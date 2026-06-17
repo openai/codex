@@ -1267,10 +1267,13 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         session.get_tx_event(),
         CancellationToken::new(),
         turn_context.permission_profile(),
-        codex_mcp::McpRuntimeContext::new(Arc::clone(&session.services.environment_manager), {
-            #[allow(deprecated)]
-            turn_context.cwd.to_path_buf()
-        }),
+        codex_mcp::McpRuntimeContext::new(
+            session.services.turn_environments.environment_manager(),
+            {
+                #[allow(deprecated)]
+                turn_context.cwd.to_path_buf()
+            },
+        ),
         turn_context.config.codex_home.to_path_buf(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,
@@ -1313,15 +1316,14 @@ async fn codex_apps_auth_elicitation_non_host_owned_server_returns_original_resu
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
-    Arc::get_mut(&mut turn_context)
-        .expect("single turn context ref")
-        .features = ManagedFeatures::from(features);
+    let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+    Arc::make_mut(&mut turn_context.config).features = ManagedFeatures::from(features);
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
 
     let returned = maybe_request_codex_apps_auth_elicitation(
         &session,
-        &turn_context,
+        turn_context,
         "call_123",
         CODEX_APPS_MCP_SERVER_NAME,
         Some(&metadata),
@@ -1340,7 +1342,7 @@ async fn codex_apps_auth_elicitation_disallowed_by_policy_returns_original_resul
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    turn_context.features = ManagedFeatures::from(features);
+    Arc::make_mut(&mut turn_context.config).features = ManagedFeatures::from(features);
     turn_context
         .approval_policy
         .set(AskForApproval::Never)
@@ -1369,7 +1371,7 @@ async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_resu
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    turn_context.features = ManagedFeatures::from(features);
+    Arc::make_mut(&mut turn_context.config).features = ManagedFeatures::from(features);
     turn_context
         .approval_policy
         .set(AskForApproval::Granular(GranularApprovalConfig {
@@ -1404,9 +1406,10 @@ async fn codex_apps_auth_elicitation_feature_enabled_requests_elicitation() {
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
-    Arc::get_mut(&mut turn_context)
-        .expect("single turn context ref")
-        .features = ManagedFeatures::from(features);
+    {
+        let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+        Arc::make_mut(&mut turn_context.config).features = ManagedFeatures::from(features);
+    }
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
 

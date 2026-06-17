@@ -19,7 +19,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
     crate::session::turn_context::TurnEnvironment::new(
         environment_id.to_string(),
         std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
-        std::env::temp_dir().abs(),
+        PathUri::from_abs_path(&std::env::temp_dir().abs()),
         /*shell*/ None,
     )
 }
@@ -233,7 +233,12 @@ async fn file_system_sandbox_context_uses_active_attempt() {
     );
     let expected_permissions =
         PermissionProfile::from_runtime_permissions(&file_system_policy, network_policy);
-    assert_eq!(sandbox.permissions, expected_permissions);
+    let native_permissions: PermissionProfile = sandbox
+        .permissions
+        .clone()
+        .try_into()
+        .expect("native sandbox permissions");
+    assert_eq!(native_permissions, expected_permissions);
     assert_eq!(
         sandbox.cwd,
         Some(codex_utils_path_uri::PathUri::from_abs_path(&path))

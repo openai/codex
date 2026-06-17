@@ -16,9 +16,12 @@ use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathConvention;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::io;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use ts_rs::TS;
@@ -54,9 +57,9 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
 #[ts(export_to = "v2/")]
 pub struct AdditionalFileSystemPermissions {
     /// This will be removed in favor of `entries`.
-    pub read: Option<Vec<AbsolutePathBuf>>,
+    pub read: Option<Vec<LegacyAppPathString>>,
     /// This will be removed in favor of `entries`.
-    pub write: Option<Vec<AbsolutePathBuf>>,
+    pub write: Option<Vec<LegacyAppPathString>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub glob_scan_max_depth: Option<NonZeroUsize>,
@@ -65,27 +68,42 @@ pub struct AdditionalFileSystemPermissions {
     pub entries: Option<Vec<FileSystemSandboxEntry>>,
 }
 
-impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
-    fn from(value: CoreFileSystemPermissions) -> Self {
+// TODO(anp): Remove this conversion once core permission paths use PathUri.
+impl From<CoreFileSystemPermissions<AbsolutePathBuf>> for AdditionalFileSystemPermissions {
+    fn from(value: CoreFileSystemPermissions<AbsolutePathBuf>) -> Self {
         if let Some((read, write)) = value.legacy_read_write_roots() {
             let mut entries = Vec::with_capacity(
                 read.as_ref().map_or(0, Vec::len) + write.as_ref().map_or(0, Vec::len),
             );
             if let Some(paths) = read.as_ref() {
                 entries.extend(paths.iter().map(|path| FileSystemSandboxEntry {
-                    path: FileSystemPath::Path { path: path.clone() },
+                    path: FileSystemPath::Path {
+                        path: LegacyAppPathString::from_abs_path(path),
+                    },
                     access: FileSystemAccessMode::Read,
                 }));
             }
             if let Some(paths) = write.as_ref() {
                 entries.extend(paths.iter().map(|path| FileSystemSandboxEntry {
-                    path: FileSystemPath::Path { path: path.clone() },
+                    path: FileSystemPath::Path {
+                        path: LegacyAppPathString::from_abs_path(path),
+                    },
                     access: FileSystemAccessMode::Write,
                 }));
             }
             Self {
-                read,
-                write,
+                read: read.map(|paths| {
+                    paths
+                        .iter()
+                        .map(LegacyAppPathString::from_abs_path)
+                        .collect()
+                }),
+                write: write.map(|paths| {
+                    paths
+                        .iter()
+                        .map(LegacyAppPathString::from_abs_path)
+                        .collect()
+                }),
                 glob_scan_max_depth: None,
                 entries: Some(entries),
             }
@@ -106,21 +124,50 @@ impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
     }
 }
 
-impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
-    fn from(value: AdditionalFileSystemPermissions) -> Self {
+// TODO(anp): Remove this conversion once core permission paths use PathUri.
+impl TryFrom<AdditionalFileSystemPermissions> for CoreFileSystemPermissions<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: AdditionalFileSystemPermissions) -> Result<Self, Self::Error> {
         let mut permissions = if let Some(entries) = value.entries {
             Self {
                 entries: entries
                     .into_iter()
-                    .map(CoreFileSystemSandboxEntry::from)
-                    .collect(),
+                    .map(CoreFileSystemSandboxEntry::<AbsolutePathBuf>::try_from)
+                    .collect::<io::Result<_>>()?,
                 glob_scan_max_depth: None,
             }
         } else {
-            CoreFileSystemPermissions::from_read_write_roots(value.read, value.write)
+            let read = value
+                .read
+                .map(|paths| {
+                    paths
+                        .into_iter()
+                        .map(|path| {
+                            path.to_path_uri(PathConvention::native())
+                                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?
+                                .to_abs_path()
+                        })
+                        .collect::<io::Result<Vec<_>>>()
+                })
+                .transpose()?;
+            let write = value
+                .write
+                .map(|paths| {
+                    paths
+                        .into_iter()
+                        .map(|path| {
+                            path.to_path_uri(PathConvention::native())
+                                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?
+                                .to_abs_path()
+                        })
+                        .collect::<io::Result<Vec<_>>>()
+                })
+                .transpose()?;
+            CoreFileSystemPermissions::from_read_write_roots(read, write)
         };
         permissions.glob_scan_max_depth = value.glob_scan_max_depth;
-        permissions
+        Ok(permissions)
     }
 }
 
@@ -156,6 +203,7 @@ pub struct RequestPermissionProfile {
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
+// TODO(anp): Remove this conversion once core permission paths use PathUri.
 impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
     fn from(value: CoreRequestPermissionProfile) -> Self {
         Self {
@@ -165,12 +213,17 @@ impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
     }
 }
 
-impl From<RequestPermissionProfile> for CoreRequestPermissionProfile {
-    fn from(value: RequestPermissionProfile) -> Self {
-        Self {
+impl TryFrom<RequestPermissionProfile> for CoreRequestPermissionProfile {
+    type Error = io::Error;
+
+    fn try_from(value: RequestPermissionProfile) -> Result<Self, Self::Error> {
+        Ok(Self {
             network: value.network.map(CoreNetworkPermissions::from),
-            file_system: value.file_system.map(CoreFileSystemPermissions::from),
-        }
+            file_system: value
+                .file_system
+                .map(CoreFileSystemPermissions::<AbsolutePathBuf>::try_from)
+                .transpose()?,
+        })
     }
 }
 
@@ -231,16 +284,20 @@ impl From<FileSystemSpecialPath> for CoreFileSystemSpecialPath {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
+// TODO(anp): Rename this type to distinguish it from the generic protocol FileSystemPath.
 pub enum FileSystemPath {
-    Path { path: AbsolutePathBuf },
+    Path { path: LegacyAppPathString },
     GlobPattern { pattern: String },
     Special { value: FileSystemSpecialPath },
 }
 
-impl From<CoreFileSystemPath> for FileSystemPath {
-    fn from(value: CoreFileSystemPath) -> Self {
+// TODO(anp): Remove this conversion once core permission paths use PathUri.
+impl From<CoreFileSystemPath<AbsolutePathBuf>> for FileSystemPath {
+    fn from(value: CoreFileSystemPath<AbsolutePathBuf>) -> Self {
         match value {
-            CoreFileSystemPath::Path { path } => Self::Path { path },
+            CoreFileSystemPath::Path { path } => Self::Path {
+                path: LegacyAppPathString::from_abs_path(&path),
+            },
             CoreFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
             CoreFileSystemPath::Special { value } => Self::Special {
                 value: value.into(),
@@ -249,15 +306,23 @@ impl From<CoreFileSystemPath> for FileSystemPath {
     }
 }
 
-impl From<FileSystemPath> for CoreFileSystemPath {
-    fn from(value: FileSystemPath) -> Self {
-        match value {
-            FileSystemPath::Path { path } => Self::Path { path },
+// TODO(anp): Remove this conversion once core permission paths use PathUri.
+impl TryFrom<FileSystemPath> for CoreFileSystemPath<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: FileSystemPath) -> Result<Self, Self::Error> {
+        Ok(match value {
+            FileSystemPath::Path { path } => Self::Path {
+                path: path
+                    .to_path_uri(PathConvention::native())
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?
+                    .to_abs_path()?,
+            },
             FileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
             FileSystemPath::Special { value } => Self::Special {
                 value: value.into(),
             },
-        }
+        })
     }
 }
 
@@ -269,8 +334,9 @@ pub struct FileSystemSandboxEntry {
     pub access: FileSystemAccessMode,
 }
 
-impl From<CoreFileSystemSandboxEntry> for FileSystemSandboxEntry {
-    fn from(value: CoreFileSystemSandboxEntry) -> Self {
+// TODO(anp): Remove this conversion once core permission paths use PathUri.
+impl From<CoreFileSystemSandboxEntry<AbsolutePathBuf>> for FileSystemSandboxEntry {
+    fn from(value: CoreFileSystemSandboxEntry<AbsolutePathBuf>) -> Self {
         Self {
             path: value.path.into(),
             access: value.access.into(),
@@ -278,12 +344,14 @@ impl From<CoreFileSystemSandboxEntry> for FileSystemSandboxEntry {
     }
 }
 
-impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
-    fn from(value: FileSystemSandboxEntry) -> Self {
-        Self {
-            path: value.path.into(),
+impl TryFrom<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: FileSystemSandboxEntry) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: value.path.try_into()?,
             access: value.access.to_core(),
-        }
+        })
     }
 }
 
@@ -375,6 +443,7 @@ pub struct AdditionalPermissionProfile {
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
+// TODO(anp): Remove this conversion once core permission paths use PathUri.
 impl From<CoreAdditionalPermissionProfile> for AdditionalPermissionProfile {
     fn from(value: CoreAdditionalPermissionProfile) -> Self {
         Self {
@@ -384,12 +453,17 @@ impl From<CoreAdditionalPermissionProfile> for AdditionalPermissionProfile {
     }
 }
 
-impl From<AdditionalPermissionProfile> for CoreAdditionalPermissionProfile {
-    fn from(value: AdditionalPermissionProfile) -> Self {
-        Self {
+impl TryFrom<AdditionalPermissionProfile> for CoreAdditionalPermissionProfile {
+    type Error = io::Error;
+
+    fn try_from(value: AdditionalPermissionProfile) -> Result<Self, Self::Error> {
+        Ok(Self {
             network: value.network.map(CoreNetworkPermissions::from),
-            file_system: value.file_system.map(CoreFileSystemPermissions::from),
-        }
+            file_system: value
+                .file_system
+                .map(CoreFileSystemPermissions::<AbsolutePathBuf>::try_from)
+                .transpose()?,
+        })
     }
 }
 
@@ -405,12 +479,17 @@ pub struct GrantedPermissionProfile {
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
-impl From<GrantedPermissionProfile> for CoreAdditionalPermissionProfile {
-    fn from(value: GrantedPermissionProfile) -> Self {
-        Self {
+impl TryFrom<GrantedPermissionProfile> for CoreAdditionalPermissionProfile {
+    type Error = io::Error;
+
+    fn try_from(value: GrantedPermissionProfile) -> Result<Self, Self::Error> {
+        Ok(Self {
             network: value.network.map(CoreNetworkPermissions::from),
-            file_system: value.file_system.map(CoreFileSystemPermissions::from),
-        }
+            file_system: value
+                .file_system
+                .map(CoreFileSystemPermissions::<AbsolutePathBuf>::try_from)
+                .transpose()?,
+        })
     }
 }
 

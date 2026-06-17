@@ -685,6 +685,7 @@ async fn seed_stage1_candidate(
                 text: "remember this startup test conversation".to_string(),
             }],
             phase: None,
+            metadata: None,
         }),
     };
     let jsonl = serde_json::to_string(&line)?;

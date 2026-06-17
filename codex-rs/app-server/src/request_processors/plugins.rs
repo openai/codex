@@ -8,6 +8,8 @@ use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginListBackgroundTaskOptions;
+use codex_core_plugins::is_openai_curated_marketplace_name;
+use codex_core_plugins::remote::REMOTE_CREATED_BY_ME_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
@@ -156,6 +158,7 @@ fn remote_installed_plugin_visible_marketplaces(config: &Config) -> Vec<&'static
     let mut marketplaces = Vec::new();
     if config.features.enabled(Feature::RemotePlugin) {
         marketplaces.push(REMOTE_GLOBAL_MARKETPLACE_NAME);
+        marketplaces.push(REMOTE_CREATED_BY_ME_MARKETPLACE_NAME);
     }
     marketplaces.push(REMOTE_WORKSPACE_MARKETPLACE_NAME);
     if config.features.enabled(Feature::PluginSharing) {
@@ -172,9 +175,9 @@ fn filter_openai_curated_installed_conflicts(
 ) {
     let local_installed_plugin_names = marketplaces
         .iter()
-        .find(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
-        .map(|marketplace| installed_plugin_names(&marketplace.plugins))
-        .unwrap_or_default();
+        .filter(|marketplace| is_openai_curated_marketplace_name(&marketplace.name))
+        .flat_map(|marketplace| installed_plugin_names(&marketplace.plugins))
+        .collect::<HashSet<_>>();
     let remote_installed_plugin_names = marketplaces
         .iter()
         .find(|marketplace| marketplace.name == REMOTE_GLOBAL_MARKETPLACE_NAME)
@@ -188,13 +191,12 @@ fn filter_openai_curated_installed_conflicts(
         return;
     }
 
-    let marketplace_to_filter = if prefer_remote_curated_conflicts {
-        OPENAI_CURATED_MARKETPLACE_NAME
-    } else {
-        REMOTE_GLOBAL_MARKETPLACE_NAME
-    };
     for marketplace in marketplaces.iter_mut() {
-        if marketplace.name != marketplace_to_filter {
+        if prefer_remote_curated_conflicts {
+            if !is_openai_curated_marketplace_name(&marketplace.name) {
+                continue;
+            }
+        } else if marketplace.name != REMOTE_GLOBAL_MARKETPLACE_NAME {
             continue;
         }
         marketplace
@@ -472,7 +474,7 @@ impl PluginRequestProcessor {
     ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
-            thread_manager.skills_manager().clear_cache();
+            thread_manager.skills_service().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
@@ -482,7 +484,7 @@ impl PluginRequestProcessor {
 
     fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
-        self.thread_manager.skills_manager().clear_cache();
+        self.thread_manager.skills_service().clear_cache();
     }
 
     async fn load_latest_config(
@@ -549,15 +551,22 @@ impl PluginRequestProcessor {
         {
             return Ok(empty_response());
         }
+        let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
+        plugins_manager.set_auth_mode(auth_mode);
         let plugins_input = config.plugins_config_input();
         let include_shared_with_me =
             marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
+        let include_created_by_me_remote = marketplace_kinds
+            .contains(&PluginListMarketplaceKind::CreatedByMeRemote)
+            && config.features.enabled(Feature::RemotePlugin);
         let include_global_remote =
             !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin);
+        let use_remote_global_catalog =
+            include_global_remote && auth_mode.is_some_and(AuthMode::uses_codex_backend);
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let refresh_global_remote_catalog_cache = include_global_remote
+        let refresh_global_remote_catalog_cache = use_remote_global_catalog
             && codex_core_plugins::remote::has_cached_global_remote_plugin_catalog(
                 config.codex_home.as_path(),
                 &remote_plugin_service_config,
@@ -573,7 +582,7 @@ impl PluginRequestProcessor {
                     .list_marketplaces_for_config(
                         &config_for_marketplace_listing,
                         &roots_for_marketplace_listing,
-                        /*include_openai_curated*/ true,
+                        /*include_openai_curated*/ !use_remote_global_catalog,
                     )?;
                 Ok::<
                     (
@@ -644,16 +653,14 @@ impl PluginRequestProcessor {
                     data.push(remote_marketplace_to_info(remote_marketplace));
                 }
                 Ok(None) => {}
+                Err(RemotePluginCatalogError::UnsupportedAuthMode) => {}
                 Err(err) if explicit_marketplace_kinds => {
                     return Err(remote_plugin_catalog_error_to_jsonrpc(
                         err,
                         "list OpenAI Curated remote plugin catalog",
                     ));
                 }
-                Err(
-                    RemotePluginCatalogError::AuthRequired
-                    | RemotePluginCatalogError::UnsupportedAuthMode,
-                ) => {}
+                Err(RemotePluginCatalogError::AuthRequired) => {}
                 Err(err) => {
                     warn!(
                         error = %err,
@@ -664,8 +671,11 @@ impl PluginRequestProcessor {
         }
 
         let mut remote_sources = Vec::new();
-        if include_global_remote {
+        if use_remote_global_catalog {
             remote_sources.push(RemoteMarketplaceSource::Global);
+        }
+        if include_created_by_me_remote {
+            remote_sources.push(RemoteMarketplaceSource::CreatedByMeRemote);
         }
         if marketplace_kinds.contains(&PluginListMarketplaceKind::WorkspaceDirectory) {
             remote_sources.push(RemoteMarketplaceSource::WorkspaceDirectory);
@@ -717,7 +727,11 @@ impl PluginRequestProcessor {
                 }
             }
         }
-        if include_local || include_shared_with_me || include_global_remote {
+        if include_local
+            || include_created_by_me_remote
+            || include_shared_with_me
+            || include_global_remote
+        {
             plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
                 &plugins_input,
                 auth.clone(),
@@ -729,9 +743,10 @@ impl PluginRequestProcessor {
             );
         }
 
-        let featured_plugin_ids = if data
-            .iter()
-            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+        let featured_plugin_ids = if !plugins_input.remote_plugin_enabled
+            && data
+                .iter()
+                .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
         {
             match plugins_manager
                 .featured_plugin_ids_for_config(&plugins_input, auth.as_ref())
@@ -787,6 +802,7 @@ impl PluginRequestProcessor {
         {
             return Ok(empty_response());
         }
+        plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugins_input = config.plugins_config_input();
         let remote_installed_plugin_visible_marketplaces =
@@ -976,6 +992,8 @@ impl PluginRequestProcessor {
 
         let config = self.load_latest_config(config_cwd).await?;
         let plugins_input = config.plugins_config_input();
+        let auth = self.auth_manager.auth().await;
+        plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugin = match read_source {
             Ok(marketplace_path) => {
@@ -995,7 +1013,6 @@ impl PluginRequestProcessor {
                 );
                 let share_context = match share_context {
                     Some(context) => {
-                        let auth = self.auth_manager.auth().await;
                         let remote_plugin_service_config = RemotePluginServiceConfig {
                             chatgpt_base_url: config.chatgpt_base_url.clone(),
                         };
@@ -1102,7 +1119,6 @@ impl PluginRequestProcessor {
                         "remote plugin read is not enabled for marketplace {remote_marketplace_name}"
                     )));
                 }
-                let auth = self.auth_manager.auth().await;
                 let remote_plugin_service_config = RemotePluginServiceConfig {
                     chatgpt_base_url: config.chatgpt_base_url.clone(),
                 };

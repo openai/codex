@@ -18,7 +18,7 @@
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::context::UserInstructions as ContextUserInstructions;
-use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
@@ -46,18 +46,23 @@ const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 /// Loads project AGENTS.md content and combines it with host-provided user
 /// instructions.
 pub(crate) async fn load_project_instructions(
-    config: &mut Config,
+    config: &Config,
     user_instructions: Option<UserInstructions>,
-    environments: &ResolvedTurnEnvironments,
+    environments: &TurnEnvironmentSnapshot,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
     for turn_environment in &environments.turn_environments {
         let filesystem = turn_environment.environment.get_filesystem();
+        // TODO(anp): Migrate AGENTS.md discovery to PathUri so instructions can be loaded from
+        // environment-native foreign working directories.
+        let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
+            continue;
+        };
         match read_agents_md(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
-            turn_environment.cwd(),
+            &cwd,
         )
         .await
         {
@@ -89,7 +94,7 @@ pub(crate) async fn load_project_instructions(
 /// `Ok(None)`. Unexpected I/O failures bubble up as `Err` so callers can
 /// decide how to handle them.
 async fn read_agents_md(
-    config: &mut Config,
+    config: &Config,
     fs: &dyn ExecutorFileSystem,
     environment_id: &str,
     cwd: &AbsolutePathBuf,
@@ -126,8 +131,6 @@ async fn read_agents_md(
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
         };
-        warn_invalid_utf8(&p, &data, "Project", &mut config.startup_warnings);
-
         let size = data.len() as u64;
         if size > remaining {
             data.truncate(remaining as usize);
@@ -500,20 +503,6 @@ impl InstructionProvenance {
             Self::Project { source_path, .. } => Some(source_path),
             Self::Internal => None,
         }
-    }
-}
-
-fn warn_invalid_utf8(
-    path: &AbsolutePathBuf,
-    data: &[u8],
-    source: &str,
-    startup_warnings: &mut Vec<String>,
-) {
-    if let Err(err) = std::str::from_utf8(data) {
-        startup_warnings.push(format!(
-            "{source} AGENTS.md instructions from `{}` contain invalid UTF-8: {err}. Invalid byte sequences were replaced.",
-            path.display()
-        ));
     }
 }
 

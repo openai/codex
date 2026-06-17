@@ -1,5 +1,4 @@
 pub use codex_api::ResponseEvent;
-use codex_config::types::Personality;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -29,9 +28,6 @@ pub struct Prompt {
 
     pub base_instructions: BaseInstructions,
 
-    /// Optionally specify the personality of the model.
-    pub personality: Option<Personality>,
-
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
 
@@ -46,7 +42,6 @@ impl Default for Prompt {
             tools: Vec::new(),
             parallel_tool_calls: false,
             base_instructions: BaseInstructions::default(),
-            personality: None,
             output_schema: None,
             output_schema_strict: true,
         }
@@ -98,7 +93,7 @@ fn strip_image_details(items: &mut [ResponseItem]) {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
+            | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => {}
         }

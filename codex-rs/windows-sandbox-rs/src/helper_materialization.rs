@@ -96,22 +96,26 @@ pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &s
         Ok(path) => path,
         Err(_) => return PathBuf::from(fallback_executable),
     };
+    resolve_exe_for_launch(&source, codex_home)
+}
+
+pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
     let Some(file_name) = source.file_name() else {
-        return source;
+        return source.to_path_buf();
     };
     let destination = helper_bin_dir(codex_home).join(file_name);
-    match copy_from_source_if_needed(&source, &destination) {
+    match copy_from_source_if_needed(source, &destination) {
         Ok(_) => destination,
         Err(err) => {
             let sandbox_log_dir = crate::sandbox_dir(codex_home);
             log_note(
                 &format!(
-                    "helper copy failed for current executable: {err:#}; falling back to legacy path {}",
+                    "helper copy failed for executable: {err:#}; falling back to legacy path {}",
                     source.display()
                 ),
                 Some(&sandbox_log_dir),
             );
-            source
+            source.to_path_buf()
         }
     }
 }

@@ -82,7 +82,7 @@ impl ToolExecutor<ToolCall> for ReadTool {
                         authority,
                         package: SkillPackageId(args.package),
                         resource: requested_resource.clone(),
-                        host: None,
+                        host_snapshot: None,
                         mcp_resources: self.context.mcp_resources.clone(),
                     },
                 )

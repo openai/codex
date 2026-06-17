@@ -19,8 +19,8 @@ use url::Url;
 
 mod api_path_string;
 
-pub use api_path_string::ApiPathString;
-pub use api_path_string::ApiPathStringError;
+pub use api_path_string::LegacyAppPathString;
+pub use api_path_string::LegacyAppPathStringError;
 pub use api_path_string::PathConvention;
 
 pub const FILE_SCHEME: &str = "file";
@@ -164,6 +164,19 @@ impl PathUri {
         }
     }
 
+    /// Renders this URI using the native path syntax inferred from its shape.
+    ///
+    /// This is independent of the current host: a Windows URI renders with
+    /// Windows separators on every host. If the convention cannot be inferred
+    /// or the URI cannot be represented using that convention, the canonical
+    /// URI string is returned instead.
+    pub fn inferred_native_path_string(&self) -> String {
+        self.infer_path_convention()
+            .and_then(|convention| LegacyAppPathString::from_path_uri(self, convention).ok())
+            .map(LegacyAppPathString::into_string)
+            .unwrap_or_else(|| self.to_string())
+    }
+
     /// Returns the decoded final URI path segment, or `None` for the URI root
     /// or an opaque fallback URI created by [`Self::from_abs_path`].
     ///
@@ -211,13 +224,17 @@ impl PathUri {
             return Err(PathUriParseError::JoinPathMustBeRelative(path.to_string()));
         }
         if path.contains('\0') {
-            return Err(PathUriParseError::InvalidFileUriPath);
+            return Err(PathUriParseError::InvalidFileUriPath {
+                path: path.to_string(),
+            });
         }
         if path.is_empty() {
             return Ok(self.clone());
         }
         if decode_bad_path_uri(&self.0).is_some() {
-            return Err(PathUriParseError::InvalidFileUriPath);
+            return Err(PathUriParseError::InvalidFileUriPath {
+                path: self.to_string(),
+            });
         }
 
         let mut url = self.0.clone();
@@ -280,18 +297,28 @@ impl PathUri {
 
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                PathUriParseError::InvalidFileUriPath,
+                PathUriParseError::InvalidFileUriPath {
+                    path: self.to_string(),
+                },
             ));
         }
 
         let path = self.0.to_file_path().map_err(|()| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                PathUriParseError::InvalidFileUriPath,
+                PathUriParseError::InvalidFileUriPath {
+                    path: self.to_string(),
+                },
             )
         })?;
-        AbsolutePathBuf::from_absolute_path_checked(path)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
+        AbsolutePathBuf::from_absolute_path_checked(path).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                PathUriParseError::InvalidFileUriPath {
+                    path: self.to_string(),
+                },
+            )
+        })
     }
 
     /// Returns a clone of the canonical URL.
@@ -472,7 +499,9 @@ fn validate_file_url(url: &Url) -> Result<(), PathUriParseError> {
     if urlencoding::decode_binary(url.path().as_bytes()).contains(&0)
         && decode_bad_path_uri(url).is_none()
     {
-        return Err(PathUriParseError::InvalidFileUriPath);
+        return Err(PathUriParseError::InvalidFileUriPath {
+            path: url.to_string(),
+        });
     }
     Ok(())
 }
@@ -483,8 +512,8 @@ pub enum PathUriParseError {
     InvalidUri(#[from] url::ParseError),
     #[error("unsupported path URI scheme `{0}`")]
     UnsupportedScheme(String),
-    #[error("file URI contains an invalid absolute path")]
-    InvalidFileUriPath,
+    #[error("'{path}' is invalid on '{os}'", os = std::env::consts::OS)]
+    InvalidFileUriPath { path: String },
     #[error("credentials are not allowed in path URIs")]
     CredentialsNotAllowed,
     #[error("ports are not allowed in path URIs")]

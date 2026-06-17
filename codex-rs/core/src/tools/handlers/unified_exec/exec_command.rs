@@ -129,13 +129,21 @@ impl ExecCommandHandler {
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
+        // TODO(anp): Resolve tool paths using the selected environment's native path convention
+        // so unified exec can support relative paths in foreign environments.
+        let native_environment_cwd = turn_environment.cwd().to_abs_path().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "environment cwd `{}` is not native to the Codex host: {err}",
+                turn_environment.cwd()
+            ))
+        })?;
         let cwd = environment_args
             .workdir
             .as_deref()
             .filter(|workdir| !workdir.is_empty())
             .map_or_else(
-                || turn_environment.cwd().clone(),
-                |workdir| turn_environment.cwd().join(workdir),
+                || native_environment_cwd.clone(),
+                |workdir| native_environment_cwd.join(workdir),
             );
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
@@ -257,7 +265,7 @@ impl ExecCommandHandler {
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
                 raw_output: output.into_text().into_bytes(),
-                truncation_policy: turn.truncation_policy,
+                truncation_policy: turn.model_info.truncation_policy.into(),
                 max_output_tokens,
                 process_id: None,
                 exit_code: None,
@@ -277,8 +285,8 @@ impl ExecCommandHandler {
                     yield_time_ms,
                     max_output_tokens,
                     cwd,
-                    sandbox_cwd: turn_environment.cwd().clone(),
-                    environment,
+                    sandbox_cwd: native_environment_cwd,
+                    turn_environment: turn_environment.clone(),
                     shell_mode,
                     network: context.turn.network.clone(),
                     tty,
@@ -302,7 +310,7 @@ impl ExecCommandHandler {
                     chunk_id: generate_chunk_id(),
                     wall_time: output.duration,
                     raw_output: output_text.into_bytes(),
-                    truncation_policy: turn.truncation_policy,
+                    truncation_policy: turn.model_info.truncation_policy.into(),
                     max_output_tokens,
                     // Sandbox denial is terminal, so there is no live
                     // process for write_stdin to resume.

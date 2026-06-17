@@ -301,21 +301,23 @@ fn renders_native_paths_from_shared_cases() {
     for case in RENDER_CASES {
         let path = PathUri::parse(case.uri).expect("valid file URI");
         let expected = match case.expected {
-            RenderExpectation::RoundTrip(rendered) => Ok(ApiPathString(rendered.to_string())),
-            RenderExpectation::RenderOnly(rendered) => Ok(ApiPathString(rendered.to_string())),
+            RenderExpectation::RoundTrip(rendered) => Ok(LegacyAppPathString(rendered.to_string())),
+            RenderExpectation::RenderOnly(rendered) => {
+                Ok(LegacyAppPathString(rendered.to_string()))
+            }
             RenderExpectation::Error(ExpectedError::OpaqueFallback) => {
-                Err(ApiPathStringError::OpaqueFallback {
+                Err(LegacyAppPathStringError::OpaqueFallback {
                     path: path.to_string(),
                 })
             }
             RenderExpectation::Error(ExpectedError::IncompatibleConvention) => {
-                Err(ApiPathStringError::IncompatibleConvention {
+                Err(LegacyAppPathStringError::IncompatibleConvention {
                     path: path.to_string(),
                     convention: case.convention,
                 })
             }
         };
-        let actual = ApiPathString::from_path_uri(&path, case.convention);
+        let actual = LegacyAppPathString::from_path_uri(&path, case.convention);
 
         assert_eq!(actual, expected, "rendering {case:?}");
         if let Ok(rendered) = &actual {
@@ -327,14 +329,15 @@ fn renders_native_paths_from_shared_cases() {
         }
 
         if let RenderExpectation::RoundTrip(rendered) = case.expected {
-            let api_path = serde_json::from_value::<ApiPathString>(serde_json::json!(rendered))
-                .expect("native path should deserialize from API text");
+            let api_path =
+                serde_json::from_value::<LegacyAppPathString>(serde_json::json!(rendered))
+                    .expect("native path should deserialize from API text");
             let reparsed = api_path
                 .to_path_uri(case.convention)
                 .expect("native path should parse using its convention");
             assert_eq!(reparsed, path, "parsing {case:?}");
             assert_eq!(
-                ApiPathString::from_path_uri(&reparsed, case.convention),
+                LegacyAppPathString::from_path_uri(&reparsed, case.convention),
                 Ok(api_path),
                 "round-tripping {case:?}"
             );
@@ -345,7 +348,7 @@ fn renders_native_paths_from_shared_cases() {
 #[test]
 fn relative_api_path_serializes_and_deserializes_unchanged() {
     for raw_path in [".", "subdir", "subdir/file.rs"] {
-        let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+        let path = serde_json::from_value::<LegacyAppPathString>(serde_json::json!(raw_path))
             .expect("relative API path should deserialize");
 
         assert_eq!(
@@ -358,13 +361,13 @@ fn relative_api_path_serializes_and_deserializes_unchanged() {
 #[test]
 fn relative_api_path_is_invalid_when_converted_to_a_path_uri() {
     let raw_path = "subdir";
-    let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+    let path = serde_json::from_value::<LegacyAppPathString>(serde_json::json!(raw_path))
         .expect("relative API path should deserialize");
 
     assert_eq!(path.infer_absolute_path_convention(), None);
     assert_eq!(
         path.to_path_uri(PathConvention::Posix),
-        Err(ApiPathStringError::InvalidNativePath {
+        Err(LegacyAppPathStringError::InvalidNativePath {
             path: raw_path.to_string(),
             convention: PathConvention::Posix,
         })
@@ -377,13 +380,13 @@ fn other_non_absolute_api_paths_cannot_be_converted_to_path_uris() {
         (r"workspace\file.rs", PathConvention::Windows),
         (r"C:file.rs", PathConvention::Windows),
     ] {
-        let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+        let path = serde_json::from_value::<LegacyAppPathString>(serde_json::json!(raw_path))
             .expect("API path should deserialize without validation");
 
         assert_eq!(path.infer_absolute_path_convention(), None);
         assert_eq!(
             path.to_path_uri(convention),
-            Err(ApiPathStringError::InvalidNativePath {
+            Err(LegacyAppPathStringError::InvalidNativePath {
                 path: raw_path.to_string(),
                 convention,
             })
@@ -409,7 +412,7 @@ fn infers_absolute_path_conventions_from_api_text() {
         (r"C:file.rs", None),
         (r"\rooted-without-drive", None),
     ] {
-        let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+        let path = serde_json::from_value::<LegacyAppPathString>(serde_json::json!(raw_path))
             .expect("API path should deserialize without validation");
 
         assert_eq!(
@@ -426,7 +429,7 @@ fn foreign_absolute_syntax_deserializes_without_host_interpretation() {
         (r"C:\workspace\file.rs", PathConvention::Windows),
         ("/workspace/file.rs", PathConvention::Posix),
     ] {
-        let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+        let path = serde_json::from_value::<LegacyAppPathString>(serde_json::json!(raw_path))
             .expect("foreign API path should deserialize");
 
         assert_eq!(path.as_str(), raw_path);
@@ -444,8 +447,8 @@ fn renders_an_absolute_path_using_the_host_convention() {
         .expect("native path should be absolute");
 
     assert_eq!(
-        ApiPathString::from_abs_path(&path),
-        ApiPathString(native_path.to_string())
+        LegacyAppPathString::from(path),
+        LegacyAppPathString(native_path.to_string())
     );
 }
 
@@ -464,19 +467,19 @@ fn renders_native_non_unicode_windows_fallback_lossily() {
         AbsolutePathBuf::from_absolute_path_checked(native_path).expect("absolute native path");
 
     assert_eq!(
-        ApiPathString::from_abs_path(&native_path),
-        ApiPathString(r"C:\bad\�".to_string())
+        LegacyAppPathString::from_abs_path(&native_path),
+        LegacyAppPathString(r"C:\bad\�".to_string())
     );
 
     let path = PathUri::from_abs_path(&native_path);
 
     assert_eq!(
-        ApiPathString::from_path_uri(&path, PathConvention::Windows),
-        Ok(ApiPathString(r"C:\bad\�".to_string()))
+        LegacyAppPathString::from_path_uri(&path, PathConvention::Windows),
+        Ok(LegacyAppPathString(r"C:\bad\�".to_string()))
     );
     assert_eq!(
-        ApiPathString::from_path_uri(&path, PathConvention::Posix),
-        Err(ApiPathStringError::OpaqueFallback {
+        LegacyAppPathString::from_path_uri(&path, PathConvention::Posix),
+        Err(LegacyAppPathStringError::OpaqueFallback {
             path: path.to_string(),
         })
     );
@@ -485,13 +488,13 @@ fn renders_native_non_unicode_windows_fallback_lossily() {
 #[test]
 fn serializes_and_deserializes_as_a_string() {
     let path = PathUri::parse("file:///workspace/src/lib.rs").expect("valid file URI");
-    let rendered = ApiPathString::from_path_uri(&path, PathConvention::Posix)
+    let rendered = LegacyAppPathString::from_path_uri(&path, PathConvention::Posix)
         .expect("POSIX URI should render");
 
     let json = serde_json::to_string(&rendered).expect("rendered path should serialize");
     assert_eq!(json, r#""/workspace/src/lib.rs""#);
     assert_eq!(
-        serde_json::from_str::<ApiPathString>(&json)
+        serde_json::from_str::<LegacyAppPathString>(&json)
             .expect("rendered path should deserialize from a string"),
         rendered
     );

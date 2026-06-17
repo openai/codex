@@ -21,6 +21,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -97,6 +98,40 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         stdout = stdout.replace("\r\n", "\n");
     }
     assert_eq!(stdout, contents);
+}
+
+#[tokio::test]
+async fn user_shell_command_without_local_environment_emits_error() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                test.config.cwd.clone(),
+                vec![],
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            command: "echo shell".to_string(),
+        })
+        .await?;
+
+    let EventMsg::Error(error) =
+        wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await
+    else {
+        unreachable!()
+    };
+    assert_eq!(error.message, "shell is unavailable in this session");
+    assert_eq!(error.codex_error_info, None);
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -441,8 +476,9 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
 
     let head = (1..=69).map(|i| format!("{i}\n")).collect::<String>();
     let tail = (352..=400).map(|i| format!("{i}\n")).collect::<String>();
-    let truncated_body =
-        format!("Total output lines: 400\n\n{head}70…273 tokens truncated…351\n{tail}");
+    let truncated_body = format!(
+        "Warning: truncated output (original token count: 373)\nTotal output lines: 400\n\n{head}70…273 tokens truncated…351\n{tail}"
+    );
     let escaped_command = escape(&command);
     let escaped_truncated_body = escape(&truncated_body);
     let expected_pattern = format!(

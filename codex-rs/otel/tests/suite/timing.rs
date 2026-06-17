@@ -26,9 +26,53 @@ fn record_duration_records_histogram() -> Result<()> {
     assert_eq!(sum, 15.0);
     assert_eq!(count, 1);
     let metric = crate::harness::find_metric(&resource_metrics, "codex.request_latency")
-        .unwrap_or_else(|| panic!("metric codex.request_latency missing"));
+        .expect("codex.request_latency metric should exist");
     assert_eq!(metric.unit(), "ms");
     assert_eq!(metric.description(), "Duration in milliseconds.");
+
+    Ok(())
+}
+
+#[test]
+fn record_duration_seconds_uses_fractional_seconds_and_scaled_buckets() -> Result<()> {
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
+
+    for duration in [
+        Duration::from_millis(200),
+        Duration::from_secs(1),
+        Duration::from_millis(4900),
+    ] {
+        metrics.record_duration_seconds_with_description(
+            "codex.request_duration_seconds",
+            "Duration of Codex requests in seconds.",
+            duration,
+            &[("method", "initialize")],
+        )?;
+    }
+    metrics.shutdown()?;
+
+    let resource_metrics = latest_metrics(&exporter);
+    let (bounds, bucket_counts, sum, count) =
+        histogram_data(&resource_metrics, "codex.request_duration_seconds");
+    assert_eq!(
+        bounds,
+        vec![
+            0.0, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+        ]
+    );
+    assert_eq!(
+        bucket_counts,
+        vec![0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0]
+    );
+    assert!((sum - 6.1).abs() < f64::EPSILON * 8.0);
+    assert_eq!(count, 3);
+    let metric = crate::harness::find_metric(&resource_metrics, "codex.request_duration_seconds")
+        .expect("codex.request_duration_seconds metric should exist");
+    assert_eq!(metric.unit(), "s");
+    assert_eq!(
+        metric.description(),
+        "Duration of Codex requests in seconds."
+    );
 
     Ok(())
 }
@@ -52,12 +96,12 @@ fn timer_result_records_success() -> Result<()> {
     assert_eq!(count, 1);
     assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
     let metric = crate::harness::find_metric(&resource_metrics, "codex.request_latency")
-        .unwrap_or_else(|| panic!("metric codex.request_latency missing"));
+        .expect("codex.request_latency metric should exist");
     assert_eq!(metric.unit(), "ms");
     assert_eq!(metric.description(), "Duration in milliseconds.");
     let attrs = attributes_to_map(
-        match crate::harness::find_metric(&resource_metrics, "codex.request_latency").and_then(
-            |metric| match metric.data() {
+        crate::harness::find_metric(&resource_metrics, "codex.request_latency")
+            .and_then(|metric| match metric.data() {
                 opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(
                     opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram),
                 ) => histogram
@@ -65,11 +109,8 @@ fn timer_result_records_success() -> Result<()> {
                     .next()
                     .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::attributes),
                 _ => None,
-            },
-        ) {
-            Some(attrs) => attrs,
-            None => panic!("attributes missing"),
-        },
+            })
+            .expect("codex.request_latency attributes should exist"),
     );
     assert_eq!(attrs.get("route").map(String::as_str), Some("chat"));
 

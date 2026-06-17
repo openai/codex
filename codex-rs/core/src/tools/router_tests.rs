@@ -114,12 +114,13 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
+        &Default::default(),
     );
 
     let parallel_tool_name = ["exec_command", "shell_command"]
@@ -156,6 +157,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         namespace: Some("mcp__codex_apps__calendar".to_string()),
         arguments: "{}".to_string(),
         call_id: "call-namespace".to_string(),
+        metadata: None,
     })?
     .expect("function_call should produce a tool call");
 
@@ -180,6 +182,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: Some(vec![
                 mcp_tool_info(
@@ -195,10 +198,10 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
                     "query_with_delay",
                 ),
             ]),
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
+        &Default::default(),
     );
 
     let call = ToolCall {
@@ -228,12 +231,13 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
+        &Default::default(),
     );
 
     assert!(!router.tool_supports_parallel(&ToolCall {
@@ -282,12 +286,13 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: &dynamic_tools,
         },
+        &Default::default(),
     );
 
     assert_eq!(
@@ -335,6 +340,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
             text: "extension history".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     session
         .record_conversation_items(&turn, std::slice::from_ref(&history_item))
@@ -343,12 +349,13 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: extension_tool_executors(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
+        &Default::default(),
     );
 
     assert!(
@@ -369,6 +376,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         namespace: Some("extension/".to_string()),
         arguments: json!({ "message": "hello" }).to_string(),
         call_id: "call-extension".to_string(),
+        metadata: None,
     })?
     .expect("function_call should produce a tool call");
     let result = router

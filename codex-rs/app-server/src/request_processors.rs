@@ -52,6 +52,9 @@ use codex_app_server_protocol::CommandExecResizeParams;
 use codex_app_server_protocol::CommandExecTerminateParams;
 use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditOutcome;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::DynamicToolFunctionSpec;
@@ -149,6 +152,7 @@ use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -221,6 +225,8 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
+use codex_app_server_protocol::ThreadRealtimeAppendSpeechParams;
+use codex_app_server_protocol::ThreadRealtimeAppendSpeechResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
 use codex_app_server_protocol::ThreadRealtimeListVoicesResponse;
@@ -279,6 +285,7 @@ use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCreditType;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::ConsumeRateLimitResetCreditCode as BackendConsumeRateLimitResetCreditCode;
 use codex_backend_client::TokenUsageProfile;
 use codex_chatgpt::connectors;
 use codex_chatgpt::workspace_settings;
@@ -392,6 +399,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::ConversationSpeechParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
@@ -401,7 +409,6 @@ use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::ReviewDelivery as CoreReviewDelivery;
@@ -499,6 +506,7 @@ pub(crate) use command_exec_processor::CommandExecRequestProcessor;
 pub(crate) use config_processor::ConfigRequestProcessor;
 pub(crate) use environment_processor::EnvironmentRequestProcessor;
 pub(crate) use external_agent_config_processor::ExternalAgentConfigRequestProcessor;
+pub(crate) use external_agent_config_processor::ExternalAgentConfigRequestProcessorArgs;
 pub(crate) use feedback_processor::FeedbackRequestProcessor;
 pub(crate) use fs_processor::FsRequestProcessor;
 pub(crate) use git_processor::GitRequestProcessor;
@@ -531,6 +539,37 @@ fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, 
             .map_err(|err| invalid_request(format!("invalid cwd: {err}")))
     })
     .transpose()
+}
+
+fn resolve_turn_environment_selections(
+    thread_manager: &ThreadManager,
+    environments: Option<Vec<TurnEnvironmentParams>>,
+) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
+    let Some(environments) = environments else {
+        return Ok(None);
+    };
+    let mut selections = Vec::with_capacity(environments.len());
+    for environment in environments {
+        let environment_id = environment.environment_id;
+        let cwd = environment
+            .cwd
+            .infer_absolute_path_convention()
+            .and_then(|convention| environment.cwd.to_path_uri(convention).ok())
+            .ok_or_else(|| {
+                invalid_request(format!(
+                    "invalid cwd for environment `{environment_id}`: path `{}` does not use absolute POSIX or Windows path syntax",
+                    environment.cwd
+                ))
+            })?;
+        selections.push(TurnEnvironmentSelection {
+            environment_id,
+            cwd,
+        });
+    }
+    thread_manager
+        .validate_environment_selections(&selections)
+        .map_err(environment_selection_error)?;
+    Ok(Some(selections))
 }
 
 fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {

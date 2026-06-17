@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -53,7 +54,7 @@ impl RecordingState {
         let mut guard = self
             .stream_requests
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("stream requests mutex should not be poisoned");
         guard.push(req);
     }
 
@@ -61,7 +62,7 @@ impl RecordingState {
         let mut guard = self
             .stream_requests
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("stream requests mutex should not be poisoned");
         std::mem::take(&mut *guard)
     }
 }
@@ -172,14 +173,14 @@ impl FlakyTransport {
     fn attempts(&self) -> i64 {
         self.state
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+            .expect("flaky transport state mutex should not be poisoned")
             .attempts
     }
 
     fn requests(&self) -> Vec<(RequestBody, HeaderMap, codex_client::RequestCompression)> {
         self.state
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+            .expect("flaky transport state mutex should not be poisoned")
             .requests
             .clone()
     }
@@ -212,14 +213,14 @@ impl FailsOnceAuth {
         *self
             .attempts
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+            .expect("auth attempts mutex should not be poisoned")
     }
 
     async fn apply_auth(&self, request: Request) -> Result<Request, AuthError> {
         let mut attempts = self
             .attempts
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("auth attempts mutex should not be poisoned");
         *attempts += 1;
 
         if *attempts == 1 {
@@ -253,7 +254,7 @@ impl HttpTransport for FlakyTransport {
         let mut state = self
             .state
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("flaky transport state mutex should not be poisoned");
         state.attempts += 1;
         state
             .requests
@@ -312,6 +313,7 @@ async fn responses_client_stream_request_preserves_exact_json_body() -> Result<(
             role: "user".into(),
             content: vec![ContentItem::InputText { text: "hi".into() }],
             phase: None,
+            metadata: None,
         }],
         tools: Vec::new(),
         tool_choice: "auto".into(),
@@ -485,10 +487,9 @@ async fn streaming_client_does_not_retry_auth_build_error() -> Result<()> {
             /*turn_state*/ None,
         )
         .await;
-    let err = match result {
-        Ok(_) => panic!("auth build errors should fail without retry"),
-        Err(err) => err,
-    };
+    let err = result
+        .err()
+        .expect("auth build errors should fail without retry");
 
     assert!(matches!(
         err,
@@ -514,6 +515,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
             role: "user".into(),
             content: vec![ContentItem::InputText { text: "hi".into() }],
             phase: None,
+            metadata: None,
         }],
         tools: Vec::new(),
         tool_choice: "auto".into(),
