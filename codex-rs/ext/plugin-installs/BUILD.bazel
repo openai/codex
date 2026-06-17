@@ -1,0 +1,6 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "plugin-installs",
+    crate_name = "codex_plugin_installs_extension",
+)
