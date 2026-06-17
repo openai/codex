@@ -360,6 +360,11 @@ pub struct ConfigToml {
     /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
     pub apps_mcp_product_sku: Option<String>,
 
+    /// Maximum number of Codex Apps file bridge uploads that may run concurrently for one
+    /// array-valued tool argument.
+    #[schemars(range(min = 1))]
+    pub apps_file_upload_concurrency: Option<usize>,
+
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,
 

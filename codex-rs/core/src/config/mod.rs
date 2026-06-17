@@ -194,6 +194,7 @@ impl Default for GhostSnapshotConfig {
 pub(crate) const AGENTS_MD_MAX_BYTES: usize = DEFAULT_PROJECT_DOC_MAX_BYTES; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
+pub(crate) const DEFAULT_APPS_FILE_UPLOAD_CONCURRENCY: usize = 4;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
@@ -952,6 +953,10 @@ pub struct Config {
 
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
+
+    /// Maximum number of Codex Apps file bridge uploads that may run concurrently for one
+    /// array-valued tool argument.
+    pub apps_file_upload_concurrency: usize,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
@@ -3182,6 +3187,12 @@ impl Config {
                 "features.multi_agent_v2.max_concurrent_threads_per_session must be at least 1",
             ));
         }
+        if cfg.apps_file_upload_concurrency == Some(0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "apps_file_upload_concurrency must be at least 1",
+            ));
+        }
         validate_multi_agent_v2_wait_timeout(
             "features.multi_agent_v2.min_wait_timeout_ms",
             multi_agent_v2.min_wait_timeout_ms,
@@ -3644,6 +3655,9 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             respect_system_proxy,
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
+            apps_file_upload_concurrency: cfg
+                .apps_file_upload_concurrency
+                .unwrap_or(DEFAULT_APPS_FILE_UPLOAD_CONCURRENCY),
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {

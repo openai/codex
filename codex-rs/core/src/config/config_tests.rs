@@ -8953,6 +8953,52 @@ apps_mcp_product_sku = "tpp"
 }
 
 #[tokio::test]
+async fn config_loads_apps_file_upload_concurrency_from_toml() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let toml = r#"
+model = "gpt-5.4"
+apps_file_upload_concurrency = 7
+"#;
+    let cfg: ConfigToml = toml::from_str(toml)
+        .expect("TOML deserialization should succeed for apps file upload concurrency");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.apps_file_upload_concurrency, 7);
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_rejects_zero_apps_file_upload_concurrency() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let toml = r#"
+model = "gpt-5.4"
+apps_file_upload_concurrency = 0
+"#;
+    let cfg: ConfigToml = toml::from_str(toml)
+        .expect("TOML deserialization should succeed for apps file upload concurrency");
+
+    let error = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("zero apps file upload concurrency should be rejected");
+
+    assert_eq!(
+        error.to_string(),
+        "apps_file_upload_concurrency must be at least 1"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn config_loads_mcp_oauth_callback_url_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let toml = r#"
