@@ -320,15 +320,21 @@ impl ConfigManager {
                 format!("Invalid configuration: {err}"),
             )
         })?;
-        codex_core::config::validate_materialized_config_from_layer_stack(
-            self.codex_home().to_path_buf(),
-            updated_layers.clone(),
-            codex_core::config::ConfigOverrides::default(),
-        )
-        .await
-        .map_err(|err| {
-            ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, err.to_string())
-        })?;
+        let materialized_config_validation =
+            codex_core::config::validate_materialized_config_from_layer_stack(
+                self.codex_home().to_path_buf(),
+                updated_layers.clone(),
+                codex_core::config::ConfigOverrides::default(),
+            )
+            .await;
+        if let Err(err) = materialized_config_validation
+            && codex_core::config::is_windows_sandbox_network_proxy_incompatible_error(&err)
+        {
+            return Err(ConfigManagerError::write(
+                ConfigWriteErrorCode::ConfigValidationError,
+                err.to_string(),
+            ));
+        }
 
         if !config_edits.is_empty() {
             ConfigEditsBuilder::for_config_path(provided_path.as_path())

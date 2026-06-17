@@ -742,6 +742,37 @@ personality = true
     );
 }
 
+#[tokio::test]
+async fn write_value_ignores_unrelated_materialized_config_errors() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, "model_provider = \"missing\"\n")?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(config_path.display().to_string()),
+            key_path: "features.personality".to_string(),
+            value: serde_json::json!(true),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await?;
+
+    let actual: TomlValue = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let expected: TomlValue = toml::from_str(
+        r#"
+model_provider = "missing"
+
+[features]
+personality = true
+"#,
+    )?;
+    assert_eq!(actual, expected);
+
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 #[tokio::test]
 async fn batch_write_rejects_unelevated_windows_sandbox_with_network_proxy() -> Result<()> {
