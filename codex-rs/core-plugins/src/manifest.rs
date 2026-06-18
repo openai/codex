@@ -30,7 +30,7 @@ struct RawPluginManifest {
     // Keep manifest paths as raw strings so we can validate the required `./...` syntax before
     // resolving them under the plugin root.
     #[serde(default)]
-    skills: Option<RawPluginManifestPath>,
+    skills: Option<RawPluginManifestPaths>,
     #[serde(default)]
     mcp_servers: Option<RawPluginManifestMcpServers>,
     #[serde(default)]
@@ -94,8 +94,9 @@ enum RawPluginManifestDefaultPromptEntry {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum RawPluginManifestPath {
+enum RawPluginManifestPaths {
     Path(String),
+    Paths(Vec<String>),
     Invalid(JsonValue),
 }
 
@@ -230,7 +231,7 @@ pub(crate) fn parse_plugin_manifest(
         description,
         keywords,
         paths: PluginManifestPaths {
-            skills: resolve_manifest_path_value(plugin_root, "skills", skills.as_ref()),
+            skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
             mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
             apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
             hooks: resolve_manifest_hooks(plugin_root, hooks),
@@ -395,20 +396,29 @@ fn json_value_type(value: &JsonValue) -> &'static str {
     }
 }
 
-fn resolve_manifest_path_value(
+fn resolve_manifest_paths(
     plugin_root: &Path,
     field: &'static str,
-    path: Option<&RawPluginManifestPath>,
-) -> Option<AbsolutePathBuf> {
-    match path? {
-        RawPluginManifestPath::Path(path) => resolve_manifest_path(plugin_root, field, Some(path)),
-        RawPluginManifestPath::Invalid(value) => {
+    paths: Option<&RawPluginManifestPaths>,
+) -> Vec<AbsolutePathBuf> {
+    match paths {
+        Some(RawPluginManifestPaths::Path(path)) => {
+            resolve_manifest_path(plugin_root, field, Some(path))
+                .map(|path| vec![path])
+                .unwrap_or_default()
+        }
+        Some(RawPluginManifestPaths::Paths(paths)) => paths
+            .iter()
+            .filter_map(|path| resolve_manifest_path(plugin_root, field, Some(path)))
+            .collect(),
+        Some(RawPluginManifestPaths::Invalid(value)) => {
             tracing::warn!(
-                "ignoring {field}: expected a string; found {}",
+                "ignoring {field}: expected a string or string array; found {}",
                 json_value_type(value)
             );
-            None
+            Vec::new()
         }
+        None => Vec::new(),
     }
 }
 

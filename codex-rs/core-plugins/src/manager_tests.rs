@@ -4,6 +4,7 @@ use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginLoadOutcome;
 use crate::installed_marketplaces::marketplace_install_root;
+use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
@@ -33,10 +34,13 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core_skills::config_rules::SkillConfigRules;
 use codex_login::CodexAuth;
 use codex_plugin::AppDeclaration;
+use codex_plugin::PluginId;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -1282,32 +1286,62 @@ async fn capability_summary_truncates_overlong_plugin_descriptions() {
 
 #[tokio::test]
 async fn load_plugins_uses_manifest_configured_component_paths() {
-    let codex_home = TempDir::new().unwrap();
-    let plugin_root = codex_home
-        .path()
-        .join("plugins/cache")
-        .join("test/sample/local");
+    for (skills_json, expected_skill_dirs) in [
+        (r#""./custom-skills/""#, &["custom-skills"][..]),
+        (
+            r#"["./custom-skills/", "./extra-skills/"]"#,
+            &["custom-skills", "extra-skills"][..],
+        ),
+        (
+            r#"["./custom-skills/", "./custom-skills/"]"#,
+            &["custom-skills"][..],
+        ),
+        (r#""./skills/""#, &["skills"][..]),
+        (
+            r#"["./skills/abc/", "./skills/edk/"]"#,
+            &["skills/abc", "skills/edk"][..],
+        ),
+    ] {
+        let codex_home = TempDir::new().unwrap();
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/sample/local");
 
-    write_file(
-        &plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{
+        write_file(
+            &plugin_root.join(".codex-plugin/plugin.json"),
+            &format!(
+                r#"{{
   "name": "sample",
-  "skills": "./custom-skills/",
+  "skills": {skills_json},
   "mcpServers": "./config/custom.mcp.json",
   "apps": "./config/custom.app.json"
-}"#,
-    );
-    write_file(
-        &plugin_root.join("skills/default-skill/SKILL.md"),
-        "---\nname: default-skill\ndescription: default skill\n---\n",
-    );
-    write_file(
-        &plugin_root.join("custom-skills/custom-skill/SKILL.md"),
-        "---\nname: custom-skill\ndescription: custom skill\n---\n",
-    );
-    write_file(
-        &plugin_root.join(".mcp.json"),
-        r#"{
+}}"#
+            ),
+        );
+        write_file(
+            &plugin_root.join("skills/default-skill/SKILL.md"),
+            "---\nname: default-skill\ndescription: default skill\n---\n",
+        );
+        write_file(
+            &plugin_root.join("skills/abc/SKILL.md"),
+            "---\nname: abc\ndescription: abc skill\n---\n",
+        );
+        write_file(
+            &plugin_root.join("skills/edk/SKILL.md"),
+            "---\nname: edk\ndescription: edk skill\n---\n",
+        );
+        write_file(
+            &plugin_root.join("custom-skills/custom-skill/SKILL.md"),
+            "---\nname: custom-skill\ndescription: custom skill\n---\n",
+        );
+        write_file(
+            &plugin_root.join("extra-skills/extra-skill/SKILL.md"),
+            "---\nname: extra-skill\ndescription: extra skill\n---\n",
+        );
+        write_file(
+            &plugin_root.join(".mcp.json"),
+            r#"{
   "mcpServers": {
     "default": {
       "type": "http",
@@ -1315,10 +1349,10 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
     }
   }
 }"#,
-    );
-    write_file(
-        &plugin_root.join("config/custom.mcp.json"),
-        r#"{
+        );
+        write_file(
+            &plugin_root.join("config/custom.mcp.json"),
+            r#"{
   "mcpServers": {
     "custom": {
       "type": "http",
@@ -1326,73 +1360,131 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
     }
   }
 }"#,
-    );
-    write_file(
-        &plugin_root.join(".app.json"),
-        r#"{
+        );
+        write_file(
+            &plugin_root.join(".app.json"),
+            r#"{
   "apps": {
     "default-app": {
       "id": "connector_default"
     }
   }
 }"#,
-    );
-    write_file(
-        &plugin_root.join("config/custom.app.json"),
-        r#"{
+        );
+        write_file(
+            &plugin_root.join("config/custom.app.json"),
+            r#"{
   "apps": {
     "custom-app": {
       "id": "connector_custom"
     }
   }
 }"#,
-    );
+        );
+        let outcome = load_plugins_from_config(
+            &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+            codex_home.path(),
+            Some(AuthMode::Chatgpt),
+        )
+        .await;
+        let mut expected_skill_roots = expected_skill_dirs
+            .iter()
+            .map(|dir| plugin_root.join(dir).abs())
+            .collect::<Vec<_>>();
+        expected_skill_roots.sort_unstable();
+        expected_skill_roots.dedup();
 
-    let outcome = load_plugins_from_config(
-        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
-        codex_home.path(),
-        Some(AuthMode::Chatgpt),
+        assert_eq!(outcome.plugins()[0].skill_roots, expected_skill_roots);
+        assert_eq!(
+            outcome.plugins()[0].mcp_servers,
+            HashMap::from([(
+                "custom".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::StreamableHttp {
+                        url: "https://custom.example/mcp".to_string(),
+                        bearer_token_env_var: None,
+                        http_headers: None,
+                        env_http_headers: None,
+                    },
+                    environment_id: "local".to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            )])
+        );
+        assert_eq!(
+            outcome.plugins()[0].apps,
+            vec![app_declaration("custom-app", "connector_custom")]
+        );
+    }
+}
+
+#[tokio::test]
+async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local")
+        .abs();
+    write_file(
+        &plugin_root.join("skills/abc/SKILL.md"),
+        "---\nname: abc\ndescription: abc skill\n---\n",
+    );
+    write_file(
+        &plugin_root.join("skills/edk/SKILL.md"),
+        "---\nname: edk\ndescription: edk skill\n---\n",
+    );
+    let manifest_paths = crate::manifest::PluginManifestPaths {
+        skills: vec![
+            plugin_root.join("skills"),
+            plugin_root.join("skills/abc"),
+            plugin_root.join("skills/edk"),
+            plugin_root.join("skills/abc"),
+        ],
+        mcp_servers: None,
+        apps: None,
+        hooks: None,
+    };
+    let plugin_id = PluginId::parse("sample@test").expect("plugin id should parse");
+
+    let resolved = load_plugin_skills(
+        &plugin_root,
+        &plugin_id,
+        &manifest_paths,
+        /*restriction_product*/ None,
+        &SkillConfigRules::default(),
     )
     .await;
 
+    let skill_paths = resolved
+        .skills
+        .iter()
+        .map(|skill| skill.path_to_skills_md.clone())
+        .collect::<Vec<_>>();
+    let canonical_skill_path = |path| {
+        AbsolutePathBuf::from_absolute_path_checked(
+            fs::canonicalize(plugin_root.join(path)).expect("canonical skill path"),
+        )
+        .expect("absolute skill path")
+    };
     assert_eq!(
-        outcome.plugins()[0].skill_roots,
+        skill_paths,
         vec![
-            plugin_root.join("custom-skills").abs(),
-            plugin_root.join("skills").abs()
+            canonical_skill_path("skills/abc/SKILL.md"),
+            canonical_skill_path("skills/edk/SKILL.md")
         ]
-    );
-    assert_eq!(
-        outcome.plugins()[0].mcp_servers,
-        HashMap::from([(
-            "custom".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://custom.example/mcp".to_string(),
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                environment_id: "local".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
-        )])
-    );
-    assert_eq!(
-        outcome.plugins()[0].apps,
-        vec![app_declaration("custom-app", "connector_custom")]
     );
 }
 
@@ -1521,7 +1613,7 @@ async fn load_plugins_ignores_invalid_manifest_skills_shape() {
         &plugin_root.join(".codex-plugin/plugin.json"),
         r#"{
   "name": "sample",
-  "skills": ["./custom-skills/"]
+  "skills": { "path": "./custom-skills/" }
 }"#,
     );
     write_file(
