@@ -815,16 +815,11 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let sandbox_meta = meta
         .get(MCP_SANDBOX_STATE_META_CAPABILITY)
         .expect("sandbox state metadata should be present");
-    let (sandbox_policy, _) =
-        turn_permission_fields(PermissionProfile::read_only(), fixture.config.cwd.as_path());
-    let expected_sandbox_policy = serde_json::to_value(&sandbox_policy)?;
-    assert_eq!(
-        sandbox_meta.get("sandboxPolicy"),
-        Some(&expected_sandbox_policy)
-    );
+    assert_eq!(sandbox_meta.get("sandboxPolicy"), None);
+    let expected_sandbox_cwd = PathUri::from_abs_path(&fixture.config.cwd).to_string();
     assert_eq!(
         sandbox_meta.get("sandboxCwd").and_then(Value::as_str),
-        fixture.config.cwd.as_path().to_str()
+        Some(expected_sandbox_cwd.as_str())
     );
     assert_eq!(sandbox_meta.get("useLegacyLandlock"), Some(&json!(false)));
 
