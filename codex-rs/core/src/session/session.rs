@@ -897,10 +897,10 @@ impl Session {
                             Arc::clone(network_policy_decider_session),
                         )
                     });
-            let (network_proxy, session_network_proxy, credentialed_routes_reloader) =
+            let (network_proxy, session_network_proxy, credentialed_route_prefixes) =
                 if let Some(spec) = config.permissions.network.as_ref() {
                     let current_exec_policy = exec_policy.current();
-                    let (network_proxy, session_network_proxy, credentialed_routes_reloader) =
+                    let (network_proxy, session_network_proxy, credentialed_route_prefixes) =
                         Self::start_managed_network_proxy(ManagedNetworkProxyStartRequest {
                             spec,
                             chatgpt_base_url: &config.chatgpt_base_url,
@@ -923,10 +923,10 @@ impl Session {
                     (
                         Some(network_proxy),
                         Some(session_network_proxy),
-                        Some(credentialed_routes_reloader),
+                        credentialed_route_prefixes,
                     )
                 } else {
-                    (None, None, None)
+                    (None, None, Default::default())
                 };
 
             let hooks = build_hooks_for_config(
@@ -1028,8 +1028,8 @@ impl Session {
                 ),
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
-                credentialed_routes_reloader: arc_swap::ArcSwapOption::from(
-                    credentialed_routes_reloader,
+                credentialed_route_prefixes: arc_swap::ArcSwap::from_pointee(
+                    credentialed_route_prefixes,
                 ),
                 network_proxy_audit_metadata,
                 managed_network_requirements_configured,

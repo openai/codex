@@ -19,16 +19,17 @@ pub async fn prepare_proxy_state(
     base_state: ConfigState,
     chatgpt_base_url: &str,
     auth_manager: Arc<AuthManager>,
-) -> Result<(ConfigState, Arc<CredentialedRoutesReloader>)> {
+) -> Result<(ConfigState, Arc<dyn ConfigReloader>, Vec<String>)> {
     let auth = auth_manager.auth().await;
     let credentialed_routes = load_for_session(chatgpt_base_url, auth.as_ref()).await;
     let reloader = Arc::new(CredentialedRoutesReloader::new(
         base_state,
-        credentialed_routes,
+        credentialed_routes.clone(),
         source(chatgpt_base_url.to_string(), auth_manager),
     ));
     let state = ConfigReloader::reload_now(reloader.as_ref()).await?;
-    Ok((state, reloader))
+    let route_prefixes = credentialed_routes.route_prefixes();
+    Ok((state, reloader, route_prefixes))
 }
 
 /// Loads the initial credentialed routes for one Codex session.

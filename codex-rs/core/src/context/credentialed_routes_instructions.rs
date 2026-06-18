@@ -1,5 +1,4 @@
 use super::ContextualUserFragment;
-use codex_network_proxy::CredentialedRoutesConfig;
 use std::collections::BTreeSet;
 
 const MAX_INSTRUCTION_CHARS: usize = 1_000;
@@ -14,10 +13,10 @@ pub(crate) struct CredentialedRoutesInstructions {
 }
 
 impl CredentialedRoutesInstructions {
-    pub(crate) fn from_config(config: &CredentialedRoutesConfig) -> Option<Self> {
-        let route_prefixes = config
-            .route_prefixes()
-            .into_iter()
+    pub(crate) fn new(route_prefixes: &[String]) -> Option<Self> {
+        let route_prefixes = route_prefixes
+            .iter()
+            .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();

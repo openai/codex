@@ -214,7 +214,7 @@ impl NetworkProxySpec {
         let state = self.build_config_state_for_spec()?;
         started_proxy
             .proxy()
-            .replace_config_state(state)
+            .replace_base_config_state(state)
             .await
             .map_err(|err| {
                 std::io::Error::other(format!("failed to update network proxy state: {err}"))

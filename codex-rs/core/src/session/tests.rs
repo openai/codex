@@ -5025,7 +5025,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
-        credentialed_routes_reloader: arc_swap::ArcSwapOption::from(None),
+        credentialed_route_prefixes: arc_swap::ArcSwap::from_pointee(Default::default()),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
         managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
@@ -7075,7 +7075,7 @@ where
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
-        credentialed_routes_reloader: arc_swap::ArcSwapOption::from(None),
+        credentialed_route_prefixes: arc_swap::ArcSwap::from_pointee(Default::default()),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
         managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
@@ -7738,28 +7738,10 @@ async fn build_initial_context_adds_multi_agent_v2_root_usage_hint_as_developer_
 #[tokio::test]
 async fn build_initial_context_adds_credentialed_route_instructions_as_developer_message() {
     let (session, turn_context) = make_session_and_context().await;
-    let base_state = codex_network_proxy::build_config_state(
-        codex_network_proxy::NetworkProxyConfig::default(),
-        codex_network_proxy::NetworkProxyConstraints::default(),
-    )
-    .expect("credentialed route test state should compile");
-    let credentialed_routes_reloader =
-        Arc::new(codex_network_proxy::CredentialedRoutesReloader::new(
-            base_state,
-            codex_network_proxy::CredentialedRoutesConfig {
-                routes: vec![codex_network_proxy::CredentialedRoute {
-                    connector_id: "connector_123".to_string(),
-                    link_id: "link_123".to_string(),
-                    base_url: "https://api.example.com/v1".to_string(),
-                }],
-                ..codex_network_proxy::CredentialedRoutesConfig::default()
-            },
-            Arc::new(|| async { Ok(codex_network_proxy::CredentialedRoutesConfig::default()) }),
-        ));
     session
         .services
-        .credentialed_routes_reloader
-        .store(Some(credentialed_routes_reloader));
+        .credentialed_route_prefixes
+        .store(Arc::new(vec!["https://api.example.com/v1".to_string()]));
 
     let initial_context = session.build_initial_context(&turn_context).await;
 

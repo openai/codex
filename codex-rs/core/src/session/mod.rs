@@ -1002,11 +1002,7 @@ impl Session {
 
     async fn start_managed_network_proxy(
         request: ManagedNetworkProxyStartRequest<'_>,
-    ) -> anyhow::Result<(
-        StartedNetworkProxy,
-        SessionNetworkProxyRuntime,
-        Arc<codex_network_proxy::CredentialedRoutesReloader>,
-    )> {
+    ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime, Vec<String>)> {
         let ManagedNetworkProxyStartRequest {
             spec,
             chatgpt_base_url,
@@ -1027,15 +1023,18 @@ impl Session {
                 err
             })
             .unwrap_or_else(|_| spec.clone());
-        let (state, credentialed_routes_reloader) = codex_credentialed_routes::prepare_proxy_state(
-            spec.build_config_state_for_spec().map_err(|err| {
-                anyhow::anyhow!("failed to build managed proxy base state: {err}")
-            })?,
-            chatgpt_base_url,
-            auth_manager,
-        )
-        .await
-        .map_err(|err| anyhow::anyhow!("failed to build credentialed route proxy state: {err}"))?;
+        let (state, reloader, credentialed_route_prefixes) =
+            codex_credentialed_routes::prepare_proxy_state(
+                spec.build_config_state_for_spec().map_err(|err| {
+                    anyhow::anyhow!("failed to build managed proxy base state: {err}")
+                })?,
+                chatgpt_base_url,
+                auth_manager,
+            )
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("failed to build credentialed route proxy state: {err}")
+            })?;
         let network_proxy = spec
             .start_proxy_with_runtime_state(
                 permission_profile,
@@ -1043,10 +1042,7 @@ impl Session {
                 blocked_request_observer,
                 managed_network_requirements_enabled,
                 audit_metadata,
-                crate::config::NetworkProxyRuntimeState {
-                    state,
-                    reloader: credentialed_routes_reloader.clone(),
-                },
+                crate::config::NetworkProxyRuntimeState { state, reloader },
             )
             .await
             .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?;
@@ -1060,7 +1056,7 @@ impl Session {
         Ok((
             network_proxy,
             session_network_proxy,
-            credentialed_routes_reloader,
+            credentialed_route_prefixes,
         ))
     }
 
@@ -1081,7 +1077,9 @@ impl Session {
             .cloned()
         else {
             self.services.network_proxy.store(None);
-            self.services.credentialed_routes_reloader.store(None);
+            self.services
+                .credentialed_route_prefixes
+                .store(Arc::new(Default::default()));
             return;
         };
 
@@ -1105,27 +1103,7 @@ impl Session {
             }
         };
         if let Some(started_proxy) = self.services.network_proxy.load_full() {
-            let update_result = if let Some(credentialed_routes_reloader) =
-                self.services.credentialed_routes_reloader.load_full()
-            {
-                match spec.build_config_state_for_spec() {
-                    Ok(base_state) => match credentialed_routes_reloader
-                        .replace_base_state(base_state)
-                        .await
-                    {
-                        Ok(state) => started_proxy
-                            .proxy()
-                            .replace_config_state(state)
-                            .await
-                            .map_err(std::io::Error::other),
-                        Err(err) => Err(std::io::Error::other(err)),
-                    },
-                    Err(err) => Err(err),
-                }
-            } else {
-                spec.apply_to_started_proxy(started_proxy.as_ref()).await
-            };
-            if let Err(err) = update_result {
+            if let Err(err) = spec.apply_to_started_proxy(started_proxy.as_ref()).await {
                 warn!("failed to refresh managed network proxy for sandbox change: {err}");
             }
             return;
@@ -1150,13 +1128,13 @@ impl Session {
         })
         .await
         {
-            Ok((started_proxy, _session_network_proxy, credentialed_routes_reloader)) => {
+            Ok((started_proxy, _session_network_proxy, credentialed_route_prefixes)) => {
                 self.services
                     .network_proxy
                     .store(Some(Arc::new(started_proxy)));
                 self.services
-                    .credentialed_routes_reloader
-                    .store(Some(credentialed_routes_reloader));
+                    .credentialed_route_prefixes
+                    .store(Arc::new(credentialed_route_prefixes));
             }
             Err(err) => {
                 warn!("failed to start managed network proxy for sandbox change: {err}");
@@ -3072,12 +3050,8 @@ impl Session {
         {
             developer_sections.push(developer_instructions.to_string());
         }
-        if let Some(credentialed_routes_reloader) =
-            self.services.credentialed_routes_reloader.load_full()
-            && let Some(credentialed_route_instructions) =
-                CredentialedRoutesInstructions::from_config(
-                    &credentialed_routes_reloader.current_routes().await,
-                )
+        if let Some(credentialed_route_instructions) =
+            CredentialedRoutesInstructions::new(&self.services.credentialed_route_prefixes.load())
         {
             developer_sections.push(credentialed_route_instructions.render());
         }
