@@ -2418,6 +2418,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "codex-agent-identity",
  "codex-backend-client",
  "codex-config",
  "codex-core",
@@ -4271,7 +4272,6 @@ name = "codex-utils-plugins"
 version = "0.0.0"
 dependencies = [
  "codex-exec-server",
- "codex-login",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "serde",
