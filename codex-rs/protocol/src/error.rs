@@ -314,6 +314,9 @@ pub struct UnexpectedResponseError {
 
 const CLOUDFLARE_BLOCKED_MESSAGE: &str =
     "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
+const BEDROCK_EXPIRED_SIGNATURE_MESSAGE: &str = "Amazon Bedrock rejected the request because its \
+AWS signature has expired. Refresh your AWS credentials and retry. If \
+`AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex";
 const UNEXPECTED_RESPONSE_BODY_MAX_BYTES: usize = 1000;
 
 impl UnexpectedResponseError {
@@ -345,6 +348,26 @@ impl UnexpectedResponseError {
     }
 
     fn friendly_message(&self) -> Option<String> {
+        if self.is_bedrock_expired_signature() {
+            let mut message = BEDROCK_EXPIRED_SIGNATURE_MESSAGE.to_string();
+            if let Some(url) = &self.url {
+                message.push_str(&format!(", url: {url}"));
+            }
+            if let Some(cf_ray) = &self.cf_ray {
+                message.push_str(&format!(", cf-ray: {cf_ray}"));
+            }
+            if let Some(id) = &self.request_id {
+                message.push_str(&format!(", request id: {id}"));
+            }
+            if let Some(auth_error) = &self.identity_authorization_error {
+                message.push_str(&format!(", auth error: {auth_error}"));
+            }
+            if let Some(error_code) = &self.identity_error_code {
+                message.push_str(&format!(", auth error code: {error_code}"));
+            }
+            return Some(message);
+        }
+
         if self.status != StatusCode::FORBIDDEN {
             return None;
         }
@@ -372,6 +395,25 @@ impl UnexpectedResponseError {
         }
 
         Some(message)
+    }
+
+    fn is_bedrock_expired_signature(&self) -> bool {
+        if self.status != StatusCode::UNAUTHORIZED || !self.body.contains("Signature expired:") {
+            return false;
+        }
+
+        let Some(url) = self
+            .url
+            .as_deref()
+            .and_then(|url| reqwest::Url::parse(url).ok())
+        else {
+            return false;
+        };
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+
+        host.starts_with("bedrock-mantle.") && host.ends_with(".api.aws")
     }
 }
 

@@ -440,6 +440,64 @@ fn unexpected_status_non_html_is_unchanged() {
 }
 
 #[test]
+fn unexpected_status_bedrock_expired_signature_has_actionable_guidance() {
+    let err = UnexpectedResponseError {
+        status: StatusCode::UNAUTHORIZED,
+        body: "Signature expired: 20260609T133205Z is now earlier than 20260614T062525Z \
+(20260614T063025Z - 5 min.)"
+            .to_string(),
+        url: Some("https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses".to_string()),
+        cf_ray: None,
+        request_id: Some("req-bedrock".to_string()),
+        identity_authorization_error: None,
+        identity_error_code: None,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "{BEDROCK_EXPIRED_SIGNATURE_MESSAGE}, url: https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses, request id: req-bedrock"
+        )
+    );
+}
+
+#[test]
+fn unexpected_status_bedrock_other_unauthorized_error_is_unchanged() {
+    let err = UnexpectedResponseError {
+        status: StatusCode::UNAUTHORIZED,
+        body: "The security token included in the request is invalid".to_string(),
+        url: Some("https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses".to_string()),
+        cf_ray: None,
+        request_id: None,
+        identity_authorization_error: None,
+        identity_error_code: None,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "unexpected status 401 Unauthorized: The security token included in the request is invalid, url: https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+    );
+}
+
+#[test]
+fn unexpected_status_non_bedrock_expired_signature_is_unchanged() {
+    let err = UnexpectedResponseError {
+        status: StatusCode::UNAUTHORIZED,
+        body: "Signature expired: old is now earlier than new".to_string(),
+        url: Some("https://example.com/openai/v1/responses".to_string()),
+        cf_ray: None,
+        request_id: None,
+        identity_authorization_error: None,
+        identity_error_code: None,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "unexpected status 401 Unauthorized: Signature expired: old is now earlier than new, url: https://example.com/openai/v1/responses"
+    );
+}
+
+#[test]
 fn unexpected_status_prefers_error_message_when_present() {
     let err = UnexpectedResponseError {
         status: StatusCode::UNAUTHORIZED,
