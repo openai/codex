@@ -9,7 +9,11 @@ use crate::events::CodexCommandExecutionEventParams;
 use crate::events::CodexCommandExecutionEventRequest;
 use crate::events::CodexCompactionEventRequest;
 use crate::events::CodexHookRunEventRequest;
+use crate::events::CodexOnboardingExternalAgentImportFailureEventRequest;
+use crate::events::CodexOnboardingExternalAgentImportFailureMetadata;
 use crate::events::CodexPluginEventRequest;
+use crate::events::CodexPluginInstallFailedEventRequest;
+use crate::events::CodexPluginInstallFailedMetadata;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexReviewEventParams;
 use crate::events::CodexReviewEventRequest;
@@ -51,10 +55,13 @@ use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::ExternalAgentConfigImportCompletedInput;
+use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::InputError;
 use crate::facts::InvocationType;
+use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -178,6 +185,7 @@ fn sample_thread_with_metadata(
         model_provider: "openai".to_string(),
         created_at: 1,
         updated_at: 2,
+        recency_at: Some(2),
         status: AppServerThreadStatus::Idle,
         path: None,
         cwd: test_path_buf("/tmp").abs(),
@@ -3054,6 +3062,36 @@ fn plugin_management_event_serializes_expected_shape() {
 }
 
 #[test]
+fn plugin_install_failed_event_serializes_expected_shape() {
+    let event = TrackEventRequest::PluginInstallFailed(CodexPluginInstallFailedEventRequest {
+        event_type: "codex_plugin_install_failed",
+        event_params: CodexPluginInstallFailedMetadata {
+            plugin: codex_plugin_metadata(sample_plugin_metadata()),
+            error_type: "store_io".to_string(),
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize plugin install failed event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_plugin_install_failed",
+            "event_params": {
+                "plugin_id": "sample@test",
+                "plugin_name": "sample",
+                "marketplace_name": "test",
+                "has_skills": true,
+                "mcp_server_count": 2,
+                "connector_ids": ["calendar", "drive"],
+                "product_client_id": originator().value,
+                "error_type": "store_io"
+            }
+        })
+    );
+}
+
+#[test]
 fn plugin_management_event_can_use_remote_plugin_id_override() {
     let mut plugin = sample_plugin_metadata();
     plugin.remote_plugin_id = Some("plugins~Plugin_remote".to_string());
@@ -3415,6 +3453,190 @@ async fn reducer_ingests_plugin_state_changed_fact() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_plugin_install_failed_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallFailed(
+                PluginInstallFailedInput {
+                    plugin: sample_plugin_metadata(),
+                    error_type: "invalid_plugin".to_string(),
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_plugin_install_failed",
+            "event_params": {
+                "plugin_id": "sample@test",
+                "plugin_name": "sample",
+                "marketplace_name": "test",
+                "has_skills": true,
+                "mcp_server_count": 2,
+                "connector_ids": ["calendar", "drive"],
+                "product_client_id": originator().value,
+                "error_type": "invalid_plugin"
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let mut plugin = PluginTelemetryMetadata::from_plugin_id(
+        &PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
+    );
+    plugin.remote_plugin_id = Some("plugins~Plugin_00000000000000000000000000000000".to_string());
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallFailed(
+                PluginInstallFailedInput {
+                    plugin,
+                    error_type: "remote_catalog_unexpected_status".to_string(),
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_plugin_install_failed",
+            "event_params": {
+                "plugin_id": "plugins~Plugin_00000000000000000000000000000000",
+                "plugin_name": "unknown",
+                "marketplace_name": "openai-curated-remote",
+                "has_skills": null,
+                "mcp_server_count": null,
+                "connector_ids": null,
+                "product_client_id": originator().value,
+                "error_type": "remote_catalog_unexpected_status"
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_external_agent_config_import_completed_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ExternalAgentConfigImportCompleted(
+                ExternalAgentConfigImportCompletedInput {
+                    import_id: "import-1".to_string(),
+                    source: "app_server".to_string(),
+                    item_type: "PLUGINS".to_string(),
+                    success_count: 2,
+                    failed_count: 1,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_onboarding_external_agent_import_complete",
+            "event_params": {
+                "import_id": "import-1",
+                "source": "app_server",
+                "type": "PLUGINS",
+                "success_count": 2,
+                "failed_count": 1,
+                "product_client_id": originator().value,
+            }
+        }])
+    );
+}
+
+#[test]
+fn external_agent_config_import_failure_event_serializes_expected_shape() {
+    let event = TrackEventRequest::ExternalAgentConfigImportFailure(
+        CodexOnboardingExternalAgentImportFailureEventRequest {
+            event_type: "codex_onboarding_external_agent_import_failure",
+            event_params: CodexOnboardingExternalAgentImportFailureMetadata {
+                import_id: "import-1".to_string(),
+                source: "app_server".to_string(),
+                item_type: "SESSIONS".to_string(),
+                failure_stage: "session_missing".to_string(),
+                error_type: "session_missing".to_string(),
+                product_client_id: Some(originator().value),
+            },
+        },
+    );
+
+    let payload = serde_json::to_value(&event).expect("serialize import failure event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_onboarding_external_agent_import_failure",
+            "event_params": {
+                "import_id": "import-1",
+                "source": "app_server",
+                "type": "SESSIONS",
+                "failure_stage": "session_missing",
+                "error_type": "session_missing",
+                "product_client_id": originator().value,
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_external_agent_config_import_failure_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ExternalAgentConfigImportFailure(
+                ExternalAgentConfigImportFailureInput {
+                    import_id: "import-1".to_string(),
+                    source: "app_server".to_string(),
+                    item_type: "SESSIONS".to_string(),
+                    failure_stage: "session_missing".to_string(),
+                    error_type: "session_missing".to_string(),
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_onboarding_external_agent_import_failure",
+            "event_params": {
+                "import_id": "import-1",
+                "source": "app_server",
+                "type": "SESSIONS",
+                "failure_stage": "session_missing",
+                "error_type": "session_missing",
+                "product_client_id": originator().value,
             }
         }])
     );

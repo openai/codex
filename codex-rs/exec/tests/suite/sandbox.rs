@@ -60,7 +60,12 @@ async fn spawn_command_under_sandbox(
         child.arg0(arg0);
     }
     child.args(args);
-    child.current_dir(exec_request.cwd);
+    // TODO(anp): Keep PathUri through the macOS sandbox process launch boundary.
+    let native_cwd = exec_request
+        .cwd
+        .to_abs_path()
+        .map_err(|err| io::Error::other(err.to_string()))?;
+    child.current_dir(native_cwd);
     child.env_clear();
     child.envs(exec_request.env);
 

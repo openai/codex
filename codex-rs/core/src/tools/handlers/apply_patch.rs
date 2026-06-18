@@ -205,16 +205,19 @@ fn format_update_chunks_for_progress(chunks: &[codex_apply_patch::UpdateFileChun
 
 fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
     let mut keys = Vec::new();
-    let cwd = &action.cwd;
+    // TODO(anp): Migrate permission path accounting to PathUri.
+    let Ok(cwd) = action.cwd.to_abs_path() else {
+        return keys;
+    };
 
     for (path, change) in action.changes() {
-        if let Some(key) = to_abs_path(cwd, path) {
+        if let Some(key) = to_abs_path(&cwd, path) {
             keys.push(key);
         }
 
         if let ApplyPatchFileChange::Update { move_path, .. } = change
             && let Some(dest) = move_path
-            && let Some(key) = to_abs_path(cwd, dest)
+            && let Some(key) = to_abs_path(&cwd, dest)
         {
             keys.push(key);
         }

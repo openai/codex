@@ -544,6 +544,7 @@ mod tests {
             rollout_path: PathBuf::from("/tmp/a.jsonl"),
             created_at,
             updated_at: created_at,
+            recency_at: created_at,
             source: "cli".to_string(),
             thread_source: None,
             agent_path: None,

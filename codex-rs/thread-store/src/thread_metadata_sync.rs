@@ -154,11 +154,17 @@ impl ThreadMetadataSync {
         let affects_metadata = items
             .iter()
             .any(codex_state::rollout_item_affects_thread_metadata);
-        let update = if affects_metadata {
+        let advances_recency = items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))));
+        let mut update = if affects_metadata {
             self.observe_items(items)?
         } else {
             thread_updated_at_touch()
         };
+        if advances_recency {
+            update.advance_recency_at = Some(Utc::now());
+        }
         self.merge_pending_update(Some(update));
         if !affects_metadata
             && !self
@@ -347,6 +353,7 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.model.is_some()
         || update.reasoning_effort.is_some()
         || update.created_at.is_some()
+        || update.advance_recency_at.is_some()
         || update.source.is_some()
         || update.thread_source.is_some()
         || update.agent_nickname.is_some()
@@ -379,6 +386,7 @@ mod tests {
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
 
@@ -493,6 +501,27 @@ mod tests {
             sync.take_pending_update().is_some(),
             "coalesced touches still flush at the next barrier"
         );
+    }
+
+    #[test]
+    fn turn_start_advances_recency_at_without_changing_updated_at_behavior() {
+        let thread_id = ThreadId::new();
+        let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
+
+        let update = sync
+            .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::TurnStarted(
+                TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            ))])
+            .expect("turn start metadata update");
+
+        assert!(update.patch.updated_at.is_some());
+        assert!(update.patch.advance_recency_at.is_some());
     }
 
     #[test]
