@@ -835,6 +835,10 @@ impl ModelClient {
         Ok(request)
     }
 
+    fn include_item_ids_for_request(&self, request: &ResponsesApiRequest) -> bool {
+        self.state.item_ids_enabled || request.store
+    }
+
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
     ///
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
@@ -1314,10 +1318,11 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            let include_item_ids = self.client.include_item_ids_for_request(&request);
+            options.include_item_ids = include_item_ids;
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
-            let trace_request =
-                response_request_json(&request, self.client.state.item_ids_enabled)?;
+            let trace_request = response_request_json(&request, include_item_ids)?;
             inference_trace_attempt.record_started(&trace_request);
             let client = ApiResponsesClient::new(
                 transport,
@@ -1421,6 +1426,7 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            let include_item_ids = self.client.include_item_ids_for_request(&request);
             let mut client_metadata = self
                 .client
                 .build_ws_client_metadata(responses_metadata, model_info.use_responses_lite);
@@ -1487,9 +1493,9 @@ impl ModelClientSession {
                 // The transport can reuse an untraced warmup response id and omit the
                 // already-sent input, but rollout replay needs the logical model-visible
                 // request rather than the compressed websocket delta.
-                response_request_json(&request, self.client.state.item_ids_enabled)?
+                response_request_json(&request, include_item_ids)?
             } else {
-                response_request_json(&ws_request, self.client.state.item_ids_enabled)?
+                response_request_json(&ws_request, include_item_ids)?
             };
             inference_trace_attempt.record_started(&trace_request);
             self.websocket_session.last_request = Some(request);
@@ -1505,7 +1511,7 @@ impl ModelClientSession {
                     ws_request,
                     self.websocket_session.connection_reused(),
                     Some(Arc::clone(&self.turn_state)),
-                    /*include_item_ids*/ self.client.state.item_ids_enabled,
+                    include_item_ids,
                 )
                 .await
                 .map_err(|err| {
