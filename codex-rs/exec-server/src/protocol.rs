@@ -154,6 +154,7 @@ pub struct ReadResponse {
 pub struct WriteParams {
     pub process_id: ProcessId,
     pub chunk: ByteChunk,
+    pub write_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
