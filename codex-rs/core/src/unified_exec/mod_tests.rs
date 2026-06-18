@@ -76,6 +76,7 @@ fn test_exec_request(
         cwd,
         env,
         network,
+        /*network_environment_id*/ None,
         ExecExpiration::DefaultTimeout,
         ExecCapturePolicy::ShellTool,
         SandboxType::None,

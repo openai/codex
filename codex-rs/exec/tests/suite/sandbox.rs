@@ -36,6 +36,7 @@ async fn spawn_command_under_sandbox(
             capture_policy: ExecCapturePolicy::ShellTool,
             env,
             network: None,
+            network_environment_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,

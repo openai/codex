@@ -113,6 +113,7 @@ pub struct SandboxExecRequest {
     pub sandbox_policy_cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    pub network_environment_id: Option<String>,
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -130,6 +131,7 @@ pub struct SandboxTransformRequest<'a> {
     pub permissions: &'a PermissionProfile,
     pub sandbox: SandboxType,
     pub enforce_managed_network: bool,
+    pub environment_id: Option<&'a str>,
     // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
@@ -259,6 +261,7 @@ impl SandboxManager {
             permissions,
             sandbox,
             enforce_managed_network,
+            environment_id,
             network,
             sandbox_policy_cwd,
             codex_linux_sandbox_exe,
@@ -354,6 +357,7 @@ impl SandboxManager {
             sandbox_policy_cwd: native_sandbox_policy_cwd,
             env: command.env,
             network: network.cloned(),
+            network_environment_id: environment_id.map(str::to_string),
             sandbox,
             windows_sandbox_level,
             windows_sandbox_private_desktop,

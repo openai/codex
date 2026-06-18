@@ -434,6 +434,7 @@ impl<'a> SandboxAttempt<'a> {
                 permissions: self.permissions,
                 sandbox: self.sandbox,
                 enforce_managed_network: self.enforce_managed_network,
+                environment_id: None,
                 network,
                 sandbox_policy_cwd: self.sandbox_cwd,
                 codex_linux_sandbox_exe: self

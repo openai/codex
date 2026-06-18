@@ -700,6 +700,7 @@ mod tests {
             cwd.clone(),
             HashMap::new(),
             /*network*/ None,
+            /*network_environment_id*/ None,
             ExecExpiration::DefaultTimeout,
             codex_core::exec::ExecCapturePolicy::ShellTool,
             SandboxType::WindowsRestrictedToken,
@@ -817,6 +818,7 @@ mod tests {
                     cwd.clone(),
                     HashMap::new(),
                     /*network*/ None,
+                    /*network_environment_id*/ None,
                     ExecExpiration::Cancellation(CancellationToken::new()),
                     codex_core::exec::ExecCapturePolicy::ShellTool,
                     SandboxType::None,
@@ -904,6 +906,7 @@ mod tests {
                     cwd.clone(),
                     HashMap::new(),
                     /*network*/ None,
+                    /*network_environment_id*/ None,
                     ExecExpiration::TimeoutOrCancellation {
                         timeout: Duration::from_secs(30),
                         cancellation,
