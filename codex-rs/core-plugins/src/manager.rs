@@ -51,6 +51,7 @@ use crate::startup_sync::sync_openai_plugins_repo;
 use crate::store::PluginInstallResult as StorePluginInstallResult;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
+use crate::tool_suggest_metadata::ToolSuggestMetadataCache;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AuthMode;
 use codex_config::ConfigLayerStack;
@@ -354,6 +355,7 @@ pub struct PluginsManager {
     // Keep the cache auth-independent so auth changes only need to resolve capabilities again.
     loaded_plugins_cache: RwLock<LoadedPluginsCache>,
     loaded_plugins_load_semaphore: Semaphore,
+    tool_suggest_metadata_cache: ToolSuggestMetadataCache,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     global_remote_catalog_cache_refresh_state: RwLock<GlobalRemoteCatalogCacheRefreshState>,
@@ -410,6 +412,7 @@ impl PluginsManager {
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             loaded_plugins_cache: RwLock::new(LoadedPluginsCache::default()),
             loaded_plugins_load_semaphore: Semaphore::new(/*permits*/ 1),
+            tool_suggest_metadata_cache: ToolSuggestMetadataCache::new(),
             remote_installed_plugins_cache: RwLock::new(None),
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
@@ -551,12 +554,24 @@ impl PluginsManager {
     }
 
     fn clear_loaded_plugins_cache(&self) {
+        self.tool_suggest_metadata_cache.clear();
         let mut cache = match self.loaded_plugins_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
         cache.generation = cache.generation.wrapping_add(1);
         cache.entry = None;
+    }
+
+    fn clear_caches_after_marketplace_source_refresh(
+        &self,
+        installed_plugin_cache_refreshed: bool,
+    ) {
+        if installed_plugin_cache_refreshed {
+            self.clear_cache();
+        } else {
+            self.tool_suggest_metadata_cache.clear();
+        }
     }
 
     /// Load plugins for a config layer stack without touching the plugins cache.
@@ -1444,6 +1459,19 @@ impl PluginsManager {
         ))
     }
 
+    pub(crate) async fn tool_suggest_metadata_for_marketplace_plugin(
+        &self,
+        marketplace_name: &str,
+        plugin: &ConfiguredMarketplacePlugin,
+        skill_config_rules: &SkillConfigRules,
+    ) -> Result<PluginCapabilitySummary, MarketplaceError> {
+        let fragment = self
+            .tool_suggest_metadata_cache
+            .metadata_for_plugin(marketplace_name, plugin, self.restriction_product)
+            .await?;
+        Ok(fragment.project(skill_config_rules, self.auth_mode()))
+    }
+
     pub async fn read_plugin_for_config(
         &self,
         config: &PluginsConfigInput,
@@ -1795,9 +1823,7 @@ impl PluginsManager {
                 &outcome.upgraded_roots,
             ) {
                 Ok(cache_refreshed) => {
-                    if cache_refreshed {
-                        self.clear_cache();
-                    }
+                    self.clear_caches_after_marketplace_source_refresh(cache_refreshed);
                 }
                 Err(err) => {
                     self.clear_cache();
@@ -1977,9 +2003,8 @@ impl PluginsManager {
                             &configured_curated_plugin_ids,
                         ) {
                             Ok(cache_refreshed) => {
-                                if cache_refreshed {
-                                    manager.clear_cache();
-                                }
+                                manager
+                                    .clear_caches_after_marketplace_source_refresh(cache_refreshed);
                             }
                             Err(err) => {
                                 manager.clear_cache();
@@ -2220,7 +2245,9 @@ impl PluginsManager {
     }
 }
 
-fn remote_plugin_install_required_description(source: &MarketplacePluginSource) -> String {
+pub(crate) fn remote_plugin_install_required_description(
+    source: &MarketplacePluginSource,
+) -> String {
     let source_description = match source {
         MarketplacePluginSource::Git {
             url,

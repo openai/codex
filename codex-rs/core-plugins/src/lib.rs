@@ -18,6 +18,7 @@ pub mod store;
 #[cfg(test)]
 mod test_support;
 pub mod toggles;
+mod tool_suggest_metadata;
 
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_API_CURATED_MARKETPLACE_NAME: &str = "openai-api-curated";

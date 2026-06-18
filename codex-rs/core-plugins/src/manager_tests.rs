@@ -3,6 +3,8 @@ use crate::LoadedPlugin;
 use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginLoadOutcome;
+use crate::ToolSuggestDiscoverablePlugin;
+use crate::ToolSuggestPluginDiscoveryInput;
 use crate::installed_marketplaces::marketplace_install_root;
 use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
@@ -18,6 +20,7 @@ use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::test_support::load_plugins_config as load_plugins_config_input;
+use crate::test_support::write_curated_plugin;
 use crate::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::test_support::write_file;
 use crate::test_support::write_openai_api_curated_marketplace;
@@ -3494,6 +3497,103 @@ source = "/tmp/debug"
         MarketplacePluginSource::Local {
             path: AbsolutePathBuf::try_from(plugin_root).unwrap(),
         }
+    );
+}
+
+#[tokio::test]
+async fn configured_marketplace_upgrade_invalidates_cached_tool_suggest_metadata() {
+    let tmp = tempfile::tempdir().unwrap();
+    let remote_repo = tmp.path().join("remote-marketplace");
+    let remote_repo_url = url::Url::from_directory_path(&remote_repo)
+        .unwrap()
+        .to_string();
+    write_file(
+        &remote_repo.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sample"
+      }
+    }
+  ]
+}"#,
+    );
+    write_curated_plugin(&remote_repo, "sample");
+    write_file(
+        &remote_repo.join("plugins/sample/.codex-plugin/plugin.json"),
+        r#"{"name":"sample","description":"Before upgrade"}"#,
+    );
+    init_git_repo(&remote_repo);
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        &format!(
+            r#"[features]
+plugins = true
+
+[marketplaces.debug]
+source_type = "git"
+source = "{remote_repo_url}"
+"#
+        ),
+    );
+
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let initial_upgrade = manager
+        .upgrade_configured_marketplaces_for_config(&config, /*marketplace_name*/ None)
+        .expect("initial marketplace install should succeed");
+    assert_eq!(initial_upgrade.errors, Vec::new());
+    assert_eq!(initial_upgrade.upgraded_roots.len(), 1);
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let input = ToolSuggestPluginDiscoveryInput {
+        plugins: config.clone(),
+        configured_plugin_ids: HashSet::from(["sample@debug".to_string()]),
+        disabled_plugin_ids: HashSet::new(),
+        loaded_plugin_app_connector_ids: HashSet::new(),
+    };
+    let expected = ToolSuggestDiscoverablePlugin {
+        id: "sample@debug".to_string(),
+        remote_plugin_id: None,
+        name: "sample".to_string(),
+        description: Some("Before upgrade".to_string()),
+        has_skills: true,
+        mcp_server_names: vec!["sample-docs".to_string()],
+        app_connector_ids: vec!["connector_calendar".to_string()],
+    };
+    assert_eq!(
+        manager
+            .list_tool_suggest_discoverable_plugins(&input, /*auth*/ None)
+            .await
+            .expect("initial tool-suggest metadata should load"),
+        vec![expected.clone()]
+    );
+
+    write_file(
+        &remote_repo.join("plugins/sample/.codex-plugin/plugin.json"),
+        r#"{"name":"sample","description":"After upgrade"}"#,
+    );
+    run_git(&remote_repo, &["add", "."]);
+    run_git(&remote_repo, &["commit", "-m", "update plugin"]);
+    let upgrade = manager
+        .upgrade_configured_marketplaces_for_config(&config, /*marketplace_name*/ None)
+        .expect("marketplace upgrade should succeed");
+    assert_eq!(upgrade.errors, Vec::new());
+    assert_eq!(upgrade.upgraded_roots.len(), 1);
+
+    assert_eq!(
+        manager
+            .list_tool_suggest_discoverable_plugins(&input, /*auth*/ None)
+            .await
+            .expect("refreshed tool-suggest metadata should load"),
+        vec![ToolSuggestDiscoverablePlugin {
+            description: Some("After upgrade".to_string()),
+            ..expected
+        }]
     );
 }
 
