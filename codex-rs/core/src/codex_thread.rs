@@ -24,6 +24,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -533,6 +534,18 @@ impl CodexThread {
                 message: err.to_string(),
             })?;
         live_thread.update_metadata(patch, include_archived).await
+    }
+
+    /// Appends rollout items through the live thread so derived metadata stays in sync.
+    pub async fn append_rollout_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("append rollout items")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread.append_items(items).await
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
