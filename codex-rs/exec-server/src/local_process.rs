@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -54,6 +57,8 @@ use crate::rpc::invalid_request;
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
+const RETAINED_STDIN_WRITE_IDS_PER_PROCESS: usize = 4096;
+static NEXT_LOCAL_STDIN_WRITE_ID: AtomicU64 = AtomicU64::new(1);
 #[cfg(test)]
 const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
 #[cfg(not(test))]
@@ -70,6 +75,7 @@ struct RunningProcess {
     session: ExecCommandSession,
     tty: bool,
     pipe_stdin: bool,
+    accepted_stdin_write_ids: Arc<Mutex<AcceptedStdinWriteIds>>,
     output: VecDeque<RetainedOutputChunk>,
     retained_bytes: usize,
     next_seq: u64,
@@ -79,6 +85,37 @@ struct RunningProcess {
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
+}
+
+/// Bounded cache of stdin write ids that have already been accepted for one process.
+///
+/// A remote client can retry `process/write` after reconnecting. Remembering accepted
+/// ids lets the server acknowledge the retried request without writing the same bytes
+/// to child stdin twice.
+#[derive(Default)]
+struct AcceptedStdinWriteIds {
+    ids: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl AcceptedStdinWriteIds {
+    fn contains(&self, write_id: &str) -> bool {
+        self.ids.contains(write_id)
+    }
+
+    fn remember(&mut self, write_id: String) {
+        if !self.ids.insert(write_id.clone()) {
+            return;
+        }
+
+        self.order.push_back(write_id);
+        while self.order.len() > RETAINED_STDIN_WRITE_IDS_PER_PROCESS {
+            let Some(evicted) = self.order.pop_front() else {
+                break;
+            };
+            self.ids.remove(&evicted);
+        }
+    }
 }
 
 struct ProcessStart;
@@ -247,6 +284,9 @@ impl LocalProcess {
                     session: spawned.session,
                     tty: params.tty,
                     pipe_stdin: params.pipe_stdin,
+                    accepted_stdin_write_ids: Arc::new(
+                        Mutex::new(AcceptedStdinWriteIds::default()),
+                    ),
                     output: VecDeque::new(),
                     retained_bytes: 0,
                     next_seq: 1,
@@ -383,7 +423,11 @@ impl LocalProcess {
         params: WriteParams,
     ) -> Result<WriteResponse, JSONRPCErrorError> {
         let _input_bytes = params.chunk.0.len();
-        let writer_tx = {
+        if params.write_id.is_empty() {
+            return Err(invalid_params("writeId must not be empty".to_string()));
+        }
+
+        let (writer_tx, accepted_stdin_write_ids) = {
             let process_map = self.inner.processes.lock().await;
             let Some(process) = process_map.get(&params.process_id) else {
                 return Ok(WriteResponse {
@@ -400,13 +444,37 @@ impl LocalProcess {
                     status: WriteStatus::StdinClosed,
                 });
             }
-            process.session.writer_sender()
+            (
+                process.session.writer_sender(),
+                Arc::clone(&process.accepted_stdin_write_ids),
+            )
         };
 
-        writer_tx
-            .send(params.chunk.into_inner())
+        if accepted_stdin_write_ids
+            .lock()
+            .await
+            .contains(&params.write_id)
+        {
+            return Ok(WriteResponse {
+                status: WriteStatus::Accepted,
+            });
+        }
+
+        let permit = writer_tx
+            .reserve()
             .await
             .map_err(|_| internal_error("failed to write to process stdin".to_string()))?;
+        let mut accepted_stdin_write_ids = accepted_stdin_write_ids.lock().await;
+        if accepted_stdin_write_ids.contains(&params.write_id) {
+            return Ok(WriteResponse {
+                status: WriteStatus::Accepted,
+            });
+        }
+
+        // After this synchronous send, record the write id before any further await.
+        // Otherwise a cancelled RPC handler could retry and write the same bytes again.
+        permit.send(params.chunk.into_inner());
+        accepted_stdin_write_ids.remember(params.write_id);
 
         Ok(WriteResponse {
             status: WriteStatus::Accepted,
@@ -601,6 +669,10 @@ impl LocalProcess {
         self.exec_write(WriteParams {
             process_id: process_id.clone(),
             chunk: chunk.into(),
+            write_id: format!(
+                "local-{}",
+                NEXT_LOCAL_STDIN_WRITE_ID.fetch_add(1, Ordering::Relaxed)
+            ),
         })
         .await
         .map_err(map_handler_error)
@@ -1023,6 +1095,7 @@ mod tests {
                 session: dummy_session(),
                 tty: false,
                 pipe_stdin: false,
+                accepted_stdin_write_ids: Arc::new(Mutex::new(AcceptedStdinWriteIds::default())),
                 output: VecDeque::new(),
                 retained_bytes: 0,
                 next_seq: 1,

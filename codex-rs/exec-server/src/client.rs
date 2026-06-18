@@ -155,6 +155,7 @@ pub(crate) struct SessionState {
     events: ExecProcessEventLog,
     ordered_events: StdMutex<OrderedSessionEvents>,
     recoverable: AtomicBool,
+    next_write_id: AtomicU64,
 }
 
 #[derive(Default)]
@@ -421,12 +422,14 @@ impl ExecServerClient {
         &self,
         process_id: &ProcessId,
         chunk: Vec<u8>,
+        write_id: String,
     ) -> Result<WriteResponse, ExecServerError> {
         self.call(
             EXEC_WRITE_METHOD,
             &WriteParams {
                 process_id: process_id.clone(),
                 chunk: chunk.into(),
+                write_id,
             },
         )
         .await
@@ -730,6 +733,7 @@ impl SessionState {
             ),
             ordered_events: StdMutex::new(OrderedSessionEvents::default()),
             recoverable: AtomicBool::new(recoverable),
+            next_write_id: AtomicU64::new(1),
         }
     }
 
@@ -829,6 +833,12 @@ impl SessionState {
             failure: Some(message),
         }
     }
+
+    fn next_write_id(&self) -> String {
+        self.next_write_id
+            .fetch_add(1, Ordering::Relaxed)
+            .to_string()
+    }
 }
 
 impl Session {
@@ -885,7 +895,22 @@ impl Session {
     }
 
     pub(crate) async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
-        self.client.write(&self.process_id, chunk).await
+        let write_id = self.state.next_write_id();
+        loop {
+            match self
+                .client
+                .write(&self.process_id, chunk.clone(), write_id.clone())
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(error)
+                    if is_transport_closed_error(&error) && !self.client.inner.is_failed() =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn signal(&self, signal: ProcessSignal) -> Result<(), ExecServerError> {
@@ -1110,6 +1135,8 @@ mod tests {
     use crate::protocol::EXEC_CLOSED_METHOD;
     use crate::protocol::EXEC_EXITED_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
+    use crate::protocol::EXEC_READ_METHOD;
+    use crate::protocol::EXEC_WRITE_METHOD;
     use crate::protocol::ExecClosedNotification;
     use crate::protocol::ExecExitedNotification;
     use crate::protocol::ExecOutputDeltaNotification;
@@ -1118,6 +1145,10 @@ mod tests {
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeResponse;
     use crate::protocol::ProcessOutputChunk;
+    use crate::protocol::ReadResponse;
+    use crate::protocol::WriteParams;
+    use crate::protocol::WriteResponse;
+    use crate::protocol::WriteStatus;
 
     async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
     where
@@ -1681,6 +1712,121 @@ mod tests {
         let reused_client = client.get().await.expect("client should stay connected");
         assert_eq!(stable_client.session_id().as_deref(), Some("session-1"));
         assert!(Arc::ptr_eq(&stable_client.inner, &reused_client.inner));
+        finish_tx.send(()).expect("test should finish");
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn session_write_retries_same_write_id_after_recovery() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let websocket_url = format!(
+            "ws://{}",
+            listener.local_addr().expect("listener should have address")
+        );
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut first = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut first,
+                "session-1",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
+
+            let first_write = read_jsonrpc_websocket(&mut first).await;
+            let first_write = match first_write {
+                JSONRPCMessage::Request(request) if request.method == EXEC_WRITE_METHOD => request,
+                other => panic!("expected first process/write request, got {other:?}"),
+            };
+            let first_write_params: WriteParams =
+                serde_json::from_value(first_write.params.expect("write params should exist"))
+                    .expect("write params should deserialize");
+            assert_eq!(first_write_params.process_id.as_str(), "proc-write");
+            assert_eq!(first_write_params.chunk.into_inner(), b"hello\n".to_vec());
+            let write_id = first_write_params.write_id;
+            assert!(!write_id.is_empty());
+            drop(first);
+
+            let mut resumed = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut resumed,
+                "session-1",
+                /*expected_resume_session_id*/ Some("session-1"),
+            )
+            .await;
+
+            let recovery_read = read_jsonrpc_websocket(&mut resumed).await;
+            let recovery_read = match recovery_read {
+                JSONRPCMessage::Request(request) if request.method == EXEC_READ_METHOD => request,
+                other => panic!("expected recovery process/read request, got {other:?}"),
+            };
+            write_jsonrpc_websocket(
+                &mut resumed,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: recovery_read.id,
+                    result: serde_json::to_value(ReadResponse {
+                        chunks: Vec::new(),
+                        next_seq: 1,
+                        exited: false,
+                        exit_code: None,
+                        closed: false,
+                        failure: None,
+                    })
+                    .expect("read response should serialize"),
+                }),
+            )
+            .await;
+
+            let retried_write = read_jsonrpc_websocket(&mut resumed).await;
+            let retried_write = match retried_write {
+                JSONRPCMessage::Request(request) if request.method == EXEC_WRITE_METHOD => request,
+                other => panic!("expected retried process/write request, got {other:?}"),
+            };
+            let retried_write_params: WriteParams =
+                serde_json::from_value(retried_write.params.expect("write params should exist"))
+                    .expect("write params should deserialize");
+            assert_eq!(retried_write_params.process_id.as_str(), "proc-write");
+            assert_eq!(retried_write_params.chunk.into_inner(), b"hello\n".to_vec());
+            assert_eq!(retried_write_params.write_id, write_id);
+            write_jsonrpc_websocket(
+                &mut resumed,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: retried_write.id,
+                    result: serde_json::to_value(WriteResponse {
+                        status: WriteStatus::Accepted,
+                    })
+                    .expect("write response should serialize"),
+                }),
+            )
+            .await;
+
+            finish_rx.await.expect("test should finish");
+        });
+
+        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
+            websocket_url,
+            connect_timeout: Duration::from_secs(1),
+            initialize_timeout: Duration::from_secs(1),
+        });
+        let stable_client = client.get().await.expect("client should connect");
+        let session = stable_client
+            .register_session(&ProcessId::from("proc-write"))
+            .await
+            .expect("session should register");
+
+        let response = timeout(Duration::from_secs(2), session.write(b"hello\n".to_vec()))
+            .await
+            .expect("write should not time out")
+            .expect("write should recover");
+        assert_eq!(
+            response,
+            WriteResponse {
+                status: WriteStatus::Accepted
+            }
+        );
+
         finish_tx.send(()).expect("test should finish");
         server.await.expect("server task should finish");
     }
