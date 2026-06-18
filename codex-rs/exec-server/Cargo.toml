@@ -12,10 +12,10 @@ workspace = true
 
 [dependencies]
 arc-swap = { workspace = true }
-async-trait = { workspace = true }
 axum = { workspace = true, features = ["http1", "tokio", "ws"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
+clatter = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-api = { workspace = true }
 codex-client = { workspace = true }
@@ -24,9 +24,11 @@ codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 prost = "0.14.3"
 serde = { workspace = true, features = ["derive"] }
@@ -44,10 +46,19 @@ tokio = { workspace = true, features = [
     "sync",
     "time",
 ] }
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["io", "rt"] }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

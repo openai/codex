@@ -1,5 +1,6 @@
 use crate::memory_extensions_root;
 use std::path::Path;
+use tokio::io::AsyncWriteExt;
 
 pub(super) const INSTRUCTIONS: &str =
     include_str!("../../templates/extensions/ad_hoc/instructions.md");
@@ -16,7 +17,8 @@ pub(super) async fn seed_instructions(memory_root: &Path) -> std::io::Result<()>
         .await
     {
         Ok(mut file) => {
-            tokio::io::AsyncWriteExt::write_all(&mut file, INSTRUCTIONS.as_bytes()).await
+            file.write_all(INSTRUCTIONS.as_bytes()).await?;
+            file.flush().await
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(err) => Err(err),

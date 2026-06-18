@@ -31,6 +31,9 @@ pub struct RequestUserInputQuestion {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputArgs {
     pub questions: Vec<RequestUserInputQuestion>,
+    #[serde(rename = "autoResolutionMs", skip_serializing_if = "Option::is_none")]
+    #[schemars(rename = "autoResolutionMs")]
+    pub auto_resolution_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -52,4 +55,7 @@ pub struct RequestUserInputEvent {
     #[serde(default)]
     pub turn_id: String,
     pub questions: Vec<RequestUserInputQuestion>,
+    #[serde(rename = "autoResolutionMs", skip_serializing_if = "Option::is_none")]
+    #[schemars(rename = "autoResolutionMs")]
+    pub auto_resolution_ms: Option<u64>,
 }

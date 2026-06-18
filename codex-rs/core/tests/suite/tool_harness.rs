@@ -36,14 +36,10 @@ fn call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) 
         Some(call_id),
         "mismatched call_id in function_call_output"
     );
-    let (content_opt, success) = match req.function_call_output_content_and_success(call_id) {
-        Some(values) => values,
-        None => panic!("function_call_output present"),
-    };
-    let content = match content_opt {
-        Some(c) => c,
-        None => panic!("function_call_output content present"),
-    };
+    let (content_opt, success) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present");
+    let content = content_opt.expect("function_call_output content present");
     (content, success)
 }
 
@@ -54,14 +50,10 @@ fn custom_call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<
         Some(call_id),
         "mismatched call_id in custom_tool_call_output"
     );
-    let (content_opt, success) = match req.custom_tool_call_output_content_and_success(call_id) {
-        Some(values) => values,
-        None => panic!("custom_tool_call_output present"),
-    };
-    let content = match content_opt {
-        Some(c) => c,
-        None => panic!("custom_tool_call_output content present"),
-    };
+    let (content_opt, success) = req
+        .custom_tool_call_output_content_and_success(call_id)
+        .expect("custom_tool_call_output present");
+    let content = content_opt.expect("custom_tool_call_output content present");
     (content, success)
 }
 

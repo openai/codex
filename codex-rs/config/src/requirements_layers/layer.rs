@@ -54,7 +54,7 @@ pub(super) struct ComposableRequirementsLayer {
 impl ComposableRequirementsLayer {
     pub(super) fn from_entry(
         layer: RequirementsLayerEntry,
-        hostname: Option<&str>,
+        hostname_resolver: &dyn Fn() -> Option<String>,
     ) -> Result<Self, RequirementsCompositionError> {
         let RequirementsLayerEntry {
             source,
@@ -70,7 +70,13 @@ impl ComposableRequirementsLayer {
             (regular_toml, requirements)
         };
 
-        requirements.apply_remote_sandbox_config(hostname);
+        // Hostname lookup is configuration-driven and may block on DNS, so only
+        // resolve it when this layer contains hostname-based sandbox selectors.
+        let hostname = requirements
+            .remote_sandbox_config
+            .as_ref()
+            .and_then(|_| hostname_resolver());
+        requirements.apply_remote_sandbox_config(hostname.as_deref());
         materialize_remote_sandbox_config(&mut regular_toml, &requirements)?;
         strip_special_fields(&mut regular_toml);
 

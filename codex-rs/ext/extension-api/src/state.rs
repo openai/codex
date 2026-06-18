@@ -9,9 +9,11 @@ type ErasedData = Arc<dyn Any + Send + Sync>;
 
 /// Typed values supplied before an [`ExtensionData`] scope is created.
 ///
-/// Hosts consume this value once to seed a scope before lifecycle contributors
-/// run. It does not install extensions or provide persistence.
-#[derive(Debug, Default)]
+/// Hosts may retain a clone when later operations must use the same initial
+/// inputs. Cloning freezes the attachment map and shares each value by `Arc`;
+/// values with interior mutability remain shared. This type does not install
+/// extensions or provide persistence.
+#[derive(Clone, Debug, Default)]
 pub struct ExtensionDataInit {
     entries: HashMap<TypeId, ErasedData>,
 }
@@ -30,6 +32,15 @@ impl ExtensionDataInit {
         self.entries
             .insert(TypeId::of::<T>(), Arc::new(value))
             .map(downcast_data)
+    }
+
+    /// Returns a host-supplied initial attachment without creating a mutable scope.
+    pub fn get<T>(&self) -> Option<Arc<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        let value = self.entries.get(&TypeId::of::<T>())?.clone();
+        Some(downcast_data(value))
     }
 }
 

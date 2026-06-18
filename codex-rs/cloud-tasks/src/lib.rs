@@ -106,16 +106,20 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     })
 }
 
-#[async_trait::async_trait]
 trait GitInfoProvider {
-    async fn default_branch_name(&self, path: &std::path::Path) -> Option<String>;
+    fn default_branch_name(
+        &self,
+        path: &std::path::Path,
+    ) -> impl std::future::Future<Output = Option<String>> + Send;
 
-    async fn current_branch_name(&self, path: &std::path::Path) -> Option<String>;
+    fn current_branch_name(
+        &self,
+        path: &std::path::Path,
+    ) -> impl std::future::Future<Output = Option<String>> + Send;
 }
 
 struct RealGitInfo;
 
-#[async_trait::async_trait]
 impl GitInfoProvider for RealGitInfo {
     async fn default_branch_name(&self, path: &std::path::Path) -> Option<String> {
         default_branch_name(path).await
@@ -2156,7 +2160,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
     impl super::GitInfoProvider for StubGitInfo {
         async fn default_branch_name(&self, _path: &std::path::Path) -> Option<String> {
             self.default_branch.clone()

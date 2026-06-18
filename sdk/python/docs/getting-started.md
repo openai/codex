@@ -157,7 +157,7 @@ the repository:
 
 ```bash
 cd sdk/python
-uv sync --extra dev
+uv sync --group dev
 source .venv/bin/activate
 ```
 

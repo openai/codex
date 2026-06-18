@@ -97,6 +97,19 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
     }
 }
 
+fn remove_sandbox_users_file(codex_home: &Path, reason: &str) -> Result<()> {
+    let path = sandbox_users_path(codex_home);
+    debug_log(
+        &format!("{reason}; deleting {}", path.display()),
+        Some(codex_home),
+    );
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("delete {}", path.display())),
+    }
+}
+
 fn decode_password(record: &SandboxUserRecord) -> Result<String> {
     let blob = BASE64_STANDARD
         .decode(record.password.as_bytes())
@@ -232,4 +245,61 @@ pub fn require_logon_sandbox_creds(
         username: identity.username,
         password: identity.password,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn refresh_logon_sandbox_creds(
+    permissions: &ResolvedWindowsSandboxPermissions,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    read_roots_override: Option<&[PathBuf]>,
+    read_roots_include_platform_defaults: bool,
+    write_roots_override: Option<&[PathBuf]>,
+    deny_read_paths_override: &[PathBuf],
+    deny_write_paths_override: &[PathBuf],
+    proxy_enforced: bool,
+) -> Result<SandboxCreds> {
+    remove_sandbox_users_file(codex_home, "sandbox user login failed")?;
+    require_logon_sandbox_creds(
+        permissions,
+        command_cwd,
+        env_map,
+        codex_home,
+        read_roots_override,
+        read_roots_include_platform_defaults,
+        write_roots_override,
+        deny_read_paths_override,
+        deny_write_paths_override,
+        proxy_enforced,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remove_sandbox_users_file;
+    use crate::setup::sandbox_users_path;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn remove_sandbox_users_file_deletes_existing_file() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let users_path = sandbox_users_path(codex_home.path());
+        fs::create_dir_all(users_path.parent().expect("sandbox secrets dir"))
+            .expect("create sandbox secrets dir");
+        fs::write(&users_path, "users").expect("write users");
+
+        remove_sandbox_users_file(codex_home.path(), "stale creds").expect("remove users");
+        assert!(!users_path.exists());
+    }
+
+    #[test]
+    fn remove_sandbox_users_file_ignores_missing_file() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let users_path = sandbox_users_path(codex_home.path());
+
+        remove_sandbox_users_file(codex_home.path(), "stale creds").expect("remove users");
+        assert!(!users_path.exists());
+    }
 }

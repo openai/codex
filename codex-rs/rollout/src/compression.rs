@@ -362,9 +362,14 @@ mod worker {
         let result = async {
             cleanup_stale_temps(codex_home.as_path()).await?;
             let mut stats = CompressionStats::default();
-            if started_at.elapsed() < WORKER_MAX_RUNTIME {
-                let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
-                compress_rollouts_in_root(archived_root.as_path(), started_at, &mut stats).await?;
+            for root in [
+                codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
+                codex_home.join(SESSIONS_SUBDIR),
+            ] {
+                if started_at.elapsed() >= WORKER_MAX_RUNTIME {
+                    break;
+                }
+                compress_rollouts_in_root(root.as_path(), started_at, &mut stats).await?;
             }
             Ok::<_, io::Error>(stats)
         }

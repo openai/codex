@@ -64,7 +64,6 @@ mod tests {
     use crate::search::SearchInput;
     use crate::search::SearchQuery;
     use crate::search::SearchSettings;
-    use async_trait::async_trait;
     use codex_client::Request;
     use codex_client::RequestBody;
     use codex_client::Response;
@@ -100,7 +99,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl HttpTransport for CapturingTransport {
         async fn execute(&self, req: Request) -> Result<Response, TransportError> {
             *self.last_request.lock().expect("lock request store") = Some(req);
@@ -163,6 +161,7 @@ mod tests {
                             },
                         ],
                         phase: None,
+                        metadata: None,
                     }])),
                     commands: Some(SearchCommands {
                         search_query: Some(vec![SearchQuery {

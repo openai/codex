@@ -17,6 +17,7 @@ workspace = true
 codex-exec-server = { workspace = true }
 codex-login = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

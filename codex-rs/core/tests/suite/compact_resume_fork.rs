@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 //! Integration tests that cover compacting, resuming, and forking conversations.
 //!
 //! Each test sets up a mocked SSE conversation and drives the conversation through
@@ -74,7 +72,7 @@ fn extract_summary_user_text(request: &Value, summary_text: &str) -> String {
     json_message_input_texts(request, "user")
         .into_iter()
         .find(|text| text.contains(summary_text))
-        .unwrap_or_else(|| panic!("expected summary message {summary_text}"))
+        .expect("expected summary message")
 }
 
 fn json_message_input_texts(request: &Value, role: &str) -> Vec<String> {
@@ -201,7 +199,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let first_turn_user_index = first_request_user_texts
         .len()
         .checked_sub(1)
-        .unwrap_or_else(|| panic!("first turn request missing user messages"));
+        .expect("first turn request missing user messages");
     assert_eq!(
         first_request_user_texts[first_turn_user_index],
         "hello world"
@@ -226,7 +224,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let after_resume_user_texts = json_message_input_texts(&requests[3], "user");
     let (after_resume_last, after_resume_prefix) = after_resume_user_texts
         .split_last()
-        .unwrap_or_else(|| panic!("after-resume request missing user messages"));
+        .expect("after-resume request missing user messages");
     assert_eq!(after_resume_last, "AFTER_RESUME");
     assert!(
         after_resume_prefix.starts_with(&expected_after_resume_user_texts),
@@ -256,7 +254,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     expected_after_fork_history_prefix.push("AFTER_COMPACT".to_string());
     let (after_fork_last, after_fork_prefix) = after_fork_user_texts
         .split_last()
-        .unwrap_or_else(|| panic!("after-fork request missing user messages"));
+        .expect("after-fork request missing user messages");
     assert_eq!(after_fork_last, "AFTER_FORK");
     assert!(
         after_fork_prefix.starts_with(&expected_after_fork_history_prefix),
@@ -360,7 +358,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     let first_turn_user_index = first_request_user_texts
         .len()
         .checked_sub(1)
-        .unwrap_or_else(|| panic!("first turn request missing user messages"));
+        .expect("first turn request missing user messages");
     assert_eq!(
         first_request_user_texts[first_turn_user_index],
         "hello world"
@@ -384,7 +382,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
     let (final_last, final_prefix) = final_user_texts
         .split_last()
-        .unwrap_or_else(|| panic!("after-second-resume request missing user messages"));
+        .expect("after-second-resume request missing user messages");
     assert_eq!(final_last, AFTER_SECOND_RESUME);
     let matched_prefix_len = if let Some(start) = final_prefix
         .windows(expected_after_second_compact_user_texts.len())
@@ -475,7 +473,7 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
     let after_rollback_user_texts = requests[3].message_input_texts("user");
     let after_rollback_last = after_rollback_user_texts
         .last()
-        .unwrap_or_else(|| panic!("post-rollback request missing user messages"));
+        .expect("post-rollback request missing user messages");
     assert_eq!(after_rollback_last, AFTER_ROLLBACK);
     assert!(
         requests[3].body_contains_text("hello world"),
@@ -832,6 +830,7 @@ async fn resume_conversation(
         path,
         auth_manager,
         /*parent_trace*/ None,
+        /*supports_openai_form_elicitation*/ false,
     ))
     .await
     .expect("resume conversation")

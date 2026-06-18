@@ -67,17 +67,13 @@ impl InitializeRequestProcessor {
         // experimental API). Proposed direction is instance-global first-write-wins
         // with initialize-time mismatch rejection.
         let analytics_initialize_params = params.clone();
-        let (experimental_api_enabled, request_attestation, opt_out_notification_methods) =
-            match params.capabilities {
-                Some(capabilities) => (
-                    capabilities.experimental_api,
-                    capabilities.request_attestation,
-                    capabilities
-                        .opt_out_notification_methods
-                        .unwrap_or_default(),
-                ),
-                None => (false, false, Vec::new()),
-            };
+        let capabilities = params.capabilities.unwrap_or_default();
+        let experimental_api_enabled = capabilities.experimental_api;
+        let request_attestation = capabilities.request_attestation;
+        let supports_openai_form_elicitation = capabilities.mcp_server_openai_form_elicitation;
+        let opt_out_notification_methods = capabilities
+            .opt_out_notification_methods
+            .unwrap_or_default();
         let ClientInfo {
             name,
             title: _title,
@@ -101,6 +97,7 @@ impl InitializeRequestProcessor {
                 app_server_client_name: name.clone(),
                 client_version: version,
                 request_attestation,
+                supports_openai_form_elicitation,
             })
             .is_err()
         {

@@ -77,6 +77,30 @@ fn skill_doc_read_detection_matches_absolute_path() {
 }
 
 #[test]
+fn skill_doc_read_detection_matches_shared_read_parser() {
+    let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
+    let normalized_skill_doc_path = canonicalize_if_exists(&skill_doc_path);
+    let skill = test_skill_metadata(skill_doc_path);
+    let outcome = SkillLoadOutcome {
+        implicit_skills_by_scripts_dir: Arc::new(HashMap::new()),
+        implicit_skills_by_doc_path: Arc::new(HashMap::from([(normalized_skill_doc_path, skill)])),
+        ..Default::default()
+    };
+
+    let tokens = vec![
+        "nl".to_string(),
+        "-ba".to_string(),
+        test_path_display("/tmp/skill-test/SKILL.md"),
+    ];
+    let found = detect_skill_doc_read(&outcome, &tokens, &test_path_buf("/tmp").abs());
+
+    assert_eq!(
+        found.map(|value| value.name),
+        Some("test-skill".to_string())
+    );
+}
+
+#[test]
 fn skill_script_run_detection_matches_relative_path_from_skill_root() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
     let scripts_dir = canonicalize_if_exists(&test_path_buf("/tmp/skill-test/scripts").abs());

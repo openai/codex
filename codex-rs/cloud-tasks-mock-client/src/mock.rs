@@ -3,6 +3,7 @@ use codex_cloud_tasks_client::ApplyOutcome;
 use codex_cloud_tasks_client::ApplyStatus;
 use codex_cloud_tasks_client::AttemptStatus;
 use codex_cloud_tasks_client::CloudBackend;
+use codex_cloud_tasks_client::CloudBackendFuture;
 use codex_cloud_tasks_client::CloudTaskError;
 use codex_cloud_tasks_client::CreatedTask;
 use codex_cloud_tasks_client::DiffSummary;
@@ -17,8 +18,7 @@ use codex_cloud_tasks_client::TurnAttempt;
 #[derive(Clone, Default)]
 pub struct MockClient;
 
-#[async_trait::async_trait]
-impl CloudBackend for MockClient {
+impl MockClient {
     async fn list_tasks(
         &self,
         _env: Option<&str>,
@@ -157,6 +157,70 @@ impl CloudBackend for MockClient {
         let _ = (env_id, prompt, git_ref, qa_mode, best_of_n);
         let id = format!("task_local_{}", chrono::Utc::now().timestamp_millis());
         Ok(CreatedTask { id: TaskId(id) })
+    }
+}
+
+impl CloudBackend for MockClient {
+    fn list_tasks<'a>(
+        &'a self,
+        env: Option<&'a str>,
+        limit: Option<i64>,
+        cursor: Option<&'a str>,
+    ) -> CloudBackendFuture<'a, TaskListPage> {
+        Box::pin(MockClient::list_tasks(self, env, limit, cursor))
+    }
+
+    fn get_task_summary(&self, id: TaskId) -> CloudBackendFuture<'_, TaskSummary> {
+        Box::pin(MockClient::get_task_summary(self, id))
+    }
+
+    fn get_task_diff(&self, id: TaskId) -> CloudBackendFuture<'_, Option<String>> {
+        Box::pin(MockClient::get_task_diff(self, id))
+    }
+
+    fn get_task_messages(&self, id: TaskId) -> CloudBackendFuture<'_, Vec<String>> {
+        Box::pin(MockClient::get_task_messages(self, id))
+    }
+
+    fn get_task_text(&self, id: TaskId) -> CloudBackendFuture<'_, TaskText> {
+        Box::pin(MockClient::get_task_text(self, id))
+    }
+
+    fn apply_task(
+        &self,
+        id: TaskId,
+        diff_override: Option<String>,
+    ) -> CloudBackendFuture<'_, ApplyOutcome> {
+        Box::pin(MockClient::apply_task(self, id, diff_override))
+    }
+
+    fn apply_task_preflight(
+        &self,
+        id: TaskId,
+        diff_override: Option<String>,
+    ) -> CloudBackendFuture<'_, ApplyOutcome> {
+        Box::pin(MockClient::apply_task_preflight(self, id, diff_override))
+    }
+
+    fn list_sibling_attempts(
+        &self,
+        task: TaskId,
+        turn_id: String,
+    ) -> CloudBackendFuture<'_, Vec<TurnAttempt>> {
+        Box::pin(MockClient::list_sibling_attempts(self, task, turn_id))
+    }
+
+    fn create_task<'a>(
+        &'a self,
+        env_id: &'a str,
+        prompt: &'a str,
+        git_ref: &'a str,
+        qa_mode: bool,
+        best_of_n: usize,
+    ) -> CloudBackendFuture<'a, CreatedTask> {
+        Box::pin(MockClient::create_task(
+            self, env_id, prompt, git_ref, qa_mode, best_of_n,
+        ))
     }
 }
 

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::McpAuthStatus;
@@ -130,6 +131,7 @@ pub fn should_retry_without_scopes(scopes: &ResolvedMcpOAuthScopes, error: &anyh
 pub async fn compute_auth_statuses<'a, I>(
     servers: I,
     store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, McpAuthStatusEntry>
 where
@@ -152,7 +154,15 @@ where
         async move {
             let auth_status = match config.as_ref() {
                 Some(config) => {
-                    match compute_auth_status(&name, config, store_mode, has_runtime_auth).await {
+                    match compute_auth_status(
+                        &name,
+                        config,
+                        store_mode,
+                        keyring_backend_kind,
+                        has_runtime_auth,
+                    )
+                    .await
+                    {
                         Ok(status) => status,
                         Err(error) => {
                             warn!(
@@ -179,6 +189,7 @@ async fn compute_auth_status(
     server_name: &str,
     config: &McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
     has_runtime_auth: bool,
 ) -> Result<McpAuthStatus> {
     if !config.enabled {
@@ -204,6 +215,7 @@ async fn compute_auth_status(
                 http_headers.clone(),
                 env_http_headers.clone(),
                 store_mode,
+                keyring_backend_kind,
             )
             .await
         }
