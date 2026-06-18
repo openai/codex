@@ -460,14 +460,21 @@ impl LocalProcess {
             });
         }
 
-        writer_tx
-            .send(params.chunk.into_inner())
+        let permit = writer_tx
+            .reserve()
             .await
             .map_err(|_| internal_error("failed to write to process stdin".to_string()))?;
-        accepted_stdin_write_ids
-            .lock()
-            .await
-            .remember(params.write_id);
+        let mut accepted_stdin_write_ids = accepted_stdin_write_ids.lock().await;
+        if accepted_stdin_write_ids.contains(&params.write_id) {
+            return Ok(WriteResponse {
+                status: WriteStatus::Accepted,
+            });
+        }
+
+        // After this synchronous send, record the write id before any further await.
+        // Otherwise a cancelled RPC handler could retry and write the same bytes again.
+        permit.send(params.chunk.into_inner());
+        accepted_stdin_write_ids.remember(params.write_id);
 
         Ok(WriteResponse {
             status: WriteStatus::Accepted,
