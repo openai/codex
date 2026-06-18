@@ -61,7 +61,6 @@ use codex_api::auth_header_telemetry;
 use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
-use codex_api::response_request_json;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -524,7 +523,7 @@ impl ModelClient {
         let ResponsesApiRequest {
             model,
             instructions,
-            input,
+            mut input,
             tools,
             parallel_tool_calls,
             reasoning,
@@ -533,6 +532,7 @@ impl ModelClient {
             text,
             ..
         } = request;
+        self.prepare_response_items_for_request(&mut input, /*store*/ false);
         let payload = ApiCompactionInput {
             model: &model,
             input: &input,
@@ -576,7 +576,6 @@ impl ModelClient {
                 extra_headers,
                 compact_request_timeout,
                 turn_state.as_deref(),
-                /*include_item_ids*/ self.state.item_ids_enabled,
             )
             .await
             .map_err(map_api_error);
@@ -835,8 +834,14 @@ impl ModelClient {
         Ok(request)
     }
 
-    fn include_item_ids_for_request(&self, request: &ResponsesApiRequest) -> bool {
-        self.state.item_ids_enabled || request.store
+    fn prepare_response_items_for_request(&self, input: &mut [ResponseItem], store: bool) {
+        if self.state.item_ids_enabled || store {
+            return;
+        }
+
+        for item in input {
+            item.set_id(None);
+        }
     }
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
@@ -1042,7 +1047,6 @@ impl ModelClientSession {
             },
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
-            include_item_ids: self.client.state.item_ids_enabled,
         }
     }
 
@@ -1309,7 +1313,7 @@ impl ModelClientSession {
                 )
                 .await;
 
-            let request = self.client.build_responses_request(
+            let mut request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
@@ -1318,12 +1322,12 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
-            let include_item_ids = self.client.include_item_ids_for_request(&request);
-            options.include_item_ids = include_item_ids;
+            let store = request.store;
+            self.client
+                .prepare_response_items_for_request(&mut request.input, store);
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
-            let trace_request = response_request_json(&request, include_item_ids)?;
-            inference_trace_attempt.record_started(&trace_request);
+            inference_trace_attempt.record_started(&request);
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1426,7 +1430,6 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
-            let include_item_ids = self.client.include_item_ids_for_request(&request);
             let mut client_metadata = self
                 .client
                 .build_ws_client_metadata(responses_metadata, model_info.use_responses_lite);
@@ -1489,15 +1492,18 @@ impl ModelClientSession {
                 inference_trace.start_attempt()
             };
             stamp_ws_stream_request_start_ms(&mut ws_request);
-            let trace_request = if previous_response_id_from_untraced_warmup {
+            let ResponsesWsRequest::ResponseCreate(ws_payload) = &mut ws_request;
+            let store = ws_payload.store;
+            self.client
+                .prepare_response_items_for_request(&mut ws_payload.input, store);
+            if previous_response_id_from_untraced_warmup {
                 // The transport can reuse an untraced warmup response id and omit the
                 // already-sent input, but rollout replay needs the logical model-visible
                 // request rather than the compressed websocket delta.
-                response_request_json(&request, include_item_ids)?
+                inference_trace_attempt.record_started(&request);
             } else {
-                response_request_json(&ws_request, include_item_ids)?
-            };
-            inference_trace_attempt.record_started(&trace_request);
+                inference_trace_attempt.record_started(&ws_request);
+            }
             self.websocket_session.last_request = Some(request);
             self.websocket_session.last_response_from_untraced_warmup = warmup;
             let websocket_connection =
@@ -1511,7 +1517,6 @@ impl ModelClientSession {
                     ws_request,
                     self.websocket_session.connection_reused(),
                     Some(Arc::clone(&self.turn_state)),
-                    include_item_ids,
                 )
                 .await
                 .map_err(|err| {

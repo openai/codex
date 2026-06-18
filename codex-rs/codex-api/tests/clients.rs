@@ -301,7 +301,7 @@ async fn responses_client_uses_responses_path() -> Result<()> {
 }
 
 #[tokio::test]
-async fn responses_client_stream_request_preserves_item_ids_when_enabled() -> Result<()> {
+async fn responses_client_stream_request_preserves_item_ids() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
     let client = ResponsesClient::new(transport, provider("openai"), Arc::new(NoAuth));
@@ -330,13 +330,7 @@ async fn responses_client_stream_request_preserves_item_ids_when_enabled() -> Re
     let expected = serde_json::to_value(&request)?;
 
     let _stream = client
-        .stream_request(
-            request,
-            ResponsesOptions {
-                include_item_ids: true,
-                ..Default::default()
-            },
-        )
+        .stream_request(request, ResponsesOptions::default())
         .await?;
 
     let requests = state.take_stream_requests();
@@ -352,45 +346,6 @@ async fn responses_client_stream_request_preserves_item_ids_when_enabled() -> Re
         prepared.headers.get(http::header::CONTENT_TYPE),
         Some(&HeaderValue::from_static("application/json"))
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn responses_client_stream_request_strips_item_ids_by_default() -> Result<()> {
-    let state = RecordingState::default();
-    let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("openai"), Arc::new(NoAuth));
-    let request = ResponsesApiRequest {
-        model: "gpt-test".into(),
-        instructions: "Say hi".into(),
-        input: vec![ResponseItem::Message {
-            id: Some("msg_1".into()),
-            role: "user".into(),
-            content: vec![ContentItem::InputText { text: "hi".into() }],
-            phase: None,
-            metadata: None,
-        }],
-        tools: Vec::new(),
-        tool_choice: "auto".into(),
-        parallel_tool_calls: false,
-        reasoning: None,
-        store: false,
-        stream: true,
-        include: Vec::new(),
-        service_tier: None,
-        prompt_cache_key: None,
-        text: None,
-        client_metadata: None,
-    };
-
-    let _stream = client
-        .stream_request(request, ResponsesOptions::default())
-        .await?;
-
-    let requests = state.take_stream_requests();
-    assert_eq!(requests.len(), 1);
-    let body: serde_json::Value = serde_json::from_slice(request_body_bytes(&requests[0]))?;
-    assert_eq!(body["input"][0].get("id"), None);
     Ok(())
 }
 
@@ -550,7 +505,7 @@ async fn streaming_client_does_not_retry_auth_build_error() -> Result<()> {
 }
 
 #[tokio::test]
-async fn azure_store_sends_ids_when_enabled_and_headers() -> Result<()> {
+async fn azure_store_sends_ids_and_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
     let client = ResponsesClient::new(transport, provider("azure"), Arc::new(NoAuth));
@@ -590,7 +545,6 @@ async fn azure_store_sends_ids_when_enabled_and_headers() -> Result<()> {
                 extra_headers,
                 compression: Compression::None,
                 turn_state: None,
-                include_item_ids: true,
             },
         )
         .await?;

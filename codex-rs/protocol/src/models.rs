@@ -1168,8 +1168,8 @@ impl ResponseItem {
         }
     }
 
-    /// Sets the Responses API item ID for variants that carry one.
-    pub fn set_id(&mut self, new_id: String) {
+    /// Sets or clears the Responses API item ID for variants that carry one.
+    pub fn set_id(&mut self, new_id: Option<String>) {
         match self {
             Self::Message { id, .. }
             | Self::AgentMessage { id, .. }
@@ -1184,7 +1184,7 @@ impl ResponseItem {
             | Self::Reasoning { id, .. }
             | Self::ImageGenerationCall { id, .. }
             | Self::Compaction { id, .. }
-            | Self::ContextCompaction { id, .. } => *id = Some(new_id),
+            | Self::ContextCompaction { id, .. } => *id = new_id,
             Self::CompactionTrigger { .. } | Self::Other => {}
         }
     }
@@ -2132,9 +2132,13 @@ mod tests {
         let mut item = response_item_with_metadata(/*metadata*/ None);
         assert_eq!(item.id(), None);
 
-        item.set_id("msg_test".to_string());
+        item.set_id(Some("msg_test".to_string()));
 
         assert_eq!(item.id(), Some("msg_test"));
+
+        item.set_id(None);
+
+        assert_eq!(item.id(), None);
     }
 
     fn response_item_with_metadata(metadata: Option<ResponseItemMetadata>) -> ResponseItem {

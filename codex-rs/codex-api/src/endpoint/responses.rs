@@ -8,7 +8,6 @@ use crate::requests::Compression;
 use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use crate::requests::response_request_json;
 use crate::sse::spawn_response_stream;
 use crate::telemetry::SseTelemetry;
 use codex_client::EncodedJsonBody;
@@ -37,7 +36,6 @@ pub struct ResponsesOptions {
     pub extra_headers: HeaderMap,
     pub compression: Compression,
     pub turn_state: Option<Arc<OnceLock<String>>>,
-    pub include_item_ids: bool,
 }
 
 impl<T: HttpTransport> ResponsesClient<T> {
@@ -81,12 +79,9 @@ impl<T: HttpTransport> ResponsesClient<T> {
             extra_headers,
             compression,
             turn_state,
-            include_item_ids,
         } = options;
 
-        let body = response_request_json(&request, include_item_ids)
-            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
-        let body = EncodedJsonBody::encode(&body)
+        let body = EncodedJsonBody::encode(&request)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         let mut headers = extra_headers;

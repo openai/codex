@@ -2,8 +2,6 @@ use crate::auth::SharedAuthProvider;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::requests::strip_response_item_ids;
-use crate::search::SearchInput;
 use crate::search::SearchRequest;
 use crate::search::SearchResponse;
 use codex_client::HttpTransport;
@@ -39,11 +37,8 @@ impl<T: HttpTransport> SearchClient<T> {
         request: &SearchRequest,
         extra_headers: HeaderMap,
     ) -> Result<SearchResponse, ApiError> {
-        let mut body = to_value(request)
+        let body = to_value(request)
             .map_err(|e| ApiError::Stream(format!("failed to encode search request: {e}")))?;
-        if matches!(&request.input, Some(SearchInput::Items(_))) {
-            strip_response_item_ids(&mut body);
-        }
         let resp = self
             .session
             .execute(Method::POST, Self::path(), extra_headers, Some(body))
@@ -233,6 +228,7 @@ mod tests {
                 "model": "gpt-test",
                 "input": [{
                     "type": "message",
+                    "id": "msg_search",
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": "find this"},

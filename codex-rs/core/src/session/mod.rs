@@ -2673,7 +2673,7 @@ impl Session {
                 | ResponseItem::CompactionTrigger { .. }
                 | ResponseItem::Other => continue,
             };
-            item.set_id(format!("{prefix}_{}", Uuid::now_v7()));
+            item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
         }
     }
 
