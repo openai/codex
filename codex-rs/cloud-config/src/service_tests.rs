@@ -17,6 +17,8 @@ use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::auth::AgentIdentityAuth;
+use codex_login::auth::AgentIdentityAuthRecord;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -48,6 +50,7 @@ async fn auth_manager_with_api_key() -> Arc<AuthManager> {
             tmp.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
         )
@@ -77,6 +80,7 @@ async fn auth_manager_with_plan_and_identity(
             tmp.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
         )
@@ -86,6 +90,28 @@ async fn auth_manager_with_plan_and_identity(
 
 async fn auth_manager_with_plan(plan_type: &str) -> Arc<AuthManager> {
     auth_manager_with_plan_and_identity(plan_type, Some("user-12345"), Some("account-12345")).await
+}
+
+async fn auth_manager_with_agent_identity_business_plan() -> Arc<AuthManager> {
+    let key_material =
+        codex_agent_identity::generate_agent_key_material().expect("generate agent key material");
+    AuthManager::from_auth_for_testing(CodexAuth::AgentIdentity(
+        AgentIdentityAuth::from_record(
+            AgentIdentityAuthRecord {
+                agent_runtime_id: "agent-runtime-123".to_string(),
+                agent_private_key: key_material.private_key_pkcs8_base64,
+                account_id: "account-12345".to_string(),
+                chatgpt_user_id: "user-12345".to_string(),
+                email: "user@example.com".to_string(),
+                plan_type: PlanType::Business,
+                chatgpt_account_is_fedramp: false,
+                task_id: Some("task-123".to_string()),
+            },
+            "https://auth.openai.com/api/accounts",
+        )
+        .await
+        .expect("agent identity record should be complete"),
+    ))
 }
 
 fn chatgpt_auth_json(
@@ -409,6 +435,28 @@ async fn get_bundle_allows_eligible_workspace_plans_and_writes_cache() {
 }
 
 #[tokio::test]
+async fn get_bundle_allows_agent_identity_business_plan() {
+    let bundle = test_bundle();
+    let fetcher = Arc::new(StaticBundleClient::new(bundle.clone()));
+    let codex_home = tempdir().expect("tempdir");
+    let service = CloudConfigBundleService::new(
+        auth_manager_with_agent_identity_business_plan().await,
+        fetcher.clone(),
+        codex_home.path().to_path_buf(),
+        CLOUD_CONFIG_BUNDLE_TIMEOUT,
+    );
+
+    assert_eq!(service.load_startup_bundle().await, Ok(Some(bundle)));
+    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+    assert!(
+        codex_home
+            .path()
+            .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
+            .exists()
+    );
+}
+
+#[tokio::test]
 async fn get_bundle_skips_team_like_usage_based_plan() {
     let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
     let codex_home = tempdir().expect("tempdir");
@@ -635,6 +683,7 @@ async fn get_bundle_recovers_after_unauthorized_reload() {
             auth_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
         )
@@ -690,6 +739,7 @@ async fn get_bundle_recovers_after_unauthorized_reload_updates_cache_identity() 
             auth_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
         )
@@ -753,6 +803,7 @@ async fn get_bundle_surfaces_auth_recovery_message() {
             auth_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
         )
@@ -818,6 +869,7 @@ async fn get_bundle_unauthorized_without_recovery_uses_generic_message() {
             auth_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
         )
