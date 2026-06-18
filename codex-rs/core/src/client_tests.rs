@@ -200,7 +200,7 @@ fn test_auth_dot_json_with_account_and_tokens(
 }
 
 fn unauthorized_transport(body: &str) -> TransportError {
-    unauthorized_transport_with_headers(body, None)
+    unauthorized_transport_with_headers(body, /*headers*/ None)
 }
 
 fn unauthorized_transport_with_headers(
@@ -250,7 +250,7 @@ impl ExternalAuth for TestExternalAuth {
             Ok(ExternalAuthTokens::chatgpt(
                 "access-token",
                 "account_id",
-                None,
+                /*chatgpt_plan_type*/ None,
             ))
         })
     }
