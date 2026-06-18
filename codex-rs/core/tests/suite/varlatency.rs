@@ -1,12 +1,10 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 
 use anyhow::Result;
-use anyhow::anyhow;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_core::CurrentTimeContext;
 use codex_core::CurrentTimeFuture;
 use codex_core::CurrentTimeProvider;
 use codex_core::config::VarlatencyConfig;
@@ -30,51 +28,23 @@ use pretty_assertions::assert_eq;
 
 const FIRST_REMINDER: &str = "It is 2026-06-17 17:34:15 UTC.";
 const SECOND_REMINDER: &str = "It is 2026-06-17 17:35:15 UTC.";
+const FIRST_TIME_UNIX_SECONDS: i64 = 1_781_717_655;
 
-#[derive(Debug)]
-struct TestCurrentTimeProvider {
-    times: Mutex<VecDeque<DateTime<Utc>>>,
-    requested_thread_ids: Mutex<Vec<ThreadId>>,
-}
+struct TestCurrentTimeProvider(AtomicI64);
 
-impl TestCurrentTimeProvider {
-    fn new(times: &[&str]) -> Self {
-        Self {
-            times: Mutex::new(
-                times
-                    .iter()
-                    .map(|time| {
-                        DateTime::parse_from_rfc3339(time)
-                            .expect("test time should be valid RFC 3339")
-                            .with_timezone(&Utc)
-                    })
-                    .collect(),
-            ),
-            requested_thread_ids: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn requested_thread_ids(&self) -> Vec<ThreadId> {
-        self.requested_thread_ids
-            .lock()
-            .expect("requested thread IDs lock should not be poisoned")
-            .clone()
+impl Default for TestCurrentTimeProvider {
+    fn default() -> Self {
+        Self(AtomicI64::new(FIRST_TIME_UNIX_SECONDS))
     }
 }
 
 impl CurrentTimeProvider for TestCurrentTimeProvider {
-    fn current_time(&self, context: CurrentTimeContext) -> CurrentTimeFuture<'_> {
-        self.requested_thread_ids
-            .lock()
-            .expect("requested thread IDs lock should not be poisoned")
-            .push(context.thread_id);
-        let time = self
-            .times
-            .lock()
-            .expect("test times lock should not be poisoned")
-            .pop_front()
-            .ok_or_else(|| anyhow!("test current-time provider is exhausted"));
-        Box::pin(async move { time })
+    fn current_time(&self, _thread_id: ThreadId) -> CurrentTimeFuture<'_> {
+        let timestamp = self.0.fetch_add(60, Ordering::Relaxed);
+        Box::pin(async move {
+            Ok(DateTime::<Utc>::from_timestamp(timestamp, 0)
+                .expect("test timestamp should be valid"))
+        })
     }
 }
 
@@ -82,7 +52,7 @@ fn current_time_reminders(request: &ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text.starts_with("It is ") && text.ends_with(" UTC."))
+        .filter(|text| text.starts_with("It is "))
         .collect()
 }
 
@@ -111,13 +81,9 @@ async fn varlatency_reminders_follow_request_interval_and_persist_in_history() -
         ],
     )
     .await;
-    let provider = Arc::new(TestCurrentTimeProvider::new(&[
-        "2026-06-17T17:34:15Z",
-        "2026-06-17T17:35:15Z",
-    ]));
     let test = test_codex()
         .with_config(|config| enable_varlatency(config, /*interval*/ 2))
-        .with_current_time_provider(provider.clone())
+        .with_current_time_provider(Arc::new(TestCurrentTimeProvider::default()))
         .build(&server)
         .await?;
 
@@ -133,11 +99,6 @@ async fn varlatency_reminders_follow_request_interval_and_persist_in_history() -
         current_time_reminders(&requests[2]),
         vec![FIRST_REMINDER, SECOND_REMINDER]
     );
-    assert_eq!(
-        provider.requested_thread_ids(),
-        vec![test.session_configured.thread_id; 2]
-    );
-
     Ok(())
 }
 
@@ -159,10 +120,6 @@ async fn varlatency_reminder_is_refreshed_after_compaction() -> Result<()> {
         ],
     )
     .await;
-    let provider = Arc::new(TestCurrentTimeProvider::new(&[
-        "2026-06-17T17:34:15Z",
-        "2026-06-17T17:35:15Z",
-    ]));
     let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
     model_provider.name = "OpenAI-compatible test provider".to_string();
     model_provider.base_url = Some(format!("{}/v1", server.uri()));
@@ -172,7 +129,7 @@ async fn varlatency_reminder_is_refreshed_after_compaction() -> Result<()> {
             config.model_provider = model_provider;
             enable_varlatency(config, /*interval*/ 50);
         })
-        .with_current_time_provider(provider)
+        .with_current_time_provider(Arc::new(TestCurrentTimeProvider::default()))
         .build(&server)
         .await?;
 

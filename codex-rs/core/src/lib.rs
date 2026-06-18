@@ -187,7 +187,6 @@ pub use client_common::ResponseEvent;
 pub use client_common::ResponseStream;
 pub use codex_prompts::REVIEW_PROMPT;
 pub use compact::content_items_to_text;
-pub use current_time::CurrentTimeContext;
 pub use current_time::CurrentTimeFuture;
 pub use current_time::CurrentTimeProvider;
 pub use event_mapping::parse_turn_item;

@@ -3,7 +3,6 @@ use chrono::Utc;
 
 use super::ContextualUserFragment;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CurrentTimeReminder {
     current_time: DateTime<Utc>,
 }

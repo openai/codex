@@ -1,13 +1,9 @@
-use std::sync::Arc;
-
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::ResponseItem;
 
 use super::session::Session;
 use super::turn_context::TurnContext;
 use crate::context::ContextualUserFragment;
-use crate::current_time::CurrentTimeContext;
 
 #[derive(Default)]
 pub(crate) struct CurrentTimeReminderState {
@@ -51,16 +47,13 @@ pub(super) async fn maybe_record_current_time_reminder(
         .services
         .current_time_provider
         .as_ref()
-        .map(Arc::clone)
         .ok_or_else(|| CodexErr::Fatal("current-time provider is not configured".to_string()))?;
     let current_time = provider
-        .current_time(CurrentTimeContext {
-            thread_id: sess.thread_id,
-        })
+        .current_time(sess.thread_id)
         .await
         .map_err(|err| CodexErr::Fatal(format!("failed to read current time: {err:#}")))?;
 
-    let response_item: ResponseItem =
+    let response_item =
         ContextualUserFragment::into(crate::context::CurrentTimeReminder::new(current_time));
     sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
         .await;
