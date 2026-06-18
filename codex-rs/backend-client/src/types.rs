@@ -36,6 +36,23 @@ pub(crate) struct RateLimitStatusWithResetCredits {
     pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct CodexWorkspaceMessagesResponse {
+    #[serde(default)]
+    pub messages: Vec<CodexWorkspaceMessage>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct CodexWorkspaceMessage {
+    pub message_id: String,
+    pub message_type: CodexWorkspaceMessageType,
+    pub message_body: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub archived_at: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConsumeRateLimitResetCreditCode {
@@ -50,6 +67,29 @@ pub struct ConsumeRateLimitResetCreditResponse {
     pub code: ConsumeRateLimitResetCreditCode,
     #[serde(default)]
     pub windows_reset: i64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexWorkspaceMessageType {
+    Headline,
+    Announcement,
+    #[serde(other)]
+    Unknown,
+}
+
+impl CodexWorkspaceMessagesResponse {
+    pub fn headlines(&self) -> impl Iterator<Item = &CodexWorkspaceMessage> {
+        self.messages
+            .iter()
+            .filter(|message| message.message_type == CodexWorkspaceMessageType::Headline)
+    }
+
+    pub fn announcements(&self) -> impl Iterator<Item = &CodexWorkspaceMessage> {
+        self.messages
+            .iter()
+            .filter(|message| message.message_type == CodexWorkspaceMessageType::Announcement)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -519,5 +559,50 @@ Second line"
             .assistant_error_message()
             .expect("error should be present");
         assert_eq!(msg, "APPLY_FAILED: Patch could not be applied");
+    }
+
+    #[test]
+    fn workspace_messages_response_deserializes_headlines_and_announcements() {
+        let response: CodexWorkspaceMessagesResponse = serde_json::from_value(serde_json::json!({
+            "messages": [
+                {
+                    "message_id": "headline-id",
+                    "message_type": "headline",
+                    "message_body": "Headline body",
+                    "created_at": "2026-06-14T00:00:00Z",
+                    "archived_at": null
+                },
+                {
+                    "message_id": "announcement-id",
+                    "message_type": "announcement",
+                    "message_body": "Announcement body",
+                    "created_at": "2026-06-14T01:00:00Z",
+                    "archived_at": null
+                },
+                {
+                    "message_id": "unknown-id",
+                    "message_type": "unknown",
+                    "message_body": "Unknown body"
+                }
+            ]
+        }))
+        .expect("workspace messages response should deserialize");
+
+        let headlines = response
+            .headlines()
+            .map(|message| message.message_id.as_str())
+            .collect::<Vec<_>>();
+        let announcements = response
+            .announcements()
+            .map(|message| message.message_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(headlines, vec!["headline-id"]);
+        assert_eq!(announcements, vec!["announcement-id"]);
+        assert_eq!(
+            response.messages[0].created_at.as_deref(),
+            Some("2026-06-14T00:00:00Z")
+        );
+        assert_eq!(response.messages[0].archived_at, None);
     }
 }
