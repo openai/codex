@@ -709,6 +709,20 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     .await??;
     let _: ThreadRealtimeAppendTextResponse = to_response(text_append_response)?;
 
+    let assistant_append_request_id = mcp
+        .send_thread_realtime_append_text_request(ThreadRealtimeAppendTextParams {
+            thread_id: started.thread_id.clone(),
+            text: "welcome back".to_string(),
+            role: ConversationTextRole::Assistant,
+        })
+        .await?;
+    let assistant_append_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(assistant_append_request_id)),
+    )
+    .await??;
+    let _: ThreadRealtimeAppendTextResponse = to_response(assistant_append_response)?;
+
     let output_audio = read_notification::<ThreadRealtimeOutputAudioDeltaNotification>(
         &mut mcp,
         "thread/realtime/outputAudio/delta",
@@ -790,7 +804,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let connections = realtime_server.connections();
     assert_eq!(connections.len(), 1);
     let connection = &connections[0];
-    assert_eq!(connection.len(), 3);
+    assert_eq!(connection.len(), 4);
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
@@ -799,13 +813,14 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         connection[0].body_json()["session"]["instructions"].as_str(),
         Some(startup_context_instructions.as_str()),
     );
-    let text_request = connection
+    let text_requests = connection
         .iter()
         .map(WebSocketRequest::body_json)
-        .find(|request| request["type"] == "conversation.item.create")
-        .context("expected conversation item request")?;
+        .filter(|request| request["type"] == "conversation.item.create")
+        .collect::<Vec<_>>();
+    assert_eq!(text_requests.len(), 2);
     assert_eq!(
-        text_request,
+        text_requests[0],
         json!({
             "type": "conversation.item.create",
             "item": {
@@ -814,6 +829,20 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "content": [{
                     "type": "input_text",
                     "text": "hello",
+                }],
+            },
+        })
+    );
+    assert_eq!(
+        text_requests[1],
+        json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "welcome back",
                 }],
             },
         })
@@ -827,11 +856,16 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             .as_str()
             .context("expected websocket request type")?
             .to_string(),
+        connection[3].body_json()["type"]
+            .as_str()
+            .context("expected websocket request type")?
+            .to_string(),
     ];
     request_types.sort();
     assert_eq!(
         request_types,
         [
+            "conversation.item.create".to_string(),
             "conversation.item.create".to_string(),
             "input_audio_buffer.append".to_string(),
         ]

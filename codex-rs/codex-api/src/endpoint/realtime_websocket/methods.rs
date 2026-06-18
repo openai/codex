@@ -1637,10 +1637,29 @@ mod tests {
                 .into_text()
                 .expect("text");
             let fourth_json: Value = serde_json::from_str(&fourth).expect("json");
-            assert_eq!(fourth_json["type"], "conversation.handoff.append");
-            assert_eq!(fourth_json["handoff_id"], "handoff_1");
+            assert_eq!(fourth_json["type"], "conversation.item.create");
+            assert_eq!(fourth_json["item"]["role"], "assistant");
             assert_eq!(
-                fourth_json["output_text"],
+                fourth_json["item"]["content"][0]["type"],
+                Value::String("output_text".to_string())
+            );
+            assert_eq!(
+                fourth_json["item"]["content"][0]["text"],
+                Value::String("assistant context".to_string())
+            );
+
+            let fifth = ws
+                .next()
+                .await
+                .expect("fifth msg")
+                .expect("fifth msg ok")
+                .into_text()
+                .expect("text");
+            let fifth_json: Value = serde_json::from_str(&fifth).expect("json");
+            assert_eq!(fifth_json["type"], "conversation.handoff.append");
+            assert_eq!(fifth_json["handoff_id"], "handoff_1");
+            assert_eq!(
+                fifth_json["output_text"],
                 "\"Agent Final Message\":\n\nhello from background agent"
             );
 
@@ -1766,6 +1785,13 @@ mod tests {
             )
             .await
             .expect("send item");
+        connection
+            .send_conversation_item_create(
+                "assistant context".to_string(),
+                ConversationTextRole::Assistant,
+            )
+            .await
+            .expect("send assistant item");
         connection
             .send_conversation_function_call_output(
                 "handoff_1".to_string(),
@@ -1988,16 +2014,35 @@ mod tests {
                 .expect("text");
             let third_json: Value = serde_json::from_str(&third).expect("json");
             assert_eq!(third_json["type"], "conversation.item.create");
+            assert_eq!(third_json["item"]["role"], "assistant");
             assert_eq!(
-                third_json["item"]["type"],
+                third_json["item"]["content"][0]["type"],
+                Value::String("output_text".to_string())
+            );
+            assert_eq!(
+                third_json["item"]["content"][0]["text"],
+                Value::String("assistant context".to_string())
+            );
+
+            let fourth = ws
+                .next()
+                .await
+                .expect("fourth msg")
+                .expect("fourth msg ok")
+                .into_text()
+                .expect("text");
+            let fourth_json: Value = serde_json::from_str(&fourth).expect("json");
+            assert_eq!(fourth_json["type"], "conversation.item.create");
+            assert_eq!(
+                fourth_json["item"]["type"],
                 Value::String("function_call_output".to_string())
             );
             assert_eq!(
-                third_json["item"]["call_id"],
+                fourth_json["item"]["call_id"],
                 Value::String("call_1".to_string())
             );
             assert_eq!(
-                third_json["item"]["output"],
+                fourth_json["item"]["output"],
                 Value::String("delegated result".to_string())
             );
         });
@@ -2054,6 +2099,13 @@ mod tests {
             )
             .await
             .expect("send text item");
+        connection
+            .send_conversation_item_create(
+                "assistant context".to_string(),
+                ConversationTextRole::Assistant,
+            )
+            .await
+            .expect("send assistant item");
         connection
             .send_conversation_function_call_output(
                 "call_1".to_string(),
