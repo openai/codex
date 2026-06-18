@@ -1,5 +1,6 @@
-use super::*;
+use crate::permission_presets::permission_presets;
 use codex_core::config::permission_profile_catalog;
+use super::*;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -176,6 +177,15 @@ impl CatalogRequestProcessor {
         params: PermissionProfileListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.permission_profile_list_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn permission_preset_list(
+        &self,
+        params: PermissionPresetListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.permission_preset_list_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -464,6 +474,39 @@ impl CatalogRequestProcessor {
         let next_cursor = (end < total).then_some(end.to_string());
 
         Ok(PermissionProfileListResponse { data, next_cursor })
+    }
+
+    async fn permission_preset_list_response(
+        &self,
+        params: PermissionPresetListParams,
+    ) -> Result<PermissionPresetListResponse, JSONRPCErrorError> {
+        let PermissionPresetListParams { cursor, limit, cwd } = params;
+        let presets = permission_presets(&self.config_manager, cwd.map(PathBuf::from))
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to resolve permission presets: {err}"))
+            })?;
+        let total = presets.len();
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = effective_limit.min(total);
+        let start = match cursor {
+            Some(cursor) => cursor
+                .parse::<usize>()
+                .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
+            None => 0,
+        };
+
+        if start > total {
+            return Err(invalid_request(format!(
+                "cursor {start} exceeds total permission presets {total}"
+            )));
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+        let data = presets[start..end].to_vec();
+        let next_cursor = (end < total).then_some(end.to_string());
+
+        Ok(PermissionPresetListResponse { data, next_cursor })
     }
 
     async fn mock_experimental_method_inner(

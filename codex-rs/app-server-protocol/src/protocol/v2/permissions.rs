@@ -1,3 +1,5 @@
+use super::ApprovalsReviewer;
+use super::AskForApproval;
 use super::shared::v2_enum_from_core;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
@@ -389,6 +391,38 @@ pub struct PermissionProfileListResponse {
     pub data: Vec<PermissionProfileSummary>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetListParams {
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPreset {
+    pub id: String,
+    pub permission_profile_id: String,
+    pub description: Option<String>,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub is_default: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetListResponse {
+    pub data: Vec<PermissionPreset>,
     pub next_cursor: Option<String>,
 }
 

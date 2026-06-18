@@ -35,6 +35,7 @@ mod memory_reset;
 mod model_list;
 mod model_provider_capabilities_read;
 mod output_schema;
+mod permission_preset_list;
 mod permission_profile_list;
 mod plan_item;
 mod plugin_install;

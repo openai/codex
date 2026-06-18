@@ -2011,6 +2011,7 @@ dependencies = [
  "codex-thread-store",
  "codex-tools",
  "codex-utils-absolute-path",
+ "codex-utils-approval-presets",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-json-to-toml",

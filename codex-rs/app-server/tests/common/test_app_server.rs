@@ -58,6 +58,7 @@ use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadParams;
+use codex_app_server_protocol::PermissionPresetListParams;
 use codex_app_server_protocol::PermissionProfileListParams;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstalledParams;
@@ -646,6 +647,15 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("permissionProfile/list", params).await
+    }
+
+    /// Send a `permissionPreset/list` JSON-RPC request.
+    pub async fn send_permission_preset_list_request(
+        &mut self,
+        params: PermissionPresetListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("permissionPreset/list", params).await
     }
 
     /// Send an `experimentalFeature/enablement/set` JSON-RPC request.

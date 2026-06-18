@@ -9394,6 +9394,39 @@
         }
       ]
     },
+    "PermissionPreset": {
+      "properties": {
+        "approvalPolicy": {
+          "$ref": "#/definitions/AskForApproval"
+        },
+        "approvalsReviewer": {
+          "$ref": "#/definitions/ApprovalsReviewer"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "isDefault": {
+          "type": "boolean"
+        },
+        "permissionProfileId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approvalPolicy",
+        "approvalsReviewer",
+        "id",
+        "isDefault",
+        "permissionProfileId"
+      ],
+      "type": "object"
+    },
     "PermissionProfileListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
