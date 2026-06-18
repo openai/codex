@@ -56,14 +56,14 @@ const DESKTOP_ALL_ACCESS: u32 = DESKTOP_READOBJECTS
 
 pub struct LaunchDesktop {
     _private_desktop: Option<PrivateDesktop>,
-    startup_name: Vec<u16>,
+    startup_name: Option<Vec<u16>>,
 }
 
 impl LaunchDesktop {
     pub fn prepare(use_private_desktop: bool, logs_base_dir: Option<&Path>) -> Result<Self> {
         if use_private_desktop {
             let private_desktop = PrivateDesktop::create(logs_base_dir)?;
-            let startup_name = to_wide(format!("Winsta0\\{}", private_desktop.name));
+            let startup_name = Some(to_wide(format!("Winsta0\\{}", private_desktop.name)));
             Ok(Self {
                 _private_desktop: Some(private_desktop),
                 startup_name,
@@ -71,13 +71,19 @@ impl LaunchDesktop {
         } else {
             Ok(Self {
                 _private_desktop: None,
-                startup_name: to_wide("Winsta0\\Default"),
+                // Leave lpDesktop unset for non-UI commands. For elevated logon-user sandbox
+                // sessions there is no guarantee that Winsta0\Default is attached to the
+                // command's logon session, and forcing it can make CreateProcessAsUserW fail
+                // before the child process even starts.
+                startup_name: None,
             })
         }
     }
 
     pub fn startup_info_desktop(&self) -> *mut u16 {
-        self.startup_name.as_ptr() as *mut u16
+        self.startup_name
+            .as_ref()
+            .map_or(ptr::null_mut(), |name| name.as_ptr() as *mut u16)
     }
 }
 
@@ -192,5 +198,16 @@ impl Drop for PrivateDesktop {
                 let _ = CloseDesktop(self.handle);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LaunchDesktop;
+
+    #[test]
+    fn non_private_desktop_leaves_startup_desktop_unset() {
+        let desktop = LaunchDesktop::prepare(false, None).expect("desktop");
+        assert!(desktop.startup_info_desktop().is_null());
     }
 }
