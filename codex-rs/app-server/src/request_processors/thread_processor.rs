@@ -2523,6 +2523,10 @@ impl ThreadRequestProcessor {
         let Some(rollout_path) = stored_thread.rollout_path else {
             return Ok(None);
         };
+        match codex_rollout::read_session_meta_line(rollout_path.as_path()).await {
+            Ok(meta_line) if meta_line.meta.id == thread_id => {}
+            _ => return Ok(None),
+        }
         try_build_recent_not_loaded_turns_page_from_rollout_path(
             rollout_path.as_path(),
             loaded_status,
@@ -3623,7 +3627,10 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
-        let optimized_source = if !include_turns && !ephemeral {
+        let optimized_source = if !include_turns
+            && !ephemeral
+            && self.thread_store.as_any().is::<LocalThreadStore>()
+        {
             self.read_stored_thread_for_resume_with_compacted_history(&thread_id, path.as_ref())
                 .await?
         } else {
@@ -3886,6 +3893,17 @@ impl ThreadRequestProcessor {
         let notif = thread_started_notification(thread);
         let connection_id = request_id.connection_id;
         let token_usage_thread = include_turns.then(|| response.thread.clone());
+        log_listener_attach_result(
+            self.ensure_conversation_listener(
+                thread_id,
+                connection_id,
+                /*raw_events_enabled*/ false,
+            )
+            .await,
+            thread_id,
+            connection_id,
+            "thread",
+        );
         self.outgoing.send_response(request_id, response).await;
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.
@@ -3911,22 +3929,6 @@ impl ThreadRequestProcessor {
             )
             .await;
         }
-
-        tokio::task::yield_now().await;
-        // Auto-attach after the response is queued. The attach is still
-        // performed before the follow-up notification, but it no longer sits on
-        // the fork response latency path.
-        log_listener_attach_result(
-            self.ensure_conversation_listener(
-                thread_id,
-                connection_id,
-                /*raw_events_enabled*/ false,
-            )
-            .await,
-            thread_id,
-            connection_id,
-            "thread",
-        );
 
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
@@ -4321,6 +4323,7 @@ fn read_compacted_resume_suffix_items(
 ) -> std::io::Result<Option<Vec<RolloutItem>>> {
     let mut suffix_items = Vec::new();
     let mut found_checkpoint = false;
+    let mut found_checkpoint_turn_context = false;
     let mut should_fallback = false;
 
     read_rollout_lines_from_end(path, byte_len, |line| {
@@ -4341,15 +4344,20 @@ fn read_compacted_resume_suffix_items(
             return Ok(false);
         }
         let is_checkpoint = rollout_item_is_reconstruction_checkpoint(&rollout_line.item);
+        let is_turn_context = matches!(&rollout_line.item, RolloutItem::TurnContext(_));
         suffix_items.push(rollout_line.item);
         if is_checkpoint {
             found_checkpoint = true;
+            return Ok(true);
+        }
+        if found_checkpoint && is_turn_context {
+            found_checkpoint_turn_context = true;
             return Ok(false);
         }
         Ok(true)
     })?;
 
-    if should_fallback || !found_checkpoint {
+    if should_fallback || !found_checkpoint || !found_checkpoint_turn_context {
         return Ok(None);
     }
 
