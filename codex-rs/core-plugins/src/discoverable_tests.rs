@@ -640,12 +640,12 @@ async fn does_not_reload_marketplace_per_plugin() {
     let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone())
         .expect("utf8 logs")
         .replace('\\', "/");
-    assert_eq!(logs.matches("ignoring interface.defaultPrompt").count(), 4);
-    assert_eq!(logs.matches("gmail/.codex-plugin/plugin.json").count(), 2);
+    assert_eq!(logs.matches("ignoring interface.defaultPrompt").count(), 8);
+    assert_eq!(logs.matches("gmail/.codex-plugin/plugin.json").count(), 4);
     assert_eq!(
         logs.matches("openai-developers/.codex-plugin/plugin.json")
             .count(),
-        2
+        4
     );
 }
 
