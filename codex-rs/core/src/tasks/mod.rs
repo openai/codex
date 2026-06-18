@@ -227,8 +227,8 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// abort; implementers should watch for it and terminate quickly once it
     /// fires. Returning [`Some`] yields a final message that
     /// [`Session::on_task_finished`] will emit to the client. Returning
-    /// [`CodexErr::TurnAborted`] suppresses normal completion because the
-    /// interrupt path owns abort cleanup and lifecycle events.
+    /// [`CodexErr::TurnAborted`] completes the task through the aborted-turn
+    /// lifecycle instead.
     fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -430,8 +430,9 @@ impl Session {
                             sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                                 .await;
                         }
-                        // The queued interrupt owns abort cleanup and emits TurnAborted.
-                        Err(CodexErr::TurnAborted) => {}
+                        Err(CodexErr::TurnAborted) => {
+                            sess.on_task_aborted().await;
+                        }
                         Err(err) => {
                             warn!(%err, "session task returned an unexpected error");
                             sess.on_task_finished(
@@ -572,6 +573,27 @@ impl Session {
         }
 
         true
+    }
+
+    async fn on_task_aborted(self: &Arc<Self>) {
+        let Some(mut active_turn) = self.take_active_turn().await else {
+            return;
+        };
+        let Some(task) = active_turn.task.take() else {
+            return;
+        };
+
+        task.turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
+        // The task is finalizing itself, so dropping this handle must not abort it.
+        task.handle.detach();
+
+        let reason = TurnAbortReason::Interrupted;
+        self.send_turn_aborted_event(task.turn_context.as_ref(), reason.clone())
+            .await;
+        self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
+            .await;
     }
 
     pub async fn on_task_finished(
@@ -868,29 +890,33 @@ impl Session {
             }
         }
 
-        let (completed_at, duration_ms) = task
-            .turn_context
+        self.send_turn_aborted_event(task.turn_context.as_ref(), reason)
+            .await;
+    }
+
+    async fn send_turn_aborted_event(&self, turn_context: &TurnContext, reason: TurnAbortReason) {
+        let (completed_at, duration_ms) = turn_context
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
         self.services
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
-                turn_id: task.turn_context.sub_id.clone(),
-                profile: task.turn_context.turn_timing_state.complete_profile(),
+                turn_id: turn_context.sub_id.clone(),
+                profile: turn_context.turn_timing_state.complete_profile(),
             });
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: Some(task.turn_context.sub_id.clone()),
+            turn_id: Some(turn_context.sub_id.clone()),
             reason,
             completed_at,
             duration_ms,
         });
-        self.send_event(task.turn_context.as_ref(), event).await;
+        self.send_event(turn_context, event).await;
         self.services
             .guardian_rejection_circuit_breaker
             .lock()
             .await
-            .clear_turn(&task.turn_context.sub_id);
+            .clear_turn(&turn_context.sub_id);
     }
 }
 

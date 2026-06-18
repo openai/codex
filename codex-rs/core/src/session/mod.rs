@@ -3366,7 +3366,7 @@ impl Session {
                 }
                 state.token_info()
             };
-            let budget_result = self.record_rollout_budget_usage(token_usage).await;
+            let budget_result = self.record_rollout_budget_usage(token_usage);
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
                     contributor

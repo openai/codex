@@ -195,77 +195,26 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exhaustion_aborts_the_triggering_thread_and_interrupts_subagents() -> Result<()> {
+async fn exhausted_budget_aborts_current_and_later_turns() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    const ROOT_PROMPT: &str = "spawn a long-running budget worker";
-    const CHILD_PROMPT: &str = "run until interrupted";
-    const EXHAUST_PROMPT: &str = "use the rest of the budget";
-    const SPAWN_CALL_ID: &str = "spawn-interrupt-worker";
-
     let server = start_mock_server().await;
-    let spawn_args = json!({
-        "message": CHILD_PROMPT,
-        "task_name": "interrupt_worker",
-    })
-    .to_string();
-    let shell_args = json!({
-        "command": "sleep 60",
-        "timeout_ms": 60_000,
-    })
-    .to_string();
-    mount_sse_once_match(
+    mount_sse_sequence(
         &server,
-        |request: &wiremock::Request| wire_request_contains(request, ROOT_PROMPT),
-        sse(vec![
-            ev_response_created("interrupt-root-1"),
-            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
-            ev_completed_with_tokens("interrupt-root-1", /*total_tokens*/ 10),
-        ]),
+        vec![
+            sse(vec![
+                ev_response_created("exhaust-budget"),
+                ev_completed_with_tokens("exhaust-budget", /*total_tokens*/ 30),
+            ]),
+            sse(vec![
+                ev_response_created("already-exhausted"),
+                ev_completed_with_tokens("already-exhausted", /*total_tokens*/ 1),
+            ]),
+        ],
     )
     .await;
-    mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| wire_request_contains(request, "\"type\":\"agent_message\""),
-        sse(vec![
-            ev_response_created("interrupt-child-1"),
-            ev_function_call("child-sleep", "shell_command", &shell_args),
-            ev_completed("interrupt-child-1"),
-        ]),
-    )
-    .await;
-    mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| {
-            wire_request_contains(request, SPAWN_CALL_ID)
-                && !wire_request_contains(request, "\"type\":\"agent_message\"")
-        },
-        sse(vec![
-            ev_response_created("interrupt-root-2"),
-            ev_completed("interrupt-root-2"),
-        ]),
-    )
-    .await;
-    let exhaust_response = mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| wire_request_contains(request, EXHAUST_PROMPT),
-        sse(vec![
-            ev_response_created("interrupt-root-3"),
-            ev_completed_with_tokens("interrupt-root-3", /*total_tokens*/ 20),
-        ]),
-    )
-    .await;
-
     let test = test_codex()
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Collab)
-                .expect("test config should allow multi-agent tools");
-            config
-                .features
-                .enable(Feature::MultiAgentV2)
-                .expect("test config should allow multi-agent v2");
             config.rollout_budget = Some(RolloutBudgetConfig {
                 limit_tokens: 30,
                 reminder_interval_tokens: 10,
@@ -275,49 +224,33 @@ async fn exhaustion_aborts_the_triggering_thread_and_interrupts_subagents() -> R
         .build(&server)
         .await?;
 
-    let mut created_threads = test.thread_manager.subscribe_thread_created();
-    test.submit_turn(ROOT_PROMPT).await?;
-    let child_thread_id = timeout(Duration::from_secs(10), created_threads.recv()).await??;
-    let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
-    wait_for_event(child_thread.as_ref(), |event| {
-        matches!(event, EventMsg::ExecCommandBegin(_))
-    })
-    .await;
+    for prompt in ["exhaust the budget", "try another turn"] {
+        test.codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: prompt.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
+            })
+            .await?;
 
-    test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: EXHAUST_PROMPT.to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
+        let event = wait_for_event(&test.codex, |event| match event {
+            EventMsg::TurnAborted(_) => true,
+            EventMsg::TurnComplete(_) => {
+                panic!("exhausted budget completed the turn instead of aborting")
+            }
+            _ => false,
         })
-        .await?;
-
-    let root_abort = wait_for_event(&test.codex, |event| match event {
-        EventMsg::TurnAborted(_) => true,
-        EventMsg::TurnComplete(_) => {
-            panic!("budget-exhausting turn completed instead of aborting")
-        }
-        _ => false,
-    })
-    .await;
-    let child_abort = wait_for_event(child_thread.as_ref(), |event| {
-        matches!(event, EventMsg::TurnAborted(_))
-    })
-    .await;
-    let EventMsg::TurnAborted(root_abort) = root_abort else {
-        unreachable!("event filter only accepts TurnAborted")
-    };
-    let EventMsg::TurnAborted(child_abort) = child_abort else {
-        unreachable!("event filter only accepts TurnAborted")
-    };
-    assert_eq!(root_abort.reason, TurnAbortReason::Interrupted);
-    assert_eq!(child_abort.reason, TurnAbortReason::Interrupted);
-    exhaust_response.single_request();
+        .await;
+        let EventMsg::TurnAborted(abort) = event else {
+            unreachable!("event filter only accepts TurnAborted")
+        };
+        assert_eq!(abort.reason, TurnAbortReason::Interrupted);
+    }
 
     Ok(())
 }

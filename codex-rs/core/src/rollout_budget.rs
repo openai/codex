@@ -40,7 +40,7 @@ impl RolloutBudget {
         });
     }
 
-    /// Returns true when the configured budget is exhausted.
+    /// Returns true once the configured budget is exhausted, including on later calls.
     pub(crate) fn record_usage(&self, usage: &TokenUsage) -> bool {
         let Some(mut state) = self.lock() else {
             return false;

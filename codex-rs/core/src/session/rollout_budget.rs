@@ -23,20 +23,15 @@ pub(super) async fn maybe_record_reminder(
 }
 
 impl Session {
-    pub(crate) async fn record_rollout_budget_usage(&self, usage: &TokenUsage) -> CodexResult<()> {
-        if !self
+    pub(crate) fn record_rollout_budget_usage(&self, usage: &TokenUsage) -> CodexResult<()> {
+        if self
             .services
             .agent_control
             .rollout_budget()
             .record_usage(usage)
         {
-            return Ok(());
+            return Err(CodexErr::TurnAborted);
         }
-
-        self.services
-            .agent_control
-            .interrupt_all_threads(self.thread_id())
-            .await?;
-        Err(CodexErr::TurnAborted)
+        Ok(())
     }
 }
