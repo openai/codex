@@ -976,7 +976,7 @@ impl ThreadManager {
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {
-        AgentControl::new(Arc::downgrade(&self.state), None)
+        AgentControl::new(Arc::downgrade(&self.state), /*rollout_budget*/ None)
     }
 
     fn agent_control_for_config(&self, config: &Config) -> AgentControl {
