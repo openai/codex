@@ -1029,9 +1029,15 @@ impl App {
                     let codex_home = self.config.codex_home.clone();
                     let tx = self.app_event_tx.clone();
 
-                    // If the elevated setup already ran on this machine, don't prompt for
-                    // elevation again - just flip the config to use the elevated path.
-                    if crate::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path()) {
+                    // Skip the UAC path only when the existing setup still refreshes cleanly
+                    // for the current workspace roots and permission profile.
+                    if crate::windows_sandbox::elevated_setup_is_ready(
+                        &permission_profile,
+                        workspace_roots.as_slice(),
+                        command_cwd.as_path(),
+                        &env_map,
+                        codex_home.as_path(),
+                    ) {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,

@@ -43,6 +43,41 @@ pub(crate) fn sandbox_setup_is_complete(_codex_home: &Path) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) fn elevated_setup_is_ready(
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+) -> bool {
+    if !sandbox_setup_is_complete(codex_home) {
+        return false;
+    }
+
+    codex_windows_sandbox::run_setup_refresh_with_extra_read_roots(
+        permission_profile,
+        workspace_roots,
+        command_cwd,
+        env_map,
+        codex_home,
+        Vec::new(),
+        /*proxy_enforced*/ false,
+    )
+    .is_ok()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn elevated_setup_is_ready(
+    _permission_profile: &PermissionProfile,
+    _workspace_roots: &[AbsolutePathBuf],
+    _command_cwd: &Path,
+    _env_map: &HashMap<String, String>,
+    _codex_home: &Path,
+) -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn run_elevated_setup(
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],

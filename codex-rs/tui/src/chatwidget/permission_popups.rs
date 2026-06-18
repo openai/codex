@@ -328,7 +328,13 @@ impl ChatWidget {
                     == WindowsSandboxLevel::Disabled
                 {
                     let preset = preset.clone();
-                    if crate::windows_sandbox::sandbox_setup_is_complete(
+                    let env_map: std::collections::HashMap<String, String> =
+                        std::env::vars().collect();
+                    if crate::windows_sandbox::elevated_setup_is_ready(
+                        &self.config.permissions.effective_permission_profile(),
+                        self.config.effective_workspace_roots().as_slice(),
+                        self.config.cwd.as_path(),
+                        &env_map,
                         self.config.codex_home.as_path(),
                     ) {
                         return vec![Box::new(move |tx| {

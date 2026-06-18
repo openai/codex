@@ -170,6 +170,41 @@ pub fn run_elevated_setup(
 }
 
 #[cfg(target_os = "windows")]
+pub fn elevated_setup_is_ready(
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+) -> bool {
+    if !sandbox_setup_is_complete(codex_home) {
+        return false;
+    }
+
+    codex_windows_sandbox::run_setup_refresh_with_extra_read_roots(
+        permission_profile,
+        workspace_roots,
+        command_cwd,
+        env_map,
+        codex_home,
+        Vec::new(),
+        /*proxy_enforced*/ false,
+    )
+    .is_ok()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn elevated_setup_is_ready(
+    _permission_profile: &PermissionProfile,
+    _workspace_roots: &[AbsolutePathBuf],
+    _command_cwd: &Path,
+    _env_map: &HashMap<String, String>,
+    _codex_home: &Path,
+) -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
 pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> anyhow::Result<()> {
     codex_windows_sandbox::run_elevated_provisioning_setup(codex_home, real_user)
 }
@@ -307,7 +342,13 @@ async fn run_windows_sandbox_setup_and_persist(
     let setup_result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         match mode {
             WindowsSandboxSetupMode::Elevated => {
-                if !sandbox_setup_is_complete(setup_codex_home.as_path()) {
+                if !elevated_setup_is_ready(
+                    &permission_profile,
+                    workspace_roots.as_slice(),
+                    command_cwd.as_path(),
+                    &env_map,
+                    setup_codex_home.as_path(),
+                ) {
                     run_elevated_setup(
                         &permission_profile,
                         workspace_roots.as_slice(),
