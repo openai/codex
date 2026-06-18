@@ -1719,6 +1719,15 @@ async fn handle_server_request(
             )
             .await
         }
+        ServerRequest::CurrentTimeRead { request_id, .. } => {
+            reject_server_request(
+                client,
+                request_id,
+                &method,
+                "external current time is not supported in exec mode".to_string(),
+            )
+            .await
+        }
         ServerRequest::ApplyPatchApproval { request_id, params } => {
             reject_server_request(
                 client,
