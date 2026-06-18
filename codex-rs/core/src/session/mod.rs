@@ -3298,11 +3298,8 @@ impl Session {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
-        if reference_context_item
-            .as_ref()
-            .and_then(|item| item.turn_id.as_deref())
-            == Some(turn_context.sub_id.as_str())
-        {
+        let turn_context_item = turn_context.to_turn_context_item();
+        if reference_context_item.as_ref() == Some(&turn_context_item) {
             return;
         }
         let should_inject_full_context = reference_context_item.is_none();
@@ -3320,7 +3317,6 @@ impl Session {
                     .await,
             );
         }
-        let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;

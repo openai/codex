@@ -7660,9 +7660,11 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
         .insert(TurnContextExtensionTestState {
             expected_model_context_window: Some(50),
         });
+    let mut previous_context_item = turn_context.to_turn_context_item();
+    previous_context_item.turn_id = Some("previous-turn-id".to_string());
     {
         let mut state = session.state.lock().await;
-        state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+        state.set_reference_context_item(Some(previous_context_item));
     }
 
     session
