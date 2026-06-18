@@ -157,3 +157,39 @@ async fn failed_route_state_build_keeps_the_last_working_routes() {
         CredentialedRoutesConfig::default()
     );
 }
+
+#[tokio::test]
+async fn failed_base_state_replacement_keeps_the_last_working_base() {
+    let base_state = build_config_state(
+        NetworkProxyConfig::default(),
+        NetworkProxyConstraints::default(),
+    )
+    .unwrap();
+    let credentialed_routes =
+        proxy_config(vec![route("connector_123", "https://api.example.com/v1")]);
+    let reloader = CredentialedRoutesReloader::new(
+        base_state,
+        credentialed_routes,
+        Arc::new(|| async { Ok(CredentialedRoutesConfig::default()) }),
+    );
+    let mut constrained_config = NetworkProxyConfig::default();
+    constrained_config
+        .network
+        .set_allowed_domains(vec!["existing.example.com".to_string()]);
+    let constrained_state = build_config_state(
+        constrained_config,
+        NetworkProxyConstraints {
+            allowed_domains: Some(vec!["existing.example.com".to_string()]),
+            ..NetworkProxyConstraints::default()
+        },
+    )
+    .unwrap();
+
+    assert!(
+        reloader
+            .replace_base_state(constrained_state)
+            .await
+            .is_err()
+    );
+    assert!(reloader.reload_now().await.is_ok());
+}
