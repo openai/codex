@@ -536,6 +536,7 @@ impl Session {
         ));
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
+        extension_data.insert(session_telemetry_for_context.clone());
         extension_data.insert(skills_snapshot.clone());
         TurnContext {
             sub_id,

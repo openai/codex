@@ -79,6 +79,7 @@ async fn contribute_prompt(
         fragments.extend(
             contributor
                 .contribute(ContextContributionContext {
+                    thread_id: codex_protocol::ThreadId::new(),
                     session_store,
                     thread_store,
                     turn_store: &turn_store,

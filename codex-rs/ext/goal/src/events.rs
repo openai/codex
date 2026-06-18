@@ -22,13 +22,17 @@ impl GoalEventEmitter {
         turn_id: Option<String>,
         goal: ThreadGoal,
     ) {
-        self.sink.emit(Event {
-            id: event_id.into(),
-            msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
-                thread_id: goal.thread_id,
-                turn_id,
-                goal,
-            }),
-        });
+        let thread_id = goal.thread_id;
+        self.sink.emit(
+            thread_id,
+            Event {
+                id: event_id.into(),
+                msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                    thread_id,
+                    turn_id,
+                    goal,
+                }),
+            },
+        );
     }
 }

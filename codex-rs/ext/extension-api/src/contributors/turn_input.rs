@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codex_protocol::ThreadId;
 use codex_protocol::user_input::UserInput;
 
 /// Host-owned turn environment summary visible to turn-input contributors.
@@ -16,6 +17,8 @@ pub struct TurnInputEnvironment {
 /// Turn facts supplied before the host records turn-local model input items.
 #[derive(Debug, Clone)]
 pub struct TurnInputContext {
+    /// Thread that owns this turn.
+    pub thread_id: ThreadId,
     /// Stable host-owned turn identifier.
     pub turn_id: String,
     /// User input submitted for this turn.

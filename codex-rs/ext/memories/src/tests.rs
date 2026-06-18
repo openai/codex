@@ -185,6 +185,7 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
 
     let fragments = extension
         .contribute(ContextContributionContext {
+            thread_id: Default::default(),
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,

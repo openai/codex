@@ -1407,7 +1407,7 @@ impl RecordingEventSink {
 }
 
 impl ExtensionEventSink for RecordingEventSink {
-    fn emit(&self, event: Event) {
+    fn emit(&self, _thread_id: ThreadId, event: Event) {
         self.events().push(event);
     }
 }

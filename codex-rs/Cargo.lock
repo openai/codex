@@ -3889,6 +3889,7 @@ dependencies = [
  "codex-exec-server",
  "codex-extension-api",
  "codex-mcp",
+ "codex-otel",
  "codex-protocol",
  "codex-tools",
  "codex-utils-absolute-path",

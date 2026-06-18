@@ -20,6 +20,7 @@ use codex_extension_api::ToolExecutor;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
 use codex_mcp::McpResourceClient;
+use codex_otel::SessionTelemetry;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -134,17 +135,23 @@ where
                 )
                 .await;
             for warning in &catalog.warnings {
-                self.emit_warning(thread_store.level_id(), warning.clone());
+                self.emit_warning(
+                    context.thread_id,
+                    context.turn_store.level_id(),
+                    warning.clone(),
+                );
             }
+            let session_telemetry = context.turn_store.get::<SessionTelemetry>();
             let Some((fragment, warning)) = available_skills_fragment(
                 &catalog,
                 host_snapshot.as_deref(),
                 context.model_context_window,
+                session_telemetry.as_deref(),
             ) else {
                 return Vec::new();
             };
             if let Some(warning) = warning {
-                self.emit_warning(thread_store.level_id(), warning);
+                self.emit_warning(context.thread_id, context.turn_store.level_id(), warning);
             }
             vec![PromptFragment::developer_capability(fragment.render())]
         })
@@ -206,7 +213,7 @@ where
             };
             let catalog = self.list_skills(query, &thread_state).await;
             for warning in &catalog.warnings {
-                self.emit_warning(&input.turn_id, warning.clone());
+                self.emit_warning(input.thread_id, &input.turn_id, warning.clone());
             }
 
             let selected_entries = collect_explicit_skill_mentions(&input.user_input, &catalog);
@@ -227,7 +234,7 @@ where
                                 "Skill `{}` exceeded the main prompt context limit and was truncated.",
                                 entry.name
                             );
-                            self.emit_warning(&input.turn_id, warning.clone());
+                            self.emit_warning(input.thread_id, &input.turn_id, warning.clone());
                             warnings.push(warning);
                         }
                         let fragment = SkillInstructions {
@@ -247,7 +254,7 @@ where
                     }
                     Err(message) => {
                         let warning = format!("Failed to load skill `{}`: {message}", entry.name);
-                        self.emit_warning(&input.turn_id, warning.clone());
+                        self.emit_warning(input.thread_id, &input.turn_id, warning.clone());
                         warnings.push(warning);
                     }
                 }
@@ -332,11 +339,14 @@ impl<C> SkillsExtension<C> {
             .map_err(|err| err.message)
     }
 
-    fn emit_warning(&self, turn_id: &str, message: String) {
-        self.event_sink.emit(Event {
-            id: turn_id.to_string(),
-            msg: EventMsg::Warning(WarningEvent { message }),
-        });
+    fn emit_warning(&self, thread_id: codex_protocol::ThreadId, turn_id: &str, message: String) {
+        self.event_sink.emit(
+            thread_id,
+            Event {
+                id: turn_id.to_string(),
+                msg: EventMsg::Warning(WarningEvent { message }),
+            },
+        );
     }
 }
 

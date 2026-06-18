@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_context_fragments::ContextualUserFragment;
+use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -44,6 +45,7 @@ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Host context available while extensions contribute initial model input.
 #[derive(Clone, Copy)]
 pub struct ContextContributionContext<'a> {
+    pub thread_id: ThreadId,
     pub session_store: &'a ExtensionData,
     pub thread_store: &'a ExtensionData,
     pub turn_store: &'a ExtensionData,

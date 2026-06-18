@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -27,7 +28,6 @@ use rmcp::model::CallToolResult;
 use rmcp::model::Content;
 use rmcp::model::RequestId;
 use serde_json::json;
-use tokio::sync::Mutex;
 
 /// To adhere to MCP `tools/call` response format, include the Codex
 /// `threadId` in the `structured_content` field of the response.
@@ -98,7 +98,7 @@ pub async fn run_codex_tool_session(
     let sub_id = id.to_string();
     running_requests_id_to_codex_uuid
         .lock()
-        .await
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(id.clone(), thread_id);
     let submission = Submission {
         id: sub_id.clone(),
@@ -126,7 +126,10 @@ pub async fn run_codex_tool_session(
         );
         outgoing.send_response(id.clone(), result).await;
         // unregister the id so we don't keep it in the map
-        running_requests_id_to_codex_uuid.lock().await.remove(&id);
+        running_requests_id_to_codex_uuid
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
         return;
     }
 
@@ -150,10 +153,11 @@ pub async fn run_codex_tool_session_reply(
 ) {
     running_requests_id_to_codex_uuid
         .lock()
-        .await
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(request_id.clone(), thread_id);
-    if let Err(e) = thread
-        .submit(Op::UserInput {
+    let submission = Submission {
+        id: request_id.to_string(),
+        op: Op::UserInput {
             items: vec![UserInput::Text {
                 text: prompt,
                 // MCP tool prompts are plain text with no UI element ranges.
@@ -163,9 +167,11 @@ pub async fn run_codex_tool_session_reply(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: Default::default(),
-        })
-        .await
-    {
+        },
+        client_user_message_id: None,
+        trace: None,
+    };
+    if let Err(e) = thread.submit_with_id(submission).await {
         tracing::error!("Failed to submit user input: {e}");
         let result = create_call_tool_result_with_thread_id(
             thread_id,
@@ -176,7 +182,7 @@ pub async fn run_codex_tool_session_reply(
         // unregister the id so we don't keep it in the map
         running_requests_id_to_codex_uuid
             .lock()
-            .await
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&request_id);
         return;
     }
@@ -310,11 +316,6 @@ async fn run_codex_tool_session_inner(
                             thread_id, text, /*is_error*/ None,
                         );
                         outgoing.send_response(request_id.clone(), result).await;
-                        // unregister the id so we don't keep it in the map
-                        running_requests_id_to_codex_uuid
-                            .lock()
-                            .await
-                            .remove(&request_id);
                         break;
                     }
                     EventMsg::SessionConfigured(_) => {
@@ -409,6 +410,10 @@ async fn run_codex_tool_session_inner(
             }
         }
     }
+    running_requests_id_to_codex_uuid
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&request_id);
 }
 
 #[cfg(test)]

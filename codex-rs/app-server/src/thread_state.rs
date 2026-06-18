@@ -56,6 +56,10 @@ pub(crate) enum ThreadListenerCommand {
     EmitThreadGoalSnapshot {
         state_db: StateDbHandle,
     },
+    // EmitWarning is used to order extension warnings with core turn events.
+    EmitWarning {
+        message: String,
+    },
     // ResolveServerRequest is used to notify the client that the request has been resolved.
     // It is executed in the thread listener's context to ensure that the resolved notification is ordered with regard to the request itself.
     ResolveServerRequest {

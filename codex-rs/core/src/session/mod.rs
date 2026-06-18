@@ -2967,9 +2967,14 @@ impl Session {
             }
         }
         let context_contributors = self.services.extensions.context_contributors().to_vec();
+        let mut extension_developer_policy = Vec::new();
+        let mut extension_developer_capabilities = Vec::new();
+        let mut extension_contextual_user = Vec::new();
+        let mut extension_separate_developer = Vec::new();
         for contributor in context_contributors {
             for fragment in contributor
                 .contribute(ContextContributionContext {
+                    thread_id: self.thread_id(),
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),
@@ -2978,18 +2983,22 @@ impl Session {
                 .await
             {
                 match fragment.slot() {
-                    PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
-                        developer_sections.push(fragment.text().to_string());
+                    PromptSlot::DeveloperPolicy => {
+                        extension_developer_policy.push(fragment.text().to_string());
+                    }
+                    PromptSlot::DeveloperCapabilities => {
+                        extension_developer_capabilities.push(fragment.text().to_string());
                     }
                     PromptSlot::ContextualUser => {
-                        contextual_user_sections.push(fragment.text().to_string());
+                        extension_contextual_user.push(fragment.text().to_string());
                     }
                     PromptSlot::SeparateDeveloper => {
-                        separate_developer_sections.push(fragment.text().to_string());
+                        extension_separate_developer.push(fragment.text().to_string());
                     }
                 }
             }
         }
+        developer_sections.extend(extension_developer_capabilities);
         let loaded_plugins = self
             .services
             .plugins_manager
@@ -3023,6 +3032,9 @@ impl Session {
         {
             developer_sections.push(plugin_instructions.render());
         }
+        developer_sections.extend(extension_developer_policy);
+        contextual_user_sections.extend(extension_contextual_user);
+        separate_developer_sections.extend(extension_separate_developer);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             contextual_user_sections.push(user_instructions.to_string());
         }

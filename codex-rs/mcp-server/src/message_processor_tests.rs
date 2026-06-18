@@ -1,3 +1,4 @@
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 use pretty_assertions::assert_eq;
@@ -14,18 +15,25 @@ async fn extension_event_sink_forwards_warning_with_request_and_thread_metadata(
     let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
     let thread_id = ThreadId::new();
     let request_id = RequestId::String("request-1".into());
-    let running_requests = Arc::new(Mutex::new(HashMap::from([(request_id.clone(), thread_id)])));
+    let stale_request_id = RequestId::String("stale-request".into());
+    let running_requests = Arc::new(Mutex::new(HashMap::from([
+        (stale_request_id, thread_id),
+        (request_id.clone(), thread_id),
+    ])));
     let sink = McpServerExtensionEventSink {
         outgoing,
         running_requests,
     };
 
-    sink.emit(Event {
-        id: thread_id.to_string(),
-        msg: EventMsg::Warning(WarningEvent {
-            message: "skill warning".to_string(),
-        }),
-    });
+    sink.emit(
+        thread_id,
+        Event {
+            id: request_id.to_string(),
+            msg: EventMsg::Warning(WarningEvent {
+                message: "skill warning".to_string(),
+            }),
+        },
+    );
 
     let OutgoingMessage::Notification(OutgoingNotification { method, params }) =
         outgoing_rx.recv().await.expect("notification")
@@ -40,7 +48,7 @@ async fn extension_event_sink_forwards_warning_with_request_and_thread_metadata(
                 "requestId": request_id,
                 "threadId": thread_id,
             },
-            "id": thread_id.to_string(),
+            "id": request_id.to_string(),
             "msg": {
                 "type": "warning",
                 "message": "skill warning",

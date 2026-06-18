@@ -201,6 +201,7 @@ async fn contributors_preserve_registration_order() {
         fragments.extend(
             contributor
                 .contribute(ContextContributionContext {
+                    thread_id: codex_protocol::ThreadId::new(),
                     session_store: &session_store,
                     thread_store: &thread_store,
                     turn_store: &turn_store,
@@ -323,7 +324,7 @@ struct RecordingEventSink {
 }
 
 impl ExtensionEventSink for RecordingEventSink {
-    fn emit(&self, event: Event) {
+    fn emit(&self, _thread_id: codex_protocol::ThreadId, event: Event) {
         let EventMsg::Warning(warning) = event.msg else {
             panic!("test sink only accepts warning events");
         };
@@ -339,13 +340,15 @@ fn custom_event_sink_survives_registry_build() {
     let sink = Arc::new(RecordingEventSink::default());
     let builder = ExtensionRegistryBuilder::<()>::with_event_sink(sink.clone());
 
-    builder
-        .event_sink()
-        .emit(warning_event("builder", "before"));
+    builder.event_sink().emit(
+        codex_protocol::ThreadId::new(),
+        warning_event("builder", "before"),
+    );
     let registry = builder.build();
-    registry
-        .event_sink()
-        .emit(warning_event("registry", "after"));
+    registry.event_sink().emit(
+        codex_protocol::ThreadId::new(),
+        warning_event("registry", "after"),
+    );
 
     assert_eq!(
         sink.events

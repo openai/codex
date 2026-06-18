@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::StateDbHandle;
@@ -32,7 +33,6 @@ use rmcp::model::JsonRpcResponse;
 use rmcp::model::RequestId;
 use rmcp::model::ServerCapabilities;
 use serde_json::json;
-use tokio::sync::Mutex;
 use tokio::task;
 
 use crate::codex_tool_config::CodexToolCallParam;
@@ -527,7 +527,10 @@ impl MessageProcessor {
 
         // Obtain the thread id while holding the first lock, then release.
         let thread_id = {
-            let map_guard = self.running_requests_id_to_codex_uuid.lock().await;
+            let map_guard = self
+                .running_requests_id_to_codex_uuid
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             match map_guard.get(&request_id) {
                 Some(id) => *id,
                 None => {
@@ -563,7 +566,7 @@ impl MessageProcessor {
         // unregister the id so we don't keep it in the map
         self.running_requests_id_to_codex_uuid
             .lock()
-            .await
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&request_id);
     }
 
@@ -604,22 +607,18 @@ struct McpServerExtensionEventSink {
 }
 
 impl ExtensionEventSink for McpServerExtensionEventSink {
-    fn emit(&self, event: Event) {
-        let Ok(thread_id) = ThreadId::from_string(&event.id) else {
-            tracing::warn!(event_id = %event.id, "dropping extension event with invalid thread id");
-            return;
-        };
+    fn emit(&self, thread_id: ThreadId, event: Event) {
+        let request_id = self
+            .running_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find_map(|(request_id, running_thread_id)| {
+                (*running_thread_id == thread_id && request_id.to_string() == event.id)
+                    .then(|| request_id.clone())
+            });
         let outgoing = Arc::clone(&self.outgoing);
-        let running_requests = Arc::clone(&self.running_requests);
         tokio::spawn(async move {
-            let request_id =
-                running_requests
-                    .lock()
-                    .await
-                    .iter()
-                    .find_map(|(request_id, running_thread_id)| {
-                        (*running_thread_id == thread_id).then(|| request_id.clone())
-                    });
             outgoing
                 .send_event_as_notification(
                     &event,

@@ -9,8 +9,12 @@ use codex_core_skills::build_available_skills;
 use codex_core_skills::default_skill_metadata_budget;
 use codex_core_skills::render::SkillCatalogMode;
 use codex_core_skills::render::SkillRenderSideEffects;
+use codex_extension_api::ContextualUserFragment;
+use codex_otel::SessionTelemetry;
+use codex_utils_string::approx_token_count;
 
 const MAX_AVAILABLE_SKILLS_BYTES: usize = 8_000;
+const MAX_AVAILABLE_SKILLS_TOKENS: usize = 10_000;
 const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
 pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
@@ -19,16 +23,29 @@ pub(crate) fn available_skills_fragment(
     catalog: &SkillCatalog,
     host_snapshot: Option<&HostSkillsSnapshot>,
     model_context_window: Option<i64>,
+    session_telemetry: Option<&SessionTelemetry>,
 ) -> Option<(AvailableSkillsInstructions, Option<String>)> {
     let visible_entries = catalog
         .entries
         .iter()
         .filter(|entry| entry.enabled && entry.prompt_visible)
         .collect::<Vec<_>>();
+    let side_effects = session_telemetry
+        .map_or(SkillRenderSideEffects::None, |session_telemetry| {
+            SkillRenderSideEffects::ThreadStart { session_telemetry }
+        });
+    let host_available = host_snapshot.and_then(|host_snapshot| {
+        build_available_skills(
+            host_snapshot.outcome(),
+            default_skill_metadata_budget(model_context_window),
+            side_effects,
+        )
+    });
+
     if visible_entries
         .iter()
         .any(|entry| entry.authority.kind == SkillSourceKind::Host)
-        && let Some(host_snapshot) = host_snapshot
+        && let Some(available) = host_available
     {
         let external_lines = bounded_skill_lines(
             visible_entries
@@ -36,30 +53,8 @@ pub(crate) fn available_skills_fragment(
                 .copied()
                 .filter(|entry| entry.authority.kind != SkillSourceKind::Host),
         );
-        if let Some(available) = build_available_skills(
-            host_snapshot.outcome(),
-            default_skill_metadata_budget(model_context_window),
-            SkillRenderSideEffects::None,
-        ) {
-            let warning = available.warning_message.clone();
-            return Some((
-                AvailableSkillsInstructions::from_available_skills_with_additional_lines(
-                    available,
-                    external_lines,
-                ),
-                warning,
-            ));
-        }
-        if !external_lines.is_empty() {
-            return Some((
-                AvailableSkillsInstructions::from_skill_lines(
-                    external_lines,
-                    SkillCatalogMode::Mixed,
-                ),
-                None,
-            ));
-        }
-        return None;
+        let warning = available.warning_message.clone();
+        return Some((bounded_mixed_fragment(available, external_lines), warning));
     }
 
     let mode = if visible_entries
@@ -70,7 +65,7 @@ pub(crate) fn available_skills_fragment(
     } else {
         SkillCatalogMode::HostOnly
     };
-    let skill_lines = bounded_skill_lines(visible_entries);
+    let skill_lines = bounded_skill_lines(visible_entries).into_lines();
     (!skill_lines.is_empty()).then(|| {
         (
             AvailableSkillsInstructions::from_skill_lines(skill_lines, mode),
@@ -79,9 +74,23 @@ pub(crate) fn available_skills_fragment(
     })
 }
 
+struct BoundedSkillLines {
+    lines: Vec<String>,
+    omitted: usize,
+}
+
+impl BoundedSkillLines {
+    fn into_lines(mut self) -> Vec<String> {
+        if let Some(line) = omitted_skills_line(self.omitted) {
+            self.lines.push(line);
+        }
+        self.lines
+    }
+}
+
 fn bounded_skill_lines<'a>(
     entries: impl IntoIterator<Item = &'a SkillCatalogEntry>,
-) -> Vec<String> {
+) -> BoundedSkillLines {
     let mut total_bytes = 0usize;
     let mut omitted = 0usize;
     let mut skill_lines = Vec::new();
@@ -101,13 +110,43 @@ fn bounded_skill_lines<'a>(
         skill_lines.push(line);
     }
 
-    if omitted > 0 {
-        let skill_word = if omitted == 1 { "skill" } else { "skills" };
-        skill_lines.push(format!(
-            "- {omitted} additional {skill_word} omitted from this bounded skills list."
-        ));
+    BoundedSkillLines {
+        lines: skill_lines,
+        omitted,
     }
-    skill_lines
+}
+
+fn bounded_mixed_fragment(
+    available: codex_core_skills::AvailableSkills,
+    mut external: BoundedSkillLines,
+) -> AvailableSkillsInstructions {
+    loop {
+        let mut additional_lines = external.lines.clone();
+        if let Some(line) = omitted_skills_line(external.omitted) {
+            additional_lines.push(line);
+        }
+        let fragment = AvailableSkillsInstructions::from_available_skills_with_additional_lines(
+            available.clone(),
+            additional_lines,
+        );
+        if approx_token_count(&fragment.render()) <= MAX_AVAILABLE_SKILLS_TOKENS {
+            return fragment;
+        }
+        if external.lines.pop().is_none() {
+            return AvailableSkillsInstructions::from_available_skills_with_additional_lines(
+                available,
+                Vec::new(),
+            );
+        }
+        external.omitted = external.omitted.saturating_add(1);
+    }
+}
+
+fn omitted_skills_line(omitted: usize) -> Option<String> {
+    (omitted > 0).then(|| {
+        let skill_word = if omitted == 1 { "skill" } else { "skills" };
+        format!("- {omitted} additional {skill_word} omitted from this bounded skills list.")
+    })
 }
 
 fn render_skill_line(entry: &SkillCatalogEntry, description: &str) -> String {
