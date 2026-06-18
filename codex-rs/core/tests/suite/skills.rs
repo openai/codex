@@ -83,7 +83,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             )
             .await?;
             fs.write_file(
-                &PathUri::from_path(&metadata_dir.join("openai.yaml"))?,
+                &PathUri::from_path(metadata_dir.join("openai.yaml"))?,
                 br#"dependencies:
   tools:
     - type: "mcp"
