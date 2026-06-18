@@ -4975,21 +4975,11 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 }
 
 #[test]
-fn index_gated_mode_survives_disabled_permissions() {
-    let cfg = ConfigToml {
-        web_search: Some(WebSearchMode::IndexGated),
-        ..Default::default()
-    };
-    let features = Features::with_defaults();
+fn web_search_mode_for_turn_preserves_index_gated_for_disabled_permissions() {
+    let web_search_mode = Constrained::allow_any(WebSearchMode::IndexGated);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
-    let resolved = resolve_web_search_mode(&cfg, &features);
-    assert_eq!(resolved, Some(WebSearchMode::IndexGated));
-
-    let web_search_mode = Constrained::allow_any(resolved.expect("mode should resolve"));
-    assert_eq!(
-        resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled),
-        WebSearchMode::IndexGated
-    );
+    assert_eq!(mode, WebSearchMode::IndexGated);
 }
 
 #[test]

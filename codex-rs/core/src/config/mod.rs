@@ -2513,13 +2513,11 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     let preferred = web_search_mode.value();
 
     if matches!(permission_profile, PermissionProfile::Disabled)
-        && preferred != WebSearchMode::Disabled
+        && !matches!(
+            preferred,
+            WebSearchMode::Disabled | WebSearchMode::IndexGated
+        )
     {
-        if preferred == WebSearchMode::IndexGated
-            && web_search_mode.can_set(&WebSearchMode::IndexGated).is_ok()
-        {
-            return WebSearchMode::IndexGated;
-        }
         for mode in [
             WebSearchMode::Live,
             WebSearchMode::IndexGated,
