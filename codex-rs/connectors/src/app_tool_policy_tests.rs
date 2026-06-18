@@ -521,9 +521,59 @@ fn default_tools_enable_overrides_app_level_hints() {
 }
 
 #[test]
-fn evaluator_uses_default_tools_approval_mode() {
+fn evaluator_uses_apps_default_tools_approval_mode_only_with_connector_id() {
     let apps_config = AppsConfigToml {
-        default: None,
+        default: Some(AppsDefaultConfig {
+            default_tools_approval_mode: Some(AppToolApproval::Prompt),
+            ..defaults(
+                /*enabled*/ true, /*destructive_enabled*/ true,
+                /*open_world_enabled*/ true,
+            )
+        }),
+        apps: HashMap::new(),
+    };
+
+    assert_eq!(
+        [
+            policy_from_apps_config(
+                Some(&apps_config),
+                Some("calendar"),
+                "events/list",
+                /*tool_title*/ None,
+                /*destructive_hint*/ None,
+                /*open_world_hint*/ None,
+                /*managed_approval*/ None,
+            ),
+            policy_from_apps_config(
+                Some(&apps_config),
+                /*connector_id*/ None,
+                "events/list",
+                /*tool_title*/ None,
+                /*destructive_hint*/ None,
+                /*open_world_hint*/ None,
+                /*managed_approval*/ None,
+            ),
+        ],
+        [
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Prompt,
+            },
+            AppToolPolicy::default(),
+        ]
+    );
+}
+
+#[test]
+fn evaluator_prefers_app_default_tools_approval_mode_over_apps_default() {
+    let apps_config = AppsConfigToml {
+        default: Some(AppsDefaultConfig {
+            default_tools_approval_mode: Some(AppToolApproval::Approve),
+            ..defaults(
+                /*enabled*/ true, /*destructive_enabled*/ true,
+                /*open_world_enabled*/ true,
+            )
+        }),
         apps: HashMap::from([(
             "calendar".to_string(),
             AppConfig {
@@ -720,5 +770,6 @@ fn defaults(
         approvals_reviewer: None,
         destructive_enabled,
         open_world_enabled,
+        default_tools_approval_mode: None,
     }
 }

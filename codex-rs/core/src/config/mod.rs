@@ -947,6 +947,9 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Whether Codex-owned clients should respect host system proxy settings.
+    pub respect_system_proxy: bool,
+
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
 
@@ -1017,6 +1020,9 @@ pub struct Config {
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
+    /// Shared token budget for the root thread and its sub-agents.
+    pub rollout_budget: Option<RolloutBudgetConfig>,
+
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
 
@@ -1058,6 +1064,15 @@ pub struct Config {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct CodeModeConfig {
     pub excluded_tool_namespaces: Vec<String>,
+    pub direct_only_tool_namespaces: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct RolloutBudgetConfig {
+    pub limit_tokens: i64,
+    pub reminder_interval_tokens: i64,
+    pub sampling_token_weight: f64,
+    pub prefill_token_weight: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2401,6 +2416,10 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
             .and_then(|config| config.excluded_tool_namespaces.as_ref())
             .cloned()
             .unwrap_or_default(),
+        direct_only_tool_namespaces: base
+            .and_then(|config| config.direct_only_tool_namespaces.as_ref())
+            .cloned()
+            .unwrap_or_default(),
     }
 }
 
@@ -2461,6 +2480,65 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     }
 }
 
+fn resolve_rollout_budget_config(
+    config_toml: &ConfigToml,
+    features: &ManagedFeatures,
+) -> std::io::Result<Option<RolloutBudgetConfig>> {
+    if !features.enabled(Feature::RolloutBudget) {
+        return Ok(None);
+    }
+    let missing_limit_error = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.rollout_budget.limit_tokens is required when rollout_budget is enabled",
+        )
+    };
+    let Some(FeatureToml::Config(config)) = config_toml
+        .features
+        .as_ref()
+        .and_then(|features| features.rollout_budget.as_ref())
+    else {
+        return Err(missing_limit_error());
+    };
+    let Some(limit_tokens) = config.limit_tokens else {
+        return Err(missing_limit_error());
+    };
+    if limit_tokens <= 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.rollout_budget.limit_tokens must be positive",
+        ));
+    }
+    let reminder_interval_tokens = config
+        .reminder_interval_tokens
+        .unwrap_or_else(|| (limit_tokens / 10).max(1));
+    if reminder_interval_tokens <= 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.rollout_budget.reminder_interval_tokens must be positive",
+        ));
+    }
+    let sampling_token_weight = config.sampling_token_weight.unwrap_or(1.0);
+    let prefill_token_weight = config.prefill_token_weight.unwrap_or(1.0);
+    for (field, weight) in [
+        ("sampling_token_weight", sampling_token_weight),
+        ("prefill_token_weight", prefill_token_weight),
+    ] {
+        if !weight.is_finite() || weight < 0.0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("features.rollout_budget.{field} must be finite and non-negative"),
+            ));
+        }
+    }
+    Ok(Some(RolloutBudgetConfig {
+        limit_tokens,
+        reminder_interval_tokens,
+        sampling_token_weight,
+        prefill_token_weight,
+    }))
+}
+
 fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
     let Some(tui) = config_toml.tui.as_ref() else {
         return TerminalResizeReflowConfig::default();
@@ -2505,6 +2583,27 @@ fn network_proxy_toml_config(features: Option<&FeaturesToml>) -> Option<&Network
         FeatureToml::Enabled(_) => None,
         FeatureToml::Config(config) => Some(config),
     }
+}
+
+/// Bootstrap-only resolver for the cloud-config fetch.
+///
+/// Call before a cloud-config bundle is available. Final [`Config`] loading
+/// resolves the effective feature value after all layers are available.
+pub fn resolve_bootstrap_respect_system_proxy(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<bool> {
+    let configured_features = Features::from_sources(
+        FeatureConfigSource {
+            features: cfg.features.as_ref(),
+            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    let features =
+        ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
+    Ok(features.get().enabled(Feature::RespectSystemProxy))
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(
@@ -2770,6 +2869,7 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
+        let respect_system_proxy = features.enabled(Feature::RespectSystemProxy);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
         // Keep the configured mode separate so a requirement-constrained mode
@@ -3116,6 +3216,7 @@ impl Config {
             resolve_experimental_request_user_input_enabled(&cfg);
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
+        let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
@@ -3617,6 +3718,7 @@ impl Config {
             chatgpt_base_url: cfg
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            respect_system_proxy,
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
             realtime_audio: cfg
                 .audio
@@ -3655,6 +3757,7 @@ impl Config {
             background_terminal_max_timeout,
             ghost_snapshot,
             multi_agent_v2,
+            rollout_budget,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
@@ -3848,7 +3951,7 @@ impl Config {
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {
-        crate::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
+        crate::skills::service::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
 }
 

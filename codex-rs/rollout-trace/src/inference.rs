@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn traced_response_item_preserves_reasoning_content_omitted_by_normal_serializer() {
         let item = ResponseItem::Reasoning {
-            id: "rs-1".to_string(),
+            id: Some("rs-1".to_string()),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "summary".to_string(),
             }],

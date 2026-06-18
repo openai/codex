@@ -173,7 +173,7 @@ impl AccountRequestProcessor {
         }
     }
 
-    async fn maybe_refresh_remote_installed_plugins_cache_for_current_config(
+    async fn maybe_refresh_plugin_caches_for_current_config(
         config_manager: &ConfigManager,
         thread_manager: &Arc<ThreadManager>,
         auth: Option<CodexAuth>,
@@ -181,6 +181,9 @@ impl AccountRequestProcessor {
         thread_manager
             .plugins_manager()
             .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
+        thread_manager
+            .plugins_manager()
+            .clear_recommended_plugins_cache();
 
         match config_manager
             .load_latest_config(/*fallback_cwd*/ None)
@@ -191,7 +194,7 @@ impl AccountRequestProcessor {
                 let refresh_config_manager = config_manager.clone();
                 thread_manager
                     .plugins_manager()
-                    .maybe_start_remote_installed_plugins_cache_refresh(
+                    .maybe_start_remote_plugin_caches_refresh(
                         &config.plugins_config_input(),
                         auth,
                         Some(Arc::new(move || {
@@ -216,7 +219,7 @@ impl AccountRequestProcessor {
     ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
-            thread_manager.skills_manager().clear_cache();
+            thread_manager.skills_service().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
@@ -618,7 +621,7 @@ impl AccountRequestProcessor {
     }
 
     async fn send_login_success_notifications(&self, login_id: Option<Uuid>) {
-        Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
+        Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
             &self.thread_manager,
             self.auth_manager.auth_cached(),
@@ -671,7 +674,7 @@ impl AccountRequestProcessor {
                 .await;
 
             let auth = auth_manager.auth_cached();
-            Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
+            Self::maybe_refresh_plugin_caches_for_current_config(
                 &config_manager,
                 &thread_manager,
                 auth.clone(),
@@ -703,7 +706,7 @@ impl AccountRequestProcessor {
             }
         }
 
-        Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
+        Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
             &self.thread_manager,
             self.auth_manager.auth_cached(),

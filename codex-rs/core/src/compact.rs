@@ -77,7 +77,12 @@ pub(crate) async fn run_inline_auto_compact_task(
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
-    let prompt = turn_context.compact_prompt().to_string();
+    let prompt = turn_context
+        .config
+        .compact_prompt
+        .as_deref()
+        .unwrap_or(SUMMARIZATION_PROMPT)
+        .to_string();
     let input = vec![UserInput::Text {
         text: prompt,
         // Compaction prompt is synthesized; no UI element ranges to preserve.
@@ -209,7 +214,7 @@ async fn run_compact_task_inner_impl(
     let mut history = sess.clone_history().await;
     history.record_items(
         &[initial_input_for_turn.into()],
-        turn_context.truncation_policy,
+        turn_context.model_info.truncation_policy.into(),
     );
 
     let max_retries = turn_context.provider.info().stream_max_retries();
@@ -234,7 +239,6 @@ async fn run_compact_task_inner_impl(
         let prompt = Prompt {
             input: turn_input,
             base_instructions: sess.get_base_instructions().await,
-            personality: turn_context.personality,
             ..Default::default()
         };
         let attempt_result = drain_to_completed(

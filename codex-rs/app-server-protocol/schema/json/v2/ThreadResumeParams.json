@@ -448,13 +448,6 @@
               },
               "type": "array"
             },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
             "metadata": {
               "anyOf": [
                 {
@@ -596,14 +589,6 @@
                 "null"
               ]
             },
-            "id": {
-              "description": "Legacy id field retained for compatibility with older payloads.",
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
             "metadata": {
               "anyOf": [
                 {
@@ -640,13 +625,6 @@
             },
             "call_id": {
               "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
             },
             "metadata": {
               "anyOf": [
@@ -695,13 +673,6 @@
             },
             "execution": {
               "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
             },
             "metadata": {
               "anyOf": [
@@ -773,13 +744,6 @@
           "properties": {
             "call_id": {
               "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
             },
             "input": {
               "type": "string"
@@ -917,13 +881,6 @@
                 }
               ]
             },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
             "metadata": {
               "anyOf": [
                 {
@@ -957,7 +914,11 @@
         {
           "properties": {
             "id": {
-              "type": "string"
+              "description": "Existing provider ID retained on serialized history for compatibility.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -990,7 +951,6 @@
             }
           },
           "required": [
-            "id",
             "result",
             "status",
             "type"
@@ -1106,6 +1066,12 @@
     },
     "ResponseItemMetadata": {
       "properties": {
+        "source_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "turn_id": {
           "type": [
             "string",

@@ -438,6 +438,7 @@ async fn load_config_resolves_code_mode_config() -> std::io::Result<()> {
 [features.code_mode]
 enabled = true
 excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
+direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -452,7 +453,72 @@ excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
         config.code_mode.excluded_tool_namespaces,
         vec!["mcp__codex_apps".to_string(), "multi_agent_v1".to_string()]
     );
+    assert_eq!(
+        config.code_mode.direct_only_tool_namespaces,
+        vec!["mcp__history".to_string(), "mcp__notes".to_string()]
+    );
     assert!(config.features.enabled(Feature::CodeMode));
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_rollout_budget() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"
+[features.rollout_budget]
+enabled = true
+limit_tokens = 100000
+reminder_interval_tokens = 10000
+sampling_token_weight = 1.0
+prefill_token_weight = 0.1
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(config.features.enabled(Feature::RolloutBudget));
+    assert!(!config.features.enabled(Feature::TokenBudget));
+    assert_eq!(
+        config.rollout_budget,
+        Some(RolloutBudgetConfig {
+            limit_tokens: 100_000,
+            reminder_interval_tokens: 10_000,
+            sampling_token_weight: 1.0,
+            prefill_token_weight: 0.1,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_enabled_rollout_budget_without_limit() -> std::io::Result<()> {
+    for config_toml in [
+        "[features]\nrollout_budget = true\n",
+        "[features.rollout_budget]\nenabled = true\n",
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml: ConfigToml =
+            toml::from_str(config_toml).expect("TOML deserialization should succeed");
+        let err = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("enabled rollout budget without limit_tokens should be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            err.to_string(),
+            "features.rollout_budget.limit_tokens is required when rollout_budget is enabled"
+        );
+    }
     Ok(())
 }
 
@@ -1358,6 +1424,92 @@ sandbox = "elevated"
         .expect("network_proxy should start the managed network proxy");
     assert_eq!(network.proxy_host_and_port(), "127.0.0.1:3128");
     assert!(!network.socks_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn respect_system_proxy_feature_resolves_enabled() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(
+                toml::from_str(
+                    r#"
+respect_system_proxy = true
+"#,
+                )
+                .expect("valid features"),
+            ),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(config.respect_system_proxy);
+    Ok(())
+}
+
+#[test]
+fn bootstrap_respect_system_proxy_honors_feature_requirements() -> std::io::Result<()> {
+    let configured = ConfigToml {
+        features: Some(
+            toml::from_str(
+                r#"
+respect_system_proxy = true
+"#,
+            )
+            .expect("valid features"),
+        ),
+        ..Default::default()
+    };
+    let disabled = Sourced::new(
+        FeatureRequirementsToml {
+            entries: BTreeMap::from([("respect_system_proxy".to_string(), false)]),
+        },
+        RequirementSource::Unknown,
+    );
+    assert!(!resolve_bootstrap_respect_system_proxy(
+        &configured,
+        Some(&disabled)
+    )?);
+
+    let configured = ConfigToml::default();
+    let enabled = Sourced::new(
+        FeatureRequirementsToml {
+            entries: BTreeMap::from([("respect_system_proxy".to_string(), true)]),
+        },
+        RequirementSource::Unknown,
+    );
+    assert!(resolve_bootstrap_respect_system_proxy(
+        &configured,
+        Some(&enabled)
+    )?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn respect_system_proxy_cli_override_enables_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+respect_system_proxy = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "features.respect_system_proxy".to_string(),
+            toml::Value::Boolean(true),
+        )])
+        .build()
+        .await?;
+
+    assert!(config.respect_system_proxy);
     Ok(())
 }
 

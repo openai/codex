@@ -137,6 +137,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
             metadata: None,
         },
         ResponseItem::Compaction {
+            id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
             metadata: None,
         },
