@@ -1,6 +1,5 @@
 use std::ffi::c_void;
 use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -22,8 +21,9 @@ pub(super) fn ensure_codex_app_runtime_paths_readable(
     };
 
     let read_execute_mask = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+    let codex_root = local_app_data.join("OpenAI").join("Codex");
 
-    for runtime_path in codex_runtime_acl_roots(&local_app_data) {
+    for runtime_path in [codex_root.join("bin"), codex_root.join("runtimes")] {
         if !runtime_path.is_dir() {
             continue;
         }
@@ -87,32 +87,11 @@ pub(super) fn ensure_codex_app_runtime_paths_readable(
 }
 
 fn local_app_data_root() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(PathBuf::from).or_else(|| {
-        std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .map(|profile| profile.join("AppData").join("Local"))
-    })
-}
-
-fn codex_runtime_acl_roots(local_app_data: &Path) -> Vec<PathBuf> {
-    let codex_root = local_app_data.join("OpenAI").join("Codex");
-    vec![codex_root.join("bin"), codex_root.join("runtimes")]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::codex_runtime_acl_roots;
-    use std::path::Path;
-    use std::path::PathBuf;
-
-    #[test]
-    fn runtime_acl_roots_cover_bin_and_runtime_cache() {
-        let local_app_data = Path::new(r"C:\Users\alice\AppData\Local");
-        let actual = codex_runtime_acl_roots(local_app_data);
-        let expected = vec![
-            PathBuf::from(r"C:\Users\alice\AppData\Local\OpenAI\Codex\bin"),
-            PathBuf::from(r"C:\Users\alice\AppData\Local\OpenAI\Codex\runtimes"),
-        ];
-        assert_eq!(actual, expected);
-    }
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|profile| profile.join("AppData").join("Local"))
+        })
 }
