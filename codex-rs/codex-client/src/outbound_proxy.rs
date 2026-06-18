@@ -291,9 +291,7 @@ impl EnvSource for ProcessEnv {
 
 fn proxy_env_value(env: &dyn EnvSource, upper: &str) -> Option<String> {
     let lower = upper.to_ascii_lowercase();
-    env.var(upper)
-        .filter(|value| !value.is_empty())
-        .or_else(|| env.var(&lower).filter(|value| !value.is_empty()))
+    env.var(upper).or_else(|| env.var(&lower))
 }
 
 #[cfg(test)]

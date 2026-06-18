@@ -1,4 +1,5 @@
 use super::*;
+use pretty_assertions::assert_eq;
 
 struct MapEnv {
     values: HashMap<String, String>,
@@ -8,6 +9,29 @@ impl EnvSource for MapEnv {
     fn var(&self, key: &str) -> Option<String> {
         self.values.get(key).cloned()
     }
+}
+
+#[test]
+fn proxy_env_value_matches_reqwest_casing_precedence() {
+    let env = MapEnv {
+        values: HashMap::from([
+            ("HTTPS_PROXY".to_string(), "upper".to_string()),
+            ("https_proxy".to_string(), "lower".to_string()),
+            ("http_proxy".to_string(), "lower-only".to_string()),
+            ("ALL_PROXY".to_string(), String::new()),
+            ("all_proxy".to_string(), "masked".to_string()),
+        ]),
+    };
+
+    assert_eq!(
+        proxy_env_value(&env, "HTTPS_PROXY"),
+        Some("upper".to_string())
+    );
+    assert_eq!(
+        proxy_env_value(&env, "HTTP_PROXY"),
+        Some("lower-only".to_string())
+    );
+    assert_eq!(proxy_env_value(&env, "ALL_PROXY"), Some(String::new()));
 }
 
 #[test]
