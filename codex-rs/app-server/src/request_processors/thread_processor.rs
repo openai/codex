@@ -192,7 +192,7 @@ fn normalize_thread_list_cwd_filters(
     };
     let mut normalized_cwds = Vec::with_capacity(cwds.len());
     for cwd in cwds {
-        let cwd = AbsolutePathBuf::from_absolute_path(cwd.as_str())
+        let cwd = AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
             .map(AbsolutePathBuf::into_path_buf)
             .map_err(|err| {
                 invalid_params(format!("invalid thread/list cwd filter `{cwd}`: {err}"))
@@ -4219,12 +4219,13 @@ pub(crate) fn thread_from_stored_thread(
         branch: info.branch,
         origin_url: info.repository_url,
     });
-    let cwd =
-        AbsolutePathBuf::from_absolute_path(path_utils::normalize_for_native_workdir(thread.cwd))
-            .unwrap_or_else(|err| {
-                warn!("failed to normalize thread cwd while reading stored thread: {err}");
-                fallback_cwd.clone()
-            });
+    let cwd = AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(
+        thread.cwd,
+    ))
+    .unwrap_or_else(|err| {
+        warn!("failed to normalize thread cwd while reading stored thread: {err}");
+        fallback_cwd.clone()
+    });
     let source = with_thread_spawn_agent_metadata(
         thread.source,
         thread.agent_nickname.clone(),

@@ -259,6 +259,77 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_resume_then_turn_preserves_first_user_metadata() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let first_user_message = "original first user message";
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        first_user_message,
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: resumed.id,
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "later user message".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let thread_metadata = state_db
+        .get_thread(ThreadId::from_string(&thread_id)?)
+        .await?
+        .expect("resumed thread metadata should exist");
+    assert_eq!(thread_metadata.preview.as_deref(), Some(first_user_message));
+    assert_eq!(
+        thread_metadata.first_user_message.as_deref(),
+        Some(first_user_message)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
