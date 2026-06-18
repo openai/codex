@@ -44,6 +44,7 @@ struct Inner<D: SessionRuntimeDelegate> {
     stored_values: Mutex<HashMap<String, JsonValue>>,
     cells: Mutex<HashMap<CellId, CellState>>,
     cell_count_tx: watch::Sender<usize>,
+    shutdown_token: CancellationToken,
     delegate: Arc<D>,
     shutting_down: AtomicBool,
     next_cell_id: AtomicU64,
@@ -62,6 +63,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
                 stored_values: Mutex::new(HashMap::new()),
                 cells: Mutex::new(HashMap::new()),
                 cell_count_tx,
+                shutdown_token: CancellationToken::new(),
                 delegate,
                 shutting_down: AtomicBool::new(false),
                 next_cell_id: AtomicU64::new(1),
@@ -100,12 +102,13 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         cell_id: &CellId,
         mode: ObserveMode,
     ) -> Result<PendingEvent, Error> {
-        let cells = self.inner.cells.lock().await;
-        let Some(CellState::Live(handle)) = cells.get(cell_id) else {
-            return Err(Error::MissingCell(cell_id.clone()));
+        let handle = {
+            let cells = self.inner.cells.lock().await;
+            let Some(CellState::Live(handle)) = cells.get(cell_id) else {
+                return Err(Error::MissingCell(cell_id.clone()));
+            };
+            handle.clone()
         };
-        let handle = handle.clone();
-        drop(cells);
         Ok(PendingEvent {
             event: map_actor_event(cell_id.clone(), handle.observe(mode)),
         })
@@ -127,7 +130,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
 
     pub async fn shutdown(&self) -> Result<(), Error> {
         let mut cell_count = self.inner.cell_count_tx.subscribe();
-        self.inner.shutting_down.store(true, Ordering::Release);
+        self.begin_shutdown();
         let handles = self
             .inner
             .cells
@@ -177,9 +180,14 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         if cells.contains_key(&cell_id) {
             return Err(Error::DuplicateCell(cell_id));
         }
-        let (handle, initial_event, task) =
-            CellActor::prepare(request, stored_values, host, initial_observe_mode)
-                .map_err(Error::Runtime)?;
+        let (handle, initial_event, task) = CellActor::prepare(
+            request,
+            stored_values,
+            host,
+            initial_observe_mode,
+            self.inner.shutdown_token.clone(),
+        )
+        .map_err(Error::Runtime)?;
         cells.insert(cell_id.clone(), CellState::Live(handle));
         self.inner.cell_count_tx.send_replace(cells.len());
         drop(cells);
@@ -189,6 +197,8 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
 
     fn begin_shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::Release);
+        self.inner.shutdown_token.cancel();
+        // The token reaches every cell if the registry is temporarily locked.
         if let Ok(cells) = self.inner.cells.try_lock() {
             for state in cells.values() {
                 if let CellState::Live(handle) = state {

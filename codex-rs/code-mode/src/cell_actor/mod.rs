@@ -45,6 +45,7 @@ impl CellActor {
         stored_values: HashMap<String, JsonValue>,
         host: Arc<H>,
         initial_observe_mode: ObserveMode,
+        session_shutdown_token: CancellationToken,
     ) -> Result<
         (
             CellHandle,
@@ -71,6 +72,7 @@ impl CellActor {
                 runtime_control_tx,
                 runtime_terminate_handle,
                 cancellation_token,
+                session_shutdown_token,
             },
             event_rx,
             command_rx,
@@ -90,6 +92,7 @@ struct CellContext {
     runtime_control_tx: std::sync::mpsc::Sender<RuntimeControlCommand>,
     runtime_terminate_handle: v8::IsolateHandle,
     cancellation_token: CancellationToken,
+    session_shutdown_token: CancellationToken,
 }
 
 struct Observer {
@@ -113,6 +116,7 @@ async fn run_cell<H: CellHost>(
         runtime_control_tx,
         runtime_terminate_handle,
         cancellation_token,
+        session_shutdown_token,
     } = context;
     let mut content_items = Vec::new();
     let mut pending_tool_call_ids = Vec::new();
@@ -124,14 +128,21 @@ async fn run_cell<H: CellHost>(
     let mut yield_timer: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
     let mut notification_tasks = JoinSet::new();
     let mut tool_tasks = JoinSet::new();
-
     loop {
         let yield_deadline_elapsed = yield_timer
             .as_ref()
             .is_some_and(|yield_timer| yield_timer.deadline() <= tokio::time::Instant::now());
         tokio::select! {
             biased;
-            maybe_command = command_rx.recv() => {
+            maybe_command = async {
+                tokio::select! {
+                    biased;
+                    command = command_rx.recv() => command,
+                    _ = session_shutdown_token.cancelled(), if termination.is_none() => {
+                        Some(CellCommand::Terminate { response_tx: None })
+                    }
+                }
+            } => {
                 let Some(command) = maybe_command else {
                     if completed_event.is_some() {
                         break;
@@ -384,6 +395,7 @@ async fn run_cell<H: CellHost>(
             }
         }
     }
+    // Reject requests that arrive while asynchronous terminal cleanup runs.
     drop(command_rx);
     begin_termination(
         &runtime_tx,

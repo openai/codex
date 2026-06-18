@@ -133,34 +133,18 @@ pub trait SessionRuntimeDelegate: Send + Sync + 'static {
 }
 
 /// A failure reported by a session runtime operation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum Error {
+    #[error("code mode session is shutting down")]
     ShuttingDown,
+    #[error("exec cell {0} already exists")]
     DuplicateCell(CellId),
+    #[error("exec cell {0} not found")]
     MissingCell(CellId),
+    #[error("exec cell {0} already has an active observer")]
     BusyObserver(CellId),
+    #[error("exec cell {0} is already terminating")]
     AlreadyTerminating(CellId),
+    #[error("{0}")]
     Runtime(String),
 }
-
-impl fmt::Display for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ShuttingDown => formatter.write_str("code mode session is shutting down"),
-            Self::DuplicateCell(cell_id) => write!(formatter, "exec cell {cell_id} already exists"),
-            Self::MissingCell(cell_id) => write!(formatter, "exec cell {cell_id} not found"),
-            Self::BusyObserver(cell_id) => {
-                write!(
-                    formatter,
-                    "exec cell {cell_id} already has an active observer"
-                )
-            }
-            Self::AlreadyTerminating(cell_id) => {
-                write!(formatter, "exec cell {cell_id} is already terminating")
-            }
-            Self::Runtime(error_text) => formatter.write_str(error_text),
-        }
-    }
-}
-
-impl std::error::Error for Error {}

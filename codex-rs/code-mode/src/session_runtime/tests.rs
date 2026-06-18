@@ -286,3 +286,43 @@ async fn concurrent_shutdowns_wait_for_the_same_cell_cleanup() {
     assert_eq!(first_shutdown.await.unwrap(), Ok(()));
     assert_eq!(second_shutdown.await.unwrap(), Ok(()));
 }
+
+#[tokio::test]
+async fn drop_terminates_cells_when_the_registry_is_locked() {
+    let (delegate, mut close_started_rx) = BlockingCloseDelegate::new(FirstCloseOutcome::Succeeds);
+    let runtime = SessionRuntime::new(Arc::clone(&delegate));
+    let started = runtime
+        .execute(
+            execute_request("while (true) {}"),
+            ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
+        )
+        .await
+        .unwrap();
+    let cell_id = started.cell_id.clone();
+    assert_eq!(
+        started.initial_event().await.unwrap(),
+        CellEvent::Yielded {
+            content_items: Vec::new(),
+        }
+    );
+
+    let inner = Arc::clone(&runtime.inner);
+    let mut cell_count = inner.cell_count_tx.subscribe();
+    let cells = inner.cells.lock().await;
+    drop(runtime);
+    drop(cells);
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 1), close_started_rx.recv())
+            .await
+            .unwrap(),
+        Some(cell_id)
+    );
+
+    delegate.close_release.add_permits(/*n*/ 1);
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), cell_count.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(*cell_count.borrow_and_update(), 0);
+}
