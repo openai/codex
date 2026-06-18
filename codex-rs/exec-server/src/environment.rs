@@ -47,9 +47,9 @@ pub const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR: &str =
 /// use `default_environment().is_some()` as the signal for model-facing
 /// shell/filesystem tool availability.
 ///
-/// Remote environments create remote filesystem and execution backends that
-/// lazy-connect to the configured exec-server on first use. The remote
-/// transport is not opened when the manager or environment is constructed.
+/// Remote environments begin connecting when added to the manager. Their
+/// filesystem and execution backends share that startup result and reconnect
+/// after later disconnects as needed.
 #[derive(Debug)]
 pub struct EnvironmentManager {
     default_environment: Option<String>,
@@ -221,6 +221,10 @@ impl EnvironmentManager {
                 Some(environment_id)
             }
         };
+        // The snapshot is valid; start connecting its remote environments in the background.
+        for environment in environment_map.values() {
+            environment.start_connecting();
+        }
         Ok(Self {
             default_environment,
             environments: RwLock::new(environment_map),
@@ -304,12 +308,15 @@ impl EnvironmentManager {
                 "remote environment requires an exec-server url".to_string(),
             ));
         };
-        let environment =
-            Environment::remote_inner(exec_server_url, self.local_runtime_paths.clone());
+        let environment = Arc::new(Environment::remote_inner(
+            exec_server_url,
+            self.local_runtime_paths.clone(),
+        ));
+        environment.start_connecting();
         self.environments
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, Arc::new(environment));
+            .insert(environment_id, environment);
         Ok(())
     }
 
@@ -333,14 +340,15 @@ impl EnvironmentManager {
                 "failed to generate Noise harness identity: {error}"
             ))
         })?;
-        let environment = Environment::remote_with_transport(
+        let environment = Arc::new(Environment::remote_with_transport(
             ExecServerTransportParams::NoiseRendezvous { provider, identity },
             self.local_runtime_paths.clone(),
-        );
+        ));
+        environment.start_connecting();
         self.environments
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, Arc::new(environment));
+            .insert(environment_id, environment);
         Ok(())
     }
 }
@@ -590,6 +598,7 @@ impl From<DetectedShell> for ShellInfo {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use super::Environment;
     use super::EnvironmentManager;
@@ -602,6 +611,8 @@ mod tests {
     use crate::environment_provider::EnvironmentProviderSnapshot;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
+    use tokio::net::TcpListener;
+    use tokio::time::timeout;
 
     fn test_runtime_paths() -> ExecServerRuntimePaths {
         ExecServerRuntimePaths::new(
@@ -615,8 +626,8 @@ mod tests {
         assert!(manager.try_local_environment().is_none());
     }
 
-    #[test]
-    fn noise_environment_config_selects_remote_as_default() {
+    #[tokio::test]
+    async fn noise_environment_config_selects_remote_as_default() {
         let config = noise_environment_config_from_values(
             Some("http://registry.example/api".to_string()),
             Some("environment-requested".to_string()),
@@ -969,6 +980,26 @@ mod tests {
         assert!(second.is_remote());
         assert_eq!(second.exec_server_url(), Some("ws://127.0.0.1:9876"));
         assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn environment_manager_starts_remote_environment_when_upserted() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind websocket listener");
+        let manager = EnvironmentManager::without_environments();
+
+        manager
+            .upsert_environment(
+                "executor-a".to_string(),
+                format!("ws://{}", listener.local_addr().expect("listener address")),
+            )
+            .expect("remote environment");
+
+        timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("environment should start connecting when registered")
+            .expect("accept connection");
     }
 
     #[tokio::test]
