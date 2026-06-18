@@ -34,21 +34,24 @@ fn file_uri_round_trips_an_absolute_path() {
 #[test]
 fn non_native_uri_io_conversion_is_invalid_input() {
     #[cfg(unix)]
-    let uri = PathUri::parse("file://server/share/file.txt").expect("valid file URI");
+    let uris = ["file://server/share/file.txt", "file:///C:/workspace"];
     #[cfg(windows)]
-    let uri = PathUri::parse("file:///usr/local/file.txt").expect("valid file URI");
+    let uris = ["file:///usr/local/file.txt"];
 
-    let error = uri
-        .to_abs_path()
-        .expect_err("URI should not be host-native");
+    for uri in uris {
+        let uri = PathUri::parse(uri).expect("valid file URI");
+        let error = uri
+            .to_abs_path()
+            .expect_err("URI should not be host-native");
 
-    assert_eq!(
-        (error.kind(), error.to_string()),
-        (
-            io::ErrorKind::InvalidInput,
-            format!("'{uri}' is invalid on '{}'", std::env::consts::OS),
-        )
-    );
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (
+                io::ErrorKind::InvalidInput,
+                format!("'{uri}' is invalid on '{}'", std::env::consts::OS),
+            )
+        );
+    }
 }
 
 #[test]
@@ -473,6 +476,33 @@ fn basename_uses_decoded_uri_segments() {
             "basename for {input}"
         );
     }
+}
+
+#[test]
+fn file_stem_uses_the_decoded_basename() {
+    for (uri, expected) in [
+        ("file:///workspace/archive.tar.gz", Some("archive.tar")),
+        ("file:///C:/Program%20Files/pwsh.exe", Some("pwsh")),
+        ("file:///workspace/.env", Some(".env")),
+        ("file:///", None),
+    ] {
+        let path = PathUri::parse(uri).expect("valid path URI");
+        assert_eq!(path.file_stem().as_deref(), expected, "file stem for {uri}");
+    }
+}
+
+#[test]
+fn path_buf_uses_the_inferred_native_spelling() {
+    let windows = PathUri::parse("file:///C:/Program%20Files/pwsh.exe").expect("Windows URI");
+    let posix = PathUri::parse("file:///usr/local/bin/bash").expect("POSIX URI");
+
+    assert_eq!(
+        (windows.to_path_buf(), PathBuf::from(posix)),
+        (
+            PathBuf::from(r"C:\Program Files\pwsh.exe"),
+            PathBuf::from("/usr/local/bin/bash"),
+        )
+    );
 }
 
 #[test]

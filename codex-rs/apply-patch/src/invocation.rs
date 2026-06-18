@@ -1,9 +1,7 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::LazyLock;
 
 use codex_exec_server::ExecutorFileSystem;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use tree_sitter::Parser;
 use tree_sitter::Query;
 use tree_sitter::QueryCursor;
@@ -21,6 +19,7 @@ use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
 use crate::unified_diff_from_chunks;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::str::Utf8Error;
 use tree_sitter::LanguageError;
@@ -51,14 +50,26 @@ pub enum ExtractHeredocError {
     FailedToFindHeredocBody,
 }
 
-fn classify_shell_name(shell: &str) -> Option<String> {
-    std::path::Path::new(shell)
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .map(str::to_ascii_lowercase)
+fn classify_shell_name(shell: &PathUri) -> Option<String> {
+    shell.file_stem().map(|name| name.to_ascii_lowercase())
 }
 
-fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
+fn shell_path_uri(shell: &str) -> Option<PathUri> {
+    [PathConvention::Windows, PathConvention::Posix]
+        .into_iter()
+        .find_map(|convention| PathUri::from_absolute_native_path(shell, convention))
+        .or_else(|| {
+            // Bare executable names and relative executable paths have no cwd at this parsing
+            // layer. Anchor them to a synthetic URI root because only lexical basename handling
+            // is needed here.
+            PathUri::parse("file:///")
+                .ok()?
+                .join(&shell.replace('\\', "/"))
+                .ok()
+        })
+}
+
+fn classify_shell(shell: &PathUri, flag: &str) -> Option<ApplyPatchShell> {
     classify_shell_name(shell).and_then(|name| match name.as_str() {
         "bash" | "zsh" | "sh" if matches!(flag, "-lc" | "-c") => Some(ApplyPatchShell::Unix),
         "pwsh" | "powershell" if flag.eq_ignore_ascii_case("-command") => {
@@ -69,7 +80,7 @@ fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
     })
 }
 
-fn can_skip_flag(shell: &str, flag: &str) -> bool {
+fn can_skip_flag(shell: &PathUri, flag: &str) -> bool {
     classify_shell_name(shell).is_some_and(|name| {
         matches!(name.as_str(), "pwsh" | "powershell") && flag.eq_ignore_ascii_case("-noprofile")
     })
@@ -77,12 +88,19 @@ fn can_skip_flag(shell: &str, flag: &str) -> bool {
 
 fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
     match argv {
-        [shell, flag, script] => classify_shell(shell, flag).map(|shell_type| {
-            let script = script.as_str();
-            (shell_type, script)
-        }),
-        [shell, skip_flag, flag, script] if can_skip_flag(shell, skip_flag) => {
-            classify_shell(shell, flag).map(|shell_type| {
+        [shell, flag, script] => {
+            let shell = shell_path_uri(shell)?;
+            classify_shell(&shell, flag).map(|shell_type| {
+                let script = script.as_str();
+                (shell_type, script)
+            })
+        }
+        [shell, skip_flag, flag, script] => {
+            let shell = shell_path_uri(shell)?;
+            if !can_skip_flag(&shell, skip_flag) {
+                return None;
+            }
+            classify_shell(&shell, flag).map(|shell_type| {
                 let script = script.as_str();
                 (shell_type, script)
             })
@@ -130,11 +148,11 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     }
 }
 
-/// cwd must be an absolute path so that we can resolve relative paths in the
-/// patch.
+/// `cwd` must identify an absolute environment-native path so relative patch paths can be
+/// resolved without projecting them onto the app-server or exec-server host.
 pub async fn maybe_parse_apply_patch_verified(
     argv: &[String],
-    cwd: &AbsolutePathBuf,
+    cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
 ) -> MaybeApplyPatchVerified {
@@ -161,10 +179,22 @@ pub async fn maybe_parse_apply_patch_verified(
 
 pub async fn verify_apply_patch_args(
     args: ApplyPatchArgs,
-    cwd: &AbsolutePathBuf,
+    cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
 ) -> MaybeApplyPatchVerified {
+    match try_verify_apply_patch_args(args, cwd, fs, sandbox).await {
+        Ok(action) => MaybeApplyPatchVerified::Body(action),
+        Err(err) => MaybeApplyPatchVerified::CorrectnessError(err),
+    }
+}
+
+async fn try_verify_apply_patch_args(
+    args: ApplyPatchArgs,
+    cwd: &PathUri,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
+) -> Result<ApplyPatchAction, ApplyPatchError> {
     let ApplyPatchArgs {
         patch,
         hunks,
@@ -173,35 +203,24 @@ pub async fn verify_apply_patch_args(
     } = args;
     let effective_cwd = workdir
         .as_ref()
-        .map(|dir| cwd.join(Path::new(dir)))
+        .map(|dir| cwd.join(dir))
+        .transpose()?
         .unwrap_or_else(|| cwd.clone());
     let mut changes = HashMap::new();
     for hunk in hunks {
-        let path = hunk.resolve_path(&effective_cwd);
+        let path = hunk.resolve_path(&effective_cwd)?;
         match hunk {
             Hunk::AddFile { contents, .. } => {
-                changes.insert(
-                    path.into_path_buf(),
-                    ApplyPatchFileChange::Add { content: contents },
-                );
+                changes.insert(path, ApplyPatchFileChange::Add { content: contents });
             }
             Hunk::DeleteFile { .. } => {
-                let path_uri = PathUri::from_abs_path(&path);
-                let content = match fs.read_file_text(&path_uri, sandbox).await {
-                    Ok(content) => content,
-                    Err(e) => {
-                        return MaybeApplyPatchVerified::CorrectnessError(
-                            ApplyPatchError::IoError(IoError {
-                                context: format!("Failed to read {}", path.display()),
-                                source: e,
-                            }),
-                        );
-                    }
-                };
-                changes.insert(
-                    path.into_path_buf(),
-                    ApplyPatchFileChange::Delete { content },
-                );
+                let content = fs.read_file_text(&path, sandbox).await.map_err(|source| {
+                    ApplyPatchError::IoError(IoError {
+                        context: format!("Failed to read {}", path.inferred_native_path_string()),
+                        source,
+                    })
+                })?;
+                changes.insert(path, ApplyPatchFileChange::Delete { content });
             }
             Hunk::UpdateFile {
                 move_path, chunks, ..
@@ -210,27 +229,24 @@ pub async fn verify_apply_patch_args(
                     unified_diff,
                     content: contents,
                     ..
-                } = match unified_diff_from_chunks(&path, &chunks, fs, sandbox).await {
-                    Ok(diff) => diff,
-                    Err(e) => {
-                        return MaybeApplyPatchVerified::CorrectnessError(e);
-                    }
-                };
+                } = unified_diff_from_chunks(&path, &chunks, fs, sandbox).await?;
                 changes.insert(
-                    path.into_path_buf(),
+                    path,
                     ApplyPatchFileChange::Update {
                         unified_diff,
-                        move_path: move_path.map(|p| effective_cwd.join(p).into_path_buf()),
+                        move_path: move_path
+                            .map(|path| effective_cwd.join(&path.to_string_lossy()))
+                            .transpose()?,
                         new_content: contents,
                     },
                 );
             }
         }
     }
-    MaybeApplyPatchVerified::Body(ApplyPatchAction {
+    Ok(ApplyPatchAction {
         changes,
         patch,
-        cwd: effective_cwd.into(),
+        cwd: effective_cwd,
     })
 }
 
@@ -392,7 +408,6 @@ mod tests {
     use crate::unified_diff_from_chunks;
     use assert_matches::assert_matches;
     use codex_exec_server::LOCAL_FS;
-    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
@@ -479,7 +494,7 @@ mod tests {
         assert_matches!(
             maybe_parse_apply_patch_verified(
                 &args,
-                &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+                &PathUri::from_path(dir.path()).expect("absolute test path"),
                 LOCAL_FS.as_ref(),
                 /*sandbox*/ None,
             )
@@ -496,7 +511,7 @@ mod tests {
         assert_matches!(
             maybe_parse_apply_patch_verified(
                 &args,
-                &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+                &PathUri::from_path(dir.path()).expect("absolute test path"),
                 LOCAL_FS.as_ref(),
                 /*sandbox*/ None,
             )
@@ -615,6 +630,20 @@ PATCH"#,
     }
 
     #[tokio::test]
+    async fn test_apply_patch_interception_recognizes_foreign_windows_pwsh_path() {
+        let script = heredoc_script("");
+        assert_match_args(
+            strs_to_strings(&[
+                r"C:\Program Files\PowerShell\7\pwsh.exe",
+                "-NoProfile",
+                "-Command",
+                &script,
+            ]),
+            /*expected_workdir*/ None,
+        );
+    }
+
+    #[tokio::test]
     async fn test_cmd_heredoc_with_cd() {
         let script = heredoc_script("cd foo && ");
         assert_match_args(args_cmd(&script), Some("foo"));
@@ -707,9 +736,9 @@ PATCH"#,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
 
-        let path_abs = path.as_path().abs();
+        let path_uri = PathUri::from_path(&path).expect("absolute test path");
         let diff =
-            unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
+            unified_diff_from_chunks(&path_uri, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
                 .await
                 .unwrap();
         let expected_diff = r#"@@ -2,2 +2,2 @@
@@ -747,9 +776,9 @@ PATCH"#,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
 
-        let path_abs = path.as_path().abs();
+        let path_uri = PathUri::from_path(&path).expect("absolute test path");
         let diff =
-            unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
+            unified_diff_from_chunks(&path_uri, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
                 .await
                 .unwrap();
         let expected_diff = r#"@@ -3 +3,2 @@
@@ -787,7 +816,7 @@ PATCH"#,
 
         let result = maybe_parse_apply_patch_verified(
             &argv,
-            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+            &PathUri::from_path(session_dir.path()).expect("absolute test path"),
             LOCAL_FS.as_ref(),
             /*sandbox*/ None,
         )
@@ -799,7 +828,8 @@ PATCH"#,
             result,
             MaybeApplyPatchVerified::Body(ApplyPatchAction {
                 changes: HashMap::from([(
-                    session_dir.path().join(relative_path),
+                    PathUri::from_path(session_dir.path().join(relative_path))
+                        .expect("absolute test path"),
                     ApplyPatchFileChange::Update {
                         unified_diff: r#"@@ -1 +1 @@
 -session directory content
@@ -811,9 +841,7 @@ PATCH"#,
                     },
                 )]),
                 patch: argv[1].clone(),
-                cwd: AbsolutePathBuf::from_absolute_path(session_dir.path())
-                    .unwrap()
-                    .into(),
+                cwd: PathUri::from_path(session_dir.path()).expect("absolute test path"),
             })
         );
     }
@@ -843,7 +871,7 @@ PATCH"#,
 
         let result = maybe_parse_apply_patch_verified(
             &argv,
-            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+            &PathUri::from_path(session_dir.path()).expect("absolute test path"),
             LOCAL_FS.as_ref(),
             /*sandbox*/ None,
         )
@@ -858,18 +886,18 @@ PATCH"#,
             worktree_dir.as_path()
         );
 
-        let source_path = worktree_dir.join(source_name);
+        let source_path =
+            PathUri::from_path(worktree_dir.join(source_name)).expect("absolute test path");
         let change = action
             .changes()
-            .get(source_path.as_path())
+            .get(&source_path)
             .expect("source file change present");
 
         match change {
             ApplyPatchFileChange::Update { move_path, .. } => {
-                assert_eq!(
-                    move_path.as_deref(),
-                    Some(worktree_dir.join(dest_name).as_path())
-                );
+                let expected_move_path =
+                    PathUri::from_path(worktree_dir.join(dest_name)).expect("absolute test path");
+                assert_eq!(move_path.as_ref(), Some(&expected_move_path));
             }
             other => panic!("expected update change, got {other:?}"),
         }
@@ -879,7 +907,7 @@ PATCH"#,
     async fn test_unreadable_destinations_still_verify() {
         let session_dir = tempdir().unwrap();
         fs::write(session_dir.path().join("binary.dat"), [0xff, 0xfe, 0xfd]).unwrap();
-        let cwd = AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap();
+        let cwd = PathUri::from_path(session_dir.path()).expect("absolute test path");
         let add_argv = vec![
             "apply_patch".to_string(),
             "*** Begin Patch\n*** Add File: binary.dat\n+text\n*** End Patch".to_string(),
@@ -922,7 +950,7 @@ PATCH"#,
 
         let result = maybe_parse_apply_patch_verified(
             &argv,
-            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+            &PathUri::from_path(session_dir.path()).expect("absolute test path"),
             LOCAL_FS.as_ref(),
             /*sandbox*/ None,
         )
