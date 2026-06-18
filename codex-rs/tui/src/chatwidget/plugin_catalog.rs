@@ -1617,7 +1617,15 @@ pub(super) fn merge_remote_marketplaces(
         .iter()
         .map(|marketplace| marketplace.name.clone())
         .collect::<std::collections::HashSet<_>>();
+    let remote_curated_present = remote_names.contains(REMOTE_GLOBAL_MARKETPLACE_NAME);
     response.marketplaces.retain(|marketplace| {
+        if remote_curated_present
+            && marketplace.path.is_some()
+            && is_openai_curated_marketplace_name(&marketplace.name)
+        {
+            return false;
+        }
+
         marketplace.path.is_some()
             || !REMOTE_MARKETPLACE_SECTIONS
                 .into_iter()
