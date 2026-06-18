@@ -1,5 +1,7 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::io::Read;
+use std::io::Write;
 
 struct MapEnv {
     values: HashMap<String, String>,
@@ -53,6 +55,52 @@ fn environment_fallback_reads_injected_proxy_environment() {
             route_class: ClientRouteClass::Auth,
         })
     ));
+}
+
+#[tokio::test]
+async fn enabled_environment_proxy_routes_request_through_proxy() {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("local proxy listener should bind");
+    let proxy_addr = listener
+        .local_addr()
+        .expect("local proxy listener should have an address");
+    let proxy_thread = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("proxy should accept a request");
+        let mut buffer = [0_u8; 4096];
+        let size = stream.read(&mut buffer).expect("proxy should read request");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .expect("proxy should write response");
+        String::from_utf8_lossy(&buffer[..size]).into_owned()
+    });
+    let env = MapEnv {
+        values: HashMap::from([("HTTP_PROXY".to_string(), format!("http://{proxy_addr}"))]),
+    };
+    let request_url = "http://enabled-proxy.test/proxy-check";
+    let config = OutboundProxyConfig::respect_system_proxy();
+    let builder = configure_proxy_for_route(
+        &env,
+        reqwest::Client::builder().timeout(Duration::from_secs(2)),
+        request_url,
+        ClientRouteClass::Auth,
+        Some(&config),
+    )
+    .expect("enabled proxy route should configure");
+
+    let response = builder
+        .build()
+        .expect("proxy client should build")
+        .get(request_url)
+        .send()
+        .await
+        .expect("request should use local proxy");
+    let proxy_request = proxy_thread.join().expect("proxy thread should finish");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        proxy_request.lines().next(),
+        Some("GET http://enabled-proxy.test/proxy-check HTTP/1.1")
+    );
 }
 
 #[test]
