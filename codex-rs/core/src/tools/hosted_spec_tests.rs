@@ -21,7 +21,7 @@ fn image_generation_tool_matches_expected_spec() {
 fn web_search_tool_preserves_configured_options() {
     assert_eq!(
         create_web_search_tool(WebSearchToolOptions {
-            web_search_mode: Some(WebSearchMode::IndexGated),
+            web_search_mode: Some(WebSearchMode::Live),
             web_search_config: Some(&WebSearchConfig {
                 filters: Some(WebSearchFilters {
                     allowed_domains: Some(vec!["example.com".to_string()]),
@@ -39,7 +39,7 @@ fn web_search_tool_preserves_configured_options() {
         }),
         Some(ToolSpec::WebSearch {
             external_web_access: Some(true),
-            index_gated_web_access: Some(true),
+            index_gated_web_access: None,
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
             }),
@@ -52,6 +52,25 @@ fn web_search_tool_preserves_configured_options() {
             }),
             search_context_size: Some(WebSearchContextSize::Low),
             search_content_types: Some(vec!["text".to_string(), "image".to_string()]),
+        })
+    );
+}
+
+#[test]
+fn index_gated_web_search_tool_sets_index_gate() {
+    assert_eq!(
+        create_web_search_tool(WebSearchToolOptions {
+            web_search_mode: Some(WebSearchMode::IndexGated),
+            web_search_config: None,
+            web_search_tool_type: WebSearchToolType::Text,
+        }),
+        Some(ToolSpec::WebSearch {
+            external_web_access: Some(true),
+            index_gated_web_access: Some(true),
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
         })
     );
 }

@@ -2520,7 +2520,6 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     {
         for mode in [
             WebSearchMode::Live,
-            WebSearchMode::IndexGated,
             WebSearchMode::Cached,
             WebSearchMode::Disabled,
         ] {
@@ -2534,7 +2533,6 @@ pub(crate) fn resolve_web_search_mode_for_turn(
         }
         for mode in [
             WebSearchMode::Cached,
-            WebSearchMode::IndexGated,
             WebSearchMode::Live,
             WebSearchMode::Disabled,
         ] {

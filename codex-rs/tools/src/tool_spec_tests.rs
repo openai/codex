@@ -200,7 +200,7 @@ fn web_search_tool_spec_serializes_expected_wire_shape() {
     assert_eq!(
         serde_json::to_value(ToolSpec::WebSearch {
             external_web_access: Some(true),
-            index_gated_web_access: Some(true),
+            index_gated_web_access: None,
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
             }),
@@ -218,7 +218,6 @@ fn web_search_tool_spec_serializes_expected_wire_shape() {
         json!({
             "type": "web_search",
             "external_web_access": true,
-            "index_gated_web_access": true,
             "filters": {
                 "allowed_domains": ["example.com"],
             },
@@ -231,6 +230,26 @@ fn web_search_tool_spec_serializes_expected_wire_shape() {
             },
             "search_context_size": "high",
             "search_content_types": ["text", "image"],
+        })
+    );
+}
+
+#[test]
+fn index_gated_web_search_tool_spec_serializes_gate() {
+    assert_eq!(
+        serde_json::to_value(ToolSpec::WebSearch {
+            external_web_access: Some(true),
+            index_gated_web_access: Some(true),
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        })
+        .expect("serialize index-gated web_search"),
+        json!({
+            "type": "web_search",
+            "external_web_access": true,
+            "index_gated_web_access": true,
         })
     );
 }

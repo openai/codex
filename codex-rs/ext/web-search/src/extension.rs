@@ -75,12 +75,16 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
                 blocked_domains: None,
             }),
         allowed_callers: Some(vec![AllowedCaller::Direct]),
-        external_web_access: Some(ExternalWebAccess::Mode(match web_search_mode {
-            WebSearchMode::Disabled | WebSearchMode::Cached => ExternalWebAccessMode::Offline,
-            WebSearchMode::IndexGated => ExternalWebAccessMode::IndexOnly,
-            WebSearchMode::Live => ExternalWebAccessMode::Online,
-        })),
+        external_web_access: Some(external_web_access_for_mode(web_search_mode)),
         ..Default::default()
+    }
+}
+
+fn external_web_access_for_mode(web_search_mode: WebSearchMode) -> ExternalWebAccess {
+    match web_search_mode {
+        WebSearchMode::Disabled | WebSearchMode::Cached => ExternalWebAccess::Boolean(false),
+        WebSearchMode::IndexGated => ExternalWebAccess::Mode(ExternalWebAccessMode::IndexOnly),
+        WebSearchMode::Live => ExternalWebAccess::Boolean(true),
     }
 }
 
@@ -152,9 +156,32 @@ mod tests {
     use super::AuthManager;
     use super::Config;
     use super::WebSearchExtensionConfig;
+    use super::external_web_access_for_mode;
     use super::install;
     use crate::tool::RUN_TOOL_NAME;
     use crate::tool::WEB_NAMESPACE;
+    use codex_api::ExternalWebAccess;
+    use codex_api::ExternalWebAccessMode;
+    use codex_protocol::config_types::WebSearchMode;
+
+    #[test]
+    fn external_web_access_preserves_legacy_values_until_index_gated() {
+        assert_eq!(
+            [
+                WebSearchMode::Disabled,
+                WebSearchMode::Cached,
+                WebSearchMode::IndexGated,
+                WebSearchMode::Live,
+            ]
+            .map(external_web_access_for_mode),
+            [
+                ExternalWebAccess::Boolean(false),
+                ExternalWebAccess::Boolean(false),
+                ExternalWebAccess::Mode(ExternalWebAccessMode::IndexOnly),
+                ExternalWebAccess::Boolean(true),
+            ]
+        );
+    }
 
     #[test]
     fn installed_extension_contributes_web_run_when_enabled() {
