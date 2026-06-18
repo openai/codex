@@ -17,7 +17,13 @@ impl ChatWidget {
             && !key_hint::ctrl(KeyCode::Char('r')).is_press(key_event)
             && !key_hint::ctrl(KeyCode::Char('u')).is_press(key_event)
         {
+            let should_pause_active_goal = self
+                .bottom_pane
+                .active_view_will_interrupt_turn_on_key_event(key_event);
             self.bottom_pane.handle_key_event(key_event);
+            if should_pause_active_goal {
+                self.pause_active_goal_for_interrupt();
+            }
             if self.bottom_pane.no_modal_or_popup_active() {
                 self.maybe_send_next_queued_input();
             }
@@ -367,6 +373,7 @@ impl ChatWidget {
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
+        let should_pause_active_goal = self.bottom_pane.active_view_will_interrupt_turn_on_ctrl_c();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
                 if modal_or_popup_active {
@@ -376,6 +383,9 @@ impl ChatWidget {
                 } else {
                     self.arm_quit_shortcut(key);
                 }
+            }
+            if should_pause_active_goal {
+                self.pause_active_goal_for_interrupt();
             }
             return;
         }
@@ -403,10 +413,10 @@ impl ChatWidget {
 
         self.arm_quit_shortcut(key);
 
-        if self.is_cancellable_work_active() {
-            if self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output()) {
-                self.pause_active_goal_for_interrupt();
-            }
+        if self.is_cancellable_work_active()
+            && self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output())
+        {
+            self.pause_active_goal_for_interrupt();
         }
     }
 

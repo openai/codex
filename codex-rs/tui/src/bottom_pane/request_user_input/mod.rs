@@ -1183,6 +1183,21 @@ impl BottomPaneView for RequestUserInputOverlay {
         true
     }
 
+    fn will_interrupt_turn_on_key_event(&self, key_event: KeyEvent) -> bool {
+        key_event.kind != KeyEventKind::Release
+            && !self.confirm_unanswered_active()
+            && !(matches!(key_event.code, KeyCode::Esc)
+                && self.has_options()
+                && self.notes_ui_visible())
+            && self.interrupt_turn_keys.is_pressed(key_event)
+    }
+
+    fn will_interrupt_turn_on_ctrl_c(&self) -> bool {
+        self.confirm_unanswered_active()
+            || !self.focus_is_notes()
+            || self.composer.current_text_with_pending().is_empty()
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Release {
             return;

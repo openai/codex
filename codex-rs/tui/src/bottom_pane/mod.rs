@@ -1320,6 +1320,20 @@ impl BottomPane {
         !self.view_stack.is_empty()
     }
 
+    pub(crate) fn active_view_will_interrupt_turn_on_key_event(&self, key_event: KeyEvent) -> bool {
+        self.is_task_running
+            && self
+                .active_view()
+                .is_some_and(|view| view.will_interrupt_turn_on_key_event(key_event))
+    }
+
+    pub(crate) fn active_view_will_interrupt_turn_on_ctrl_c(&self) -> bool {
+        self.is_task_running
+            && self
+                .active_view()
+                .is_some_and(BottomPaneView::will_interrupt_turn_on_ctrl_c)
+    }
+
     #[cfg(test)]
     pub(crate) fn active_view_id(&self) -> Option<&'static str> {
         self.view_stack.last().and_then(|view| view.view_id())
