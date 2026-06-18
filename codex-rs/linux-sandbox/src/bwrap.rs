@@ -1021,6 +1021,10 @@ fn prune_redundant_unreadable_roots(
         path_depth(left_comparable)
             .cmp(&path_depth(right_comparable))
             .then_with(|| left_comparable.cmp(right_comparable))
+            // Prefer the canonical spelling when aliases resolve to the same
+            // mount target. Masking that target covers every immutable alias
+            // without asking bwrap to mount it twice.
+            .then_with(|| (left != left_comparable).cmp(&(right != right_comparable)))
             .then_with(|| left.cmp(right))
     });
     let comparable_write_paths = allowed_write_paths
@@ -1034,14 +1038,12 @@ fn prune_redundant_unreadable_roots(
             retained.push((candidate, original));
             continue;
         }
-        for (ancestor, ancestor_original) in &retained {
+        for (ancestor, _) in &retained {
             if candidate == *ancestor {
-                if original == *ancestor_original {
-                    continue 'candidate;
-                }
-                // Distinct symlink and canonical spellings need separate
-                // mounts even when they resolve to the same inode.
-                continue;
+                // A single mask on the canonical target covers every alias.
+                // Paths crossing writable symlinks were retained above so
+                // append_unreadable_root_args can reject them as unsafe.
+                continue 'candidate;
             }
             if !candidate.starts_with(ancestor) {
                 continue;
@@ -2694,7 +2696,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn symlink_and_canonical_deny_spellings_are_both_retained() {
+    fn immutable_symlink_and_canonical_deny_spellings_collapse_to_canonical() {
         let temp_dir = TempDir::new().expect("temp dir");
         let target = temp_dir.path().join("target-token");
         let symlink = temp_dir.path().join("projected-token");
@@ -2702,13 +2704,11 @@ mod tests {
         std::os::unix::fs::symlink(&target, &symlink).expect("create token symlink");
 
         let retained = prune_redundant_unreadable_roots(
-            vec![symlink.clone(), target.clone()],
+            vec![symlink, target.clone()],
             /*allowed_write_paths*/ &[],
         );
 
-        assert_eq!(retained.len(), 2);
-        assert!(retained.contains(&symlink));
-        assert!(retained.contains(&target));
+        assert_eq!(retained, vec![target]);
     }
 
     #[test]
