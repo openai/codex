@@ -5,10 +5,8 @@ use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::test_support::PathExt;
 
-use super::SkillRootCacheKey;
-use super::SkillRootLoader;
+use super::PluginSkillRootCache;
 use crate::loader::SkillRoot;
-use crate::loader::load_skill_root;
 
 fn plugin_root(path: &std::path::Path) -> SkillRoot {
     SkillRoot {
@@ -32,45 +30,26 @@ fn write_skill(path: &std::path::Path, description: &str) {
 }
 
 #[tokio::test]
-async fn reuses_plugin_root_snapshot_until_cache_is_cleared() {
+async fn reuses_plugin_skill_root_snapshot_until_cache_is_cleared() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let loader = SkillRootLoader::default();
+    let cache = PluginSkillRootCache::default();
 
     write_skill(tempdir.path(), "first");
-    let first = loader
+    let first = cache
         .load_skills_from_roots([plugin_root(tempdir.path())])
         .await;
 
     write_skill(tempdir.path(), "second");
-    let cached = loader
+    let cached = cache
         .load_skills_from_roots([plugin_root(tempdir.path())])
         .await;
     assert_eq!(cached.skills, first.skills);
 
-    loader.clear_cache();
-    let refreshed = loader
+    cache.clear_cache();
+    let refreshed = cache
         .load_skills_from_roots([plugin_root(tempdir.path())])
         .await;
     let mut expected = first.skills;
     expected[0].description = "second".to_string();
     assert_eq!(refreshed.skills, expected);
-}
-
-#[tokio::test]
-async fn clear_cache_rejects_an_in_flight_snapshot() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let loader = SkillRootLoader::default();
-    write_skill(tempdir.path(), "first");
-
-    let root = plugin_root(tempdir.path());
-    let cache_key = SkillRootCacheKey::from_root(&root).expect("plugin root cache key");
-    let (generation, cached_snapshot) = loader.cached_snapshot(&cache_key);
-    assert!(cached_snapshot.is_none());
-
-    let snapshot = load_skill_root(root).await;
-    loader.clear_cache();
-    loader.cache_snapshot(generation, cache_key.clone(), snapshot);
-
-    let (_, cached_snapshot) = loader.cached_snapshot(&cache_key);
-    assert!(cached_snapshot.is_none());
 }

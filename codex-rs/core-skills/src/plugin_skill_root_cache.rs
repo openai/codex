@@ -1,11 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::hash::Hash;
-use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use codex_exec_server::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::SkillLoadOutcome;
@@ -16,62 +13,16 @@ use crate::model::SkillFileSystemsByPath;
 
 const MAX_CACHED_PLUGIN_SKILL_ROOTS: usize = 256;
 
-#[derive(Clone)]
-struct FileSystemIdentity(Arc<dyn ExecutorFileSystem>);
-
-impl PartialEq for FileSystemIdentity {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for FileSystemIdentity {}
-
-impl Hash for FileSystemIdentity {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (Arc::as_ptr(&self.0) as *const ()).hash(state);
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct SkillRootCacheKey {
-    path: AbsolutePathBuf,
-    scope_rank: u8,
-    file_system: FileSystemIdentity,
-    plugin_id: String,
-    plugin_namespace: String,
-    plugin_root: AbsolutePathBuf,
-}
-
-impl SkillRootCacheKey {
-    fn from_root(root: &SkillRoot) -> Option<Self> {
-        Some(Self {
-            path: root.path.clone(),
-            scope_rank: scope_rank(root.scope),
-            file_system: FileSystemIdentity(Arc::clone(&root.file_system)),
-            plugin_id: root.plugin_id.clone()?,
-            plugin_namespace: root.plugin_namespace.clone()?,
-            plugin_root: root.plugin_root.clone()?,
-        })
-    }
-}
-
-/// Loads skill roots and reuses parsed plugin-root snapshots until explicitly invalidated.
+/// Shares parsed plugin skill-root snapshots between plugin and skill loading.
 ///
 /// Non-plugin roots are always loaded directly because their filesystem lifecycle is owned by the
 /// environment or config layer that supplied them.
 #[derive(Default)]
-struct PluginRootCache {
-    generation: u64,
-    snapshots: HashMap<SkillRootCacheKey, SkillRootSnapshot>,
+pub struct PluginSkillRootCache {
+    snapshots: RwLock<HashMap<AbsolutePathBuf, SkillRootSnapshot>>,
 }
 
-#[derive(Default)]
-pub struct SkillRootLoader {
-    plugin_root_cache: RwLock<PluginRootCache>,
-}
-
-impl SkillRootLoader {
+impl PluginSkillRootCache {
     /// Loads and merges roots, reusing snapshots for roots owned by a plugin.
     pub async fn load_skills_from_roots<I>(&self, roots: I) -> SkillLoadOutcome
     where
@@ -79,16 +30,28 @@ impl SkillRootLoader {
     {
         let mut snapshots = Vec::new();
         for root in roots {
-            let cache_key = SkillRootCacheKey::from_root(&root);
-            let (cache_generation, cached_snapshot) = cache_key
+            // Plugin skill roots always use local filesystem and User scope, so the absolute skill
+            // root path is sufficient to share their snapshot between plugin and skill loading.
+            let cache_key = root.plugin_root.as_ref().map(|_| root.path.clone());
+            let cached_snapshot = cache_key
                 .as_ref()
-                .map_or((0, None), |key| self.cached_snapshot(key));
+                .and_then(|root| match self.snapshots.read() {
+                    Ok(cache) => cache.get(root).cloned(),
+                    Err(err) => err.into_inner().get(root).cloned(),
+                });
             let snapshot = match cached_snapshot {
                 Some(snapshot) => snapshot,
                 None => {
                     let snapshot = load_skill_root(root).await;
-                    if let Some(cache_key) = cache_key {
-                        self.cache_snapshot(cache_generation, cache_key, snapshot.clone());
+                    if let Some(root) = cache_key {
+                        let mut cache = self
+                            .snapshots
+                            .write()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if cache.len() < MAX_CACHED_PLUGIN_SKILL_ROOTS || cache.contains_key(&root)
+                        {
+                            cache.insert(root, snapshot.clone());
+                        }
                     }
                     snapshot
                 }
@@ -102,34 +65,10 @@ impl SkillRootLoader {
     /// Invalidates every cached plugin-root snapshot.
     pub fn clear_cache(&self) {
         let mut cache = self
-            .plugin_root_cache
+            .snapshots
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.generation = cache.generation.wrapping_add(1);
-        cache.snapshots.clear();
-    }
-
-    fn cached_snapshot(&self, key: &SkillRootCacheKey) -> (u64, Option<SkillRootSnapshot>) {
-        match self.plugin_root_cache.read() {
-            Ok(cache) => (cache.generation, cache.snapshots.get(key).cloned()),
-            Err(err) => {
-                let cache = err.into_inner();
-                (cache.generation, cache.snapshots.get(key).cloned())
-            }
-        }
-    }
-
-    fn cache_snapshot(&self, generation: u64, key: SkillRootCacheKey, snapshot: SkillRootSnapshot) {
-        let mut cache = self
-            .plugin_root_cache
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cache.generation == generation
-            && (cache.snapshots.len() < MAX_CACHED_PLUGIN_SKILL_ROOTS
-                || cache.snapshots.contains_key(&key))
-        {
-            cache.snapshots.insert(key, snapshot);
-        }
+        cache.clear();
     }
 }
 
@@ -178,9 +117,10 @@ fn merge_skill_root_snapshots(snapshots: Vec<SkillRootSnapshot>) -> SkillLoadOut
     outcome.skill_root_by_path = Arc::new(skill_root_by_path);
     outcome.file_systems_by_skill_path = SkillFileSystemsByPath::new(file_systems_by_skill_path);
 
+    // The merged outcome includes non-plugin roots, so preserve the global scope ordering.
     outcome.skills.sort_by(|a, b| {
-        scope_rank(a.scope)
-            .cmp(&scope_rank(b.scope))
+        merged_skill_scope_rank(a.scope)
+            .cmp(&merged_skill_scope_rank(b.scope))
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.path_to_skills_md.cmp(&b.path_to_skills_md))
     });
@@ -188,7 +128,7 @@ fn merge_skill_root_snapshots(snapshots: Vec<SkillRootSnapshot>) -> SkillLoadOut
     outcome
 }
 
-fn scope_rank(scope: codex_protocol::protocol::SkillScope) -> u8 {
+fn merged_skill_scope_rank(scope: codex_protocol::protocol::SkillScope) -> u8 {
     use codex_protocol::protocol::SkillScope;
 
     match scope {
@@ -200,5 +140,5 @@ fn scope_rank(scope: codex_protocol::protocol::SkillScope) -> u8 {
 }
 
 #[cfg(test)]
-#[path = "root_loader_tests.rs"]
+#[path = "plugin_skill_root_cache_tests.rs"]
 mod tests;

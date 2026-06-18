@@ -14,8 +14,8 @@ use tracing::instrument;
 use tracing::warn;
 
 use crate::HostSkillsSnapshot;
+use crate::PluginSkillRootCache;
 use crate::SkillLoadOutcome;
-use crate::SkillRootLoader;
 use crate::build_implicit_skill_path_indexes;
 use crate::config_rules::SkillConfigRules;
 use crate::config_rules::resolve_disabled_skill_paths;
@@ -56,7 +56,7 @@ impl SkillsLoadInput {
 pub struct SkillsService {
     codex_home: AbsolutePathBuf,
     restriction_product: Option<Product>,
-    skill_root_loader: Arc<SkillRootLoader>,
+    plugin_skill_root_cache: Arc<PluginSkillRootCache>,
     extra_roots: RwLock<Vec<AbsolutePathBuf>>,
     cache_by_cwd: RwLock<HashMap<AbsolutePathBuf, HostSkillsSnapshot>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, HostSkillsSnapshot>>,
@@ -75,7 +75,7 @@ impl SkillsService {
         let service = Self {
             codex_home,
             restriction_product,
-            skill_root_loader: Arc::new(SkillRootLoader::default()),
+            plugin_skill_root_cache: Arc::new(PluginSkillRootCache::default()),
             extra_roots: RwLock::new(Vec::new()),
             cache_by_cwd: RwLock::new(HashMap::new()),
             cache_by_config: RwLock::new(HashMap::new()),
@@ -90,9 +90,12 @@ impl SkillsService {
         service
     }
 
-    /// Reuses plugin-root snapshots populated by another owner of the loader.
-    pub fn with_skill_root_loader(mut self, skill_root_loader: Arc<SkillRootLoader>) -> Self {
-        self.skill_root_loader = skill_root_loader;
+    /// Reuses plugin-root snapshots populated by another owner of the cache.
+    pub fn with_plugin_skill_root_cache(
+        mut self,
+        plugin_skill_root_cache: Arc<PluginSkillRootCache>,
+    ) -> Self {
+        self.plugin_skill_root_cache = plugin_skill_root_cache;
         self
     }
 
@@ -207,7 +210,9 @@ impl SkillsService {
         skill_config_rules: &SkillConfigRules,
     ) -> SkillLoadOutcome {
         let outcome = crate::filter_skill_load_outcome_for_product(
-            self.skill_root_loader.load_skills_from_roots(roots).await,
+            self.plugin_skill_root_cache
+                .load_skills_from_roots(roots)
+                .await,
             self.restriction_product,
         );
         let disabled_paths = resolve_disabled_skill_paths(&outcome.skills, skill_config_rules);
@@ -215,7 +220,7 @@ impl SkillsService {
     }
 
     pub fn clear_cache(&self) {
-        self.skill_root_loader.clear_cache();
+        self.plugin_skill_root_cache.clear_cache();
         let cleared_cwd = {
             let mut cache = self
                 .cache_by_cwd

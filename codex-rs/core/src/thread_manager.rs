@@ -287,7 +287,7 @@ impl ThreadManager {
                 config.bundled_skills_enabled(),
                 restriction_product,
             )
-            .with_skill_root_loader(plugins_manager.skill_root_loader()),
+            .with_plugin_skill_root_cache(plugins_manager.plugin_skill_root_cache()),
         );
         Self {
             state: Arc::new(ThreadManagerState {
@@ -382,7 +382,7 @@ impl ThreadManager {
                 /*bundled_skills_enabled*/ true,
                 restriction_product,
             )
-            .with_skill_root_loader(plugins_manager.skill_root_loader()),
+            .with_plugin_skill_root_cache(plugins_manager.plugin_skill_root_cache()),
         );
         // This test constructor has no Config input. Tests that need a non-local
         // process store should construct ThreadManager::new with an explicit store.

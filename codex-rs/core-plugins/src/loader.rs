@@ -19,8 +19,8 @@ use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
+use codex_core_skills::PluginSkillRootCache;
 use codex_core_skills::SkillMetadata;
-use codex_core_skills::SkillRootLoader;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
@@ -72,7 +72,7 @@ enum PluginLoadScope<'a> {
     AllCapabilities {
         restriction_product: Option<Product>,
         skill_config_rules: &'a SkillConfigRules,
-        skill_root_loader: &'a SkillRootLoader,
+        plugin_skill_root_cache: &'a PluginSkillRootCache,
     },
     HooksOnly,
 }
@@ -114,7 +114,7 @@ pub(crate) async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
-    skill_root_loader: &SkillRootLoader,
+    plugin_skill_root_cache: &PluginSkillRootCache,
     restriction_product: Option<Product>,
     prefer_remote_curated_conflicts: bool,
 ) -> Vec<LoadedPlugin<McpServerConfig>> {
@@ -127,7 +127,7 @@ pub(crate) async fn load_plugins_from_layer_stack(
         PluginLoadScope::AllCapabilities {
             restriction_product,
             skill_config_rules: &skill_config_rules,
-            skill_root_loader,
+            plugin_skill_root_cache,
         },
     )
     .await
@@ -716,7 +716,7 @@ async fn load_plugin(
         PluginLoadScope::AllCapabilities {
             restriction_product,
             skill_config_rules,
-            skill_root_loader,
+            plugin_skill_root_cache,
         } => {
             loaded_plugin.manifest_name = Some(manifest.display_name().to_string());
             loaded_plugin.manifest_description = manifest.description.clone();
@@ -727,7 +727,7 @@ async fn load_plugin(
                 &manifest,
                 *restriction_product,
                 skill_config_rules,
-                skill_root_loader,
+                plugin_skill_root_cache,
             )
             .await;
             let has_enabled_skills = resolved_skills.has_enabled_skills();
@@ -796,7 +796,7 @@ pub async fn load_plugin_skills(
     manifest: &PluginManifest,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
-    skill_root_loader: &SkillRootLoader,
+    plugin_skill_root_cache: &PluginSkillRootCache,
 ) -> ResolvedPluginSkills {
     let roots = plugin_skill_roots(plugin_root, &manifest.paths)
         .into_iter()
@@ -809,7 +809,7 @@ pub async fn load_plugin_skills(
             plugin_root: Some(plugin_root.clone()),
         })
         .collect::<Vec<_>>();
-    let outcome = skill_root_loader.load_skills_from_roots(roots).await;
+    let outcome = plugin_skill_root_cache.load_skills_from_roots(roots).await;
     let had_errors = !outcome.errors.is_empty();
     let skills = outcome
         .skills

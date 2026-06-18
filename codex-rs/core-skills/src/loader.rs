@@ -5,7 +5,7 @@ use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
 use crate::model::SkillPolicy;
 use crate::model::SkillToolDependency;
-use crate::root_loader::SkillRootLoader;
+use crate::plugin_skill_root_cache::PluginSkillRootCache;
 use crate::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
@@ -164,7 +164,7 @@ pub async fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
 where
     I: IntoIterator<Item = SkillRoot>,
 {
-    SkillRootLoader::default()
+    PluginSkillRootCache::default()
         .load_skills_from_roots(roots)
         .await
 }
