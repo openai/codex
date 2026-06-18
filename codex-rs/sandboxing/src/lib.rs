@@ -1,6 +1,7 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
 pub mod landlock;
+mod managed_network;
 mod manager;
 pub mod policy_transforms;
 #[cfg(target_os = "macos")]
@@ -11,6 +12,7 @@ mod windows;
 pub use bwrap::find_system_bwrap_in_path;
 #[cfg(target_os = "linux")]
 pub use bwrap::system_bwrap_warning;
+pub use managed_network::prepare_managed_network_child;
 pub use manager::SandboxCommand;
 pub use manager::SandboxDirectSpawnTransformRequest;
 pub use manager::SandboxExecRequest;
@@ -20,8 +22,9 @@ pub use manager::SandboxTransformRequest;
 pub use manager::SandboxType;
 pub use manager::SandboxablePreference;
 pub use manager::compatibility_sandbox_policy_for_permission_profile;
+#[cfg(target_os = "linux")]
+pub use manager::ensure_legacy_landlock_supports_managed_mitm;
 pub use manager::get_platform_sandbox;
-pub use manager::with_managed_mitm_ca_readable_root;
 pub use windows::WindowsSandboxFilesystemOverrides;
 pub use windows::permission_profile_supports_windows_restricted_token_sandbox;
 pub use windows::resolve_windows_elevated_filesystem_overrides;
@@ -47,6 +50,25 @@ impl From<SandboxTransformError> for CodexErr {
             }
             SandboxTransformError::MissingLinuxSandboxExecutable => {
                 CodexErr::LandlockSandboxExecutableNotProvided
+            }
+            SandboxTransformError::ManagedMitmCaPathUnderWritableRoot => {
+                CodexErr::UnsupportedOperation(
+                    "managed MITM CA isolation requires its proxy directory to be outside sandbox-writable roots"
+                        .to_string(),
+                )
+            }
+            SandboxTransformError::ManagedMitmCustomCaUnsupportedOnWindows => {
+                CodexErr::UnsupportedOperation(
+                    "CA directories and command-specific CA overrides with managed MITM are not supported in the Windows sandbox because its read grants persist across commands"
+                        .to_string(),
+                )
+            }
+            #[cfg(target_os = "linux")]
+            SandboxTransformError::LegacyLandlockUnsupportedWithManagedMitm => {
+                CodexErr::UnsupportedOperation(
+                    "managed MITM CA isolation requires bubblewrap and is incompatible with legacy Landlock"
+                        .to_string(),
+                )
             }
             #[cfg(target_os = "linux")]
             SandboxTransformError::Wsl1UnsupportedForBubblewrap => {
