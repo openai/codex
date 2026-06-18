@@ -476,6 +476,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "current_time_reminder": {
+              "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
+            },
             "default_mode_request_user_input": {
               "type": "boolean"
             },
@@ -695,9 +698,6 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
-            "current_time_reminder": {
-              "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
-            },
             "web_search": {
               "type": "boolean"
             },
@@ -802,6 +802,30 @@
       },
       "type": "object"
     },
+    "CurrentTimeReminderConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "clock_source": {
+          "$ref": "#/definitions/CurrentTimeSource"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "reminder_interval_model_requests": {
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CurrentTimeSource": {
+      "enum": [
+        "system",
+        "app_server_client"
+      ],
+      "type": "string"
+    },
     "DebugConfigLockToml": {
       "additionalProperties": false,
       "properties": {
@@ -894,6 +918,16 @@
         }
       ]
     },
+    "FeatureToml_for_CurrentTimeReminderConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/CurrentTimeReminderConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
         {
@@ -915,14 +949,12 @@
       ]
     },
     "FeatureToml_for_RolloutBudgetConfigToml": {
-    "FeatureToml_for_CurrentTimeReminderConfigToml": {
       "anyOf": [
         {
           "type": "boolean"
         },
         {
           "$ref": "#/definitions/RolloutBudgetConfigToml"
-          "$ref": "#/definitions/CurrentTimeReminderConfigToml"
         }
       ]
     },
@@ -4349,30 +4381,6 @@
         }
       ]
     },
-    "CurrentTimeSource": {
-      "enum": [
-        "system",
-        "app_server_client"
-      ],
-      "type": "string"
-    },
-    "CurrentTimeReminderConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "clock_source": {
-          "$ref": "#/definitions/CurrentTimeSource"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "reminder_interval_model_requests": {
-          "format": "uint64",
-          "minimum": 1.0,
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
     "Verbosity": {
       "description": "Controls output length/detail on GPT-5 models via the Responses API. Serialized with lowercase values to match the OpenAI API.",
       "enum": [
@@ -4708,6 +4716,9 @@
         "connectors": {
           "type": "boolean"
         },
+        "current_time_reminder": {
+          "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
+        },
         "default_mode_request_user_input": {
           "type": "boolean"
         },
@@ -4926,9 +4937,6 @@
         },
         "use_linux_sandbox_bwrap": {
           "type": "boolean"
-        },
-        "current_time_reminder": {
-          "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
         },
         "web_search": {
           "type": "boolean"
