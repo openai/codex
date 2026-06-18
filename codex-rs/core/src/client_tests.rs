@@ -17,8 +17,14 @@ use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_app_server_protocol::AuthMode;
+use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AuthDotJson;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::TokenData;
+use codex_login::load_auth_dot_json;
+use codex_login::save_auth;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -28,6 +34,7 @@ use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -151,6 +158,32 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+fn test_auth_dot_json() -> AuthDotJson {
+    AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: Default::default(),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            account_id: Some("account_id".to_string()),
+        }),
+        last_refresh: Some(chrono::Utc::now()),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+    }
+}
+
+fn unauthorized_transport(body: &str) -> TransportError {
+    TransportError::Http {
+        status: http::StatusCode::UNAUTHORIZED,
+        url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+        headers: None,
+        body: Some(body.to_string()),
+    }
 }
 
 #[derive(Default)]
@@ -564,6 +597,110 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[tokio::test]
+async fn workspace_restricted_401_forces_chatgpt_logout() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    save_auth(
+        codex_home.path(),
+        &test_auth_dot_json(),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    let auth_manager = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        codex_home.path().to_path_buf(),
+    );
+    assert!(auth_manager.auth_cached().is_some());
+
+    let mut recovery = Some(auth_manager.unauthorized_recovery());
+    let err = super::handle_unauthorized(
+        unauthorized_transport(r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#),
+        &mut recovery,
+        &test_session_telemetry(),
+    )
+    .await
+    .expect_err("matching 401 should force reauth without retry");
+
+    match err {
+        CodexErr::RefreshTokenFailed(failed) => {
+            assert_eq!(
+                failed.message,
+                "Your ChatGPT session is no longer authorized for this network or workspace. Please sign in again and choose an allowed workspace."
+            );
+        }
+        other => panic!("expected RefreshTokenFailed, got {other:?}"),
+    }
+    assert!(auth_manager.auth_cached().is_none());
+    assert!(
+        load_auth_dot_json(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )?
+        .is_none()
+    );
+    assert!(!recovery.as_ref().expect("recovery").has_next());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn workspace_restricted_401_does_not_clear_api_key_auth() {
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
+    let mut recovery = Some(auth_manager.unauthorized_recovery());
+
+    let err = super::handle_unauthorized(
+        unauthorized_transport(r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#),
+        &mut recovery,
+        &test_session_telemetry(),
+    )
+    .await
+    .expect_err("api key auth should not use ChatGPT forced logout");
+
+    assert!(matches!(err, CodexErr::UnexpectedStatus(_)));
+    assert!(
+        auth_manager
+            .auth_cached()
+            .is_some_and(|auth| auth.is_api_key_auth())
+    );
+}
+
+#[tokio::test]
+async fn generic_or_malformed_401_uses_existing_recovery_path() {
+    for body in [
+        r#"{"error":{"code":"token_expired"}}"#,
+        "not json",
+        r#"{"error":{"message":"missing code"}}"#,
+    ] {
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let mut recovery = Some(auth_manager.unauthorized_recovery());
+
+        let err = super::handle_unauthorized(
+            unauthorized_transport(body),
+            &mut recovery,
+            &test_session_telemetry(),
+        )
+        .await
+        .expect_err("non-matching 401 should fall back to normal recovery");
+
+        assert!(matches!(err, CodexErr::RefreshTokenFailed(_)));
+        assert!(auth_manager.auth_cached().is_some());
+    }
+}
+
+#[test]
+fn workspace_restricted_error_code_parser_accepts_supported_shapes() {
+    for body in [
+        r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#,
+        r#"{"code":"chatgpt_ip_workspace_restricted"}"#,
+    ] {
+        assert!(super::is_chatgpt_ip_workspace_restricted_unauthorized(
+            &unauthorized_transport(body)
+        ));
+    }
 }
 
 fn model_client_with_counting_attestation(

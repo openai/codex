@@ -1661,6 +1661,17 @@ impl UnauthorizedRecovery {
         }
     }
 
+    pub fn current_auth_uses_codex_backend(&self) -> bool {
+        self.manager.current_auth_uses_codex_backend()
+    }
+
+    pub async fn force_logout_due_to_server_auth_rejection(&mut self) -> std::io::Result<bool> {
+        self.step = UnauthorizedRecoveryStep::Done;
+        self.manager
+            .force_logout_due_to_server_auth_rejection()
+            .await
+    }
+
     pub async fn next(&mut self) -> Result<UnauthorizedRecoveryStepResult, RefreshTokenError> {
         if !self.has_next() {
             return Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
@@ -2399,6 +2410,23 @@ impl AuthManager {
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
         Ok(result)
+    }
+
+    pub async fn force_logout_due_to_server_auth_rejection(&self) -> std::io::Result<bool> {
+        if !self.current_auth_uses_codex_backend() {
+            return Ok(false);
+        }
+
+        let removal_result = logout_all_stores(
+            &self.codex_home,
+            self.auth_credentials_store_mode,
+            self.keyring_backend_kind,
+        );
+        let had_external_auth = self.has_external_auth();
+        self.clear_external_auth();
+        let cache_changed = self.set_cached_auth(None);
+        let removed = removal_result?;
+        Ok(removed || had_external_auth || cache_changed)
     }
 
     pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {
