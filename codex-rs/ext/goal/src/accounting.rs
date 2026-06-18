@@ -6,10 +6,13 @@ use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::Semaphore;
+use tokio::sync::SemaphorePermit;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct GoalAccountingState {
     inner: Mutex<GoalAccountingInner>,
+    progress_accounting_lock: Semaphore,
 }
 
 #[derive(Debug)]
@@ -81,6 +84,17 @@ impl GoalAccountingState {
 
     pub(crate) fn current_turn_id(&self) -> Option<String> {
         self.inner().current_turn_id.clone()
+    }
+
+    /// Acquires the per-thread progress-accounting permit.
+    ///
+    /// Hold the returned permit from before taking a progress snapshot until after the persistent
+    /// usage write has succeeded and the snapshot has been marked accounted. This serializes
+    /// concurrent tool-completion hooks so only one hook can charge a given token or time delta.
+    pub(crate) async fn progress_accounting_permit(
+        &self,
+    ) -> Result<SemaphorePermit<'_>, tokio::sync::AcquireError> {
+        self.progress_accounting_lock.acquire().await
     }
 
     pub(crate) fn turn_is_current_active_goal(&self, turn_id: &str) -> bool {
@@ -284,6 +298,15 @@ impl GoalAccountingState {
 
     fn inner(&self) -> std::sync::MutexGuard<'_, GoalAccountingInner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Default for GoalAccountingState {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(GoalAccountingInner::default()),
+            progress_accounting_lock: Semaphore::new(/*permits*/ 1),
+        }
     }
 }
 

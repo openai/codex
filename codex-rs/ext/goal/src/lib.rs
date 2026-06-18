@@ -1,10 +1,7 @@
-//! Extension crate sketch for the `/goal` feature.
-//!
-//! This crate is intentionally not wired into the host yet. It contains the
-//! goal tool specs, extension registration shape, and the parts of runtime
-//! accounting that can be represented with today's extension API.
+//! Extension crate for the `/goal` feature.
 
 mod accounting;
+mod analytics;
 mod api;
 mod events;
 mod extension;

@@ -29,12 +29,14 @@ impl ChatWidget {
     pub(super) fn on_image_generation_end(
         &mut self,
         call_id: String,
+        status: String,
         revised_prompt: Option<String>,
         saved_path: Option<AbsolutePathBuf>,
     ) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(history_cell::new_image_generation_call(
             call_id,
+            &status,
             revised_prompt,
             saved_path,
         ));
@@ -140,6 +142,13 @@ impl ChatWidget {
             cached_spawn_request.as_ref(),
             |thread_id| self.collab_agent_metadata(thread_id),
         ) {
+            self.on_collab_event(cell);
+        }
+    }
+
+    pub(super) fn on_sub_agent_activity(&mut self, item: ThreadItem) {
+        self.record_visible_turn_activity();
+        if let Some(cell) = multi_agents::sub_agent_activity_history_cell(&item) {
             self.on_collab_event(cell);
         }
     }

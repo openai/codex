@@ -17,7 +17,7 @@ impl TurnAborted {
 }
 
 impl ContextualUserFragment for TurnAborted {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 

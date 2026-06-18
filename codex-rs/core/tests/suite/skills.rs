@@ -1,5 +1,5 @@
 #![cfg(not(target_os = "windows"))]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
@@ -9,6 +9,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -16,6 +17,8 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use std::sync::Arc;
@@ -28,21 +31,25 @@ async fn write_repo_skill(
     body: &str,
 ) -> Result<()> {
     let skill_dir = cwd.join(".agents").join("skills").join(name);
+    let skill_dir_uri = PathUri::from_path(&skill_dir)?;
     fs.create_directory(
-        &skill_dir,
+        &skill_dir_uri,
         CreateDirectoryOptions { recursive: true },
         /*sandbox*/ None,
     )
     .await?;
     let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
     let path = skill_dir.join("SKILL.md");
-    fs.write_file(&path, contents.into_bytes(), /*sandbox*/ None)
+    let path_uri = PathUri::from_path(&path)?;
+    fs.write_file(&path_uri, contents.into_bytes(), /*sandbox*/ None)
         .await?;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_includes_skill_instructions() -> Result<()> {
+    // TODO(anp): Remove after skill-path helpers use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires native cross-OS skill paths");
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -85,12 +92,11 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
                     path: skill_path.clone(),
                 },
             ],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.to_path_buf()),
+                environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

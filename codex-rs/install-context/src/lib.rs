@@ -184,11 +184,14 @@ impl InstallContext {
 impl CodexPackageLayout {
     fn from_exe(exe_path: &Path) -> Option<Self> {
         let canonical_exe = canonical_absolute_path(exe_path)?;
-        let bin_dir = canonical_exe.parent()?;
-        if bin_dir.file_name() != Some(OsStr::new(BIN_DIRNAME)) {
-            return None;
+        let exe_dir = canonical_exe.parent()?;
+        match exe_dir.file_name() {
+            Some(name) if name == OsStr::new(BIN_DIRNAME) => Self::from_package_bin_dir(exe_dir),
+            Some(_) | None => None,
         }
+    }
 
+    fn from_package_bin_dir(bin_dir: AbsolutePathBuf) -> Option<Self> {
         let package_dir = bin_dir.parent()?;
         if !package_dir.join(PACKAGE_METADATA_FILENAME).is_file() {
             return None;

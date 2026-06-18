@@ -452,10 +452,13 @@ def normalize_issue_comments(items):
     return out
 
 
-def normalize_review_comments(items):
+def normalize_review_comments(items, review_states):
     out = []
     for item in items:
         if not isinstance(item, dict):
+            continue
+        review_id = str(item.get("pull_request_review_id") or "")
+        if review_states.get(review_id) == "PENDING":
             continue
         line = item.get("line")
         if line is None:
@@ -480,6 +483,8 @@ def normalize_reviews(items):
     out = []
     for item in items:
         if not isinstance(item, dict):
+            continue
+        if str(item.get("state") or "").upper() == "PENDING":
             continue
         out.append(
             {
@@ -534,16 +539,33 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
     review_payload = gh_api_list_paginated(endpoints["review"], repo=repo)
 
     issue_items = normalize_issue_comments(issue_payload)
-    review_comment_items = normalize_review_comments(review_comment_payload)
+    review_states = {
+        str(item.get("id")): str(item.get("state") or "").upper()
+        for item in review_payload
+        if isinstance(item, dict) and item.get("id") not in (None, "")
+    }
+    pending_review_ids = {
+        review_id for review_id, review_state in review_states.items() if review_state == "PENDING"
+    }
+    pending_review_comment_ids = {
+        str(item.get("id"))
+        for item in review_comment_payload
+        if isinstance(item, dict)
+        and item.get("id") not in (None, "")
+        and str(item.get("pull_request_review_id") or "") in pending_review_ids
+    }
+    review_comment_items = normalize_review_comments(review_comment_payload, review_states)
     review_items = normalize_reviews(review_payload)
     all_items = issue_items + review_comment_items + review_items
 
     seen_issue = {str(x) for x in state.get("seen_issue_comment_ids") or []}
     seen_review_comment = {str(x) for x in state.get("seen_review_comment_ids") or []}
     seen_review = {str(x) for x in state.get("seen_review_ids") or []}
+    seen_review_comment.difference_update(pending_review_comment_ids)
+    seen_review.difference_update(pending_review_ids)
 
     # On a brand-new state file, surface existing review activity instead of
-    # silently treating it as seen. This avoids missing already-pending review
+    # silently treating it as seen. This avoids missing already-published review
     # feedback when monitoring starts after comments were posted.
 
     new_items = []

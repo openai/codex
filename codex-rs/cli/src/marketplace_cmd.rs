@@ -5,16 +5,28 @@ use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
+use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::installed_marketplaces::marketplace_install_root;
+use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_core_plugins::marketplace::marketplace_root_dir;
+use codex_core_plugins::marketplace_add::MarketplaceAddOutcome;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
+use codex_core_plugins::marketplace_remove::MarketplaceRemoveOutcome;
 use codex_core_plugins::marketplace_remove::MarketplaceRemoveRequest;
 use codex_core_plugins::marketplace_remove::remove_marketplace;
 use codex_utils_cli::CliConfigOverrides;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 
+use crate::plugin_cmd::JsonMarketplaceSource;
 use crate::plugin_cmd::configured_marketplace_snapshot_issues;
+use crate::plugin_cmd::configured_marketplace_sources;
+use crate::plugin_cmd::load_cli_auth_mode;
 
 #[derive(Debug, Parser)]
 #[command(bin_name = "codex plugin marketplace")]
@@ -32,7 +44,7 @@ enum MarketplaceSubcommand {
     Add(AddMarketplaceArgs),
 
     /// List plugin marketplaces Codex is currently considering and their roots.
-    List,
+    List(ListMarketplaceArgs),
 
     /// Refresh configured Git marketplace snapshots.
     ///
@@ -64,6 +76,18 @@ struct AddMarketplaceArgs {
         action = clap::ArgAction::Append
     )]
     sparse_paths: Vec<String>,
+
+    /// Output add result as JSON.
+    #[arg(long = "json")]
+    json: bool,
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex plugin marketplace list")]
+struct ListMarketplaceArgs {
+    /// Output marketplace list as JSON.
+    #[arg(long = "json")]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -75,6 +99,10 @@ struct UpgradeMarketplaceArgs {
     /// Optional configured marketplace name to upgrade. Omit to upgrade all Git marketplaces.
     #[arg(value_name = "MARKETPLACE_NAME")]
     marketplace_name: Option<String>,
+
+    /// Output upgrade result as JSON.
+    #[arg(long = "json")]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -86,6 +114,10 @@ struct RemoveMarketplaceArgs {
     /// Configured marketplace name to remove.
     #[arg(value_name = "MARKETPLACE_NAME")]
     marketplace_name: String,
+
+    /// Output remove result as JSON.
+    #[arg(long = "json")]
+    json: bool,
 }
 
 impl MarketplaceCli {
@@ -101,7 +133,7 @@ impl MarketplaceCli {
 
         match subcommand {
             MarketplaceSubcommand::Add(args) => run_add(args).await?,
-            MarketplaceSubcommand::List => run_list(overrides).await?,
+            MarketplaceSubcommand::List(args) => run_list(overrides, args).await?,
             MarketplaceSubcommand::Upgrade(args) => run_upgrade(overrides, args).await?,
             MarketplaceSubcommand::Remove(args) => run_remove(args).await?,
         }
@@ -115,6 +147,7 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
         source,
         ref_name,
         sparse_paths,
+        json,
     } = args;
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
@@ -127,6 +160,12 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
         },
     )
     .await?;
+
+    if json {
+        let output = JsonMarketplaceAddOutput::from_outcome(outcome);
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
 
     if outcome.already_added {
         println!(
@@ -147,11 +186,30 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     Ok(())
 }
 
-async fn run_list(overrides: Vec<(String, toml::Value)>) -> Result<()> {
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonMarketplaceAddOutput {
+    marketplace_name: String,
+    installed_root: String,
+    already_added: bool,
+}
+
+impl JsonMarketplaceAddOutput {
+    fn from_outcome(outcome: MarketplaceAddOutcome) -> Self {
+        Self {
+            marketplace_name: outcome.marketplace_name,
+            installed_root: outcome.installed_root.as_path().display().to_string(),
+            already_added: outcome.already_added,
+        }
+    }
+}
+
+async fn run_list(overrides: Vec<(String, toml::Value)>, args: ListMarketplaceArgs) -> Result<()> {
     let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
     let manager = PluginsManager::new(config.codex_home.to_path_buf());
+    manager.set_auth_mode(load_cli_auth_mode(&config).await);
     let plugins_input = config.plugins_config_input();
     let marketplace_listing = manager
         .discover_marketplaces_for_config(&plugins_input, &[])
@@ -191,6 +249,15 @@ async fn run_list(overrides: Vec<(String, toml::Value)>) -> Result<()> {
         bail!("failed to load marketplace(s):\n{issue_lines}");
     }
     let marketplaces = marketplace_listing.marketplaces;
+    if args.json {
+        let marketplace_sources =
+            configured_marketplace_sources_by_root(config.codex_home.as_path(), &plugins_input);
+        let output =
+            JsonMarketplaceListOutput::from_marketplaces(marketplaces, &marketplace_sources);
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
     if marketplaces.is_empty() {
         println!("No plugin marketplaces in scope.");
         return Ok(());
@@ -227,11 +294,84 @@ async fn run_list(overrides: Vec<(String, toml::Value)>) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonMarketplaceListOutput {
+    marketplaces: Vec<JsonMarketplaceListEntry>,
+}
+
+impl JsonMarketplaceListOutput {
+    fn from_marketplaces(
+        marketplaces: Vec<codex_core_plugins::marketplace::Marketplace>,
+        marketplace_sources: &HashMap<PathBuf, JsonMarketplaceSource>,
+    ) -> Self {
+        let mut seen_roots = HashSet::new();
+        let marketplaces = marketplaces
+            .into_iter()
+            .filter_map(|marketplace| {
+                let root = marketplace_root_dir(&marketplace.path).ok()?;
+                if !seen_roots.insert(root.clone()) {
+                    return None;
+                }
+                Some(JsonMarketplaceListEntry {
+                    marketplace_source: marketplace_sources.get(root.as_path()).cloned(),
+                    name: marketplace.name,
+                    root: root.display().to_string(),
+                })
+            })
+            .collect();
+
+        Self { marketplaces }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonMarketplaceListEntry {
+    name: String,
+    root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    marketplace_source: Option<JsonMarketplaceSource>,
+}
+
+fn configured_marketplace_sources_by_root(
+    codex_home: &Path,
+    plugins_input: &PluginsConfigInput,
+) -> HashMap<PathBuf, JsonMarketplaceSource> {
+    let marketplace_sources = configured_marketplace_sources(plugins_input);
+    let Some(user_config) = plugins_input.config_layer_stack.effective_user_config() else {
+        return HashMap::new();
+    };
+    let Some(marketplaces) = user_config
+        .get("marketplaces")
+        .and_then(toml::Value::as_table)
+    else {
+        return HashMap::new();
+    };
+
+    let default_install_root = marketplace_install_root(codex_home);
+    marketplaces
+        .iter()
+        .filter_map(|(marketplace_name, marketplace)| {
+            let marketplace_source = marketplace_sources.get(marketplace_name)?;
+            let root = resolve_configured_marketplace_root(
+                marketplace_name,
+                marketplace,
+                &default_install_root,
+            )?;
+            Some((root, marketplace_source.clone()))
+        })
+        .collect()
+}
+
 async fn run_upgrade(
     overrides: Vec<(String, toml::Value)>,
     args: UpgradeMarketplaceArgs,
 ) -> Result<()> {
-    let UpgradeMarketplaceArgs { marketplace_name } = args;
+    let UpgradeMarketplaceArgs {
+        marketplace_name,
+        json,
+    } = args;
     let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
@@ -241,17 +381,30 @@ async fn run_upgrade(
     let outcome = manager
         .upgrade_configured_marketplaces_for_config(&plugins_input, marketplace_name.as_deref())
         .map_err(anyhow::Error::msg)?;
-    print_upgrade_outcome(&outcome, marketplace_name.as_deref())
+    if json {
+        print_upgrade_outcome_json(&outcome)
+    } else {
+        print_upgrade_outcome(&outcome, marketplace_name.as_deref())
+    }
 }
 
 async fn run_remove(args: RemoveMarketplaceArgs) -> Result<()> {
-    let RemoveMarketplaceArgs { marketplace_name } = args;
+    let RemoveMarketplaceArgs {
+        marketplace_name,
+        json,
+    } = args;
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let outcome = remove_marketplace(
         codex_home.to_path_buf(),
         MarketplaceRemoveRequest { marketplace_name },
     )
     .await?;
+
+    if json {
+        let output = JsonMarketplaceRemoveOutput::from_outcome(outcome);
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
 
     println!("Removed marketplace `{}`.", outcome.marketplace_name);
     if let Some(installed_root) = outcome.removed_installed_root {
@@ -262,6 +415,76 @@ async fn run_remove(args: RemoveMarketplaceArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonMarketplaceRemoveOutput {
+    marketplace_name: String,
+    installed_root: Option<String>,
+}
+
+impl JsonMarketplaceRemoveOutput {
+    fn from_outcome(outcome: MarketplaceRemoveOutcome) -> Self {
+        Self {
+            marketplace_name: outcome.marketplace_name,
+            installed_root: outcome
+                .removed_installed_root
+                .map(|root| root.as_path().display().to_string()),
+        }
+    }
+}
+
+fn print_upgrade_outcome_json(outcome: &PluginMarketplaceUpgradeOutcome) -> Result<()> {
+    for error in &outcome.errors {
+        eprintln!(
+            "Failed to upgrade marketplace `{}`: {}",
+            error.marketplace_name, error.message
+        );
+    }
+    if !outcome.all_succeeded() {
+        bail!("{} upgrade failure(s) occurred.", outcome.errors.len());
+    }
+
+    let output = JsonMarketplaceUpgradeOutput::from_outcome(outcome);
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonMarketplaceUpgradeOutput {
+    selected_marketplaces: Vec<String>,
+    upgraded_roots: Vec<String>,
+    errors: Vec<JsonMarketplaceUpgradeError>,
+}
+
+impl JsonMarketplaceUpgradeOutput {
+    fn from_outcome(outcome: &PluginMarketplaceUpgradeOutcome) -> Self {
+        Self {
+            selected_marketplaces: outcome.selected_marketplaces.clone(),
+            upgraded_roots: outcome
+                .upgraded_roots
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect(),
+            errors: outcome
+                .errors
+                .iter()
+                .map(|error| JsonMarketplaceUpgradeError {
+                    marketplace_name: error.marketplace_name.clone(),
+                    message: error.message.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonMarketplaceUpgradeError {
+    marketplace_name: String,
+    message: String,
 }
 
 fn print_upgrade_outcome(

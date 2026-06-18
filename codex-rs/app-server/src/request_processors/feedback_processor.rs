@@ -2,6 +2,8 @@ use super::*;
 #[cfg(target_os = "windows")]
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
 
+const MAX_FEEDBACK_TREE_THREADS: usize = 8;
+
 #[derive(Clone)]
 pub(crate) struct FeedbackRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -125,6 +127,27 @@ impl FeedbackRequestProcessor {
                 },
                 None => Vec::new(),
             };
+            let mut feedback_thread_ids = feedback_thread_ids;
+            let original_len = feedback_thread_ids.len();
+            if let Some(conversation_id) = conversation_id {
+                let mut descendant_thread_ids = feedback_thread_ids
+                    .into_iter()
+                    .filter(|thread_id| *thread_id != conversation_id)
+                    .collect::<Vec<_>>();
+                // Thread ids are UUIDv7, so lexicographic order tracks creation time.
+                descendant_thread_ids.sort_unstable_by_key(ToString::to_string);
+                if original_len > MAX_FEEDBACK_TREE_THREADS {
+                    let keep_descendants = MAX_FEEDBACK_TREE_THREADS.saturating_sub(1);
+                    let split_index = descendant_thread_ids.len().saturating_sub(keep_descendants);
+                    descendant_thread_ids = descendant_thread_ids.split_off(split_index);
+                    warn!(
+                        "feedback log upload for thread_id={conversation_id:?} truncated from {original_len} threads to root plus {keep_descendants} most recent descendants"
+                    );
+                }
+                feedback_thread_ids = Vec::with_capacity(descendant_thread_ids.len() + 1);
+                feedback_thread_ids.push(conversation_id);
+                feedback_thread_ids.extend(descendant_thread_ids);
+            }
             let sqlite_feedback_logs = if let Some(state_db_ctx) = state_db_ctx.as_ref()
                 && !feedback_thread_ids.is_empty()
             {

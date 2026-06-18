@@ -95,6 +95,7 @@ mod tests {
                 }
             }],
             phase: None,
+            metadata: None,
         }
     }
 

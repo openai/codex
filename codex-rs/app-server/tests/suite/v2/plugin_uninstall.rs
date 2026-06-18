@@ -206,7 +206,7 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
 
     Mock::given(method("POST"))
         .and(path(format!(
-            "/backend-api/plugins/{REMOTE_PLUGIN_ID}/uninstall"
+            "/backend-api/ps/plugins/{REMOTE_PLUGIN_ID}/uninstall"
         )))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
@@ -249,7 +249,7 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
-        &format!("/plugins/{REMOTE_PLUGIN_ID}/uninstall"),
+        &format!("/ps/plugins/{REMOTE_PLUGIN_ID}/uninstall"),
         /*expected_count*/ 1,
     )
     .await?;
@@ -278,7 +278,7 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
 
     Mock::given(method("POST"))
         .and(path(format!(
-            "/backend-api/plugins/{REMOTE_PLUGIN_ID}/uninstall"
+            "/backend-api/ps/plugins/{REMOTE_PLUGIN_ID}/uninstall"
         )))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
@@ -321,7 +321,7 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
-        &format!("/plugins/{REMOTE_PLUGIN_ID}/uninstall"),
+        &format!("/ps/plugins/{REMOTE_PLUGIN_ID}/uninstall"),
         /*expected_count*/ 1,
     )
     .await?;
@@ -357,7 +357,7 @@ async fn plugin_uninstall_accepts_workspace_remote_plugin_id_shape() -> Result<(
 
     Mock::given(method("POST"))
         .and(path(format!(
-            "/backend-api/plugins/{WORKSPACE_REMOTE_PLUGIN_ID}/uninstall"
+            "/backend-api/ps/plugins/{WORKSPACE_REMOTE_PLUGIN_ID}/uninstall"
         )))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
@@ -395,7 +395,7 @@ async fn plugin_uninstall_accepts_workspace_remote_plugin_id_shape() -> Result<(
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
-        &format!("/plugins/{WORKSPACE_REMOTE_PLUGIN_ID}/uninstall"),
+        &format!("/ps/plugins/{WORKSPACE_REMOTE_PLUGIN_ID}/uninstall"),
         /*expected_count*/ 1,
     )
     .await?;
@@ -451,7 +451,7 @@ async fn plugin_uninstall_rejects_before_post_when_remote_detail_fetch_fails() -
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
-        &format!("/plugins/{REMOTE_PLUGIN_ID}/uninstall"),
+        &format!("/ps/plugins/{REMOTE_PLUGIN_ID}/uninstall"),
         /*expected_count*/ 0,
     )
     .await?;
@@ -487,7 +487,7 @@ async fn plugin_uninstall_rejects_remote_plugin_id_with_spaces_before_network_ca
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
-        "/plugins/sample plugin/uninstall",
+        "/ps/plugins/sample plugin/uninstall",
         /*expected_count*/ 0,
     )
     .await?;
@@ -522,7 +522,7 @@ async fn plugin_uninstall_rejects_invalid_remote_plugin_id_before_network_call()
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
-        "/plugins/linear/../../oops/uninstall",
+        "/ps/plugins/linear/../../oops/uninstall",
         /*expected_count*/ 0,
     )
     .await?;

@@ -13,11 +13,9 @@ doctest = false
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 codex-api = { workspace = true }
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
-codex-features = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-model-provider-info = { workspace = true }

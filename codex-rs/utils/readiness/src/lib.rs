@@ -17,7 +17,6 @@ pub struct Token(i32);
 
 const LOCK_TIMEOUT: Duration = Duration::from_millis(1000);
 
-#[async_trait::async_trait]
 pub trait Readiness: Send + Sync + 'static {
     /// Returns true if the flag is currently marked ready. At least one token needs to be marked
     /// as ready before.
@@ -27,17 +26,22 @@ pub trait Readiness: Send + Sync + 'static {
     /// Subscribe to readiness and receive an authorization token.
     ///
     /// If the flag is already ready, returns `FlagAlreadyReady`.
-    async fn subscribe(&self) -> Result<Token, errors::ReadinessError>;
+    fn subscribe(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Token, errors::ReadinessError>> + Send;
 
     /// Attempt to mark the flag ready, validated by the provided token.
     ///
     /// Returns `true` iff:
     /// - `token` is currently subscribed, and
     /// - the flag was not already ready.
-    async fn mark_ready(&self, token: Token) -> Result<bool, errors::ReadinessError>;
+    fn mark_ready(
+        &self,
+        token: Token,
+    ) -> impl std::future::Future<Output = Result<bool, errors::ReadinessError>> + Send;
 
     /// Asynchronously wait until the flag becomes ready.
-    async fn wait_ready(&self);
+    fn wait_ready(&self) -> impl std::future::Future<Output = ()> + Send;
 }
 
 pub struct ReadinessFlag {
@@ -92,7 +96,6 @@ impl fmt::Debug for ReadinessFlag {
     }
 }
 
-#[async_trait::async_trait]
 impl Readiness for ReadinessFlag {
     fn is_ready(&self) -> bool {
         if self.load_ready() {

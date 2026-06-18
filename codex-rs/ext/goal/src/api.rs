@@ -6,8 +6,11 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
+use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::validate_thread_goal_objective;
 
 use crate::runtime::GoalRuntimeHandle;
@@ -61,6 +64,14 @@ pub struct GoalSetOutcome {
 }
 
 impl GoalSetOutcome {
+    pub fn thread_goal_updated_item(&self) -> RolloutItem {
+        RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+            thread_id: self.goal.thread_id,
+            turn_id: None,
+            goal: self.goal.clone(),
+        }))
+    }
+
     pub async fn apply_runtime_effects(&self, goal_service: &GoalService) {
         if let Some(runtime) = goal_service.runtime_for_thread(self.goal.thread_id)
             && let Err(err) = runtime
@@ -124,7 +135,19 @@ impl GoalService {
                 .map_err(GoalServiceError::InvalidRequest)?;
         }
 
-        if let Some(runtime) = self.runtime_for_thread(thread_id)
+        let runtime = self.runtime_for_thread(thread_id);
+        // Hold this through the prepare/write window so idle continuation cannot
+        // launch from goal state that this external mutation is about to change.
+        let _goal_state_permit = match runtime.as_ref() {
+            Some(runtime) => Some(
+                runtime
+                    .goal_state_permit()
+                    .await
+                    .map_err(GoalServiceError::Internal)?,
+            ),
+            None => None,
+        };
+        if let Some(runtime) = runtime.as_ref()
             && let Err(err) = runtime.prepare_external_goal_mutation().await
         {
             tracing::warn!("failed to prepare external goal mutation: {err}");
@@ -229,23 +252,37 @@ impl GoalService {
         state_db: &codex_state::StateRuntime,
         thread_id: ThreadId,
     ) -> Result<bool, GoalServiceError> {
-        if let Some(runtime) = self.runtime_for_thread(thread_id)
+        let runtime = self.runtime_for_thread(thread_id);
+        // Hold this through the prepare/write window so idle continuation cannot
+        // launch from goal state that this external mutation is about to change.
+        let goal_state_permit = match runtime.as_ref() {
+            Some(runtime) => Some(
+                runtime
+                    .goal_state_permit()
+                    .await
+                    .map_err(GoalServiceError::Internal)?,
+            ),
+            None => None,
+        };
+        if let Some(runtime) = runtime.as_ref()
             && let Err(err) = runtime.prepare_external_goal_mutation().await
         {
             tracing::warn!("failed to prepare external goal mutation: {err}");
         }
 
-        let cleared = state_db
+        let cleared_goal = state_db
             .thread_goals()
             .delete_thread_goal(thread_id)
             .await
             .map_err(|err| {
                 GoalServiceError::Internal(format!("failed to clear thread goal: {err}"))
             })?;
+        let cleared = cleared_goal.is_some();
+        drop(goal_state_permit);
+        drop(runtime);
 
-        if cleared
-            && let Some(runtime) = self.runtime_for_thread(thread_id)
-            && let Err(err) = runtime.apply_external_goal_clear().await
+        if let (Some(runtime), Some(goal)) = (self.runtime_for_thread(thread_id), cleared_goal)
+            && let Err(err) = runtime.apply_external_goal_clear(goal).await
         {
             tracing::warn!("failed to apply external goal clear runtime effects: {err}");
         }

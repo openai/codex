@@ -1,6 +1,5 @@
 use super::*;
 use pretty_assertions::assert_eq;
-use std::path::Path;
 
 #[tokio::test]
 async fn evaluates_powershell_inner_commands_against_prompt_rules() {
@@ -15,7 +14,6 @@ async fn evaluates_powershell_inner_commands_against_prompt_rules() {
             ],
             approval_policy: AskForApproval::Never,
             permission_profile: PermissionProfile::Disabled,
-            file_system_sandbox_policy: unrestricted_file_system_sandbox_policy(),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         },
@@ -39,7 +37,6 @@ async fn evaluates_powershell_inner_commands_against_allow_rules() {
             ],
             approval_policy: AskForApproval::UnlessTrusted,
             permission_profile: PermissionProfile::read_only(),
-            file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         },
@@ -81,11 +78,94 @@ fn unmatched_safe_powershell_words_are_allowed() {
             UnmatchedCommandContext {
                 approval_policy: AskForApproval::UnlessTrusted,
                 permission_profile: &PermissionProfile::read_only(),
-                file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
-                sandbox_cwd: Path::new("/tmp"),
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 used_complex_parsing: false,
                 command_origin: ExecPolicyCommandOrigin::PowerShell,
+            },
+        )
+    );
+}
+
+#[test]
+fn read_only_windows_sandbox_runs_unmatched_commands_under_sandbox() {
+    let command = vec!["cmd.exe".to_string(), "/c".to_string(), "dir".to_string()];
+
+    for windows_sandbox_level in [
+        WindowsSandboxLevel::RestrictedToken,
+        WindowsSandboxLevel::Elevated,
+    ] {
+        assert_eq!(
+            Decision::Allow,
+            render_decision_for_unmatched_command(
+                &command,
+                UnmatchedCommandContext {
+                    approval_policy: AskForApproval::Never,
+                    permission_profile: &PermissionProfile::read_only(),
+                    windows_sandbox_level,
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    used_complex_parsing: false,
+                    command_origin: ExecPolicyCommandOrigin::Generic,
+                },
+            )
+        );
+    }
+}
+
+#[test]
+fn read_only_windows_policy_without_sandbox_backend_still_requires_approval() {
+    let command = vec!["cmd.exe".to_string(), "/c".to_string(), "dir".to_string()];
+
+    assert_eq!(
+        Decision::Forbidden,
+        render_decision_for_unmatched_command(
+            &command,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::Never,
+                permission_profile: &PermissionProfile::read_only(),
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Generic,
+            },
+        ),
+        "command is forbidden because approval policy is never and there is no Windows sandbox to rely on"
+    );
+}
+
+#[test]
+fn writable_windows_policy_without_sandbox_backend_still_requires_approval() {
+    let command = vec!["cmd.exe".to_string(), "/c".to_string(), "dir".to_string()];
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    assert_eq!(
+        Decision::Forbidden,
+        render_decision_for_unmatched_command(
+            &command,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::Never,
+                permission_profile: &permission_profile,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Generic,
             },
         )
     );
@@ -110,7 +190,6 @@ async fn unmatched_dangerous_powershell_inner_commands_require_approval() {
             ],
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::Disabled,
-            file_system_sandbox_policy: unrestricted_file_system_sandbox_policy(),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         },

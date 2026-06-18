@@ -4,6 +4,7 @@ use pretty_assertions::assert_eq;
 fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartupState) {
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            thread_id: Some("thread-1".to_string()),
             name: name.to_string(),
             status,
             error: None,
@@ -15,12 +16,90 @@ fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartup
 fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            thread_id: Some("thread-1".to_string()),
             name: name.to_string(),
             status: McpServerStartupState::Failed,
             error: Some(error.to_string()),
         }),
         /*replay_kind*/ None,
     );
+}
+
+#[tokio::test]
+async fn mcp_startup_ignores_status_for_other_thread() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["sentry".to_string()]);
+    let parent_thread_id = ThreadId::new();
+    let child_thread_id = ThreadId::new();
+    chat.thread_id = Some(parent_thread_id);
+    chat.on_stream_error(
+        "Connection interrupted, retrying".to_string(),
+        /*additional_details*/ None,
+    );
+    let status_before = chat.status_state.current_status.clone();
+    let retry_status_header_before = chat.status_state.retry_status_header.clone();
+
+    for status in [
+        McpServerStartupState::Starting,
+        McpServerStartupState::Failed,
+    ] {
+        chat.handle_server_notification(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some(child_thread_id.to_string()),
+                name: "sentry".to_string(),
+                status,
+                error: matches!(status, McpServerStartupState::Failed)
+                    .then(|| "sentry is not logged in".to_string()),
+            }),
+            /*replay_kind*/ None,
+        );
+    }
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.mcp_startup_status.is_none());
+    assert_eq!(chat.status_state.current_status, status_before);
+    assert_eq!(
+        chat.status_state.retry_status_header,
+        retry_status_header_before
+    );
+}
+
+#[tokio::test]
+async fn mcp_startup_dedupes_same_round_duplicate_failure_warning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    notify_mcp_status_error(
+        &mut chat,
+        "alpha",
+        "MCP client for `alpha` failed to start: handshake failed",
+    );
+    notify_mcp_status_error(
+        &mut chat,
+        "alpha",
+        "MCP client for `alpha` failed to start: handshake failed",
+    );
+
+    let failure_text = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(
+        failure_text,
+        "⚠ MCP client for `alpha` failed to start: handshake failed\n"
+    );
+
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+
+    let summary_text = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(summary_text, "⚠ MCP startup incomplete (failed: alpha)\n");
 }
 
 #[tokio::test]
@@ -110,6 +189,11 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
     assert!(drain_insert_history(&mut rx).is_empty());
     assert!(chat.bottom_pane.is_task_running());
 
+    notify_mcp_status_error(
+        &mut chat,
+        "alpha",
+        "MCP client for `alpha` failed to start: handshake failed",
+    );
     notify_mcp_status_error(
         &mut chat,
         "alpha",

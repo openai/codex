@@ -27,12 +27,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
 
-use codex_exec_server::Environment;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathUri;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -40,6 +39,7 @@ use tokio::sync::Mutex;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
 use crate::tools::network_approval::DeferredNetworkApproval;
 
@@ -62,6 +62,7 @@ pub(crate) use process::SpawnLifecycleHandle;
 pub(crate) use process::UnifiedExecProcess;
 
 pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
+pub(crate) const WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS: u64 = 2_000;
 // Minimum yield time for an empty `write_stdin`.
 pub(crate) const MIN_EMPTY_YIELD_TIME_MS: u64 = 5_000;
 pub(crate) const MAX_YIELD_TIME_MS: u64 = 30_000;
@@ -95,9 +96,9 @@ pub(crate) struct ExecCommandRequest {
     pub process_id: i32,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
-    pub cwd: AbsolutePathBuf,
-    pub sandbox_cwd: AbsolutePathBuf,
-    pub environment: Arc<Environment>,
+    pub cwd: PathUri,
+    pub sandbox_cwd: PathUri,
+    pub turn_environment: TurnEnvironment,
     pub shell_mode: UnifiedExecShellMode,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
@@ -155,6 +156,8 @@ struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
     process_id: i32,
+    cwd: PathUri,
+    initial_exec_command_active: Arc<std::sync::atomic::AtomicBool>,
     hook_command: String,
     tty: bool,
     network_approval: Option<DeferredNetworkApproval>,
@@ -163,6 +166,11 @@ struct ProcessEntry {
 }
 
 pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {
+    let yield_time_ms = if cfg!(windows) {
+        yield_time_ms.max(WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS)
+    } else {
+        yield_time_ms
+    };
     yield_time_ms.clamp(MIN_YIELD_TIME_MS, MAX_YIELD_TIME_MS)
 }
 

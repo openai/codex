@@ -562,7 +562,7 @@ impl ChatWidget {
         match item {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
-            StatusLineItem::Reasoning => Some(self.reasoning_display_name().to_string()),
+            StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),
@@ -762,15 +762,16 @@ impl ChatWidget {
                 /*max_chars*/ 32,
             )),
             TerminalTitleItem::Reasoning => Some(Self::truncate_terminal_title_part(
-                self.reasoning_display_name().to_string(),
+                self.reasoning_display_name(),
                 /*max_chars*/ 32,
             )),
             TerminalTitleItem::TaskProgress => self.terminal_title_task_progress(),
         }
     }
 
-    fn reasoning_display_name(&self) -> &'static str {
-        Self::status_line_reasoning_effort_label(self.effective_reasoning_effort())
+    fn reasoning_display_name(&self) -> String {
+        let effort = self.effective_reasoning_effort();
+        Self::status_line_reasoning_effort_label(effort.as_ref())
     }
 
     fn model_with_reasoning_display_name(&self) -> String {

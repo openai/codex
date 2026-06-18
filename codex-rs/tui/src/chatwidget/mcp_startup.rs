@@ -83,7 +83,13 @@ impl ChatWidget {
             // per-server failures immediately.
             let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
             if let McpStartupStatus::Failed { error } = &status {
-                self.on_warning(error);
+                let already_reported = matches!(
+                    startup_status.get(&server),
+                    Some(McpStartupStatus::Failed { error: previous }) if previous == error
+                );
+                if !already_reported {
+                    self.on_warning(error);
+                }
             }
             startup_status.insert(server, status);
             startup_status

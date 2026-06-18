@@ -95,7 +95,7 @@ impl ArgMatcherCardinality {
 }
 
 impl<'v> AllocValue<'v> for ArgMatcher {
-    fn alloc_value(self, heap: &'v Heap) -> Value<'v> {
+    fn alloc_value(self, heap: Heap<'v>) -> Value<'v> {
         heap.alloc_simple(self)
     }
 }

@@ -1,5 +1,5 @@
 warning: argument comment `/*api_base*/` does not match parameter `base_url`
-  --> $DIR/comment_mismatch.rs:9:44
+  --> $DIR/comment_mismatch.rs:18:44
    |
 LL |     let _ = create_openai_url(/*api_base*/ None);
    |                                            ^^^^
@@ -11,5 +11,13 @@ note: the lint level is defined here
 LL | #![warn(argument_comment_mismatch)]
    |         ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: 1 warning emitted
+warning: argument comment `/*value*/` does not match parameter `enabled`
+  --> $DIR/comment_mismatch.rs:19:39
+   |
+LL |     let _ = Options.enabled(/*value*/ false);
+   |                                       ^^^^^
+   |
+   = help: use `/*enabled*/`
+
+warning: 2 warnings emitted
 

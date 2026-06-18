@@ -4,7 +4,7 @@ use super::ContextualUserFragment;
 pub(crate) struct GuardianFollowupReviewReminder;
 
 impl ContextualUserFragment for GuardianFollowupReviewReminder {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

@@ -1,0 +1,121 @@
+name: python-runtime-build
+
+on:
+  workflow_call:
+    inputs:
+      runtime_version:
+        description: "Runtime version to build, for example 0.136.0 or 0.136.0a2."
+        required: true
+        type: string
+
+jobs:
+  build-python-runtime:
+    if: github.repository == 'openai/codex'
+    name: build-python-runtime
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate and resolve Python runtime release
+        id: python_runtime
+        shell: bash
+        env:
+          REQUESTED_RUNTIME_VERSION: ${{ inputs.runtime_version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          python_version = os.environ["REQUESTED_RUNTIME_VERSION"]
+          if match := re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)a([0-9]+)", python_version):
+              release_version = f"{match.group(1)}-alpha.{match.group(2)}"
+          elif re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", python_version):
+              release_version = python_version
+          else:
+              raise SystemExit(
+                  "Python runtime version must be stable or a numbered alpha, "
+                  f"for example 0.136.0 or 0.136.0a2; found {python_version}"
+              )
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f"python_version={python_version}", file=output)
+              print(f"release_tag=rust-v{release_version}", file=output)
+          PY
+
+      - name: Download Python runtime release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHON_RUNTIME_VERSION: ${{ steps.python_runtime.outputs.python_version }}
+          RELEASE_TAG: ${{ steps.python_runtime.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/python-runtime dist/python-runtime-packages
+          gh release download "$RELEASE_TAG" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "openai_codex_cli_bin-${PYTHON_RUNTIME_VERSION}-*.whl" \
+            --dir dist/python-runtime
+          gh release download "$RELEASE_TAG" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "codex-package-*-unknown-linux-musl.tar.gz" \
+            --dir dist/python-runtime-packages
+
+          shopt -s nullglob
+          wheels=(dist/python-runtime/*.whl)
+          if [[ "${#wheels[@]}" -ne 6 ]]; then
+            echo "Expected 6 Python runtime wheels for ${PYTHON_RUNTIME_VERSION}, found ${#wheels[@]}."
+            exit 1
+          fi
+          packages=(dist/python-runtime-packages/*.tar.gz)
+          if [[ "${#packages[@]}" -ne 2 ]]; then
+            echo "Expected 2 Linux package archives for ${PYTHON_RUNTIME_VERSION}, found ${#packages[@]}."
+            exit 1
+          fi
+
+      - name: Build musllinux Python runtime wheels
+        env:
+          RELEASE_TAG: ${{ steps.python_runtime.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
+
+          while read -r target platform_tag; do
+            stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${target}-${platform_tag}"
+            python3 sdk/python/scripts/update_sdk_artifacts.py \
+              stage-runtime \
+              "$stage_dir" \
+              "dist/python-runtime-packages/codex-package-${target}.tar.gz" \
+              --codex-version "$RELEASE_TAG" \
+              --platform-tag "$platform_tag"
+            "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build \
+              --wheel \
+              --outdir dist/python-runtime \
+              "$stage_dir"
+          done <<'EOF'
+          aarch64-unknown-linux-musl musllinux_1_1_aarch64
+          x86_64-unknown-linux-musl musllinux_1_1_x86_64
+          EOF
+
+          shopt -s nullglob
+          wheels=(dist/python-runtime/*.whl)
+          if [[ "${#wheels[@]}" -ne 8 ]]; then
+            echo "Expected 8 Python runtime wheels, found ${#wheels[@]}."
+            exit 1
+          fi
+          ls -lh dist/python-runtime
+
+      - name: Upload Python runtime wheels
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: python-runtime-wheels
+          path: dist/python-runtime/*
+          if-no-files-found: error

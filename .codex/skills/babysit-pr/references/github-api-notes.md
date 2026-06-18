@@ -44,6 +44,9 @@ Reruns only failed jobs (and dependencies) for a workflow run.
 - Review submissions:
   - `gh api repos/{owner}/{repo}/pulls/<pr_number>/reviews?per_page=100`
 
+Use each inline comment's `pull_request_review_id` to find its parent review. Ignore parent reviews
+whose `state` is `PENDING`, along with their inline comments, until the review is submitted.
+
 ## JSON fields consumed by the watcher
 
 ### `gh pr view`

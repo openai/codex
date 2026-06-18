@@ -180,6 +180,20 @@ impl AgentRegistry {
         }
     }
 
+    pub(crate) fn clear_last_task_message(&self, thread_id: ThreadId) {
+        let mut active_agents = self
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(metadata) = active_agents
+            .agent_tree
+            .values_mut()
+            .find(|metadata| metadata.agent_id == Some(thread_id))
+        {
+            metadata.last_task_message = None;
+        }
+    }
+
     fn register_spawned_thread(&self, agent_metadata: AgentMetadata) {
         let Some(thread_id) = agent_metadata.agent_id else {
             return;

@@ -280,5 +280,6 @@ pub enum AllowedCaller {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct SearchResponse {
-    pub encrypted_output: String,
+    pub encrypted_output: Option<String>,
+    pub output: String,
 }

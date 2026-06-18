@@ -1,0 +1,349 @@
+name: Set up AKV PKCS11 code signing
+description: Download prebuilt rcodesign and Azure Key Vault PKCS11 provider artifacts, then export macOS signing environment.
+
+inputs:
+  setup-mode:
+    description: signing configures Azure and exports signing env vars; tools-only only downloads signing tools.
+    required: false
+    default: signing
+  rcodesign-blob-uri:
+    description: Azure Blob URI for the prebuilt Linux/amd64 rcodesign binary.
+    required: true
+  rcodesign-sha256:
+    description: Expected SHA-256 digest for the prebuilt rcodesign binary.
+    required: true
+  akv-pkcs11-library-blob-uri:
+    description: Azure Blob URI for the prebuilt Linux/amd64 AKV PKCS11 provider library.
+    required: true
+  akv-pkcs11-library-sha256:
+    description: Expected SHA-256 digest for the prebuilt AKV PKCS11 provider library.
+    required: true
+  azure-client-id:
+    description: GitHub OIDC client ID for the Azure signer application.
+    required: true
+  azure-tenant-id:
+    description: Azure tenant ID for the signer application.
+    required: true
+  azure-subscription-id:
+    description: Azure subscription ID that owns the signing vault.
+    required: true
+  key-vault-name:
+    description: Azure Key Vault name containing the certificate-backed signing key.
+    required: true
+  key-name:
+    description: Key Vault certificate/key name used as the PKCS11 key label.
+    required: true
+  key-version:
+    description: Optional Key Vault key version to pin while signing.
+    required: false
+    default: ""
+  certificate-sha256:
+    description: Optional expected SHA-256 fingerprint for the downloaded public certificate.
+    required: false
+    default: ""
+
+outputs:
+  pkcs11-library:
+    description: Path to the downloaded AKV PKCS11 provider library.
+    value: ${{ steps.paths.outputs.pkcs11_library }}
+  signing-certificate-pem:
+    description: Path to the downloaded public signing certificate.
+    value: ${{ steps.paths.outputs.signing_certificate_pem }}
+  rcodesign:
+    description: Path to the downloaded rcodesign binary.
+    value: ${{ steps.paths.outputs.rcodesign }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate pinned signing artifacts
+      shell: bash
+      env:
+        SETUP_MODE: ${{ inputs.setup-mode }}
+        RCODESIGN_BLOB_URI: ${{ inputs.rcodesign-blob-uri }}
+        RCODESIGN_SHA256: ${{ inputs.rcodesign-sha256 }}
+        AKV_PKCS11_LIBRARY_BLOB_URI: ${{ inputs.akv-pkcs11-library-blob-uri }}
+        AKV_PKCS11_LIBRARY_SHA256: ${{ inputs.akv-pkcs11-library-sha256 }}
+        KEY_VAULT_NAME: ${{ inputs.key-vault-name }}
+        KEY_NAME: ${{ inputs.key-name }}
+      run: |
+        set -euo pipefail
+
+        case "$SETUP_MODE" in
+          signing|tools-only)
+            ;;
+          *)
+            echo "setup-mode must be 'signing' or 'tools-only', got '$SETUP_MODE'." >&2
+            exit 1
+            ;;
+        esac
+
+        for variable_name in RCODESIGN_SHA256 AKV_PKCS11_LIBRARY_SHA256; do
+          value="${!variable_name}"
+          if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "$variable_name must be a lowercase SHA-256 digest." >&2
+            exit 1
+          fi
+        done
+
+        for variable_name in RCODESIGN_BLOB_URI AKV_PKCS11_LIBRARY_BLOB_URI; do
+          value="${!variable_name}"
+          if [[ ! "$value" =~ ^az://[^/]+/[^/]+/.+ ]]; then
+            echo "$variable_name must use az://<account>/<container>/<blob>." >&2
+            exit 1
+          fi
+        done
+
+        if [[ "$SETUP_MODE" == "signing" ]]; then
+          for variable_name in \
+            KEY_VAULT_NAME \
+            KEY_NAME; do
+            if [[ -z "${!variable_name}" ]]; then
+              echo "$variable_name is required for AKV PKCS11 signing." >&2
+              exit 1
+            fi
+          done
+        fi
+
+    - name: Resolve signing tool paths
+      id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ "${RUNNER_OS}" != "Linux" ]]; then
+          echo "Prebuilt AKV PKCS11 signing tools are only vendored for Linux runners, got ${RUNNER_OS}." >&2
+          exit 1
+        fi
+
+        if [[ "${RUNNER_ARCH}" != "X64" && "${RUNNER_ARCH}" != "AMD64" ]]; then
+          echo "Prebuilt AKV PKCS11 signing tools are only vendored for amd64 runners, got ${RUNNER_ARCH}." >&2
+          exit 1
+        fi
+
+        provider_root="${RUNNER_TEMP}/akv-pkcs11-provider"
+        rcodesign_root="${RUNNER_TEMP}/rcodesign-root"
+        signing_certificate_pem="${RUNNER_TEMP}/akv-signing-cert.pem"
+        library_name="libakv_pkcs_11.so"
+
+        mkdir -p "$provider_root" "$rcodesign_root/bin"
+
+        {
+          echo "pkcs11_library=$provider_root/$library_name"
+          echo "pkcs11_manifest=$provider_root/akv-pkcs11-provider.manifest"
+          echo "rcodesign_root=$rcodesign_root"
+          echo "rcodesign=$rcodesign_root/bin/rcodesign"
+          echo "signing_certificate_pem=$signing_certificate_pem"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Validate Azure credentials for private signing artifacts
+      shell: bash
+      env:
+        AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+        AZURE_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
+      run: |
+        set -euo pipefail
+
+        for variable_name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+          if [[ -z "${!variable_name}" ]]; then
+            echo "$variable_name is required for private AKV PKCS11 signing artifacts." >&2
+            exit 1
+          fi
+        done
+
+    - name: Log in to Azure with GitHub OIDC
+      uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - name: Install prebuilt signing tools
+      shell: bash
+      env:
+        RCODESIGN_BLOB_URI: ${{ inputs.rcodesign-blob-uri }}
+        RCODESIGN_SHA256: ${{ inputs.rcodesign-sha256 }}
+        RCODESIGN: ${{ steps.paths.outputs.rcodesign }}
+        AKV_PKCS11_LIBRARY_BLOB_URI: ${{ inputs.akv-pkcs11-library-blob-uri }}
+        AKV_PKCS11_LIBRARY_SHA256: ${{ inputs.akv-pkcs11-library-sha256 }}
+        PKCS11_LIBRARY: ${{ steps.paths.outputs.pkcs11_library }}
+        PKCS11_MANIFEST: ${{ steps.paths.outputs.pkcs11_manifest }}
+      run: |
+        set -euo pipefail
+
+        download_az_blob_uri() {
+          local uri="$1"
+          local destination="$2"
+          local rest account container blob
+
+          rest="${uri#az://}"
+          account="${rest%%/*}"
+          rest="${rest#*/}"
+          container="${rest%%/*}"
+          blob="${rest#*/}"
+
+          if [[ -z "$account" || -z "$container" || -z "$blob" || "$blob" == "$rest" ]]; then
+            echo "Invalid Azure Blob URI. Expected az://<account>/<container>/<blob>." >&2
+            exit 1
+          fi
+
+          mkdir -p "$(dirname "$destination")"
+          rm -f "$destination"
+          if ! az storage blob download \
+            --account-name "$account" \
+            --container-name "$container" \
+            --name "$blob" \
+            --file "$destination" \
+            --auth-mode login \
+            --only-show-errors \
+            >/dev/null 2>&1; then
+            echo "Failed to download a private signing artifact from Azure Blob Storage." >&2
+            exit 1
+          fi
+        }
+
+        verify_sha256() {
+          local path="$1"
+          local expected="$2"
+          local actual
+
+          actual="$(shasum -a 256 "$path" | awk '{ print $1 }')"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "SHA-256 verification failed for '$path'." >&2
+            exit 1
+          fi
+        }
+
+        echo "Downloading prebuilt rcodesign."
+        download_az_blob_uri "$RCODESIGN_BLOB_URI" "$RCODESIGN"
+        verify_sha256 "$RCODESIGN" "$RCODESIGN_SHA256"
+        chmod 0755 "$RCODESIGN"
+
+        echo "Downloading prebuilt AKV PKCS11 provider."
+        download_az_blob_uri "$AKV_PKCS11_LIBRARY_BLOB_URI" "$PKCS11_LIBRARY"
+        verify_sha256 "$PKCS11_LIBRARY" "$AKV_PKCS11_LIBRARY_SHA256"
+        chmod 0644 "$PKCS11_LIBRARY"
+
+        {
+          echo "runner_os=$RUNNER_OS"
+          echo "runner_arch=$RUNNER_ARCH"
+          echo "library_name=$(basename "$PKCS11_LIBRARY")"
+        } > "$PKCS11_MANIFEST"
+
+    - name: Verify downloaded signing tools
+      shell: bash
+      env:
+        RCODESIGN: ${{ steps.paths.outputs.rcodesign }}
+        RCODESIGN_SHA256: ${{ inputs.rcodesign-sha256 }}
+        PKCS11_LIBRARY: ${{ steps.paths.outputs.pkcs11_library }}
+        AKV_PKCS11_LIBRARY_SHA256: ${{ inputs.akv-pkcs11-library-sha256 }}
+        PKCS11_MANIFEST: ${{ steps.paths.outputs.pkcs11_manifest }}
+      run: |
+        set -euo pipefail
+
+        verify_sha256() {
+          local path="$1"
+          local expected="$2"
+          local actual
+
+          actual="$(shasum -a 256 "$path" | awk '{ print $1 }')"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "SHA-256 verification failed for '$path'." >&2
+            exit 1
+          fi
+        }
+
+        if [[ ! -x "$RCODESIGN" ]]; then
+          echo "rcodesign is missing or not executable at '$RCODESIGN'." >&2
+          exit 1
+        fi
+
+        if [[ ! -f "$PKCS11_LIBRARY" ]]; then
+          echo "AKV PKCS11 provider library is missing at '$PKCS11_LIBRARY'." >&2
+          exit 1
+        fi
+
+        verify_sha256 "$RCODESIGN" "$RCODESIGN_SHA256"
+        verify_sha256 "$PKCS11_LIBRARY" "$AKV_PKCS11_LIBRARY_SHA256"
+
+        "$RCODESIGN" --version
+        "$RCODESIGN" notarize --help > /dev/null
+
+        if [[ -f "$PKCS11_MANIFEST" ]]; then
+          echo "AKV PKCS11 provider artifact manifest is present."
+        else
+          echo "AKV PKCS11 provider artifact manifest is absent." >&2
+          exit 1
+        fi
+
+    - name: Download signing certificate from Key Vault
+      if: ${{ inputs.setup-mode == 'signing' }}
+      shell: bash
+      env:
+        KEY_VAULT_NAME: ${{ inputs.key-vault-name }}
+        KEY_NAME: ${{ inputs.key-name }}
+        KEY_VERSION: ${{ inputs.key-version }}
+        CERTIFICATE_SHA256: ${{ inputs.certificate-sha256 }}
+        SIGNING_CERTIFICATE_PEM: ${{ steps.paths.outputs.signing_certificate_pem }}
+      run: |
+        set -euo pipefail
+
+        certificate_version_args=()
+        if [[ -n "$KEY_VERSION" ]]; then
+          certificate_version_args+=(--version "$KEY_VERSION")
+        fi
+
+        if ! az keyvault certificate download \
+          --vault-name "$KEY_VAULT_NAME" \
+          --name "$KEY_NAME" \
+          "${certificate_version_args[@]}" \
+          --file "$SIGNING_CERTIFICATE_PEM" \
+          --encoding PEM \
+          --only-show-errors \
+          >/dev/null 2>&1; then
+          echo "Failed to download the public signing certificate from Azure Key Vault." >&2
+          exit 1
+        fi
+
+        if [[ -n "$CERTIFICATE_SHA256" ]]; then
+          actual_sha256="$(
+            openssl x509 -in "$SIGNING_CERTIFICATE_PEM" -noout -fingerprint -sha256 |
+              awk -F= '{ print toupper($2) }' |
+              tr -d ':\r\n'
+          )"
+          expected_sha256="$(printf '%s' "$CERTIFICATE_SHA256" | tr '[:lower:]' '[:upper:]' | tr -d ':\r\n ')"
+          if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+            echo "Downloaded signing certificate SHA-256 did not match the expected fingerprint." >&2
+            exit 1
+          fi
+        fi
+
+    - name: Export AKV PKCS11 signing environment
+      if: ${{ inputs.setup-mode == 'signing' }}
+      shell: bash
+      env:
+        RCODESIGN_ROOT: ${{ steps.paths.outputs.rcodesign_root }}
+        PKCS11_LIBRARY: ${{ steps.paths.outputs.pkcs11_library }}
+        SIGNING_CERTIFICATE_PEM: ${{ steps.paths.outputs.signing_certificate_pem }}
+        KEY_VAULT_NAME: ${{ inputs.key-vault-name }}
+        KEY_NAME: ${{ inputs.key-name }}
+        KEY_VERSION: ${{ inputs.key-version }}
+      run: |
+        set -euo pipefail
+
+        {
+          echo "$RCODESIGN_ROOT/bin"
+        } >> "$GITHUB_PATH"
+
+        {
+          echo "OAI_CODESIGN_BACKEND=akv-pkcs11"
+          echo "OAI_AKV_PKCS11_LIBRARY=$PKCS11_LIBRARY"
+          echo "OAI_AKV_SIGNING_CERTIFICATE_PEM=$SIGNING_CERTIFICATE_PEM"
+          echo "OAI_AKV_KEY_LABEL=$KEY_NAME"
+          echo "AZURE_CREDENTIAL_KIND=azurecli"
+          echo "AZURE_KEYVAULT_NAME=$KEY_VAULT_NAME"
+          if [[ -n "$KEY_VERSION" ]]; then
+            echo "AZURE_KEYVAULT_KEY_VERSION=$KEY_VERSION"
+          fi
+        } >> "$GITHUB_ENV"

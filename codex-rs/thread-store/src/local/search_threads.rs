@@ -23,6 +23,10 @@ use crate::ThreadSortKey;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
+#[cfg(test)]
+#[path = "search_threads_tests.rs"]
+mod tests;
+
 struct ThreadSearchItem {
     item: codex_rollout::ThreadItem,
     snippet: String,
@@ -50,6 +54,7 @@ pub(super) async fn search_threads(
     let sort_key = match params.sort_key {
         ThreadSortKey::CreatedAt => codex_rollout::ThreadSortKey::CreatedAt,
         ThreadSortKey::UpdatedAt => codex_rollout::ThreadSortKey::UpdatedAt,
+        ThreadSortKey::RecencyAt => codex_rollout::ThreadSortKey::RecencyAt,
     };
     let sort_direction = match params.sort_direction {
         SortDirection::Asc => codex_rollout::SortDirection::Asc,
@@ -93,6 +98,7 @@ pub(super) async fn search_threads(
         cwd_filters: None,
         archived: params.archived,
         search_term: None,
+        parent_thread_id: None,
         use_state_db_only: state_db.is_some(),
     };
     let mut remaining_rollouts = matching_rollouts;
@@ -109,7 +115,8 @@ pub(super) async fn search_threads(
         )
         .await?;
         for item in page.items {
-            let Some(snippet) = (match remaining_rollouts.remove(item.path.as_path()) {
+            let logical_path = codex_rollout::plain_rollout_path(item.path.as_path());
+            let Some(snippet) = (match remaining_rollouts.remove(logical_path.as_path()) {
                 Some(Some(snippet)) => Some(snippet),
                 Some(None) => first_rollout_content_match_snippet(item.path.as_path(), search_term)
                     .await
@@ -177,8 +184,17 @@ fn cursor_from_thread_search_item(
             .updated_at
             .as_deref()
             .or(item.item.created_at.as_deref())?,
+        ThreadSortKey::RecencyAt => item
+            .item
+            .recency_at
+            .as_deref()
+            .or(item.item.updated_at.as_deref())
+            .or(item.item.created_at.as_deref())?,
     };
-    parse_cursor(timestamp)
+    match sort_key {
+        ThreadSortKey::RecencyAt => parse_cursor(&format!("{timestamp}|{}", item.item.thread_id?)),
+        ThreadSortKey::CreatedAt | ThreadSortKey::UpdatedAt => parse_cursor(timestamp),
+    }
 }
 
 async fn set_thread_search_result_names(

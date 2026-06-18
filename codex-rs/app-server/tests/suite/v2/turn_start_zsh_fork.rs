@@ -167,7 +167,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     assert!(command.contains("/bin/sh -c"));
     assert!(command.contains("sleep 0.01"));
     assert!(command.contains(&release_marker.display().to_string()));
-    assert_eq!(cwd.as_path(), workspace.as_path());
+    assert_eq!(cwd.as_str(), workspace.to_string_lossy().as_ref());
 
     mcp.interrupt_turn_and_wait_for_aborted(thread.id, turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
@@ -810,7 +810,7 @@ fn create_config_toml(
                 .iter()
                 .find(|spec| spec.id == feature)
                 .map(|spec| spec.key)
-                .unwrap_or_else(|| panic!("missing feature key for {feature:?}"));
+                .expect("feature should have a config key");
             format!("{key} = {enabled}")
         })
         .collect::<Vec<_>>()
