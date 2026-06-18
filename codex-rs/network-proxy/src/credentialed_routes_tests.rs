@@ -92,6 +92,15 @@ fn route_prefixes_omit_invalid_values_and_canonicalize_urls() {
     );
 }
 
+#[test]
+fn invalid_proxy_url_disables_hooks_and_advertised_prefixes() {
+    let mut config = proxy_config(vec![route("connector_123", "https://api.example.com/v1")]);
+    config.proxy_url = Some("not a URL".to_string());
+
+    assert!(config.mitm_hooks().is_empty());
+    assert!(config.route_prefixes().is_empty());
+}
+
 #[tokio::test]
 async fn credentialed_routes_reloader_rebuilds_generated_hooks() {
     let mut base_config = NetworkProxyConfig::default();
