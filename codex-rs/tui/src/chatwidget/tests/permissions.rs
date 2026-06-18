@@ -326,22 +326,8 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
     let cwd = test_path_buf("/tmp/project").abs();
 
     assert!(
-        ChatWidget::preset_matches_current(
-            AskForApproval::OnRequest,
-            &current_profile,
-            cwd.as_path(),
-            &preset
-        ),
+        preset.matches_permission_profile(&current_profile, cwd.as_path()),
         "WorkspaceWrite with extra roots should still match the Ask for approval preset"
-    );
-    assert!(
-        !ChatWidget::preset_matches_current(
-            AskForApproval::Never,
-            &current_profile,
-            cwd.as_path(),
-            &preset
-        ),
-        "approval mismatch should prevent matching the preset"
     );
 }
 
@@ -374,12 +360,7 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
     let cwd = test_path_buf("/tmp/project").abs();
 
     assert!(
-        !ChatWidget::preset_matches_current(
-            AskForApproval::OnRequest,
-            &current_profile,
-            cwd.as_path(),
-            &preset
-        ),
+        !preset.matches_permission_profile(&current_profile, cwd.as_path()),
         "profiles with any writable root should not be classified as Read Only"
     );
 }

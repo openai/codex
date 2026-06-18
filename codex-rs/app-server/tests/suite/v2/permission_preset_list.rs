@@ -172,128 +172,82 @@ description = "Inspect without writes."
 }
 
 #[tokio::test]
-async fn permission_preset_list_matches_legacy_read_only_as_default() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        r#"
+async fn permission_preset_list_matches_legacy_defaults() -> Result<()> {
+    for (config, requirements, expected) in [
+        (
+            r#"
 sandbox_mode = "read-only"
 approval_policy = "on-request"
 "#,
-    )?;
-
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_permission_preset_list_request(PermissionPresetListParams {
-            cursor: None,
-            limit: None,
-            cwd: None,
-        })
-        .await?;
-    let actual = read_response::<PermissionPresetListResponse>(&mut mcp, request_id).await?;
-
-    assert_eq!(
-        actual
-            .data
-            .into_iter()
-            .filter(|preset| preset.is_default)
-            .collect::<Vec<_>>(),
-        vec![preset(
-            "read-only",
-            BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-            AskForApproval::OnRequest,
-            ApprovalsReviewer::User,
-            true,
-        )]
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn permission_preset_list_marks_managed_legacy_fallback_as_default() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        r#"
+            None,
+            preset(
+                "read-only",
+                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+                AskForApproval::OnRequest,
+                ApprovalsReviewer::User,
+                true,
+            ),
+        ),
+        (
+            r#"
 sandbox_mode = "workspace-write"
 approval_policy = "on-request"
 "#,
-    )?;
-    std::fs::write(
-        codex_home.path().join("requirements.toml"),
-        r#"
+            Some(
+                r#"
 allowed_sandbox_modes = ["read-only"]
 "#,
-    )?;
-
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_permission_preset_list_request(PermissionPresetListParams {
-            cursor: None,
-            limit: None,
-            cwd: None,
-        })
-        .await?;
-    let actual = read_response::<PermissionPresetListResponse>(&mut mcp, request_id).await?;
-
-    assert_eq!(
-        actual
-            .data
-            .into_iter()
-            .filter(|preset| preset.is_default)
-            .collect::<Vec<_>>(),
-        vec![preset(
-            "read-only",
-            BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-            AskForApproval::OnRequest,
-            ApprovalsReviewer::User,
-            true,
-        )]
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn permission_preset_list_matches_legacy_full_access_as_default() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        r#"
+            ),
+            preset(
+                "read-only",
+                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+                AskForApproval::OnRequest,
+                ApprovalsReviewer::User,
+                true,
+            ),
+        ),
+        (
+            r#"
 sandbox_mode = "danger-full-access"
 approval_policy = "never"
 "#,
-    )?;
+            None,
+            preset(
+                "full-access",
+                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
+                AskForApproval::Never,
+                ApprovalsReviewer::User,
+                true,
+            ),
+        ),
+    ] {
+        let codex_home = TempDir::new()?;
+        std::fs::write(codex_home.path().join("config.toml"), config)?;
+        if let Some(requirements) = requirements {
+            std::fs::write(codex_home.path().join("requirements.toml"), requirements)?;
+        }
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+        let mut mcp = TestAppServer::new(codex_home.path()).await?;
+        timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_permission_preset_list_request(PermissionPresetListParams {
-            cursor: None,
-            limit: None,
-            cwd: None,
-        })
-        .await?;
-    let actual = read_response::<PermissionPresetListResponse>(&mut mcp, request_id).await?;
+        let request_id = mcp
+            .send_permission_preset_list_request(PermissionPresetListParams {
+                cursor: None,
+                limit: None,
+                cwd: None,
+            })
+            .await?;
+        let actual = read_response::<PermissionPresetListResponse>(&mut mcp, request_id).await?;
 
-    assert_eq!(
-        actual
-            .data
-            .into_iter()
-            .filter(|preset| preset.is_default)
-            .collect::<Vec<_>>(),
-        vec![preset(
-            "full-access",
-            BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
-            AskForApproval::Never,
-            ApprovalsReviewer::User,
-            true,
-        )]
-    );
+        assert_eq!(
+            actual
+                .data
+                .into_iter()
+                .filter(|preset| preset.is_default)
+                .collect::<Vec<_>>(),
+            vec![expected]
+        );
+    }
     Ok(())
 }
 

@@ -2417,7 +2417,6 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
     .await?;
 
     assert!(config.explicit_permission_profile_mode);
-    assert!(config.custom_permission_profiles.is_empty());
     let policy = config.permissions.file_system_sandbox_policy();
     assert_eq!(
         config

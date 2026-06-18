@@ -26,16 +26,26 @@ pub(crate) async fn permission_presets(
         .load_for_cwd(None, ConfigOverrides::default(), cwd)
         .await?;
     let selectable_profiles = config
-        .selectable_permission_profiles()
-        .await?
+        .selectable_permission_profiles()?
         .into_iter()
         .map(|profile| (profile.id.clone(), profile))
         .collect::<HashMap<_, _>>();
+    let active_profile_id = config
+        .permissions
+        .active_permission_profile()
+        .map(|profile| profile.id);
     let mut candidates = Vec::new();
 
     for preset in builtin_approval_presets() {
-        let Some(profile) = selectable_profiles.get(&preset.active_permission_profile.id) else {
+        if !selectable_profiles.contains_key(&preset.active_permission_profile.id) {
             continue;
+        }
+        let profile_is_default = match active_profile_id.as_deref() {
+            Some(id) => id == preset.active_permission_profile.id,
+            None => preset.matches_permission_profile(
+                config.permissions.permission_profile(),
+                config.cwd.as_path(),
+            ),
         };
         candidates.push(PermissionPresetCandidate {
             id: preset.id.to_string(),
@@ -43,7 +53,7 @@ pub(crate) async fn permission_presets(
             description: None,
             approval_policy: preset.approval,
             approvals_reviewer: ApprovalsReviewer::User,
-            profile_is_default: profile.is_default,
+            profile_is_default,
         });
         if preset.id == "auto" {
             candidates.push(PermissionPresetCandidate {
@@ -58,7 +68,7 @@ pub(crate) async fn permission_presets(
                     mcp_elicitations: true,
                 }),
                 approvals_reviewer: ApprovalsReviewer::User,
-                profile_is_default: profile.is_default,
+                profile_is_default,
             });
             if config.features.enabled(Feature::GuardianApproval) {
                 candidates.push(PermissionPresetCandidate {
@@ -67,7 +77,7 @@ pub(crate) async fn permission_presets(
                     description: None,
                     approval_policy: AskForApproval::OnRequest,
                     approvals_reviewer: ApprovalsReviewer::AutoReview,
-                    profile_is_default: profile.is_default,
+                    profile_is_default,
                 });
             }
         }
@@ -78,18 +88,17 @@ pub(crate) async fn permission_presets(
         .filter(|profile| !profile.id.starts_with(':'))
         .collect::<Vec<_>>();
     custom_profiles.sort_by(|left, right| left.id.cmp(&right.id));
-    candidates.extend(
-        custom_profiles
-            .into_iter()
-            .map(|profile| PermissionPresetCandidate {
-                id: format!("permission-profile:{}", profile.id),
-                permission_profile_id: profile.id,
-                description: profile.description,
-                approval_policy: config.permissions.approval_policy.value(),
-                approvals_reviewer: config.approvals_reviewer,
-                profile_is_default: profile.is_default,
-            }),
-    );
+    candidates.extend(custom_profiles.into_iter().map(|profile| {
+        let profile_is_default = active_profile_id.as_deref() == Some(profile.id.as_str());
+        PermissionPresetCandidate {
+            id: format!("permission-profile:{}", profile.id),
+            permission_profile_id: profile.id,
+            description: profile.description,
+            approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: config.approvals_reviewer,
+            profile_is_default,
+        }
+    }));
 
     let requirements = config.config_layer_stack.requirements();
     let mut presets = Vec::new();

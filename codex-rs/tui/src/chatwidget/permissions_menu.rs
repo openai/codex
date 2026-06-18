@@ -27,17 +27,15 @@ impl ChatWidget {
             );
             return;
         };
-        let mut items = vec![
-            self.builtin_permission_mode_selection_item(
-                default,
-                ":workspace",
-                default
-                    .description
-                    .replace(" (Identical to Agent mode)", ""),
-                AskForApproval::from(default.approval),
-                ApprovalsReviewer::User,
-            ),
-        ];
+        let mut items = vec![self.builtin_permission_mode_selection_item(
+            default,
+            ":workspace",
+            default
+                .description
+                .replace(" (Identical to Agent mode)", ""),
+            AskForApproval::from(default.approval),
+            ApprovalsReviewer::User,
+        )];
         if self.config.features.enabled(Feature::GuardianApproval) {
             items.push(self.builtin_permission_mode_selection_item(
                 default,
