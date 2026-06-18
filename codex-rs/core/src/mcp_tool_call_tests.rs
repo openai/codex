@@ -3,6 +3,7 @@ use crate::config::ConfigBuilder;
 use crate::config::ManagedFeatures;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
+use crate::session::turn_context::TurnEnvironment;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::hook_names::HookToolName;
@@ -31,6 +32,7 @@ use codex_rollout_trace::ToolDispatchInvocation;
 use codex_rollout_trace::ToolDispatchPayload;
 use codex_rollout_trace::ToolDispatchRequester;
 use codex_rollout_trace::replay_bundle;
+use codex_utils_path_uri::PathUri;
 use core_test_support::hooks::trusted_config_layer_stack;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -1092,6 +1094,39 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
 }
 
 #[tokio::test]
+async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Result<()> {
+    let (_, mut turn_context) = make_session_and_context().await;
+    let secondary_cwd = PathUri::parse("file:///C:/remote/project")?;
+    let environment = turn_context.environments.turn_environments[0]
+        .environment
+        .clone();
+    turn_context
+        .environments
+        .turn_environments
+        .push(TurnEnvironment::new(
+            "remote".to_string(),
+            environment,
+            secondary_cwd.clone(),
+            /*shell*/ None,
+        ));
+
+    let sandbox_cwd = sandbox_cwd_for_mcp_server(&turn_context, "remote");
+
+    assert_eq!(sandbox_cwd, Some(secondary_cwd));
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_sandbox_cwd_is_none_for_unselected_server_environment() -> anyhow::Result<()> {
+    let (_, turn_context) = make_session_and_context().await;
+
+    let sandbox_cwd = sandbox_cwd_for_mcp_server(&turn_context, "remote");
+
+    assert_eq!(sandbox_cwd, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     let (_, turn_context) = make_session_and_context().await;
     let expected_turn_metadata = turn_context
@@ -1260,21 +1295,26 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
     let manager = codex_mcp::McpConnectionManager::new(
         &HashMap::new(),
         turn_context.config.mcp_oauth_credentials_store_mode,
+        turn_context.config.auth_keyring_backend_kind(),
         HashMap::new(),
         &turn_context.approval_policy,
         turn_context.sub_id.clone(),
         session.get_tx_event(),
         CancellationToken::new(),
         turn_context.permission_profile(),
-        codex_mcp::McpRuntimeContext::new(Arc::clone(&session.services.environment_manager), {
-            #[allow(deprecated)]
-            turn_context.cwd.to_path_buf()
-        }),
+        codex_mcp::McpRuntimeContext::new(
+            session.services.turn_environments.environment_manager(),
+            {
+                #[allow(deprecated)]
+                turn_context.cwd.to_path_buf()
+            },
+        ),
         turn_context.config.codex_home.to_path_buf(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,
         turn_context.config.prefix_mcp_tool_names(),
         rmcp::model::ElicitationCapability::default(),
+        /*supports_openai_form_elicitation*/ false,
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
@@ -1312,15 +1352,14 @@ async fn codex_apps_auth_elicitation_non_host_owned_server_returns_original_resu
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
-    Arc::get_mut(&mut turn_context)
-        .expect("single turn context ref")
-        .features = ManagedFeatures::from(features);
+    let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+    Arc::make_mut(&mut turn_context.config).features = ManagedFeatures::from(features);
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
 
     let returned = maybe_request_codex_apps_auth_elicitation(
         &session,
-        &turn_context,
+        turn_context,
         "call_123",
         CODEX_APPS_MCP_SERVER_NAME,
         Some(&metadata),
@@ -1339,7 +1378,7 @@ async fn codex_apps_auth_elicitation_disallowed_by_policy_returns_original_resul
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    turn_context.features = ManagedFeatures::from(features);
+    Arc::make_mut(&mut turn_context.config).features = ManagedFeatures::from(features);
     turn_context
         .approval_policy
         .set(AskForApproval::Never)
@@ -1368,7 +1407,7 @@ async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_resu
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    turn_context.features = ManagedFeatures::from(features);
+    Arc::make_mut(&mut turn_context.config).features = ManagedFeatures::from(features);
     turn_context
         .approval_policy
         .set(AskForApproval::Granular(GranularApprovalConfig {
@@ -1403,9 +1442,10 @@ async fn codex_apps_auth_elicitation_feature_enabled_requests_elicitation() {
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
-    Arc::get_mut(&mut turn_context)
-        .expect("single turn context ref")
-        .features = ManagedFeatures::from(features);
+    {
+        let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+        Arc::make_mut(&mut turn_context.config).features = ManagedFeatures::from(features);
+    }
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
 

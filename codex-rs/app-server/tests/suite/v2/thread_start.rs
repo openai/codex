@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::PathBufExt;
@@ -21,6 +22,8 @@ use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::loader::project_trust_key;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
@@ -290,7 +293,10 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
         .send_thread_start_request(ThreadStartParams {
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "missing".to_string(),
-                cwd: codex_home.path().to_path_buf().try_into()?,
+                cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                    codex_home.path().to_path_buf(),
+                )?
+                .into(),
             }]),
             ..Default::default()
         })
@@ -305,6 +311,40 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
     assert_eq!(error.id, RequestId::Integer(request_id));
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(error.error.message, "unknown turn environment id `missing`");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            environments: Some(vec![TurnEnvironmentParams {
+                environment_id: "local".to_string(),
+                cwd: serde_json::from_value(json!("relative"))?,
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.id, RequestId::Integer(request_id));
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        error.error.message,
+        "invalid cwd for environment `local`: path `relative` does not use absolute POSIX or Windows path syntax"
+    );
 
     Ok(())
 }
@@ -400,11 +440,13 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
 }
 
 #[tokio::test]
-async fn thread_start_without_selected_environment_excludes_instruction_sources() -> Result<()> {
+async fn thread_start_without_selected_environment_includes_only_global_instruction_source()
+-> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
-    std::fs::write(codex_home.path().join("AGENTS.md"), "global instructions")?;
+    let global_agents_path = codex_home.path().join("AGENTS.md");
+    std::fs::write(&global_agents_path, "global instructions")?;
     let workspace = TempDir::new()?;
     std::fs::write(workspace.path().join("AGENTS.md"), "project instructions")?;
 
@@ -424,11 +466,56 @@ async fn thread_start_without_selected_environment_excludes_instruction_sources(
     )
     .await??;
     let ThreadStartResponse {
+        thread,
         instruction_sources,
         ..
     } = to_response::<ThreadStartResponse>(response)?;
 
-    assert!(instruction_sources.is_empty());
+    assert_eq!(
+        instruction_sources
+            .into_iter()
+            .map(normalize_path_for_comparison)
+            .collect::<Vec<_>>(),
+        vec![normalize_path_for_comparison(std::fs::canonicalize(
+            global_agents_path,
+        )?)]
+    );
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "inspect instructions".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let model_request = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/responses"))
+        .context("expected model request")?;
+    let model_request_body = model_request
+        .body_json::<Value>()
+        .context("model request body should be JSON")?
+        .to_string();
+    assert!(model_request_body.contains("global instructions"));
+    assert!(!model_request_body.contains("project instructions"));
 
     Ok(())
 }

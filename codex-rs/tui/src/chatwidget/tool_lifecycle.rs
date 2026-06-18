@@ -29,12 +29,14 @@ impl ChatWidget {
     pub(super) fn on_image_generation_end(
         &mut self,
         call_id: String,
+        status: String,
         revised_prompt: Option<String>,
         saved_path: Option<AbsolutePathBuf>,
     ) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(history_cell::new_image_generation_call(
             call_id,
+            &status,
             revised_prompt,
             saved_path,
         ));

@@ -47,6 +47,10 @@ fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThre
             .timestamp_opt(1_709_251_200, 0)
             .single()
             .expect("valid timestamp"),
+        recency_at: Utc
+            .timestamp_opt(1_709_251_200, 0)
+            .single()
+            .expect("valid timestamp"),
         archived_at: None,
         cwd: PathBuf::from(cwd),
         cli_version: "test".to_string(),
@@ -74,6 +78,7 @@ fn message(role: &str, content: ContentItem) -> ResponseItem {
         role: role.to_string(),
         content: vec![content],
         phase: None,
+        metadata: None,
     }
 }
 

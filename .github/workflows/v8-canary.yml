@@ -8,6 +8,7 @@ on:
       - ".github/scripts/run_bazel_with_buildbuddy.py"
       - ".github/scripts/rusty_v8_bazel.py"
       - ".github/scripts/rusty_v8_module_bazel.py"
+      - ".github/scripts/v8_canary_changes.py"
       - ".github/workflows/rusty-v8-release.yml"
       - ".github/workflows/v8-canary.yml"
       - "MODULE.bazel"
@@ -27,6 +28,7 @@ on:
       - ".github/scripts/run_bazel_with_buildbuddy.py"
       - ".github/scripts/rusty_v8_bazel.py"
       - ".github/scripts/rusty_v8_module_bazel.py"
+      - ".github/scripts/v8_canary_changes.py"
       - ".github/workflows/rusty-v8-release.yml"
       - ".github/workflows/v8-canary.yml"
       - "MODULE.bazel"
@@ -53,11 +55,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       v8_version: ${{ steps.v8_version.outputs.version }}
+      windows_source_required: ${{ steps.changes.outputs.windows_source_required }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
@@ -72,6 +76,26 @@ jobs:
           set -euo pipefail
           version="$(python3 .github/scripts/rusty_v8_bazel.py resolved-v8-crate-version)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Detect whether Windows source artifacts need rebuilding
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            output="$(python3 .github/scripts/v8_canary_changes.py --force)"
+          else
+            output="$(python3 .github/scripts/v8_canary_changes.py \
+              --base "${BASE_SHA}" \
+              --head "${HEAD_SHA}")"
+          fi
+          echo "${output}"
+          echo "${output}" >> "${GITHUB_OUTPUT}"
 
   build:
     name: Build ${{ matrix.variant }} ${{ matrix.target }}
@@ -301,6 +325,7 @@ jobs:
   build-windows-source:
     name: Build ptrcomp-sandbox ${{ matrix.target }} from source
     needs: metadata
+    if: ${{ needs.metadata.outputs.windows_source_required == 'true' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

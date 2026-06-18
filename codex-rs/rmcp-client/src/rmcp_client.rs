@@ -13,6 +13,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_api::SharedAuthProvider;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::HttpClient;
 use futures::FutureExt;
@@ -39,6 +40,7 @@ use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
+use rmcp::model::RequestParamsMeta;
 use rmcp::model::ServerResult;
 use rmcp::model::Tool;
 use rmcp::service::RoleClient;
@@ -124,6 +126,7 @@ enum TransportRecipe {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
     },
@@ -249,7 +252,24 @@ fn remaining_operation_timeout(
     }
 }
 
-pub type Elicitation = CreateElicitationRequestParams;
+#[derive(Debug, Clone, PartialEq)]
+pub enum Elicitation {
+    Mcp(CreateElicitationRequestParams),
+    OpenAiForm {
+        meta: Option<serde_json::Value>,
+        message: String,
+        requested_schema: serde_json::Value,
+    },
+}
+
+impl Elicitation {
+    pub fn meta(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        match self {
+            Self::Mcp(request) => request.meta().map(|meta| &meta.0),
+            Self::OpenAiForm { meta, .. } => meta.as_ref().and_then(serde_json::Value::as_object),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -371,6 +391,7 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
     ) -> Result<Self> {
@@ -381,6 +402,7 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
+            keyring_backend_kind,
             http_client,
             auth_provider,
         };
@@ -757,6 +779,7 @@ impl RmcpClient {
                 http_headers,
                 env_http_headers,
                 store_mode,
+                keyring_backend_kind,
                 http_client,
                 auth_provider,
             } => {
@@ -767,7 +790,7 @@ impl RmcpClient {
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
-                    match load_oauth_tokens(server_name, url, *store_mode) {
+                    match load_oauth_tokens(server_name, url, *store_mode, *keyring_backend_kind) {
                         Ok(tokens) => tokens,
                         Err(err) => {
                             warn!("failed to read tokens for server `{server_name}`: {err}");
@@ -784,6 +807,7 @@ impl RmcpClient {
                         url,
                         initial_tokens.clone(),
                         *store_mode,
+                        *keyring_backend_kind,
                         default_headers.clone(),
                         Arc::clone(http_client),
                     )
@@ -1127,6 +1151,7 @@ async fn create_oauth_transport_and_runtime(
     url: &str,
     initial_tokens: StoredOAuthTokens,
     credentials_store: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
     default_headers: HeaderMap,
     http_client: Arc<dyn HttpClient>,
 ) -> Result<(
@@ -1175,6 +1200,7 @@ async fn create_oauth_transport_and_runtime(
         url.to_string(),
         auth_manager,
         credentials_store,
+        keyring_backend_kind,
         Some(initial_tokens),
     );
 

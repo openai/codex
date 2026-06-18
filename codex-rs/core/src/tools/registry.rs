@@ -34,6 +34,7 @@ use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
 use serde_json::Value;
+use tracing::instrument;
 
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
@@ -327,6 +328,7 @@ impl ToolRegistry {
         Self { tools }
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
         let mut tools_by_name = HashMap::new();
         for tool in tools {
@@ -569,7 +571,7 @@ impl ToolRegistry {
             Ok((_, success)) => *success,
             Err(_) => false,
         };
-        emit_metric_for_tool_read(&invocation, success).await;
+        emit_metric_for_tool_read(&invocation, success);
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
             guard
@@ -594,7 +596,6 @@ impl ToolRegistry {
         } else {
             None
         };
-
         if let Some(outcome) = &post_tool_use_outcome {
             record_additional_contexts(
                 &invocation.session,
@@ -602,32 +603,9 @@ impl ToolRegistry {
                 outcome.additional_contexts.clone(),
             )
             .await;
-            let replacement_text = if outcome.should_stop {
-                Some(
-                    outcome
-                        .feedback_message
-                        .clone()
-                        .or_else(|| outcome.stop_reason.clone())
-                        .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string()),
-                )
-            } else {
-                outcome.feedback_message.clone()
-            };
-            if let Some(replacement_text) = replacement_text {
-                let mut guard = response_cell.lock().await;
-                if let Some(mut result) = guard.take() {
-                    result.result = Box::new(PostToolUseFeedbackOutput {
-                        original: result.result,
-                        model_visible: FunctionToolOutput::from_text(
-                            replacement_text,
-                            /*success*/ None,
-                        ),
-                    });
-                    *guard = Some(result);
-                }
-            }
         }
 
+        // A PostToolUse block rejects the result, not the already-completed tool execution.
         let lifecycle_outcome = match &result {
             Ok(_) => {
                 let guard = response_cell.lock().await;
@@ -654,9 +632,28 @@ impl ToolRegistry {
         match result {
             Ok(_) => {
                 let mut guard = response_cell.lock().await;
-                let result = guard.take().ok_or_else(|| {
+                let mut result = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
+                if let Some(outcome) = post_tool_use_outcome {
+                    if outcome.should_block {
+                        let message = outcome.feedback_message.unwrap_or_else(|| {
+                            "PostToolUse hook blocked the tool result".to_string()
+                        });
+                        let err = FunctionCallError::RespondToModel(message);
+                        dispatch_trace.record_failed(&err);
+                        return Err(err);
+                    }
+                    if let Some(feedback_message) = outcome.feedback_message {
+                        result.result = Box::new(PostToolUseFeedbackOutput {
+                            original: result.result,
+                            model_visible: FunctionToolOutput::from_text(
+                                feedback_message,
+                                /*success*/ None,
+                            ),
+                        });
+                    }
+                }
                 dispatch_trace.record_completed(
                     &invocation,
                     &result.call_id,

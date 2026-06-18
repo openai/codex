@@ -60,6 +60,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
             text: injected_text.to_string(),
         }],
         phase: None,
+        metadata: None,
     };
 
     let inject_req = mcp
@@ -197,6 +198,7 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
             text: "Injected after first turn".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     let injected_value = serde_json::to_value(&injected_item)?;
 

@@ -1818,7 +1818,11 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
 fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
     // Only handle bash/zsh here; PowerShell is stripped separately without bash parsing.
     let (_, script) = extract_bash_command(original)?;
+    Some(parse_shell_script(script))
+}
 
+/// Parses command metadata from a Bash-compatible shell script.
+pub fn parse_shell_script(script: &str) -> Vec<ParsedCommand> {
     if let Some(tree) = try_parse_shell(script)
         && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
         && !all_commands.is_empty()
@@ -1831,9 +1835,9 @@ fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
         // Commands arrive in source order; drop formatting helpers while preserving it.
         let filtered_commands = drop_small_formatting_commands(all_commands);
         if filtered_commands.is_empty() {
-            return Some(vec![ParsedCommand::Unknown {
+            return vec![ParsedCommand::Unknown {
                 cmd: script.to_string(),
-            }]);
+            }];
         }
         // Build parsed commands, tracking `cd` segments to compute effective file paths.
         let mut commands: Vec<ParsedCommand> = Vec::new();
@@ -1939,11 +1943,11 @@ fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                 })
                 .collect();
         }
-        return Some(commands);
+        return commands;
     }
-    Some(vec![ParsedCommand::Unknown {
+    vec![ParsedCommand::Unknown {
         cmd: script.to_string(),
-    }])
+    }]
 }
 
 /// Return true if this looks like a small formatting helper in a pipeline.

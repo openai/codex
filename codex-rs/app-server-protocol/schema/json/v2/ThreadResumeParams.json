@@ -9,6 +9,26 @@
       "oneOf": [
         {
           "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "input_text"
+              ],
+              "title": "InputTextAgentMessageInputContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "InputTextAgentMessageInputContent",
+          "type": "object"
+        },
+        {
+          "properties": {
             "encrypted_content": {
               "type": "string"
             },
@@ -428,12 +448,15 @@
               },
               "type": "array"
             },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "phase": {
               "anyOf": [
@@ -475,6 +498,16 @@
               },
               "type": "array"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "recipient": {
               "type": "string"
             },
@@ -513,6 +546,16 @@
                 "null"
               ]
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "summary": {
               "items": {
                 "$ref": "#/definitions/ReasoningItemReasoningSummary"
@@ -546,13 +589,15 @@
                 "null"
               ]
             },
-            "id": {
-              "description": "Legacy id field retained for compatibility with older payloads.",
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "status": {
               "$ref": "#/definitions/LocalShellStatus"
@@ -581,12 +626,15 @@
             "call_id": {
               "type": "string"
             },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "name": {
               "type": "string"
@@ -626,12 +674,15 @@
             "execution": {
               "type": "string"
             },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "status": {
               "type": [
@@ -660,6 +711,16 @@
             "call_id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "output": {
               "$ref": "#/definitions/FunctionCallOutputBody"
             },
@@ -684,15 +745,18 @@
             "call_id": {
               "type": "string"
             },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
             "input": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "name": {
               "type": "string"
@@ -724,6 +788,16 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "name": {
               "type": [
@@ -761,6 +835,16 @@
             "execution": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "status": {
               "type": "string"
             },
@@ -797,12 +881,15 @@
                 }
               ]
             },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "status": {
               "type": [
@@ -827,7 +914,21 @@
         {
           "properties": {
             "id": {
-              "type": "string"
+              "description": "Existing provider ID retained on serialized history for compatibility.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "result": {
               "type": "string"
@@ -850,7 +951,6 @@
             }
           },
           "required": [
-            "id",
             "result",
             "status",
             "type"
@@ -862,6 +962,16 @@
           "properties": {
             "encrypted_content": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "type": {
               "enum": [
@@ -880,6 +990,16 @@
         },
         {
           "properties": {
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "compaction_trigger"
@@ -900,6 +1020,16 @@
               "type": [
                 "string",
                 "null"
+              ]
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "type": {
@@ -933,6 +1063,23 @@
           "type": "object"
         }
       ]
+    },
+    "ResponseItemMetadata": {
+      "properties": {
+        "source_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "ResponsesApiWebSearchAction": {
       "oneOf": [

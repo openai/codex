@@ -10,6 +10,7 @@ use crate::strict_config::config_error_from_ignored_toml_value_fields;
 use codex_file_system::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_path_uri::PathUri;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -106,7 +107,8 @@ pub(super) async fn read_config_from_path(
     log_missing_as_info: bool,
     strict_config: bool,
 ) -> io::Result<Option<TomlValue>> {
-    match fs.read_file_text(path, /*sandbox*/ None).await {
+    let path_uri = PathUri::from_abs_path(path);
+    match fs.read_file_text(&path_uri, /*sandbox*/ None).await {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(value) => {
                 if strict_config {

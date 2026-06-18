@@ -81,7 +81,7 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
             .expect("parse cache");
     assert!(
         cache_file.signed_payload.expires_at
-            <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(30)
+            <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(60)
     );
     assert!(cache_file.signed_payload.expires_at > cache_file.signed_payload.cached_at);
     assert_eq!(

@@ -59,6 +59,10 @@ pub fn curated_plugins_repo_path(codex_home: &Path) -> PathBuf {
     codex_home.join(CURATED_PLUGINS_RELATIVE_DIR)
 }
 
+pub fn curated_plugins_api_marketplace_path(codex_home: &Path) -> PathBuf {
+    curated_plugins_repo_path(codex_home).join(".agents/plugins/api_marketplace.json")
+}
+
 pub fn read_curated_plugins_sha(codex_home: &Path) -> Option<String> {
     read_sha_file(curated_plugins_sha_path(codex_home).as_path())
 }

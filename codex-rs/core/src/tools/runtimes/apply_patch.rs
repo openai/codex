@@ -32,7 +32,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -40,14 +40,14 @@ use std::time::Instant;
 #[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize)]
 pub(crate) struct ApplyPatchApprovalKey {
     environment_id: String,
-    path: AbsolutePathBuf,
+    path: PathUri,
 }
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
     pub turn_environment: TurnEnvironment,
     pub action: ApplyPatchAction,
-    pub file_paths: Vec<AbsolutePathBuf>,
+    pub file_paths: Vec<PathUri>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
@@ -77,13 +77,20 @@ impl ApplyPatchRuntime {
     fn build_guardian_review_request(
         req: &ApplyPatchRequest,
         call_id: &str,
-    ) -> GuardianApprovalRequest {
-        GuardianApprovalRequest::ApplyPatch {
+    ) -> std::io::Result<GuardianApprovalRequest> {
+        // TODO(anp): Remove this conversion once the guardian API supports PathUri.
+        let cwd = req.action.cwd.to_abs_path()?;
+        let files = req
+            .file_paths
+            .iter()
+            .map(PathUri::to_abs_path)
+            .collect::<std::io::Result<Vec<_>>>()?;
+        Ok(GuardianApprovalRequest::ApplyPatch {
             id: call_id.to_string(),
-            cwd: req.action.cwd.clone(),
-            files: req.file_paths.clone(),
+            cwd,
+            files,
             patch: req.action.patch.clone(),
-        }
+        })
     }
 
     fn file_system_sandbox_context_for_attempt(
@@ -97,8 +104,13 @@ impl ApplyPatchRuntime {
         let permissions =
             effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
         Some(FileSystemSandboxContext {
-            permissions,
+            permissions: permissions.into(),
             cwd: Some(attempt.sandbox_cwd.clone()),
+            workspace_roots: attempt
+                .workspace_roots
+                .iter()
+                .map(PathUri::from_abs_path)
+                .collect(),
             windows_sandbox_level: attempt.windows_sandbox_level,
             windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             use_legacy_landlock: attempt.use_legacy_landlock,
@@ -143,7 +155,16 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
             if let Some(review_id) = guardian_review_id {
-                let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
+                let action = match ApplyPatchRuntime::build_guardian_review_request(
+                    req,
+                    ctx.call_id,
+                ) {
+                    Ok(action) => action,
+                    Err(err) => {
+                        tracing::error!(cwd = %req.action.cwd, %err, "guardian apply_patch cwd is not host-native");
+                        return ReviewDecision::Abort;
+                    }
+                };
                 return review_approval_request(session, turn, review_id, action, retry_reason)
                     .await;
             }
@@ -213,7 +234,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
 }
 
 impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRuntime {
-    fn sandbox_cwd<'a>(&self, req: &'a ApplyPatchRequest) -> Option<&'a AbsolutePathBuf> {
+    fn sandbox_cwd<'a>(&self, req: &'a ApplyPatchRequest) -> Option<&'a PathUri> {
         Some(&req.action.cwd)
     }
 

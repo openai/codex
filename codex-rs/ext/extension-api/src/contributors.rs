@@ -11,6 +11,7 @@ use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
 
+mod context;
 mod mcp;
 mod prompt;
 mod thread_lifecycle;
@@ -18,7 +19,9 @@ mod tool_lifecycle;
 mod turn_input;
 mod turn_lifecycle;
 
+pub use context::TurnContextContributionInput;
 pub use mcp::McpServerContribution;
+pub use mcp::McpServerContributionContext;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 pub use thread_lifecycle::ThreadIdleInput;
@@ -45,19 +48,50 @@ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Contributors run in registration order. Later contributions for the same
 /// name replace earlier ones. Implementations must contribute only names they
 /// own and must apply any source-specific policy before returning a server.
-/// Plugin-owned servers and their provenance continue to be resolved by the
-/// plugin manager until that ownership moves into an extension explicitly.
+/// Thread-scoped resolution exposes the host-seeded thread inputs; global
+/// resolution exposes none and must not imply a local fallback. Thread inputs
+/// are frozen for the runtime and do not include lifecycle-contributor state.
+/// Auto-discovered plugin servers are resolved by the plugin manager. A
+/// thread-selected plugin contribution must carry its own package provenance.
 pub trait McpServerContributor<C: Sync>: Send + Sync {
-    fn contribute<'a>(&'a self, config: &'a C) -> ExtensionFuture<'a, Vec<McpServerContribution>>;
+    /// Stable identity used for registration provenance and conflict diagnostics.
+    fn id(&self) -> &'static str;
+
+    fn contribute<'a>(
+        &'a self,
+        context: McpServerContributionContext<'a, C>,
+    ) -> ExtensionFuture<'a, Vec<McpServerContribution>>;
 }
 
 /// Extension contribution that adds prompt fragments during prompt assembly.
+///
+/// Implementations should use the method matching the scope needed by the
+/// fragment: thread/session context for stable inputs, and turn context for
+/// fragments that depend on turn-local host state.
 pub trait ContextContributor: Send + Sync {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
-    ) -> ExtensionFuture<'a, Vec<PromptFragment>>;
+    ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
+        Box::pin(async move {
+            let _self = self;
+            let _session_store = session_store;
+            let _thread_store = thread_store;
+            Vec::new()
+        })
+    }
+
+    fn contribute_turn_context<'a>(
+        &'a self,
+        input: TurnContextContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+            Vec::new()
+        })
+    }
 }
 
 /// Contributor for host-owned thread lifecycle gates.
@@ -66,8 +100,7 @@ pub trait ContextContributor: Send + Sync {
 /// extension-private thread state. Heavy dependencies belong on the extension
 /// value created by the host, not in these inputs.
 pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
-    /// Called after thread-scoped extension stores are created, before later
-    /// contributors can read from them.
+    /// Called after host startup has initialized the thread-scoped store.
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let _self = self;

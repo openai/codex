@@ -3,7 +3,7 @@ use crate::ToolDefinition;
 use crate::ToolName;
 use crate::parse_dynamic_tool;
 use crate::parse_mcp_tool;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -67,7 +67,7 @@ pub enum ResponsesApiNamespaceTool {
 }
 
 pub fn dynamic_tool_to_responses_api_tool(
-    tool: &DynamicToolSpec,
+    tool: &DynamicToolFunctionSpec,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
     Ok(tool_definition_to_responses_api_tool(parse_dynamic_tool(
         tool,

@@ -18,7 +18,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use codex_features::Feature;
 use color_eyre::eyre::Result;
 use ratatui::text::Line;
 
@@ -109,18 +108,14 @@ impl App {
         }
     }
 
-    pub(super) fn terminal_resize_reflow_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::TerminalResizeReflow)
-    }
-
     /// Start retaining initial resume replay rows before they are written to scrollback.
     ///
     /// Resume replay can insert thousands of already-finalized history cells before the first draw.
-    /// When resize reflow is enabled, buffering here lets the same row cap used by resize rebuilds
-    /// apply to the startup write. Starting this buffer while an overlay owns rendering would split
-    /// transcript ownership, so overlay replay continues through the normal deferred-history path.
+    /// Buffering here lets the same row cap used by resize rebuilds apply to the startup write.
+    /// Starting this buffer while an overlay owns rendering would split transcript ownership, so
+    /// overlay replay continues through the normal deferred-history path.
     pub(super) fn begin_initial_history_replay_buffer(&mut self) {
-        if self.terminal_resize_reflow_enabled() && self.overlay.is_none() {
+        if self.overlay.is_none() {
             self.initial_history_replay_buffer = Some(Default::default());
         }
     }
@@ -131,10 +126,7 @@ impl App {
     /// defer terminal writes until the replay is complete and reuse the resize-reflow tail renderer
     /// so only the rows the terminal would retain are formatted and inserted.
     pub(super) fn begin_thread_switch_history_replay_buffer(&mut self) {
-        if self.terminal_resize_reflow_enabled()
-            && self.resize_reflow_max_rows().is_some()
-            && self.overlay.is_none()
-        {
+        if self.resize_reflow_max_rows().is_some() && self.overlay.is_none() {
             self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
                 retained_lines: VecDeque::new(),
                 render_from_transcript_tail: true,
@@ -233,7 +225,6 @@ impl App {
     }
 
     fn schedule_resize_reflow(&mut self, target_width: Option<u16>) -> bool {
-        debug_assert!(self.terminal_resize_reflow_enabled());
         self.transcript_reflow.schedule_debounced(target_width)
     }
 
@@ -263,11 +254,6 @@ impl App {
     /// source-backed reflow so terminal scrollback reflects the finalized cell instead of the
     /// transient stream rows.
     pub(super) fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        if !self.terminal_resize_reflow_enabled() {
-            self.transcript_reflow.clear();
-            return Ok(());
-        }
-
         if self.transcript_reflow.take_stream_finish_reflow_needed() {
             self.schedule_immediate_resize_reflow(tui);
             self.maybe_run_resize_reflow(tui)?;
@@ -278,10 +264,6 @@ impl App {
     }
 
     fn schedule_immediate_resize_reflow(&mut self, tui: &mut tui::Tui) {
-        if !self.terminal_resize_reflow_enabled() {
-            self.transcript_reflow.clear();
-            return;
-        }
         self.transcript_reflow.schedule_immediate();
         tui.frame_requester().schedule_frame();
     }
@@ -292,10 +274,6 @@ impl App {
     /// replaced as one styled source-backed cell. If this reflow is skipped after a stream-time
     /// resize, the visible scrollback can keep the pre-consolidation wrapping.
     pub(super) fn finish_required_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        if !self.terminal_resize_reflow_enabled() {
-            self.transcript_reflow.clear();
-            return Ok(());
-        }
         self.schedule_immediate_resize_reflow(tui);
         self.maybe_run_resize_reflow(tui)?;
         if !self.transcript_reflow.has_pending_reflow() {
@@ -324,34 +302,24 @@ impl App {
             self.chat_widget.on_terminal_resize(size.width);
         }
         if should_rebuild_transcript {
-            if self.terminal_resize_reflow_enabled() {
-                if reflow_needed && self.should_mark_reflow_as_stream_time() {
-                    self.transcript_reflow.mark_resize_requested_during_stream();
-                }
-                let target_width = reflow_needed.then_some(size.width);
-                if self.schedule_resize_reflow(target_width) {
-                    frame_requester.schedule_frame();
-                } else {
-                    frame_requester.schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
-                }
-            } else if !self.terminal_resize_reflow_enabled() && width.changed {
-                self.transcript_reflow.clear();
+            if reflow_needed && self.should_mark_reflow_as_stream_time() {
+                self.transcript_reflow.mark_resize_requested_during_stream();
+            }
+            let target_width = reflow_needed.then_some(size.width);
+            if self.schedule_resize_reflow(target_width) {
+                frame_requester.schedule_frame();
+            } else {
+                frame_requester.schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
             }
         }
         if size != last_known_screen_size {
             self.refresh_status_line();
         }
-        if self.terminal_resize_reflow_enabled() {
-            self.maybe_clear_resize_reflow_without_terminal();
-        }
+        self.maybe_clear_resize_reflow_without_terminal();
         should_rebuild_transcript
     }
 
     fn maybe_clear_resize_reflow_without_terminal(&mut self) {
-        if !self.terminal_resize_reflow_enabled() {
-            self.transcript_reflow.clear();
-            return;
-        }
         let Some(deadline) = self.transcript_reflow.pending_until() else {
             return;
         };
@@ -371,7 +339,7 @@ impl App {
             tui.terminal.last_known_screen_size,
             &tui.frame_requester(),
         );
-        if should_rebuild_transcript && self.terminal_resize_reflow_enabled() {
+        if should_rebuild_transcript {
             // Resize-sensitive history inserts queued before this frame may be wrapped for the old
             // viewport or targeted at rows no longer visible. Drop them and let resize reflow
             // rebuild from transcript cells.
@@ -388,10 +356,6 @@ impl App {
     /// reuse terminal-wrapped output here would preserve exactly the stale wrapping this feature is
     /// meant to remove.
     pub(super) fn maybe_run_resize_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        if !self.terminal_resize_reflow_enabled() {
-            self.transcript_reflow.clear();
-            return Ok(());
-        }
         let Some(deadline) = self.transcript_reflow.pending_until() else {
             return Ok(());
         };

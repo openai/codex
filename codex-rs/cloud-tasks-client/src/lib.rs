@@ -4,6 +4,7 @@ pub use api::ApplyOutcome;
 pub use api::ApplyStatus;
 pub use api::AttemptStatus;
 pub use api::CloudBackend;
+pub use api::CloudBackendFuture;
 pub use api::CloudTaskError;
 pub use api::CreatedTask;
 pub use api::DiffSummary;
