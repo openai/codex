@@ -60,6 +60,7 @@ use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
+use codex_core_skills::PluginSkillSnapshots;
 use codex_core_skills::SkillMetadata;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
@@ -368,6 +369,7 @@ pub struct PluginsManager {
 struct LoadedPluginsCacheEntry {
     key: PluginLoadCacheKey,
     plugins: Vec<LoadedPlugin>,
+    plugin_skill_snapshots: PluginSkillSnapshots,
 }
 
 #[derive(Default)]
@@ -381,6 +383,16 @@ struct PluginLoadCacheKey {
     configured_plugins: HashMap<String, PluginConfig>,
     skill_config_rules: SkillConfigRules,
     remote_plugin_enabled: bool,
+}
+
+impl PluginLoadCacheKey {
+    fn from_config(config: &PluginsConfigInput) -> Self {
+        Self {
+            configured_plugins: configured_plugins_from_stack(&config.config_layer_stack),
+            skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
+            remote_plugin_enabled: config.remote_plugin_enabled,
+        }
+    }
 }
 
 impl PluginsManager {
@@ -468,6 +480,24 @@ impl PluginsManager {
             .await
     }
 
+    /// Returns skill snapshots parsed while loading the matching plugin cache entry.
+    pub fn plugin_skill_snapshots_for_config(
+        &self,
+        config: &PluginsConfigInput,
+    ) -> Option<PluginSkillSnapshots> {
+        if !config.plugins_enabled {
+            return None;
+        }
+        let key = PluginLoadCacheKey::from_config(config);
+        self.loaded_plugins_cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry
+            .as_ref()
+            .filter(|cached| cached.key == key)
+            .map(|cached| cached.plugin_skill_snapshots.clone())
+    }
+
     #[instrument(
         name = "plugins_for_config",
         level = "info",
@@ -487,11 +517,7 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         }
 
-        let cache_key = PluginLoadCacheKey {
-            configured_plugins: configured_plugins_from_stack(&config.config_layer_stack),
-            skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
-            remote_plugin_enabled: config.remote_plugin_enabled,
-        };
+        let cache_key = PluginLoadCacheKey::from_config(config);
         if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
             return self.resolve_loaded_plugins_for_auth(plugins);
         }
@@ -504,16 +530,23 @@ impl PluginsManager {
             return self.resolve_loaded_plugins_for_auth(plugins);
         }
         let cache_generation = self.loaded_plugins_cache_generation();
+        let plugin_skill_snapshots = PluginSkillSnapshots::for_plugin_load();
         let plugins = load_plugins_from_layer_stack(
             &config.config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
+            Some(&plugin_skill_snapshots),
             self.restriction_product,
             config.remote_plugin_enabled,
         )
         .await;
         log_plugin_load_errors(&plugins);
-        self.cache_loaded_plugins_if_current(cache_generation, cache_key, plugins.clone());
+        self.cache_loaded_plugins_if_current(
+            cache_generation,
+            cache_key,
+            plugins.clone(),
+            plugin_skill_snapshots,
+        );
         self.resolve_loaded_plugins_for_auth(plugins)
     }
 
@@ -587,6 +620,7 @@ impl PluginsManager {
             config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
+            /*plugin_skill_snapshots*/ None,
             self.restriction_product,
             config.remote_plugin_enabled,
         )
@@ -624,19 +658,13 @@ impl PluginsManager {
     }
 
     fn cached_loaded_plugins(&self, key: &PluginLoadCacheKey) -> Option<Vec<LoadedPlugin>> {
-        match self.loaded_plugins_cache.read() {
-            Ok(cache) => cache
-                .entry
-                .as_ref()
-                .filter(|cached| cached.key == *key)
-                .map(|cached| cached.plugins.clone()),
-            Err(err) => err
-                .into_inner()
-                .entry
-                .as_ref()
-                .filter(|cached| cached.key == *key)
-                .map(|cached| cached.plugins.clone()),
-        }
+        self.loaded_plugins_cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry
+            .as_ref()
+            .filter(|cached| cached.key == *key)
+            .map(|cached| cached.plugins.clone())
     }
 
     fn loaded_plugins_cache_generation(&self) -> u64 {
@@ -651,13 +679,18 @@ impl PluginsManager {
         generation: u64,
         key: PluginLoadCacheKey,
         plugins: Vec<LoadedPlugin>,
+        plugin_skill_snapshots: PluginSkillSnapshots,
     ) {
         let mut cache = match self.loaded_plugins_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
         if cache.generation == generation {
-            cache.entry = Some(LoadedPluginsCacheEntry { key, plugins });
+            cache.entry = Some(LoadedPluginsCacheEntry {
+                key,
+                plugins,
+                plugin_skill_snapshots,
+            });
         }
     }
 
@@ -1624,6 +1657,7 @@ impl PluginsManager {
             &codex_core_skills::config_rules::skill_config_rules_from_stack(
                 &config.config_layer_stack,
             ),
+            /*plugin_skill_snapshots*/ None,
         )
         .await;
         let plugin_data_root = self.store.plugin_data_root(&plugin_id);
