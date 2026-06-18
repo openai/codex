@@ -30,6 +30,7 @@ mod windows_impl {
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
+    use crate::helper_materialization::resolve_command_for_launch;
     use crate::identity::refresh_logon_sandbox_creds;
     use crate::identity::require_logon_sandbox_creds;
     use crate::ipc_framed::EmptyPayload;
@@ -121,6 +122,7 @@ mod windows_impl {
                 permission_profile,
                 workspace_roots,
             )?;
+        let command = resolve_command_for_launch(&command, codex_home);
         let deny_read_paths_override = deny_read_paths_override
             .iter()
             .map(AbsolutePathBuf::to_path_buf)

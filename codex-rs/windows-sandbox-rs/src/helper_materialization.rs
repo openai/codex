@@ -120,6 +120,19 @@ pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
     }
 }
 
+pub(crate) fn resolve_command_for_launch(command: &[String], codex_home: &Path) -> Vec<String> {
+    let Some(program) = command.first() else {
+        return Vec::new();
+    };
+
+    let mut resolved = command.to_vec();
+    let source = Path::new(program);
+    resolved[0] = resolve_exe_for_launch(source, codex_home)
+        .to_string_lossy()
+        .into_owned();
+    resolved
+}
+
 pub(crate) fn copy_helper_if_needed(
     kind: HelperExecutable,
     codex_home: &Path,
@@ -372,6 +385,7 @@ mod tests {
     use super::helper_bin_dir;
     use super::helper_version_suffix;
     use super::materialized_file_name;
+    use super::resolve_command_for_launch;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -459,6 +473,33 @@ mod tests {
         assert_eq!(
             b"runner".as_slice(),
             fs::read(&runner_destination).expect("read runner")
+        );
+    }
+
+    #[test]
+    fn resolve_command_for_launch_copies_only_program_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let source = tmp.path().join("runtime.exe");
+        fs::write(&source, b"runtime").expect("runtime exe");
+        let command = vec![
+            source.to_string_lossy().into_owned(),
+            "--flag".to_string(),
+            "value".to_string(),
+        ];
+
+        let resolved = resolve_command_for_launch(&command, &codex_home);
+
+        assert_eq!(command[1..], resolved[1..]);
+        assert_eq!(
+            fs::read(&source).expect("read source"),
+            fs::read(&resolved[0]).expect("read copied runtime")
+        );
+        assert!(
+            Path::new(&resolved[0]).starts_with(helper_bin_dir(&codex_home)),
+            "expected {} under {}",
+            resolved[0],
+            helper_bin_dir(&codex_home).display()
         );
     }
 

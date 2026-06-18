@@ -3,6 +3,7 @@ use super::windows_common::make_runner_resizer;
 use super::windows_common::start_runner_pipe_writer;
 use super::windows_common::start_runner_stdin_writer;
 use super::windows_common::start_runner_stdout_reader;
+use crate::helper_materialization::resolve_command_for_launch;
 use crate::identity::SandboxCreds;
 use crate::identity::refresh_logon_sandbox_creds;
 use crate::ipc_framed::EmptyPayload;
@@ -66,6 +67,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     stdin_open: bool,
     use_private_desktop: bool,
 ) -> Result<SpawnedProcess> {
+    let command = resolve_command_for_launch(&command, codex_home);
     let deny_read_paths_override = deny_read_paths_override
         .iter()
         .map(AbsolutePathBuf::to_path_buf)
