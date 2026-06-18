@@ -931,6 +931,7 @@ impl TurnRequestProcessor {
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
                 architecture: params.architecture,
+                client_managed_handoffs: params.client_managed_handoffs.unwrap_or(false),
                 codex_responses_as_items: params.codex_responses_as_items.unwrap_or(false),
                 codex_response_item_prefix: params.codex_response_item_prefix,
                 codex_response_handoff_prefix: params.codex_response_handoff_prefix,

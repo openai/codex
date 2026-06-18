@@ -316,8 +316,8 @@ impl RealtimeE2eHarness {
 
     async fn start_webrtc_realtime(&mut self, offer_sdp: &str) -> Result<StartedWebrtcRealtime> {
         self.start_webrtc_realtime_with_codex_response_routing(
-            offer_sdp, /*codex_responses_as_items*/ None,
-            /*codex_response_handoff_prefix*/ None,
+            offer_sdp, /*client_managed_handoffs*/ None,
+            /*codex_responses_as_items*/ None, /*codex_response_handoff_prefix*/ None,
         )
         .await
     }
@@ -328,6 +328,7 @@ impl RealtimeE2eHarness {
     ) -> Result<StartedWebrtcRealtime> {
         self.start_webrtc_realtime_with_codex_response_routing(
             offer_sdp,
+            /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ Some(true),
             /*codex_response_handoff_prefix*/ None,
         )
@@ -337,6 +338,7 @@ impl RealtimeE2eHarness {
     async fn start_webrtc_realtime_with_codex_response_routing(
         &mut self,
         offer_sdp: &str,
+        client_managed_handoffs: Option<bool>,
         codex_responses_as_items: Option<bool>,
         codex_response_handoff_prefix: Option<&str>,
     ) -> Result<StartedWebrtcRealtime> {
@@ -346,6 +348,7 @@ impl RealtimeE2eHarness {
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
                 architecture: None,
+                client_managed_handoffs,
                 thread_id: self.thread_id.clone(),
                 codex_response_item_prefix: codex_responses_as_items
                     .unwrap_or(false)
@@ -617,6 +620,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
+            client_managed_handoffs: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_prefix: None,
@@ -874,6 +878,7 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
+            client_managed_handoffs: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_prefix: None,
@@ -972,6 +977,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
+            client_managed_handoffs: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_prefix: None,
@@ -1153,6 +1159,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
+            client_managed_handoffs: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_prefix: None,
@@ -1257,6 +1264,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
+            client_managed_handoffs: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_prefix: None,
@@ -1492,7 +1500,85 @@ async fn webrtc_v1_default_automatic_output_uses_handoff_append() -> Result<()> 
 }
 
 #[tokio::test]
-async fn webrtc_v1_automatic_handoff_output_accepts_prefix() -> Result<()> {
+async fn webrtc_v1_client_managed_handoffs_disable_automatic_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V1,
+        main_loop_responses(vec![create_final_assistant_message_sse_response(
+            "client-managed output",
+        )?]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![session_updated("sess_v1_client_managed_handoffs")],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_webrtc_realtime_with_codex_response_routing(
+            "v=offer\r\n",
+            /*client_managed_handoffs*/ Some(true),
+            /*codex_responses_as_items*/ None,
+            /*codex_response_handoff_prefix*/ None,
+        )
+        .await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V1);
+    assert_v1_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+
+    let turn_request_id = harness
+        .mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: harness.thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "leave realtime delivery to the client".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        harness
+            .mcp
+            .read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response(turn_response)?;
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    let automatic_handoff = timeout(
+        Duration::from_millis(200),
+        harness
+            .realtime_server
+            .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1),
+    )
+    .await;
+    assert!(
+        automatic_handoff.is_err(),
+        "automatic Codex output should not reach realtime in client-managed handoff mode"
+    );
+
+    harness
+        .append_speech(harness.thread_id.clone(), "client-selected speech")
+        .await?;
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await,
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": "codex",
+            "output_text": "client-selected speech",
+        })
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn webrtc_v1_final_automatic_handoff_omits_silent_prefix() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut harness = RealtimeE2eHarness::new(
@@ -1519,6 +1605,7 @@ async fn webrtc_v1_automatic_handoff_output_accepts_prefix() -> Result<()> {
     let started = harness
         .start_webrtc_realtime_with_codex_response_routing(
             "v=offer\r\n",
+            /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ None,
             Some(RESPONSE_HANDOFF_PREFIX),
         )
@@ -1533,7 +1620,7 @@ async fn webrtc_v1_automatic_handoff_output_accepts_prefix() -> Result<()> {
         json!({
             "type": "conversation.handoff.append",
             "handoff_id": "handoff_prefixed",
-            "output_text": format!("{RESPONSE_HANDOFF_PREFIX}\n\nbackground progress"),
+            "output_text": "background progress",
         })
     );
 
@@ -2529,6 +2616,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
+            client_managed_handoffs: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_prefix: None,
@@ -2595,6 +2683,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
+            client_managed_handoffs: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_prefix: None,

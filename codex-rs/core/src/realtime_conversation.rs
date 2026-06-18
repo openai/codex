@@ -30,6 +30,7 @@ use codex_login::read_openai_api_key_from_env;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationSpeechParams;
@@ -107,6 +108,7 @@ struct RealtimeHandoffState {
     output_tx: Sender<RealtimeOutbound>,
     active_handoff: Arc<Mutex<Option<String>>>,
     last_output_text: Arc<Mutex<Option<String>>>,
+    client_managed_handoffs: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
     codex_response_handoff_prefix: Option<String>,
@@ -212,6 +214,7 @@ struct RealtimeInputChannels {
 impl RealtimeHandoffState {
     fn new(
         output_tx: Sender<RealtimeOutbound>,
+        client_managed_handoffs: bool,
         codex_responses_as_items: bool,
         codex_response_item_prefix: Option<String>,
         codex_response_handoff_prefix: Option<String>,
@@ -221,6 +224,7 @@ impl RealtimeHandoffState {
             output_tx,
             active_handoff: Arc::new(Mutex::new(None)),
             last_output_text: Arc::new(Mutex::new(None)),
+            client_managed_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
             codex_response_handoff_prefix,
@@ -244,6 +248,7 @@ struct RealtimeStart {
     api_provider: ApiProvider,
     architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
+    client_managed_handoffs: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
     codex_response_handoff_prefix: Option<String>,
@@ -301,6 +306,7 @@ impl RealtimeConversationManager {
             api_provider,
             architecture,
             extra_headers,
+            client_managed_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
             codex_response_handoff_prefix,
@@ -327,6 +333,7 @@ impl RealtimeConversationManager {
         let realtime_active = Arc::new(AtomicBool::new(true));
         let handoff = RealtimeHandoffState::new(
             handoff_output_tx,
+            client_managed_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
             codex_response_handoff_prefix,
@@ -486,7 +493,11 @@ impl RealtimeConversationManager {
         Ok(())
     }
 
-    pub(crate) async fn handoff_out(&self, output_text: String) -> CodexResult<()> {
+    pub(crate) async fn handoff_out(
+        &self,
+        output_text: String,
+        phase: Option<MessagePhase>,
+    ) -> CodexResult<()> {
         let handoff = {
             let guard = self.state.lock().await;
             let Some(state) = guard.as_ref() else {
@@ -497,6 +508,13 @@ impl RealtimeConversationManager {
             state.handoff.clone()
         };
 
+        if handoff.client_managed_handoffs {
+            return Ok(());
+        }
+        let response_handoff_prefix = match phase {
+            Some(MessagePhase::Commentary) => handoff.codex_response_handoff_prefix.clone(),
+            Some(MessagePhase::FinalAnswer) | None => None,
+        };
         let active_handoff = handoff.active_handoff.lock().await.clone();
         let output = match active_handoff {
             Some(handoff_id) => {
@@ -516,7 +534,7 @@ impl RealtimeConversationManager {
                         handoff_id,
                         text: realtime_backend_item(
                             output_text,
-                            handoff.codex_response_handoff_prefix.as_deref(),
+                            response_handoff_prefix.as_deref(),
                         ),
                     }
                 } else {
@@ -539,10 +557,7 @@ impl RealtimeConversationManager {
                 } else {
                     RealtimeOutbound::StandaloneHandoff {
                         text: if handoff.session_kind == RealtimeSessionKind::V1 {
-                            realtime_backend_item(
-                                output_text,
-                                handoff.codex_response_handoff_prefix.as_deref(),
-                            )
+                            realtime_backend_item(output_text, response_handoff_prefix.as_deref())
                         } else {
                             output_text
                         },
@@ -591,6 +606,9 @@ impl RealtimeConversationManager {
         let Some(handoff) = handoff else {
             return Ok(());
         };
+        if handoff.client_managed_handoffs {
+            return Ok(());
+        }
         match handoff.session_kind {
             RealtimeSessionKind::V1 => return Ok(()),
             RealtimeSessionKind::V2 => {}
@@ -701,6 +719,7 @@ struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
+    client_managed_handoffs: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
     codex_response_handoff_prefix: Option<String>,
@@ -771,6 +790,7 @@ async fn prepare_realtime_start(
         api_provider,
         architecture,
         extra_headers,
+        client_managed_handoffs: params.client_managed_handoffs,
         codex_responses_as_items: params.codex_responses_as_items,
         codex_response_item_prefix: params.codex_response_item_prefix,
         codex_response_handoff_prefix: params.codex_response_handoff_prefix,
@@ -942,6 +962,7 @@ async fn handle_start_inner(
         api_provider,
         architecture,
         extra_headers,
+        client_managed_handoffs,
         codex_responses_as_items,
         codex_response_item_prefix,
         codex_response_handoff_prefix,
@@ -960,6 +981,7 @@ async fn handle_start_inner(
         api_provider,
         architecture,
         extra_headers,
+        client_managed_handoffs,
         codex_responses_as_items,
         codex_response_item_prefix,
         codex_response_handoff_prefix,

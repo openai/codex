@@ -203,6 +203,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
     codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             architecture: None,
+            client_managed_handoffs: false,
             codex_responses_as_items: false,
             codex_response_item_prefix: None,
             codex_response_handoff_prefix: None,
