@@ -135,6 +135,7 @@ impl FileSystemSandboxRunner {
                     permissions: permission_profile,
                     sandbox,
                     enforce_managed_network: false,
+                    environment_id: None,
                     network: None,
                     sandbox_policy_cwd: &cwd.uri,
                     codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
