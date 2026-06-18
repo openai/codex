@@ -840,7 +840,7 @@ impl ModelClient {
         }
 
         for item in input {
-            item.set_id(None);
+            item.set_id(/*new_id*/ None);
         }
     }
 

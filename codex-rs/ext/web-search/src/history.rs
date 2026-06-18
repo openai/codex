@@ -30,7 +30,7 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
     match item {
         ResponseItem::Message { role, .. } if role == ASSISTANT_ROLE => {
             let mut message = item.clone();
-            message.set_id(None);
+            message.set_id(/*new_id*/ None);
             messages.push(message);
         }
         ResponseItem::AgentMessage {

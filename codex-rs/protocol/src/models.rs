@@ -2136,7 +2136,7 @@ mod tests {
 
         assert_eq!(item.id(), Some("msg_test"));
 
-        item.set_id(None);
+        item.set_id(/*new_id*/ None);
 
         assert_eq!(item.id(), None);
     }
