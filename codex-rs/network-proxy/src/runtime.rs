@@ -177,6 +177,11 @@ pub trait ConfigReloader: Send + Sync {
 
     /// Force a reload, regardless of whether a change was detected.
     fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState>;
+
+    /// Rebuild state after the caller replaces the proxy's base configuration.
+    fn replace_base_state(&self, base_state: ConfigState) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async move { Ok(base_state) })
+    }
 }
 
 pub type ConfigReloaderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -350,6 +355,10 @@ impl NetworkProxyState {
         *guard = new_state;
         info!("updated network proxy config state");
         Ok(())
+    }
+
+    pub(crate) async fn replace_base_state(&self, base_state: ConfigState) -> Result<ConfigState> {
+        self.reloader.replace_base_state(base_state).await
     }
 
     pub async fn host_blocked(&self, host: &str, port: u16) -> Result<HostBlockDecision> {
