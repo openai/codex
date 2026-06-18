@@ -3,6 +3,7 @@ pub mod auth_env_telemetry;
 pub mod token_data;
 
 mod device_code_auth;
+mod oauth;
 mod pkce;
 mod server;
 
@@ -12,6 +13,8 @@ pub use device_code_auth::DeviceCode;
 pub use device_code_auth::complete_device_code_login;
 pub use device_code_auth::request_device_code;
 pub use device_code_auth::run_device_code_login;
+pub use oauth::ChatgptOAuthConfig;
+pub use oauth::STAGING_CLIENT_ID;
 pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
@@ -45,6 +48,7 @@ pub use auth::login_with_api_key;
 pub use auth::login_with_bedrock_api_key;
 pub use auth::logout;
 pub use auth::logout_with_revoke;
+pub use auth::logout_with_revoke_for_chatgpt_base_url;
 pub use auth::read_codex_access_token_from_env;
 pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;

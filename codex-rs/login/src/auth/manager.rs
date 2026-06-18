@@ -40,6 +40,7 @@ use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::build_reqwest_client;
 use crate::default_client::create_client;
+use crate::oauth::ChatgptOAuthConfig;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
@@ -93,6 +94,7 @@ pub struct ChatgptAuthTokens {
 struct ChatgptAuthState {
     auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
     client: CodexHttpClient,
+    oauth_config: ChatgptOAuthConfig,
 }
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
@@ -105,8 +107,6 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const DEFAULT_CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
-const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
 static NEXT_DUMMY_AUTH_ID: AtomicU64 = AtomicU64::new(1);
@@ -255,6 +255,7 @@ impl CodexAuth {
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
+            oauth_config: ChatgptOAuthConfig::for_chatgpt_base_url(chatgpt_base_url),
         };
 
         match auth_mode {
@@ -505,6 +506,7 @@ impl CodexAuth {
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
+            oauth_config: ChatgptOAuthConfig::default(),
         };
         let dummy_auth_id = NEXT_DUMMY_AUTH_ID.fetch_add(1, Ordering::Relaxed);
         let storage = create_auth_storage(
@@ -538,6 +540,10 @@ impl ChatgptAuth {
 
     fn client(&self) -> &CodexHttpClient {
         &self.state.client
+    }
+
+    fn oauth_config(&self) -> &ChatgptOAuthConfig {
+        &self.state.oauth_config
     }
 }
 
@@ -599,6 +605,21 @@ pub async fn logout_with_revoke(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<bool> {
+    logout_with_revoke_for_chatgpt_base_url(
+        codex_home,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+}
+
+pub async fn logout_with_revoke_for_chatgpt_base_url(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    chatgpt_base_url: Option<&str>,
+) -> std::io::Result<bool> {
     let auth_dot_json = match load_auth_dot_json(
         codex_home,
         auth_credentials_store_mode,
@@ -610,7 +631,8 @@ pub async fn logout_with_revoke(
             None
         }
     };
-    if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
+    let oauth_config = ChatgptOAuthConfig::for_chatgpt_base_url(chatgpt_base_url);
+    if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref(), &oauth_config).await {
         tracing::warn!("failed to revoke auth tokens during logout: {err}");
     }
     logout_all_stores(
@@ -1019,14 +1041,15 @@ fn persist_tokens(
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
     client: &CodexHttpClient,
+    oauth_config: &ChatgptOAuthConfig,
 ) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
-        client_id: CLIENT_ID,
+        client_id: oauth_config.client_id.as_str(),
         grant_type: "refresh_token",
         refresh_token,
     };
 
-    let endpoint = refresh_token_endpoint();
+    let endpoint = refresh_token_endpoint(oauth_config);
 
     // Use shared client factory to include standard headers
     let response = client
@@ -1115,8 +1138,8 @@ fn extract_refresh_token_error_code(body: &str) -> Option<String> {
 }
 
 #[derive(Serialize)]
-struct RefreshRequest {
-    client_id: &'static str,
+struct RefreshRequest<'a> {
+    client_id: &'a str,
     grant_type: &'static str,
     refresh_token: String,
 }
@@ -1129,11 +1152,10 @@ struct RefreshResponse {
 }
 
 // Shared constant for token refresh (client id used for oauth token refresh flow)
-pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+pub const CLIENT_ID: &str = crate::oauth::PROD_CLIENT_ID;
 
-fn refresh_token_endpoint() -> String {
-    std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
-        .unwrap_or_else(|_| REFRESH_TOKEN_URL.to_string())
+fn refresh_token_endpoint(oauth_config: &ChatgptOAuthConfig) -> String {
+    std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR).unwrap_or_else(|_| oauth_config.token_url())
 }
 
 impl AuthDotJson {
@@ -2045,7 +2067,16 @@ impl AuthManager {
         let auth_dot_json = self
             .auth_cached()
             .and_then(|auth| auth.get_current_auth_json());
-        if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
+        let oauth_config = self
+            .auth_cached()
+            .as_ref()
+            .and_then(|auth| match auth {
+                CodexAuth::Chatgpt(auth) => Some(auth.oauth_config()),
+                _ => None,
+            })
+            .cloned()
+            .unwrap_or_default();
+        if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref(), &oauth_config).await {
             tracing::warn!("failed to revoke auth tokens during logout: {err}");
         }
         let result = logout_all_stores(
@@ -2162,7 +2193,9 @@ impl AuthManager {
         auth: &ChatgptAuth,
         refresh_token: String,
     ) -> Result<(), RefreshTokenError> {
-        let refresh_response = request_chatgpt_token_refresh(refresh_token, auth.client()).await?;
+        let refresh_response =
+            request_chatgpt_token_refresh(refresh_token, auth.client(), auth.oauth_config())
+                .await?;
 
         persist_tokens(
             auth.storage(),

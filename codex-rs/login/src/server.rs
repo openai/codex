@@ -28,6 +28,7 @@ use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
 use crate::default_client::originator;
+use crate::oauth::ChatgptOAuthConfig;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use crate::token_data::TokenData;
@@ -49,7 +50,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
 // Keep in sync with the Codex CLI Hydra redirect URI allow-list.
 const FALLBACK_PORT: u16 = 1457;
@@ -85,7 +85,7 @@ impl ServerOptions {
         Self {
             codex_home,
             client_id,
-            issuer: DEFAULT_ISSUER.to_string(),
+            issuer: ChatgptOAuthConfig::default().issuer,
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
@@ -94,6 +94,25 @@ impl ServerOptions {
             cli_auth_credentials_store_mode,
             auth_keyring_backend_kind,
         }
+    }
+
+    pub fn for_chatgpt_base_url(
+        codex_home: PathBuf,
+        chatgpt_base_url: Option<&str>,
+        forced_chatgpt_workspace_id: Option<Vec<String>>,
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+        auth_keyring_backend_kind: AuthKeyringBackendKind,
+    ) -> Self {
+        let oauth_config = ChatgptOAuthConfig::for_chatgpt_base_url(chatgpt_base_url);
+        let mut opts = Self::new(
+            codex_home,
+            oauth_config.client_id,
+            forced_chatgpt_workspace_id,
+            cli_auth_credentials_store_mode,
+            auth_keyring_backend_kind,
+        );
+        opts.issuer = oauth_config.issuer;
+        opts
     }
 }
 
@@ -863,7 +882,7 @@ fn compose_success_url(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let platform_url = if issuer == DEFAULT_ISSUER {
+    let platform_url = if issuer == ChatgptOAuthConfig::default().issuer {
         "https://platform.openai.com"
     } else {
         "https://platform.api.openai.org"
@@ -1162,9 +1181,9 @@ pub(crate) async fn obtain_api_key(
 }
 #[cfg(test)]
 mod tests {
+    use crate::oauth::ChatgptOAuthConfig;
     use pretty_assertions::assert_eq;
 
-    use super::DEFAULT_ISSUER;
     use super::TokenEndpointErrorDetail;
     use super::compose_success_url;
     use super::html_escape;
@@ -1277,7 +1296,7 @@ mod tests {
     fn compose_success_url_omits_streamlined_success_by_default() {
         let url = url::Url::parse(&compose_success_url(
             /*port*/ 1455,
-            DEFAULT_ISSUER,
+            ChatgptOAuthConfig::default().issuer.as_str(),
             "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
             "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
             /*codex_streamlined_login*/ false,
@@ -1295,7 +1314,7 @@ mod tests {
     fn compose_success_url_includes_streamlined_success_when_requested() {
         let url = url::Url::parse(&compose_success_url(
             /*port*/ 1455,
-            DEFAULT_ISSUER,
+            ChatgptOAuthConfig::default().issuer.as_str(),
             "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
             "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
             /*codex_streamlined_login*/ true,

@@ -10,6 +10,7 @@ use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::RefreshTokenError;
+use codex_login::STAGING_CLIENT_ID;
 use codex_login::load_auth_dot_json;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
@@ -25,6 +26,7 @@ use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_json;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -92,6 +94,49 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         .get_token_data()
         .context("token data should be cached")?;
     assert_eq!(cached, refreshed_tokens);
+
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn staging_refresh_uses_staging_oauth_client_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_json(json!({
+            "client_id": STAGING_CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": INITIAL_REFRESH_TOKEN,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new_with_chatgpt_base_url(
+        &server,
+        Some("https://chatgpt-staging.com/backend-api/"),
+    )
+    .await?;
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN)),
+        last_refresh: Some(Utc::now() - Duration::days(1)),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+    };
+    ctx.write_auth(&initial_auth).await?;
+
+    ctx.auth_manager.refresh_token_from_authority().await?;
 
     server.verify().await;
     Ok(())
@@ -1196,6 +1241,13 @@ struct RefreshTokenTestContext {
 
 impl RefreshTokenTestContext {
     async fn new(server: &MockServer) -> Result<Self> {
+        Self::new_with_chatgpt_base_url(server, /*chatgpt_base_url*/ None).await
+    }
+
+    async fn new_with_chatgpt_base_url(
+        server: &MockServer,
+        chatgpt_base_url: Option<&str>,
+    ) -> Result<Self> {
         let codex_home = TempDir::new()?;
 
         let endpoint = format!("{}/oauth/token", server.uri());
@@ -1205,7 +1257,7 @@ impl RefreshTokenTestContext {
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
-            /*chatgpt_base_url*/ None,
+            chatgpt_base_url.map(str::to_string),
             AuthKeyringBackendKind::default(),
         )
         .await;
