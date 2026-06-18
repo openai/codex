@@ -10,7 +10,7 @@ use crate::managed_network::can_read_path_with_policy;
 use crate::managed_network::prepare_managed_network_child;
 #[cfg(test)]
 use crate::managed_network::read_deny_glob_matcher;
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 use crate::managed_network::with_managed_mitm_ca_proxy_dirs_denied;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 use crate::managed_network::with_managed_mitm_ca_readable_roots;
