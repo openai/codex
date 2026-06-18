@@ -8,6 +8,7 @@ use super::SandboxablePreference;
 use super::can_read_path_with_policy;
 use super::get_platform_sandbox;
 use super::read_deny_glob_matcher;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::with_managed_mitm_ca_proxy_dirs_denied;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::with_managed_mitm_ca_readable_roots;
