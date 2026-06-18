@@ -11,6 +11,7 @@ mod config_rpc;
 mod connection_handling_websocket;
 #[cfg(unix)]
 mod connection_handling_websocket_unix;
+mod current_time;
 mod dynamic_tools;
 #[cfg(not(target_os = "windows"))]
 mod executor_mcp;
