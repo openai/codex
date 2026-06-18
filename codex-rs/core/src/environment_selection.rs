@@ -1,14 +1,18 @@
 use std::collections::HashSet;
+use std::fmt;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
+use futures::future::BoxFuture;
+use futures::future::Shared;
 
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -28,17 +32,38 @@ pub(crate) fn default_thread_environment_selections(
         .collect()
 }
 
-#[derive(Clone, Debug)]
+type TurnEnvironmentResolution =
+    Shared<BoxFuture<'static, Result<TurnEnvironment, Arc<ExecServerError>>>>;
+
+#[derive(Clone)]
+struct SelectedTurnEnvironment {
+    selection: TurnEnvironmentSelection,
+    // Starting environments resolve in the background without blocking snapshots.
+    delayed_start: bool,
+    resolution: TurnEnvironmentResolution,
+}
+
+#[derive(Clone)]
 pub(crate) struct StartingTurnEnvironment {
     pub(crate) selection: TurnEnvironmentSelection,
-    pub(crate) environment: Arc<Environment>,
+    resolution: TurnEnvironmentResolution,
+}
+
+impl fmt::Debug for StartingTurnEnvironment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StartingTurnEnvironment")
+            .field("selection", &self.selection)
+            .field("resolved", &self.resolution.peek().is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) struct ThreadEnvironments {
     environment_manager: Arc<EnvironmentManager>,
     local_shell: Shell,
     shell_snapshot: ShellSnapshot,
-    snapshot: ArcSwap<TurnEnvironmentSnapshot>,
+    environments: ArcSwap<Vec<SelectedTurnEnvironment>>,
 }
 
 impl ThreadEnvironments {
@@ -48,183 +73,140 @@ impl ThreadEnvironments {
         shell_snapshot: ShellSnapshot,
         current: TurnEnvironmentSnapshot,
     ) -> Self {
+        // Reuse only attached environments from the supplied snapshot; drop starting entries.
+        let environments = current
+            .turn_environments
+            .into_iter()
+            .map(|environment| {
+                let selection = environment.selection();
+                let resolution: TurnEnvironmentResolution =
+                    futures::future::ready(Ok(environment)).boxed().shared();
+                SelectedTurnEnvironment {
+                    selection,
+                    delayed_start: false,
+                    resolution,
+                }
+            })
+            .collect();
         Self {
             environment_manager,
             local_shell,
             shell_snapshot,
-            snapshot: ArcSwap::from_pointee(current),
+            environments: ArcSwap::from_pointee(environments),
         }
     }
 
     pub(crate) fn update_selections(&self, environments: &[TurnEnvironmentSelection]) {
-        let previous = self.snapshot.load();
+        let previous = self.environments.load();
         let mut seen_environment_ids = HashSet::with_capacity(environments.len());
-        let mut turn_environments = Vec::with_capacity(environments.len());
-        let mut starting = Vec::with_capacity(environments.len());
-        let mut ordered_selections = Vec::with_capacity(environments.len());
+        let mut next = Vec::with_capacity(environments.len());
+        let mut new_resolutions = Vec::new();
         for selected_environment in environments {
             if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
                 continue;
             }
-            // Reuse the exact attached or starting environment already selected by this thread.
-            if let Some(environment) = previous.turn_environments.iter().find(|environment| {
-                environment.environment_id == selected_environment.environment_id
-                    && environment.cwd() == &selected_environment.cwd
-            }) {
-                turn_environments.push(environment.clone());
-                ordered_selections.push(selected_environment.clone());
-                continue;
-            }
             if let Some(environment) = previous
-                .starting
                 .iter()
                 .find(|environment| environment.selection == *selected_environment)
             {
-                starting.push(environment.clone());
-                ordered_selections.push(selected_environment.clone());
+                next.push(environment.clone());
                 continue;
             }
 
-            // Only new selections consult the manager; reused selections keep their stable handle.
             let environment_id = &selected_environment.environment_id;
             let Some(environment) = self.environment_manager.get_environment(environment_id) else {
                 tracing::warn!("skipping unknown turn environment `{environment_id}`");
                 continue;
             };
-            if environment.is_remote() {
-                // Connect in the background and leave attachment to a later snapshot.
-                environment.start_connecting();
-                starting.push(StartingTurnEnvironment {
-                    selection: selected_environment.clone(),
-                    environment,
-                });
-            } else {
-                turn_environments.push(self.build_turn_environment(
-                    selected_environment,
-                    environment,
-                    Some(self.local_shell.clone()),
-                ));
-            }
-            ordered_selections.push(selected_environment.clone());
+            let delayed_start = environment.is_remote() && !environment.startup_finished();
+            let resolution = Self::resolve_environment(
+                selected_environment.clone(),
+                environment,
+                self.local_shell.clone(),
+                self.shell_snapshot.clone(),
+            );
+            new_resolutions.push(resolution.clone());
+            next.push(SelectedTurnEnvironment {
+                selection: selected_environment.clone(),
+                delayed_start,
+                resolution,
+            });
         }
-        self.snapshot.store(Arc::new(TurnEnvironmentSnapshot {
-            turn_environments,
-            starting,
-            ordered_selections,
-        }));
+        self.environments.store(Arc::new(next));
+        for resolution in new_resolutions {
+            drop(tokio::spawn(resolution));
+        }
     }
 
-    async fn resolve_starting_environment(
-        &self,
-        starting: &StartingTurnEnvironment,
-    ) -> TurnEnvironment {
-        let environment_id = &starting.selection.environment_id;
-        let shell = match starting.environment.info().boxed().await {
-            Ok(info) => match Shell::from_environment_shell_info(info.shell) {
-                Ok(shell) => Some(shell),
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to resolve shell for environment `{environment_id}`: {err}"
-                    );
-                    None
-                }
-            },
-            Err(err) => {
-                tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
-                None
-            }
-        };
-        self.build_turn_environment(
-            &starting.selection,
-            Arc::clone(&starting.environment),
-            shell,
-        )
-    }
-
-    fn build_turn_environment(
-        &self,
-        selected_environment: &TurnEnvironmentSelection,
+    fn resolve_environment(
+        selection: TurnEnvironmentSelection,
         environment: Arc<Environment>,
-        shell: Option<Shell>,
-    ) -> TurnEnvironment {
-        let mut turn_environment = TurnEnvironment::new(
-            selected_environment.environment_id.clone(),
-            environment,
-            selected_environment.cwd.clone(),
-            shell,
-        );
-        let task = self
-            .shell_snapshot
-            .clone()
-            .build(turn_environment.clone())
-            .boxed()
-            .shared();
-        drop(tokio::spawn(task.clone()));
-        turn_environment.shell_snapshot = task;
-        turn_environment
+        local_shell: Shell,
+        shell_snapshot: ShellSnapshot,
+    ) -> TurnEnvironmentResolution {
+        async move {
+            let environment_id = &selection.environment_id;
+            if let Err(err) = environment.wait_until_ready().await {
+                tracing::warn!("turn environment `{environment_id}` failed to start: {err}");
+                return Err(Arc::new(err));
+            }
+            let shell = if environment.is_remote() {
+                match environment.info().await {
+                    Ok(info) => match Shell::from_environment_shell_info(info.shell) {
+                        Ok(shell) => Some(shell),
+                        Err(err) => {
+                            tracing::warn!(
+                                "failed to resolve shell for environment `{environment_id}`: {err}"
+                            );
+                            None
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to get info for environment `{environment_id}`: {err}"
+                        );
+                        None
+                    }
+                }
+            } else {
+                Some(local_shell)
+            };
+            let mut turn_environment =
+                TurnEnvironment::new(selection.environment_id, environment, selection.cwd, shell);
+            let task = shell_snapshot
+                .build(turn_environment.clone())
+                .boxed()
+                .shared();
+            drop(tokio::spawn(task.clone()));
+            turn_environment.shell_snapshot = task;
+            Ok(turn_environment)
+        }
+        .boxed()
+        .shared()
     }
 
     pub(crate) async fn snapshot(&self) -> TurnEnvironmentSnapshot {
-        loop {
-            let current = self.snapshot.load_full();
-            if current.starting.is_empty() {
-                return current.as_ref().clone();
+        let current = self.environments.load_full();
+        let mut turn_environments = Vec::with_capacity(current.len());
+        let mut starting = Vec::new();
+        for environment in current.iter() {
+            let resolved = if environment.delayed_start {
+                environment.resolution.peek().cloned()
+            } else {
+                Some(environment.resolution.clone().await)
+            };
+            match resolved {
+                Some(Ok(turn_environment)) => turn_environments.push(turn_environment),
+                Some(Err(_)) => {}
+                None => starting.push(StartingTurnEnvironment {
+                    selection: environment.selection.clone(),
+                    resolution: environment.resolution.clone(),
+                }),
             }
-
-            // Rebuild both lists in configured order while promoting completed startups.
-            let mut changed = false;
-            let mut turn_environments = Vec::with_capacity(current.ordered_selections.len());
-            let mut starting = Vec::with_capacity(current.starting.len());
-            for selection in &current.ordered_selections {
-                if let Some(environment) = current.turn_environments.iter().find(|environment| {
-                    environment.environment_id == selection.environment_id
-                        && environment.cwd() == &selection.cwd
-                }) {
-                    turn_environments.push(environment.clone());
-                    continue;
-                }
-                let Some(environment) = current
-                    .starting
-                    .iter()
-                    .find(|environment| environment.selection == *selection)
-                else {
-                    continue;
-                };
-                if !environment.environment.startup_finished() {
-                    // Never wait for an environment whose startup is still running.
-                    starting.push(environment.clone());
-                    continue;
-                }
-
-                changed = true;
-                // Startup finished, so this only reads its saved success or failure.
-                match environment.environment.wait_until_ready().boxed().await {
-                    Ok(()) => {
-                        turn_environments
-                            .push(self.resolve_starting_environment(environment).await);
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            "turn environment `{}` failed to start: {err}",
-                            environment.selection.environment_id
-                        );
-                    }
-                }
-            }
-            if !changed {
-                return current.as_ref().clone();
-            }
-
-            let next = Arc::new(TurnEnvironmentSnapshot {
-                turn_environments,
-                starting,
-                ordered_selections: current.ordered_selections.clone(),
-            });
-            // Do not overwrite selections changed while shell resolution was in flight.
-            let previous = self.snapshot.compare_and_swap(&current, Arc::clone(&next));
-            if Arc::ptr_eq(&previous, &current) {
-                return next.as_ref().clone();
-            }
+        }
+        TurnEnvironmentSnapshot {
+            turn_environments,
+            starting,
         }
     }
 
@@ -237,21 +219,14 @@ impl ThreadEnvironments {
 pub(crate) struct TurnEnvironmentSnapshot {
     pub(crate) turn_environments: Vec<TurnEnvironment>,
     pub(crate) starting: Vec<StartingTurnEnvironment>,
-    // Attached and starting environments are stored separately, so retain their configured order.
-    ordered_selections: Vec<TurnEnvironmentSelection>,
 }
 
 impl TurnEnvironmentSnapshot {
     #[cfg(test)]
     pub(crate) fn from_turn_environments(turn_environments: Vec<TurnEnvironment>) -> Self {
-        let ordered_selections = turn_environments
-            .iter()
-            .map(TurnEnvironment::selection)
-            .collect();
         Self {
             turn_environments,
             starting: Vec::new(),
-            ordered_selections,
         }
     }
 
@@ -272,7 +247,10 @@ impl TurnEnvironmentSnapshot {
     }
 
     pub(crate) fn to_selections(&self) -> Vec<TurnEnvironmentSelection> {
-        self.ordered_selections.clone()
+        self.turn_environments
+            .iter()
+            .map(TurnEnvironment::selection)
+            .collect()
     }
 
     pub(crate) fn primary_filesystem(&self) -> Option<Arc<dyn ExecutorFileSystem>> {
@@ -628,19 +606,16 @@ url = "ws://127.0.0.1:8765"
                 .collect::<Vec<_>>(),
             vec![remote.clone()]
         );
-        assert_eq!(
-            starting.to_selections(),
-            vec![remote.clone(), local.clone()]
-        );
+        assert_eq!(starting.to_selections(), vec![local.clone()]);
 
         let server = tokio::spawn(serve_environment_info(listener));
         timeout(
             std::time::Duration::from_secs(5),
-            starting.starting[0].environment.wait_until_ready(),
+            starting.starting[0].resolution.clone(),
         )
         .await
-        .expect("environment startup should finish")
-        .expect("environment startup should succeed");
+        .expect("environment resolution should finish")
+        .expect("environment resolution should succeed");
         let attached = turn_environments.snapshot().await;
 
         assert!(attached.starting.is_empty());
@@ -657,7 +632,7 @@ url = "ws://127.0.0.1:8765"
     }
 
     #[tokio::test]
-    async fn latest_environment_update_wins_while_previous_resolution_is_pending() {
+    async fn latest_environment_update_replaces_pending_resolution() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind websocket listener");
@@ -704,7 +679,7 @@ url = "ws://127.0.0.1:8765"
     }
 
     #[tokio::test]
-    async fn matching_environment_id_and_cwd_reuse_starting_environment() {
+    async fn matching_environment_id_and_cwd_reuse_resolution() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let first_listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -754,29 +729,62 @@ url = "ws://127.0.0.1:8765"
         }]);
         let changed_snapshot = environments.snapshot().await;
 
+        let initial = initial_snapshot
+            .starting
+            .first()
+            .expect("initial environment");
+        let reused = reused_snapshot
+            .starting
+            .first()
+            .expect("reused environment");
+        let changed = changed_snapshot
+            .starting
+            .first()
+            .expect("changed environment");
+        assert!(initial.resolution.ptr_eq(&reused.resolution));
+        assert!(!reused.resolution.ptr_eq(&changed.resolution));
+    }
+
+    #[tokio::test]
+    async fn inherited_environment_reuses_parent_handle() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let selection = TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&cwd),
+        };
+        let inherited_environment = Arc::new(
+            Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                .expect("inherited environment"),
+        );
+        let inherited = TurnEnvironment::new(
+            selection.environment_id.clone(),
+            Arc::clone(&inherited_environment),
+            selection.cwd.clone(),
+            /*shell*/ None,
+        );
+        let manager = Arc::new(EnvironmentManager::without_environments());
+        manager
+            .upsert_environment(
+                REMOTE_ENVIRONMENT_ID.to_string(),
+                "ws://127.0.0.1:9876".to_string(),
+            )
+            .expect("replacement environment");
+        let environments = ThreadEnvironments::new(
+            manager,
+            crate::shell::default_user_shell(),
+            ShellSnapshot::disabled(),
+            TurnEnvironmentSnapshot::from_turn_environments(vec![inherited]),
+        );
+
+        environments.update_selections(std::slice::from_ref(&selection));
+        let snapshot = environments.snapshot().await;
+
         assert!(Arc::ptr_eq(
-            &initial_snapshot
-                .starting
-                .first()
-                .expect("initial environment")
+            &snapshot
+                .primary()
+                .expect("inherited environment")
                 .environment,
-            &reused_snapshot
-                .starting
-                .first()
-                .expect("reused environment")
-                .environment,
-        ));
-        assert!(!Arc::ptr_eq(
-            &reused_snapshot
-                .starting
-                .first()
-                .expect("reused environment")
-                .environment,
-            &changed_snapshot
-                .starting
-                .first()
-                .expect("changed environment")
-                .environment,
+            &inherited_environment,
         ));
     }
 
