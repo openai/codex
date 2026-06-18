@@ -72,11 +72,6 @@ pub(crate) trait BottomPaneView: Renderable {
         false
     }
 
-    /// Return true when Ctrl-C will interrupt the active agent turn.
-    fn will_interrupt_turn_on_ctrl_c(&self) -> bool {
-        false
-    }
-
     /// Optional paste handler. Return true if the view modified its state and
     /// needs a redraw.
     fn handle_paste(&mut self, _pasted: String) -> bool {

@@ -373,7 +373,12 @@ impl ChatWidget {
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
-        let should_pause_active_goal = self.bottom_pane.active_view_will_interrupt_turn_on_ctrl_c();
+        let should_pause_active_goal = self
+            .bottom_pane
+            .active_view_will_interrupt_turn_on_key_event(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            ));
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
                 if modal_or_popup_active {
