@@ -451,14 +451,16 @@ mod tests {
         }]
     }
 
-    fn posix_cwd() -> PathUri {
-        PathUri::parse("file:///workspace").expect("valid POSIX test cwd")
-    }
-
+    #[track_caller]
     fn assert_match_args(args: Vec<String>, expected_workdir: Option<&str>) {
-        assert_match_args_with_cwd(args, &posix_cwd(), expected_workdir);
+        assert_match_args_with_cwd(
+            args,
+            &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+            expected_workdir,
+        );
     }
 
+    #[track_caller]
     fn assert_match_args_with_cwd(
         args: Vec<String>,
         cwd: &PathUri,
@@ -473,6 +475,7 @@ mod tests {
         }
     }
 
+    #[track_caller]
     fn assert_match(script: &str, expected_workdir: Option<&str>) {
         let args = args_bash(script);
         assert_match_args(args, expected_workdir);
@@ -481,7 +484,10 @@ mod tests {
     fn assert_not_match(script: &str) {
         let args = args_bash(script);
         assert_matches!(
-            maybe_parse_apply_patch(&args, &posix_cwd()),
+            maybe_parse_apply_patch(
+                &args,
+                &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+            ),
             MaybeApplyPatch::NotApplyPatch
         );
     }
@@ -531,7 +537,10 @@ mod tests {
 "#,
         ]);
 
-        match maybe_parse_apply_patch(&args, &posix_cwd()) {
+        match maybe_parse_apply_patch(
+            &args,
+            &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+        ) {
             MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
                 assert_eq!(
                     hunks,
@@ -556,7 +565,10 @@ mod tests {
 "#,
         ]);
 
-        match maybe_parse_apply_patch(&args, &posix_cwd()) {
+        match maybe_parse_apply_patch(
+            &args,
+            &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+        ) {
             MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
                 assert_eq!(
                     hunks,
@@ -595,7 +607,10 @@ mod tests {
 PATCH"#,
         ]);
 
-        match maybe_parse_apply_patch(&args, &posix_cwd()) {
+        match maybe_parse_apply_patch(
+            &args,
+            &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+        ) {
             MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
                 assert_eq!(workdir, None);
                 assert_eq!(
