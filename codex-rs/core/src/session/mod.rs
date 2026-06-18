@@ -27,6 +27,7 @@ use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
+use crate::context::CredentialedRoutesInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
@@ -922,6 +923,18 @@ async fn thread_title_from_thread_store(
     (!title.is_empty() && thread.preview.trim() != title).then(|| title.to_string())
 }
 
+struct ManagedNetworkProxyStartRequest<'a> {
+    spec: &'a crate::config::NetworkProxySpec,
+    chatgpt_base_url: &'a str,
+    auth_manager: Arc<AuthManager>,
+    exec_policy: &'a codex_execpolicy::Policy,
+    permission_profile: &'a PermissionProfile,
+    network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
+    blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
+    managed_network_requirements_enabled: bool,
+    audit_metadata: NetworkProxyAuditMetadata,
+}
+
 fn push_prompt_fragment(
     fragment: PromptFragment,
     developer_sections: &mut Vec<String>,
@@ -988,14 +1001,19 @@ impl Session {
     }
 
     async fn start_managed_network_proxy(
-        spec: &crate::config::NetworkProxySpec,
-        exec_policy: &codex_execpolicy::Policy,
-        permission_profile: &PermissionProfile,
-        network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
-        blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
-        managed_network_requirements_enabled: bool,
-        audit_metadata: NetworkProxyAuditMetadata,
-    ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime)> {
+        request: ManagedNetworkProxyStartRequest<'_>,
+    ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime, Vec<String>)> {
+        let ManagedNetworkProxyStartRequest {
+            spec,
+            chatgpt_base_url,
+            auth_manager,
+            exec_policy,
+            permission_profile,
+            network_policy_decider,
+            blocked_request_observer,
+            managed_network_requirements_enabled,
+            audit_metadata,
+        } = request;
         let spec = spec
             .with_exec_policy_network_rules(exec_policy)
             .map_err(|err| {
@@ -1005,13 +1023,26 @@ impl Session {
                 err
             })
             .unwrap_or_else(|_| spec.clone());
+        let (state, reloader, credentialed_route_prefixes) =
+            codex_credentialed_routes::prepare_proxy_state(
+                spec.build_config_state_for_spec().map_err(|err| {
+                    anyhow::anyhow!("failed to build managed proxy base state: {err}")
+                })?,
+                chatgpt_base_url,
+                auth_manager,
+            )
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("failed to build credentialed route proxy state: {err}")
+            })?;
         let network_proxy = spec
-            .start_proxy(
+            .start_proxy_with_runtime_state(
                 permission_profile,
                 network_policy_decider,
                 blocked_request_observer,
                 managed_network_requirements_enabled,
                 audit_metadata,
+                crate::config::NetworkProxyRuntimeState { state, reloader },
             )
             .await
             .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?;
@@ -1022,7 +1053,11 @@ impl Session {
                 socks_addr: proxy.socks_addr().to_string(),
             }
         };
-        Ok((network_proxy, session_network_proxy))
+        Ok((
+            network_proxy,
+            session_network_proxy,
+            credentialed_route_prefixes,
+        ))
     }
 
     async fn refresh_managed_network_proxy_for_current_permission_profile(&self) {
@@ -1042,6 +1077,9 @@ impl Session {
             .cloned()
         else {
             self.services.network_proxy.store(None);
+            self.services
+                .credentialed_route_prefixes
+                .store(Arc::new(Default::default()));
             return;
         };
 
@@ -1071,25 +1109,32 @@ impl Session {
             return;
         }
 
-        match Self::start_managed_network_proxy(
-            &spec,
-            current_exec_policy.as_ref(),
-            &session_configuration.permission_profile(),
-            /*network_policy_decider*/ None,
-            self.services
-                .managed_network_requirements_configured
-                .then(|| {
-                    build_blocked_request_observer(Arc::clone(&self.services.network_approval))
-                }),
-            self.services.managed_network_requirements_configured,
-            self.services.network_proxy_audit_metadata.clone(),
-        )
+        match Self::start_managed_network_proxy(ManagedNetworkProxyStartRequest {
+            spec: &spec,
+            chatgpt_base_url: &session_configuration
+                .original_config_do_not_use
+                .chatgpt_base_url,
+            auth_manager: Arc::clone(&self.services.auth_manager),
+            exec_policy: current_exec_policy.as_ref(),
+            permission_profile: &session_configuration.permission_profile(),
+            network_policy_decider: None,
+            blocked_request_observer: self.services.managed_network_requirements_configured.then(
+                || build_blocked_request_observer(Arc::clone(&self.services.network_approval)),
+            ),
+            managed_network_requirements_enabled: self
+                .services
+                .managed_network_requirements_configured,
+            audit_metadata: self.services.network_proxy_audit_metadata.clone(),
+        })
         .await
         {
-            Ok((started_proxy, _session_network_proxy)) => {
+            Ok((started_proxy, _session_network_proxy, credentialed_route_prefixes)) => {
                 self.services
                     .network_proxy
                     .store(Some(Arc::new(started_proxy)));
+                self.services
+                    .credentialed_route_prefixes
+                    .store(Arc::new(credentialed_route_prefixes));
             }
             Err(err) => {
                 warn!("failed to start managed network proxy for sandbox change: {err}");
@@ -3004,6 +3049,11 @@ impl Session {
             && !developer_instructions.is_empty()
         {
             developer_sections.push(developer_instructions.to_string());
+        }
+        if let Some(credentialed_route_instructions) =
+            CredentialedRoutesInstructions::new(&self.services.credentialed_route_prefixes.load())
+        {
+            developer_sections.push(credentialed_route_instructions.render());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if turn_context.config.include_collaboration_mode_instructions

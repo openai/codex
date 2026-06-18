@@ -180,6 +180,24 @@ use std::time::Duration as StdDuration;
 
 mod guardian_tests;
 
+fn managed_network_proxy_start_request<'a>(
+    spec: &'a crate::config::NetworkProxySpec,
+    exec_policy: &'a Policy,
+    permission_profile: &'a PermissionProfile,
+) -> ManagedNetworkProxyStartRequest<'a> {
+    ManagedNetworkProxyStartRequest {
+        spec,
+        chatgpt_base_url: "https://chatgpt.com/backend-api/codex",
+        auth_manager: AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
+        exec_policy,
+        permission_profile,
+        network_policy_decider: None,
+        blocked_request_observer: None,
+        managed_network_requirements_enabled: false,
+        audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+    }
+}
+
 struct InstructionsTestCase {
     slug: &'static str,
     expects_apply_patch_description: bool,
@@ -715,14 +733,8 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
         /*justification*/ None,
     )?;
 
-    let (started_proxy, _) = Session::start_managed_network_proxy(
-        &spec,
-        &exec_policy,
-        &permission_profile,
-        /*network_policy_decider*/ None,
-        /*blocked_request_observer*/ None,
-        /*managed_network_requirements_enabled*/ false,
-        crate::config::NetworkProxyAuditMetadata::default(),
+    let (started_proxy, _, _) = Session::start_managed_network_proxy(
+        managed_network_proxy_start_request(&spec, &exec_policy, &permission_profile),
     )
     .await?;
 
@@ -760,14 +772,8 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
         /*justification*/ None,
     )?;
 
-    let (started_proxy, _) = Session::start_managed_network_proxy(
-        &spec,
-        &exec_policy,
-        &permission_profile,
-        /*network_policy_decider*/ None,
-        /*blocked_request_observer*/ None,
-        /*managed_network_requirements_enabled*/ false,
-        crate::config::NetworkProxyAuditMetadata::default(),
+    let (started_proxy, _, _) = Session::start_managed_network_proxy(
+        managed_network_proxy_start_request(&spec, &exec_policy, &permission_profile),
     )
     .await?;
 
@@ -800,16 +806,17 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
         }
     });
 
-    let (started_proxy, _) = Session::start_managed_network_proxy(
-        &spec,
-        &exec_policy,
-        &full_access_permission_profile,
-        Some(network_policy_decider),
-        /*blocked_request_observer*/ None,
-        /*managed_network_requirements_enabled*/ true,
-        crate::config::NetworkProxyAuditMetadata::default(),
-    )
-    .await?;
+    let (started_proxy, _, _) =
+        Session::start_managed_network_proxy(ManagedNetworkProxyStartRequest {
+            network_policy_decider: Some(network_policy_decider),
+            managed_network_requirements_enabled: true,
+            ..managed_network_proxy_start_request(
+                &spec,
+                &exec_policy,
+                &full_access_permission_profile,
+            )
+        })
+        .await?;
 
     let spec = spec.recompute_for_permission_profile(&PermissionProfile::workspace_write())?;
     spec.apply_to_started_proxy(&started_proxy).await?;
@@ -870,14 +877,9 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
         Some(requirements),
         &initial_permission_profile,
     )?;
-    let (started_proxy, _) = Session::start_managed_network_proxy(
-        &spec,
-        &Policy::empty(),
-        &initial_permission_profile,
-        /*network_policy_decider*/ None,
-        /*blocked_request_observer*/ None,
-        /*managed_network_requirements_enabled*/ false,
-        crate::config::NetworkProxyAuditMetadata::default(),
+    let exec_policy = Policy::empty();
+    let (started_proxy, _, _) = Session::start_managed_network_proxy(
+        managed_network_proxy_start_request(&spec, &exec_policy, &initial_permission_profile),
     )
     .await?;
     assert_eq!(
@@ -5023,6 +5025,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
+        credentialed_route_prefixes: arc_swap::ArcSwap::from_pointee(Default::default()),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
         managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
@@ -7072,6 +7075,7 @@ where
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
+        credentialed_route_prefixes: arc_swap::ArcSwap::from_pointee(Default::default()),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
         managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
@@ -7728,6 +7732,25 @@ async fn build_initial_context_adds_multi_agent_v2_root_usage_hint_as_developer_
             .iter()
             .any(|message| message.as_slice() == ["Subagent guidance."]),
         "did not expect subagent usage hint for root thread, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_adds_credentialed_route_instructions_as_developer_message() {
+    let (session, turn_context) = make_session_and_context().await;
+    session
+        .services
+        .credentialed_route_prefixes
+        .store(Arc::new(vec!["https://api.example.com/v1".to_string()]));
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+
+    assert!(
+        developer_input_texts(&initial_context)
+            .iter()
+            .any(|text| text.contains("https://api.example.com/v1")),
+        "expected credentialed route developer instructions, got {:?}",
+        developer_message_texts(&initial_context)
     );
 }
 

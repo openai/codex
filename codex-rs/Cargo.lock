@@ -2622,6 +2622,7 @@ dependencies = [
  "codex-context-fragments",
  "codex-core-plugins",
  "codex-core-skills",
+ "codex-credentialed-routes",
  "codex-exec-server",
  "codex-execpolicy",
  "codex-extension-api",

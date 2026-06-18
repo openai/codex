@@ -897,18 +897,22 @@ impl Session {
                             Arc::clone(network_policy_decider_session),
                         )
                     });
-            let (network_proxy, session_network_proxy) =
+            let (network_proxy, session_network_proxy, credentialed_route_prefixes) =
                 if let Some(spec) = config.permissions.network.as_ref() {
                     let current_exec_policy = exec_policy.current();
-                    let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
-                        spec,
-                        current_exec_policy.as_ref(),
-                        config.permissions.permission_profile(),
-                        network_policy_decider.as_ref().map(Arc::clone),
-                        blocked_request_observer.as_ref().map(Arc::clone),
-                        managed_network_requirements_configured,
-                        network_proxy_audit_metadata.clone(),
-                    )
+                    let (network_proxy, session_network_proxy, credentialed_route_prefixes) =
+                        Self::start_managed_network_proxy(ManagedNetworkProxyStartRequest {
+                            spec,
+                            chatgpt_base_url: &config.chatgpt_base_url,
+                            auth_manager: Arc::clone(&auth_manager),
+                            exec_policy: current_exec_policy.as_ref(),
+                            permission_profile: config.permissions.permission_profile(),
+                            network_policy_decider: network_policy_decider.as_ref().map(Arc::clone),
+                            blocked_request_observer: blocked_request_observer.as_ref().map(Arc::clone),
+                            managed_network_requirements_enabled:
+                                managed_network_requirements_configured,
+                            audit_metadata: network_proxy_audit_metadata.clone(),
+                        })
                     .instrument(info_span!(
                         "session_init.network_proxy",
                         otel.name = "session_init.network_proxy",
@@ -916,9 +920,13 @@ impl Session {
                             managed_network_requirements_enabled,
                     ))
                     .await?;
-                    (Some(network_proxy), Some(session_network_proxy))
+                    (
+                        Some(network_proxy),
+                        Some(session_network_proxy),
+                        credentialed_route_prefixes,
+                    )
                 } else {
-                    (None, None)
+                    (None, None, Default::default())
                 };
 
             let hooks = build_hooks_for_config(
@@ -1020,6 +1028,9 @@ impl Session {
                 ),
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
+                credentialed_route_prefixes: arc_swap::ArcSwap::from_pointee(
+                    credentialed_route_prefixes,
+                ),
                 network_proxy_audit_metadata,
                 managed_network_requirements_configured,
                 network_approval: Arc::clone(&network_approval),
