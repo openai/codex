@@ -611,7 +611,8 @@ impl DirectFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        self.get_metadata_impl(path, sandbox, true).await
+        self.get_metadata_impl(path, sandbox, /*follow_symlinks*/ true)
+            .await
     }
 
     async fn get_symlink_metadata(
@@ -619,7 +620,8 @@ impl DirectFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        self.get_metadata_impl(path, sandbox, false).await
+        self.get_metadata_impl(path, sandbox, /*follow_symlinks*/ false)
+            .await
     }
 
     async fn get_metadata_impl(

@@ -148,7 +148,7 @@ impl SandboxedFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        self.get_metadata_with_follow_symlinks(path, sandbox, true)
+        self.get_metadata_with_follow_symlinks(path, sandbox, /*follow_symlinks*/ true)
             .await
     }
 
@@ -157,7 +157,7 @@ impl SandboxedFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        self.get_metadata_with_follow_symlinks(path, sandbox, false)
+        self.get_metadata_with_follow_symlinks(path, sandbox, /*follow_symlinks*/ false)
             .await
     }
 
