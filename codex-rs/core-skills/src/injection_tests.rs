@@ -26,8 +26,14 @@ fn set<'a>(items: &'a [&'a str]) -> HashSet<&'a str> {
 
 fn assert_mentions(text: &str, expected_names: &[&str], expected_paths: &[&str]) {
     let mentions = extract_tool_mentions(text);
-    assert_eq!(mentions.names, set(expected_names));
-    assert_eq!(mentions.paths, set(expected_paths));
+    assert_eq!(
+        mentions.names().collect::<HashSet<_>>(),
+        set(expected_names)
+    );
+    assert_eq!(
+        mentions.paths().collect::<HashSet<_>>(),
+        set(expected_paths)
+    );
 }
 
 fn linked_skill_mention(name: &str, unix_path: &str) -> String {

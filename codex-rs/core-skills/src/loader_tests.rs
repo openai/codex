@@ -1817,7 +1817,7 @@ async fn deduplicates_by_path_preferring_first_root() {
             plugin_root: None,
         },
         SkillRoot {
-            path: root.path().abs(),
+            path: root.path().join("dupe").abs(),
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,

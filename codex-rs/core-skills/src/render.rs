@@ -5,11 +5,6 @@ use std::path::Path;
 
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
-use codex_otel::SessionTelemetry;
-use codex_otel::THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC;
-use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
-use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
-use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
@@ -126,26 +121,27 @@ pub fn render_available_skills_body_for_mode(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillMetadataBudget {
     Tokens(usize),
+    CappedTokens(usize),
     Characters(usize),
 }
 
 impl SkillMetadataBudget {
     fn limit(self) -> usize {
         match self {
-            Self::Tokens(limit) | Self::Characters(limit) => limit,
+            Self::Tokens(limit) | Self::CappedTokens(limit) | Self::Characters(limit) => limit,
         }
     }
 
     fn cost(self, text: &str) -> usize {
         match self {
-            Self::Tokens(_) => approx_token_count(text),
+            Self::Tokens(_) | Self::CappedTokens(_) => approx_token_count(text),
             Self::Characters(_) => text.chars().count(),
         }
     }
 
     fn cost_from_counts(self, chars: usize, bytes: usize) -> usize {
         match self {
-            Self::Tokens(_) => approx_token_count_from_bytes(bytes),
+            Self::Tokens(_) | Self::CappedTokens(_) => approx_token_count_from_bytes(bytes),
             Self::Characters(_) => chars,
         }
     }
@@ -162,14 +158,6 @@ pub struct SkillRenderReport {
     pub omitted_count: usize,
     pub truncated_description_chars: usize,
     pub truncated_description_count: usize,
-}
-
-#[derive(Clone, Copy)]
-pub enum SkillRenderSideEffects<'a> {
-    None,
-    ThreadStart {
-        session_telemetry: &'a SessionTelemetry,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,17 +188,9 @@ pub fn default_skill_metadata_budget(context_window: Option<i64>) -> SkillMetada
 pub fn build_available_skills(
     outcome: &SkillLoadOutcome,
     budget: SkillMetadataBudget,
-    side_effects: SkillRenderSideEffects<'_>,
 ) -> Option<AvailableSkills> {
     let skills = outcome.allowed_skills_for_implicit_invocation();
     if skills.is_empty() {
-        record_skill_render_side_effects(
-            side_effects,
-            /*total_count*/ 0,
-            /*included_count*/ 0,
-            /*omitted_count*/ 0,
-            /*truncated_description_chars*/ 0,
-        );
         return None;
     }
 
@@ -235,7 +215,7 @@ pub fn build_available_skills(
             absolute
         };
 
-    record_available_skills_side_effects(&selected, budget, side_effects);
+    record_available_skills_truncation(&selected, budget);
     Some(selected)
 }
 
@@ -274,7 +254,9 @@ fn build_available_skills_from_lines(
         Some(
             match budget {
                 SkillMetadataBudget::Tokens(_) => SKILL_DESCRIPTION_TRUNCATED_WARNING_WITH_PERCENT,
-                SkillMetadataBudget::Characters(_) => SKILL_DESCRIPTION_TRUNCATED_WARNING,
+                SkillMetadataBudget::CappedTokens(_) | SkillMetadataBudget::Characters(_) => {
+                    SKILL_DESCRIPTION_TRUNCATED_WARNING
+                }
             }
             .to_string(),
         )
@@ -290,18 +272,7 @@ fn build_available_skills_from_lines(
     Some(available)
 }
 
-fn record_available_skills_side_effects(
-    available: &AvailableSkills,
-    budget: SkillMetadataBudget,
-    side_effects: SkillRenderSideEffects<'_>,
-) {
-    record_skill_render_side_effects(
-        side_effects,
-        available.report.total_count,
-        available.report.included_count,
-        available.report.omitted_count,
-        available.report.truncated_description_chars,
-    );
+fn record_available_skills_truncation(available: &AvailableSkills, budget: SkillMetadataBudget) {
     if available.report.omitted_count > 0 || available.report.truncated_description_chars > 0 {
         tracing::info!(
             budget_limit = budget.limit(),
@@ -323,40 +294,8 @@ fn budget_warning_prefix(budget: SkillMetadataBudget, prefix: &str) -> String {
             "Exceeded skills context budget of 2%.",
             1,
         ),
-        SkillMetadataBudget::Characters(_) => prefix.to_string(),
-    }
-}
-
-fn record_skill_render_side_effects(
-    side_effects: SkillRenderSideEffects<'_>,
-    total_count: usize,
-    included_count: usize,
-    omitted_count: usize,
-    truncated_description_chars: usize,
-) {
-    match side_effects {
-        SkillRenderSideEffects::None => {}
-        SkillRenderSideEffects::ThreadStart { session_telemetry } => {
-            session_telemetry.histogram(
-                THREAD_SKILLS_ENABLED_TOTAL_METRIC,
-                i64::try_from(total_count).unwrap_or(i64::MAX),
-                &[],
-            );
-            session_telemetry.histogram(
-                THREAD_SKILLS_KEPT_TOTAL_METRIC,
-                i64::try_from(included_count).unwrap_or(i64::MAX),
-                &[],
-            );
-            session_telemetry.histogram(
-                THREAD_SKILLS_TRUNCATED_METRIC,
-                if omitted_count > 0 { 1 } else { 0 },
-                &[],
-            );
-            session_telemetry.histogram(
-                THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC,
-                i64::try_from(truncated_description_chars).unwrap_or(i64::MAX),
-                &[],
-            );
+        SkillMetadataBudget::CappedTokens(_) | SkillMetadataBudget::Characters(_) => {
+            prefix.to_string()
         }
     }
 }
@@ -688,6 +627,7 @@ fn build_aliased_available_skills(
     let adjusted_limit = budget.limit().saturating_sub(plan.table_cost);
     let adjusted_budget = match budget {
         SkillMetadataBudget::Tokens(_) => SkillMetadataBudget::Tokens(adjusted_limit),
+        SkillMetadataBudget::CappedTokens(_) => SkillMetadataBudget::CappedTokens(adjusted_limit),
         SkillMetadataBudget::Characters(_) => SkillMetadataBudget::Characters(adjusted_limit),
     };
     let ordered_skills = ordered_skills_for_budget(skills);
@@ -1256,12 +1196,9 @@ mod tests {
             vec![root],
         );
 
-        let rendered = build_available_skills(
-            &outcome,
-            SkillMetadataBudget::Characters(usize::MAX),
-            SkillRenderSideEffects::None,
-        )
-        .expect("skills should render");
+        let rendered =
+            build_available_skills(&outcome, SkillMetadataBudget::Characters(usize::MAX))
+                .expect("skills should render");
 
         assert!(rendered.skill_root_lines.is_empty());
         assert_eq!(rendered.report.included_count, 2);
@@ -1302,12 +1239,9 @@ mod tests {
             "test fixture should make aliases cheaper"
         );
 
-        let rendered = build_available_skills(
-            &outcome,
-            SkillMetadataBudget::Characters(alias_minimum),
-            SkillRenderSideEffects::None,
-        )
-        .expect("skills should render");
+        let rendered =
+            build_available_skills(&outcome, SkillMetadataBudget::Characters(alias_minimum))
+                .expect("skills should render");
 
         assert_eq!(rendered.report.included_count, skills.len());
         assert_eq!(rendered.report.omitted_count, 0);

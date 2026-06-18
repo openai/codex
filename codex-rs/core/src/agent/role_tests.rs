@@ -1,16 +1,11 @@
 use super::*;
-use crate::SkillsService;
 use crate::config::ConfigBuilder;
-use crate::skills_load_input_from_config;
 use codex_config::ConfigLayerStackOrdering;
-use codex_core_plugins::PluginsManager;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 async fn test_config_with_cli_overrides(
@@ -374,68 +369,6 @@ async fn apply_role_takes_precedence_over_existing_session_flags_for_same_key() 
 
     assert_eq!(config.model.as_deref(), Some("role-model"));
     assert_eq!(session_flags_layer_count(&config), before_layers + 1);
-}
-
-#[cfg_attr(windows, ignore)]
-#[tokio::test]
-async fn apply_role_skills_config_disables_skill_for_spawned_agent() {
-    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
-    let skill_dir = home.path().join("skills").join("demo");
-    fs::create_dir_all(&skill_dir).expect("create skill dir");
-    let skill_path = skill_dir.join("SKILL.md");
-    fs::write(
-        &skill_path,
-        "---\nname: demo-skill\ndescription: demo description\n---\n\n# Body\n",
-    )
-    .expect("write skill");
-    let role_path = write_role_config(
-        &home,
-        "skills-role.toml",
-        &format!(
-            r#"developer_instructions = "Stay focused"
-
-[[skills.config]]
-path = "{}"
-enabled = false
-"#,
-            skill_path.display()
-        ),
-    )
-    .await;
-    config.agent_roles.insert(
-        "custom".to_string(),
-        AgentRoleConfig {
-            description: None,
-            config_file: Some(role_path),
-            nickname_candidates: None,
-        },
-    );
-
-    apply_role_to_config(&mut config, Some("custom"))
-        .await
-        .expect("custom role should apply");
-
-    let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
-    let skills_service =
-        SkillsService::new(home.path().abs(), /*bundled_skills_enabled*/ true);
-    let plugins_input = config.plugins_config_input();
-    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-    let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
-    let snapshot = skills_service
-        .snapshot_for_config(
-            &skills_input,
-            Some(Arc::clone(&codex_exec_server::LOCAL_FS)),
-        )
-        .await;
-    let outcome = snapshot.outcome();
-    let skill = outcome
-        .skills
-        .iter()
-        .find(|skill| skill.name == "demo-skill")
-        .expect("demo skill should be discovered");
-
-    assert_eq!(outcome.is_skill_enabled(skill), false);
 }
 
 #[test]

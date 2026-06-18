@@ -136,6 +136,7 @@ pub use requirements_layers::compose_requirements;
 pub use skills_config::BundledSkillsConfig;
 pub use skills_config::SkillConfig;
 pub use skills_config::SkillsConfig;
+pub use skills_config::bundled_skills_enabled_from_stack;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
 pub use state::ConfigLayerStackOrdering;

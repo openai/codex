@@ -5,14 +5,19 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirementsToml;
+use codex_config::TomlValue;
 use codex_connectors::ExplicitConnectorMentions;
+use codex_core_plugins::PluginLoadOutcome;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::SkillMetadata;
-use codex_core_skills::model::SkillDependencies;
-use codex_core_skills::model::SkillToolDependency;
+use codex_exec_server::ExecutorFileSystem;
 use codex_extension_api::ContextContributionContext;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
@@ -30,6 +35,7 @@ use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::user_input::UserInput;
+use codex_skills_extension::HostSkillsConfig;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::catalog::SkillAuthority;
@@ -69,10 +75,56 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
             .ok_or("skill path should have a parent")?,
     )?;
     std::fs::write(&skill_path, DEMO_SKILL_CONTENTS)?;
+    let metadata_path = skill_path
+        .parent()
+        .ok_or("skill path should have a parent")?
+        .join("agents")
+        .join("openai.yaml");
+    std::fs::create_dir_all(
+        metadata_path
+            .parent()
+            .ok_or("metadata path should have a parent")?,
+    )?;
+    std::fs::write(
+        metadata_path,
+        r#"{
+  "dependencies": {
+    "tools": [{
+      "type": "mcp",
+      "value": "docs",
+      "transport": "streamable_http",
+      "url": "https://example.com/mcp"
+    }]
+  }
+}"#,
+    )?;
     let config = default_config();
+    let codex_home_abs = AbsolutePathBuf::try_from(codex_home.clone())?;
+    let host = HostSkillsConfig::new(
+        codex_home_abs.clone(),
+        codex_home_abs,
+        ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: AbsolutePathBuf::try_from(codex_home.join("config.toml"))?,
+                    profile: None,
+                },
+                TomlValue::Table(Default::default()),
+            )],
+            Default::default(),
+            ConfigRequirementsToml::default(),
+        )?,
+        /*bundled_skills_enabled*/ false,
+    );
 
     let mut builder = ExtensionRegistryBuilder::new();
-    install(&mut builder, skills_extension_config);
+    install(&mut builder, move |config: &TestConfig| {
+        SkillsExtensionConfig {
+            include_instructions: config.include_instructions,
+            bundled_skills_enabled: config.bundled_skills_enabled,
+            host: Some(host.clone()),
+        }
+    });
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
@@ -88,33 +140,13 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
         })
         .await;
 
-    let skill_path = AbsolutePathBuf::try_from(skill_path)?;
+    let skill_path = AbsolutePathBuf::try_from(std::fs::canonicalize(skill_path)?)?;
     let skill_path_string = skill_path.to_string_lossy().into_owned();
-    let mut outcome = SkillLoadOutcome::default();
-    outcome.skills.push(SkillMetadata {
-        name: "demo".to_string(),
-        description: "Demo skill.".to_string(),
-        short_description: None,
-        interface: None,
-        dependencies: Some(SkillDependencies {
-            tools: vec![SkillToolDependency {
-                r#type: "mcp".to_string(),
-                value: "docs".to_string(),
-                description: None,
-                transport: Some("streamable_http".to_string()),
-                command: None,
-                url: Some("https://example.com/mcp".to_string()),
-            }],
-        }),
-        policy: None,
-        path_to_skills_md: skill_path,
-        scope: SkillScope::User,
-        plugin_id: None,
-    });
-    let loaded_skills = Arc::new(outcome);
     let skill_prompt_path = skill_path_string.replace('\\', "/");
     let turn_store = ExtensionData::new("turn-1");
-    turn_store.insert(HostSkillsSnapshot::new(Arc::clone(&loaded_skills)));
+    turn_store.insert(PluginLoadOutcome::default());
+    let fs: Arc<dyn ExecutorFileSystem> = Arc::clone(&codex_exec_server::LOCAL_FS);
+    turn_store.insert(fs);
 
     let prompt_fragments = registry.context_contributors()[0]
         .contribute(prompt_context(&session_store, &thread_store, &turn_store))
@@ -171,7 +203,6 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
             .collect::<Vec<_>>(),
         vec!["docs".to_string()]
     );
-
     std::fs::remove_dir_all(codex_home)?;
     Ok(())
 }
@@ -272,7 +303,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &initial_turn_store,
-            model_context_window: Some(400_000),
+            model_context_window: Some(2_000_000),
         })
         .await;
     assert_eq!(1, prompt_fragments.len());
@@ -292,7 +323,8 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
     let EventMsg::Warning(warning) = event_rx.try_recv()?.1.msg else {
         panic!("expected host budget warning");
     };
-    assert!(warning.message.contains("2% skills context budget"));
+    assert!(warning.message.contains("skills context budget"));
+    assert!(!warning.message.contains("2% skills context budget"));
 
     let turn_store = ExtensionData::new("turn-1");
     let fragments = registry.turn_input_contributors()[0]
@@ -904,6 +936,7 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
     SkillsExtensionConfig {
         include_instructions: config.include_instructions,
         bundled_skills_enabled: config.bundled_skills_enabled,
+        host: None,
     }
 }
 

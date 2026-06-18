@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_analytics::AnalyticsEventsClient;
@@ -6,12 +7,12 @@ use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
 use codex_connectors::ExplicitConnectorMentions;
+use codex_core_plugins::PluginLoadOutcome;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::SkillMetadata;
-use codex_core_skills::injection::ToolMentionKind;
-use codex_core_skills::injection::app_id_from_path;
-use codex_core_skills::injection::extract_tool_mentions;
-use codex_core_skills::injection::tool_kind_for_path;
+use codex_core_skills::SkillsService;
+use codex_core_skills::detect_implicit_skill_invocation_for_command;
+use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributionContext;
@@ -26,7 +27,10 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolDispatchInput;
 use codex_extension_api::ToolExecutor;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
 use codex_mcp::McpResourceClient;
@@ -34,9 +38,17 @@ use codex_mcp::McpServerDependencies;
 use codex_mcp::McpServerDependency;
 use codex_otel::SessionTelemetry;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
+use codex_tools::ToolPayload;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::tool_mentions::ToolMentionKind;
+use codex_utils_plugins::tool_mentions::app_id_from_path;
+use codex_utils_plugins::tool_mentions::extract_tool_mentions;
+use codex_utils_plugins::tool_mentions::tool_kind_for_path;
+use serde::Deserialize;
 
 use crate::SkillsExtensionConfig;
 use crate::catalog::SkillCatalog;
@@ -54,12 +66,14 @@ use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::selection::collect_explicit_skill_mentions;
 use crate::sources::SkillProviders;
+use crate::state::ImplicitSkillInvocationState;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
 use crate::tools::skill_tools;
 
 struct SkillsExtension<C> {
     providers: SkillProviders,
+    host_provider: Option<Arc<HostSkillProvider>>,
     event_sink: Arc<dyn ExtensionEventSink>,
     config_from_host: Arc<dyn Fn(&C) -> SkillsExtensionConfig + Send + Sync>,
 }
@@ -83,6 +97,7 @@ where
                 (self.config_from_host)(input.config),
                 selected_roots,
                 orchestrator_skills_enabled,
+                input.session_source.restriction_product(),
             ));
         })
     }
@@ -108,6 +123,7 @@ where
                 next_config,
                 Vec::new(),
                 orchestrator_skills_enabled,
+                /*restriction_product*/ None,
             ));
         }
     }
@@ -129,10 +145,10 @@ where
                 return Vec::new();
             };
             let config = thread_state.config();
+            let host_snapshot = self.host_snapshot(turn_store, &thread_state).await;
             if !config.include_instructions {
                 return Vec::new();
             }
-            let host_snapshot = turn_store.get::<HostSkillsSnapshot>();
             let catalog = self
                 .list_skills(
                     SkillListQuery {
@@ -154,7 +170,7 @@ where
                     warning.clone(),
                 );
             }
-            let session_telemetry = context.turn_store.get::<SessionTelemetry>();
+            let session_telemetry = turn_store.get::<SessionTelemetry>();
             let Some((fragment, warning)) = available_skills_fragment(
                 &catalog,
                 host_snapshot.as_deref(),
@@ -214,7 +230,7 @@ where
             };
 
             let config = thread_state.config();
-            let host_snapshot = turn_store.get::<HostSkillsSnapshot>();
+            let host_snapshot = self.host_snapshot(turn_store, &thread_state).await;
             let query = SkillListQuery {
                 turn_id: input.turn_id.clone(),
                 executor_roots: thread_state.selected_roots().to_vec(),
@@ -345,9 +361,9 @@ where
             if let Some(analytics) = session_store.get::<AnalyticsEventsClient>() {
                 analytics.track_skill_invocations(
                     build_track_events_context(
-                        input.model,
+                        input.model.clone(),
                         thread_store.level_id().to_string(),
-                        input.turn_id,
+                        input.turn_id.clone(),
                     ),
                     skill_invocations,
                 );
@@ -359,6 +375,22 @@ where
                 warnings,
                 main_prompts_injected,
             });
+            turn_store.insert(ImplicitSkillInvocationState {
+                model: input.model,
+                environment_cwds: input
+                    .environments
+                    .iter()
+                    .map(|environment| {
+                        (environment.environment_id.clone(), environment.cwd.clone())
+                    })
+                    .collect(),
+                primary_environment_id: input
+                    .environments
+                    .iter()
+                    .find(|environment| environment.is_primary)
+                    .map(|environment| environment.environment_id.clone()),
+                seen_skills: Default::default(),
+            });
 
             fragments
         })
@@ -366,6 +398,35 @@ where
 }
 
 impl<C> SkillsExtension<C> {
+    async fn host_snapshot(
+        &self,
+        turn_store: &ExtensionData,
+        thread_state: &SkillsThreadState,
+    ) -> Option<Arc<HostSkillsSnapshot>> {
+        if let Some(snapshot) = turn_store.get::<HostSkillsSnapshot>() {
+            refine_plugin_skill_availability(turn_store, &snapshot);
+            return Some(snapshot);
+        }
+        let provider = self.host_provider.as_ref()?;
+        let config = thread_state.config();
+        let host_config = config.host.as_ref()?;
+        let plugins = turn_store.get::<PluginLoadOutcome>();
+        let fs = turn_store
+            .get::<Arc<dyn ExecutorFileSystem>>()
+            .map(|fs| Arc::clone(fs.as_ref()));
+        let snapshot = provider
+            .snapshot_for_turn(
+                host_config,
+                thread_state.restriction_product(),
+                plugins.as_deref(),
+                fs,
+            )
+            .await;
+        refine_plugin_skill_availability(turn_store, &snapshot);
+        turn_store.insert(snapshot);
+        turn_store.get::<HostSkillsSnapshot>()
+    }
+
     async fn list_skills(
         &self,
         mut query: SkillListQuery,
@@ -423,6 +484,149 @@ impl<C> SkillsExtension<C> {
     }
 }
 
+fn refine_plugin_skill_availability(
+    turn_store: &ExtensionData,
+    host_snapshot: &HostSkillsSnapshot,
+) {
+    let Some(plugins) = turn_store.get::<PluginLoadOutcome>() else {
+        return;
+    };
+    let outcome = host_snapshot.outcome();
+    let mut available_plugin_ids = outcome
+        .skills_with_enabled()
+        .filter(|(_, enabled)| *enabled)
+        .filter_map(|(skill, _)| skill.plugin_id.clone())
+        .collect::<HashSet<_>>();
+    for plugin in plugins.plugins().iter().filter(|plugin| plugin.is_active()) {
+        if outcome.errors.iter().any(|error| {
+            plugin
+                .skill_roots
+                .iter()
+                .any(|root| error.path.as_path().starts_with(root.as_path()))
+        }) {
+            available_plugin_ids.insert(plugin.config_name.clone());
+        }
+    }
+    turn_store.insert(
+        plugins
+            .as_ref()
+            .clone()
+            .with_available_skill_plugins(&available_plugin_ids),
+    );
+}
+
+impl<C> ToolLifecycleContributor for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn on_tool_dispatch<'a>(&'a self, input: ToolDispatchInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            let Some((command, workdir)) = implicit_command_invocation(&input) else {
+                return;
+            };
+            let Some(snapshot) = input.turn_store.get::<HostSkillsSnapshot>() else {
+                return;
+            };
+            let Some(skill) = detect_implicit_skill_invocation_for_command(
+                snapshot.outcome(),
+                &command,
+                &workdir,
+            ) else {
+                return;
+            };
+            let Some(state) = input.turn_store.get::<ImplicitSkillInvocationState>() else {
+                return;
+            };
+            let skill_scope = match skill.scope {
+                codex_protocol::protocol::SkillScope::User => "user",
+                codex_protocol::protocol::SkillScope::Repo => "repo",
+                codex_protocol::protocol::SkillScope::System => "system",
+                codex_protocol::protocol::SkillScope::Admin => "admin",
+            };
+            let skill_path = skill.path_to_skills_md.to_string_lossy();
+            let seen_key = format!("{skill_scope}:{skill_path}:{}", skill.name);
+            if !state
+                .seen_skills
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(seen_key)
+            {
+                return;
+            }
+            if let Some(telemetry) = input.turn_store.get::<SessionTelemetry>() {
+                telemetry.counter(
+                    "codex.skill.injected",
+                    /*inc*/ 1,
+                    &[
+                        ("status", "ok"),
+                        ("skill", skill.name.as_str()),
+                        ("invoke_type", "implicit"),
+                    ],
+                );
+            }
+            if let Some(analytics) = input.session_store.get::<AnalyticsEventsClient>() {
+                analytics.track_skill_invocations(
+                    build_track_events_context(
+                        state.model.clone(),
+                        input.thread_store.level_id().to_string(),
+                        input.turn_id.to_string(),
+                    ),
+                    vec![SkillInvocation {
+                        skill_name: skill.name,
+                        skill_scope: skill.scope,
+                        skill_path: skill.path_to_skills_md.to_path_buf(),
+                        plugin_id: skill.plugin_id,
+                        invocation_type: InvocationType::Implicit,
+                    }],
+                );
+            }
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct ExecCommandInvocation {
+    cmd: String,
+    workdir: Option<String>,
+    environment_id: Option<String>,
+}
+
+fn implicit_command_invocation(input: &ToolDispatchInput<'_>) -> Option<(String, AbsolutePathBuf)> {
+    if input.tool_name.namespace.is_some() {
+        return None;
+    }
+    let ToolPayload::Function { arguments } = input.payload else {
+        return None;
+    };
+    let state = input.turn_store.get::<ImplicitSkillInvocationState>()?;
+    let (command, workdir, environment_id) = match input.tool_name.name.as_str() {
+        "exec_command" => {
+            let invocation = serde_json::from_str::<ExecCommandInvocation>(arguments).ok()?;
+            (
+                invocation.cmd,
+                invocation.workdir,
+                invocation.environment_id,
+            )
+        }
+        "shell_command" => {
+            let invocation = serde_json::from_str::<ShellCommandToolCallParams>(arguments).ok()?;
+            (invocation.command, invocation.workdir, None)
+        }
+        _ => return None,
+    };
+    let environment_id = environment_id.or_else(|| state.primary_environment_id.clone())?;
+    let base = state.environment_cwds.get(&environment_id)?;
+    let workdir = workdir.map(PathBuf::from).unwrap_or_else(|| base.clone());
+    let workdir = if workdir.is_absolute() {
+        workdir
+    } else {
+        base.join(workdir)
+    };
+    AbsolutePathBuf::try_from(workdir)
+        .ok()
+        .map(|workdir| (command, workdir))
+}
+
 fn host_skill_for_entry<'a>(
     host_snapshot: Option<&'a HostSkillsSnapshot>,
     entry: &SkillCatalogEntry,
@@ -442,9 +646,28 @@ pub fn install<C>(
 ) where
     C: Send + Sync + 'static,
 {
-    install_with_providers(
+    let host_provider = Arc::new(HostSkillProvider::new());
+    install_inner(
         registry,
-        SkillProviders::new().with_host_provider(Arc::new(HostSkillProvider::new())),
+        SkillProviders::new().with_host_provider(host_provider.clone()),
+        Some(host_provider),
+        config_from_host,
+    );
+}
+
+pub fn install_with_host_service<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    service: Arc<SkillsService>,
+    providers: SkillProviders,
+    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
+) where
+    C: Send + Sync + 'static,
+{
+    let host_provider = Arc::new(HostSkillProvider::with_service(service));
+    install_inner(
+        registry,
+        providers.with_host_provider(host_provider.clone()),
+        Some(host_provider),
         config_from_host,
     );
 }
@@ -456,8 +679,25 @@ pub fn install_with_providers<C>(
 ) where
     C: Send + Sync + 'static,
 {
+    install_inner(
+        registry,
+        providers,
+        /*host_provider*/ None,
+        config_from_host,
+    );
+}
+
+fn install_inner<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    providers: SkillProviders,
+    host_provider: Option<Arc<HostSkillProvider>>,
+    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
+) where
+    C: Send + Sync + 'static,
+{
     let extension = Arc::new(SkillsExtension {
         providers,
+        host_provider,
         event_sink: registry.event_sink(),
         config_from_host: Arc::new(config_from_host),
     });
@@ -465,5 +705,6 @@ pub fn install_with_providers<C>(
     registry.config_contributor(extension.clone());
     registry.prompt_contributor(extension.clone());
     registry.turn_input_contributor(extension.clone());
-    registry.tool_contributor(extension);
+    registry.tool_contributor(extension.clone());
+    registry.tool_lifecycle_contributor(extension);
 }

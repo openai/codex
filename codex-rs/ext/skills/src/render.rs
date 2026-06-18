@@ -5,16 +5,22 @@ use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
 use crate::fragments::AvailableSkillsInstructions;
 use codex_core_skills::HostSkillsSnapshot;
+use codex_core_skills::SkillMetadataBudget;
+use codex_core_skills::SkillRenderReport;
 use codex_core_skills::build_available_skills;
 use codex_core_skills::default_skill_metadata_budget;
 use codex_core_skills::render::SkillCatalogMode;
-use codex_core_skills::render::SkillRenderSideEffects;
 use codex_extension_api::ContextualUserFragment;
 use codex_otel::SessionTelemetry;
+use codex_otel::THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC;
+use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_utils_string::approx_token_count;
 
 const MAX_AVAILABLE_SKILLS_BYTES: usize = 8_000;
 const MAX_AVAILABLE_SKILLS_TOKENS: usize = 10_000;
+const MAX_HOST_SKILL_METADATA_TOKENS: usize = 8_000;
 const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
 pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
@@ -30,17 +36,20 @@ pub(crate) fn available_skills_fragment(
         .iter()
         .filter(|entry| entry.enabled && entry.prompt_visible)
         .collect::<Vec<_>>();
-    let side_effects = session_telemetry
-        .map_or(SkillRenderSideEffects::None, |session_telemetry| {
-            SkillRenderSideEffects::ThreadStart { session_telemetry }
-        });
-    let host_available = host_snapshot.and_then(|host_snapshot| {
-        build_available_skills(
-            host_snapshot.outcome(),
-            default_skill_metadata_budget(model_context_window),
-            side_effects,
-        )
-    });
+    let host_budget = match default_skill_metadata_budget(model_context_window) {
+        SkillMetadataBudget::Tokens(limit) if limit > MAX_HOST_SKILL_METADATA_TOKENS => {
+            SkillMetadataBudget::CappedTokens(MAX_HOST_SKILL_METADATA_TOKENS)
+        }
+        budget => budget,
+    };
+    let host_available = host_snapshot
+        .and_then(|host_snapshot| build_available_skills(host_snapshot.outcome(), host_budget));
+    if host_snapshot.is_some() {
+        record_skill_render_metrics(
+            session_telemetry,
+            host_available.as_ref().map(|available| &available.report),
+        );
+    }
 
     if visible_entries
         .iter()
@@ -117,7 +126,7 @@ fn bounded_skill_lines<'a>(
 }
 
 fn bounded_mixed_fragment(
-    available: codex_core_skills::AvailableSkills,
+    mut available: codex_core_skills::AvailableSkills,
     mut external: BoundedSkillLines,
 ) -> AvailableSkillsInstructions {
     loop {
@@ -132,13 +141,15 @@ fn bounded_mixed_fragment(
         if approx_token_count(&fragment.render()) <= MAX_AVAILABLE_SKILLS_TOKENS {
             return fragment;
         }
-        if external.lines.pop().is_none() {
-            return AvailableSkillsInstructions::from_available_skills_with_additional_lines(
-                available,
-                Vec::new(),
-            );
+        if external.lines.pop().is_some() {
+            external.omitted = external.omitted.saturating_add(1);
+            continue;
         }
-        external.omitted = external.omitted.saturating_add(1);
+        if available.skill_lines.pop().is_some() {
+            external.omitted = external.omitted.saturating_add(1);
+            continue;
+        }
+        available.skill_root_lines.clear();
     }
 }
 
@@ -147,6 +158,32 @@ fn omitted_skills_line(omitted: usize) -> Option<String> {
         let skill_word = if omitted == 1 { "skill" } else { "skills" };
         format!("- {omitted} additional {skill_word} omitted from this bounded skills list.")
     })
+}
+
+fn record_skill_render_metrics(
+    session_telemetry: Option<&SessionTelemetry>,
+    report: Option<&SkillRenderReport>,
+) {
+    let Some(session_telemetry) = session_telemetry else {
+        return;
+    };
+    let (total_count, included_count, truncated, truncated_description_chars) =
+        report.map_or((0, 0, 0, 0), |report| {
+            (
+                i64::try_from(report.total_count).unwrap_or(i64::MAX),
+                i64::try_from(report.included_count).unwrap_or(i64::MAX),
+                i64::from(report.omitted_count > 0),
+                i64::try_from(report.truncated_description_chars).unwrap_or(i64::MAX),
+            )
+        });
+    session_telemetry.histogram(THREAD_SKILLS_ENABLED_TOTAL_METRIC, total_count, &[]);
+    session_telemetry.histogram(THREAD_SKILLS_KEPT_TOTAL_METRIC, included_count, &[]);
+    session_telemetry.histogram(THREAD_SKILLS_TRUNCATED_METRIC, truncated, &[]);
+    session_telemetry.histogram(
+        THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC,
+        truncated_description_chars,
+        &[],
+    );
 }
 
 fn render_skill_line(entry: &SkillCatalogEntry, description: &str) -> String {

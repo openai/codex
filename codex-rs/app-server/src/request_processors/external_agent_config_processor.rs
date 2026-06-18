@@ -61,6 +61,7 @@ pub(crate) struct ExternalAgentConfigRequestProcessor {
     config_processor: ConfigRequestProcessor,
     state_db: Option<StateDbHandle>,
     analytics_events_client: AnalyticsEventsClient,
+    skills_service: Arc<codex_core_skills::SkillsService>,
 }
 
 pub(crate) struct ExternalAgentConfigRequestProcessorArgs {
@@ -73,6 +74,7 @@ pub(crate) struct ExternalAgentConfigRequestProcessorArgs {
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) codex_home: PathBuf,
+    pub(crate) skills_service: Arc<codex_core_skills::SkillsService>,
 }
 
 impl ExternalAgentConfigRequestProcessor {
@@ -87,6 +89,7 @@ impl ExternalAgentConfigRequestProcessor {
             analytics_events_client,
             arg0_paths,
             codex_home,
+            skills_service,
         } = args;
         let session_importer = ExternalAgentSessionImporter::new(
             codex_home.clone(),
@@ -103,6 +106,7 @@ impl ExternalAgentConfigRequestProcessor {
             config_processor,
             state_db,
             analytics_events_client,
+            skills_service,
         }
     }
 
@@ -265,6 +269,7 @@ impl ExternalAgentConfigRequestProcessor {
         let state_db = self.state_db.clone();
         let analytics_events_client = self.analytics_events_client.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
+        let skills_service = Arc::clone(&self.skills_service);
         let session_import_result = (!pending_session_imports.is_empty()).then(|| {
             CoreImportItemResult::new(
                 CoreMigrationItemType::Sessions,
@@ -330,7 +335,7 @@ impl ExternalAgentConfigRequestProcessor {
             completed_item_results.extend(background_item_results);
             if has_plugin_imports {
                 thread_manager.plugins_manager().clear_cache();
-                thread_manager.skills_service().clear_cache();
+                skills_service.clear_cache();
             }
             send_completed_import_notification(
                 &outgoing,

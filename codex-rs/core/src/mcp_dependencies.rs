@@ -25,7 +25,7 @@ use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_scopes;
 use codex_mcp::should_retry_without_scopes;
 
-const SKILL_MCP_DEPENDENCY_PROMPT_ID: &str = "skill_mcp_dependency_install";
+const MCP_DEPENDENCY_PROMPT_ID: &str = "skill_mcp_dependency_install";
 const MCP_DEPENDENCY_OPTION_INSTALL: &str = "Install";
 const MCP_DEPENDENCY_OPTION_SKIP: &str = "Continue anyway";
 
@@ -101,7 +101,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     let mut servers = match load_global_mcp_servers(&codex_home).await {
         Ok(servers) => servers,
         Err(err) => {
-            warn!("failed to load MCP servers while installing skill dependencies: {err}");
+            warn!("failed to load MCP servers while installing capability dependencies: {err}");
             return;
         }
     };
@@ -126,7 +126,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         .apply()
         .await
     {
-        warn!("failed to persist MCP dependencies for mentioned skills: {err}");
+        warn!("failed to persist MCP dependencies for selected capabilities: {err}");
         return;
     }
 
@@ -194,7 +194,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             .or_insert_with(|| server_config.clone());
     }
     if let Err(err) = refresh_config.mcp_servers.set(configured_servers) {
-        warn!("failed to refresh MCP dependencies for mentioned skills: {err}");
+        warn!("failed to refresh MCP dependencies for selected capabilities: {err}");
         return;
     }
     let refresh_servers = sess.runtime_mcp_servers(&refresh_config).await;
@@ -224,10 +224,10 @@ async fn should_install_mcp_dependencies(
 
     let server_list = format_missing_mcp_dependencies(missing);
     let question = RequestUserInputQuestion {
-        id: SKILL_MCP_DEPENDENCY_PROMPT_ID.to_string(),
+        id: MCP_DEPENDENCY_PROMPT_ID.to_string(),
         header: "Install MCP servers?".to_string(),
         question: format!(
-            "The following MCP servers are required by the selected skills but are not installed yet: {server_list}. Install them now?"
+            "The following MCP servers are required by selected capabilities but are not installed yet: {server_list}. Install them now?"
         ),
         is_other: false,
         is_secret: false,
@@ -268,7 +268,7 @@ async fn should_install_mcp_dependencies(
 
     let install = response
         .answers
-        .get(SKILL_MCP_DEPENDENCY_PROMPT_ID)
+        .get(MCP_DEPENDENCY_PROMPT_ID)
         .is_some_and(|answer| {
             answer
                 .answers

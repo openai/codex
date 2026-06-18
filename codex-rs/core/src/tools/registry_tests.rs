@@ -91,6 +91,11 @@ enum RecordedToolLifecycle {
         call_id: String,
         tool_name: codex_tools::ToolName,
     },
+    Dispatch {
+        call_id: String,
+        tool_name: codex_tools::ToolName,
+        payload: String,
+    },
     Finish {
         call_id: String,
         tool_name: codex_tools::ToolName,
@@ -129,6 +134,24 @@ impl codex_extension_api::ToolLifecycleContributor for ToolLifecycleRecorder {
             call_id: input.call_id.to_string(),
             tool_name: input.tool_name.clone(),
             outcome: input.outcome,
+        };
+        Box::pin(async move {
+            records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(record);
+        })
+    }
+
+    fn on_tool_dispatch<'a>(
+        &'a self,
+        input: codex_extension_api::ToolDispatchInput<'a>,
+    ) -> codex_extension_api::ToolLifecycleFuture<'a> {
+        let records = Arc::clone(&self.records);
+        let record = RecordedToolLifecycle::Dispatch {
+            call_id: input.call_id.to_string(),
+            tool_name: input.tool_name.clone(),
+            payload: input.payload.log_payload().into_owned(),
         };
         Box::pin(async move {
             records
@@ -424,6 +447,11 @@ async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
             call_id: "ok-call".to_string(),
             tool_name: ok_tool.clone(),
         },
+        RecordedToolLifecycle::Dispatch {
+            call_id: "ok-call".to_string(),
+            tool_name: ok_tool.clone(),
+            payload: "{}".to_string(),
+        },
         RecordedToolLifecycle::Finish {
             call_id: "ok-call".to_string(),
             tool_name: ok_tool,
@@ -432,6 +460,11 @@ async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
         RecordedToolLifecycle::Start {
             call_id: "failing-call".to_string(),
             tool_name: failing_tool.clone(),
+        },
+        RecordedToolLifecycle::Dispatch {
+            call_id: "failing-call".to_string(),
+            tool_name: failing_tool.clone(),
+            payload: "{}".to_string(),
         },
         RecordedToolLifecycle::Finish {
             call_id: "failing-call".to_string(),

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_config::ConfigLayerStack;
+use codex_config::bundled_skills_enabled_from_stack;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -11,7 +12,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
 use tracing::info;
 use tracing::instrument;
-use tracing::warn;
 
 use crate::HostSkillsSnapshot;
 use crate::SkillLoadOutcome;
@@ -24,7 +24,6 @@ use crate::loader::load_skills_from_roots;
 use crate::loader::skill_roots;
 use crate::system::install_system_skills;
 use crate::system::uninstall_system_skills;
-use codex_config::SkillsConfig;
 
 #[derive(Debug, Clone)]
 pub struct SkillsLoadInput {
@@ -131,6 +130,39 @@ impl SkillsService {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.insert(cache_key, snapshot.clone());
+        snapshot
+    }
+
+    /// Load exactly the plugin-owned roots supplied by plugin resolution.
+    #[instrument(level = "trace", skip_all)]
+    pub async fn snapshot_for_plugin_roots(
+        &self,
+        plugin_skill_roots: Vec<PluginSkillRoot>,
+        config_layer_stack: &ConfigLayerStack,
+    ) -> HostSkillsSnapshot {
+        let roots = plugin_skill_roots
+            .into_iter()
+            .map(|root| SkillRoot {
+                path: root.path,
+                scope: SkillScope::User,
+                file_system: Arc::clone(&codex_exec_server::LOCAL_FS),
+                plugin_id: Some(root.plugin_id),
+                plugin_namespace: Some(root.plugin_namespace),
+                plugin_root: Some(root.plugin_root),
+            })
+            .collect::<Vec<_>>();
+        let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
+        let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
+        if let Some(snapshot) = self.cached_snapshot_for_config(&cache_key) {
+            return snapshot;
+        }
+        let snapshot = HostSkillsSnapshot::new(Arc::new(
+            self.build_skill_outcome(roots, &skill_config_rules).await,
+        ));
+        self.cache_by_config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(cache_key, snapshot.clone());
         snapshot
     }
 
@@ -258,28 +290,6 @@ impl SkillsService {
 struct ConfigSkillsCacheKey {
     roots: Vec<(AbsolutePathBuf, u8, Option<String>, Option<String>)>,
     skill_config_rules: SkillConfigRules,
-}
-
-pub fn bundled_skills_enabled_from_stack(
-    config_layer_stack: &codex_config::ConfigLayerStack,
-) -> bool {
-    let effective_config = config_layer_stack.effective_config();
-    let Some(skills_value) = effective_config
-        .as_table()
-        .and_then(|table| table.get("skills"))
-    else {
-        return true;
-    };
-
-    let skills: SkillsConfig = match skills_value.clone().try_into() {
-        Ok(skills) => skills,
-        Err(err) => {
-            warn!("invalid skills config: {err}");
-            return true;
-        }
-    };
-
-    skills.bundled.unwrap_or_default().enabled
 }
 
 fn config_skills_cache_key(

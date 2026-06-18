@@ -22,8 +22,6 @@ pub struct LoadedPlugin<M> {
     pub root: AbsolutePathBuf,
     pub enabled: bool,
     pub skill_roots: Vec<AbsolutePathBuf>,
-    pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
-    pub has_enabled_skills: bool,
     pub mcp_servers: HashMap<String, M>,
     pub apps: Vec<AppDeclaration>,
     pub hook_sources: Vec<PluginHookSource>,
@@ -55,7 +53,7 @@ fn plugin_capability_summary_from_loaded<M>(
         config_name: plugin.config_name.clone(),
         display_name: plugin.display_name().to_string(),
         description: prompt_safe_plugin_description(plugin.manifest_description.as_deref()),
-        has_skills: plugin.has_enabled_skills,
+        has_skills: !plugin.skill_roots.is_empty(),
         mcp_server_names,
         app_connector_ids: app_connector_ids_from_declarations(&plugin.apps),
     };
@@ -146,6 +144,22 @@ impl<M: Clone> PluginLoadOutcome<M> {
         skill_roots
     }
 
+    /// Refines declared skill capabilities using the plugins whose skills are available at
+    /// runtime.
+    pub fn with_available_skill_plugins(mut self, available_plugin_ids: &HashSet<String>) -> Self {
+        for summary in &mut self.capability_summaries {
+            if summary.has_skills {
+                summary.has_skills = available_plugin_ids.contains(&summary.config_name);
+            }
+        }
+        self.capability_summaries.retain(|summary| {
+            summary.has_skills
+                || !summary.mcp_server_names.is_empty()
+                || !summary.app_connector_ids.is_empty()
+        });
+        self
+    }
+
     pub fn effective_mcp_servers(&self) -> HashMap<String, M> {
         let mut mcp_servers = HashMap::new();
         for plugin in self.plugins.iter().filter(|plugin| plugin.is_active()) {
@@ -233,8 +247,6 @@ mod tests {
             root: test_path(config_name),
             enabled: true,
             skill_roots,
-            disabled_skill_paths: HashSet::new(),
-            has_enabled_skills: true,
             mcp_servers: HashMap::new(),
             apps: Vec::new(),
             hook_sources: Vec::new(),
@@ -258,6 +270,28 @@ mod tests {
                 plugin_id: "zeta@test".to_string(),
                 plugin_namespace: "zeta".to_string(),
                 plugin_root: test_path("zeta@test"),
+            }]
+        );
+    }
+
+    #[test]
+    fn available_skill_plugins_refine_capability_summaries() {
+        let skills_root = test_path("skills");
+        let outcome = PluginLoadOutcome::from_plugins(vec![
+            loaded_plugin("available@test", vec![skills_root.clone()]),
+            loaded_plugin("unavailable@test", vec![skills_root]),
+        ]);
+
+        let outcome =
+            outcome.with_available_skill_plugins(&HashSet::from(["available@test".to_string()]));
+
+        assert_eq!(
+            outcome.capability_summaries(),
+            &[PluginCapabilitySummary {
+                config_name: "available@test".to_string(),
+                display_name: "available@test".to_string(),
+                has_skills: true,
+                ..PluginCapabilitySummary::default()
             }]
         );
     }

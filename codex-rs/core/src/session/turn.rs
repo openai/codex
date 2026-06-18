@@ -21,7 +21,7 @@ use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
-use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
+use crate::mcp_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
@@ -95,6 +95,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -153,7 +154,8 @@ pub(crate) async fn run_turn(
         .await;
 
     let (injection_items, explicitly_enabled_connectors) =
-        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await?;
+        build_capability_injections(&sess, turn_context.as_ref(), &input, &cancellation_token)
+            .await?;
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
@@ -452,7 +454,7 @@ async fn run_hooks_and_record_inputs(
 }
 
 #[instrument(level = "trace", skip_all)]
-async fn build_skills_and_plugins(
+async fn build_capability_injections(
     sess: &Arc<Session>,
     turn_context: &TurnContext,
     input: &[TurnInput],
@@ -478,16 +480,23 @@ async fn build_skills_and_plugins(
         sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
     );
-    let loaded_plugins = sess
-        .services
-        .plugins_manager
-        .plugins_for_config(&turn_context.config.plugins_config_input())
-        .await;
+    let loaded_plugins = match turn_context
+        .extension_data
+        .get::<codex_core_plugins::PluginLoadOutcome>()
+    {
+        Some(loaded_plugins) => loaded_plugins,
+        None => Arc::new(
+            sess.services
+                .plugins_manager
+                .plugins_for_config(&turn_context.config.plugins_config_input())
+                .await,
+        ),
+    };
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
-    let mentioned_plugins =
+    let declared_mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
-    let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
+    let mcp_tools = if turn_context.apps_enabled() || !declared_mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
@@ -530,6 +539,12 @@ async fn build_skills_and_plugins(
         cancellation_token,
     )
     .await?;
+    let loaded_plugins = turn_context
+        .extension_data
+        .get::<codex_core_plugins::PluginLoadOutcome>()
+        .unwrap_or(loaded_plugins);
+    let mentioned_plugins =
+        collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
     let mcp_dependencies = turn_context
         .extension_data
         .get::<codex_mcp::McpServerDependencies>()
@@ -542,7 +557,7 @@ async fn build_skills_and_plugins(
         Some(sess.mcp_elicitation_reviewer()),
     )
     .await;
-    let skill_connector_ids = turn_context
+    let extension_connector_ids = turn_context
         .extension_data
         .get::<codex_connectors::ExplicitConnectorMentions>()
         .map(|mentions| mentions.resolve(&available_connectors))
@@ -550,7 +565,7 @@ async fn build_skills_and_plugins(
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&user_input);
-    explicitly_enabled_connectors.extend(skill_connector_ids);
+    explicitly_enabled_connectors.extend(extension_connector_ids);
     let connector_names_by_id = available_connectors
         .iter()
         .map(|connector| (connector.id.as_str(), connector.name.as_str()))
@@ -602,6 +617,9 @@ async fn build_extension_turn_input_items(
         .filter_map(|(index, environment)| {
             // TODO(anp): Migrate extension turn-input environments to PathUri so foreign cwd
             // values are not omitted from extension context.
+            if environment.cwd().infer_path_convention() != Some(PathConvention::native()) {
+                return None;
+            }
             Some(TurnInputEnvironment {
                 environment_id: environment.environment_id.clone(),
                 cwd: environment.cwd().to_abs_path().ok()?.into_path_buf(),

@@ -30,6 +30,7 @@ use codex_rmcp_client::perform_oauth_login_silent;
 pub(crate) struct PluginRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
+    skills_service: Arc<codex_core_skills::SkillsService>,
     outgoing: Arc<OutgoingMessageSender>,
     analytics_events_client: AnalyticsEventsClient,
     config_manager: ConfigManager,
@@ -37,8 +38,8 @@ pub(crate) struct PluginRequestProcessor {
 }
 
 fn plugin_skills_to_info(
-    skills: &[codex_core::skills::SkillMetadata],
-    disabled_skill_paths: &HashSet<AbsolutePathBuf>,
+    skills: &[codex_core_skills::SkillMetadata],
+    disabled_paths: &HashSet<AbsolutePathBuf>,
 ) -> Vec<SkillSummary> {
     skills
         .iter()
@@ -57,7 +58,7 @@ fn plugin_skills_to_info(
                 }
             }),
             path: Some(skill.path_to_skills_md.clone()),
-            enabled: !disabled_skill_paths.contains(&skill.path_to_skills_md),
+            enabled: !disabled_paths.contains(&skill.path_to_skills_md),
         })
         .collect()
 }
@@ -339,6 +340,7 @@ impl PluginRequestProcessor {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
+        skills_service: Arc<codex_core_skills::SkillsService>,
         outgoing: Arc<OutgoingMessageSender>,
         analytics_events_client: AnalyticsEventsClient,
         config_manager: ConfigManager,
@@ -347,6 +349,7 @@ impl PluginRequestProcessor {
         Self {
             auth_manager,
             thread_manager,
+            skills_service,
             outgoing,
             analytics_events_client,
             config_manager,
@@ -455,10 +458,12 @@ impl PluginRequestProcessor {
 
     pub(crate) fn effective_plugins_changed_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
         let thread_manager = Arc::clone(&self.thread_manager);
+        let skills_service = Arc::clone(&self.skills_service);
         let config_manager = self.config_manager.clone();
         Arc::new(move || {
             Self::spawn_effective_plugins_changed_task(
                 Arc::clone(&thread_manager),
+                Arc::clone(&skills_service),
                 config_manager.clone(),
             );
         })
@@ -467,17 +472,19 @@ impl PluginRequestProcessor {
     fn on_effective_plugins_changed(&self) {
         Self::spawn_effective_plugins_changed_task(
             Arc::clone(&self.thread_manager),
+            Arc::clone(&self.skills_service),
             self.config_manager.clone(),
         );
     }
 
     fn spawn_effective_plugins_changed_task(
         thread_manager: Arc<ThreadManager>,
+        skills_service: Arc<codex_core_skills::SkillsService>,
         config_manager: ConfigManager,
     ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
-            thread_manager.skills_service().clear_cache();
+            skills_service.clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
@@ -487,7 +494,7 @@ impl PluginRequestProcessor {
 
     fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
-        self.thread_manager.skills_service().clear_cache();
+        self.skills_service.clear_cache();
     }
 
     async fn load_latest_config(
@@ -1067,15 +1074,36 @@ impl PluginRequestProcessor {
                     &outcome.plugin.app_category_by_id,
                 )
                 .await;
-                let visible_skills = outcome
+                let plugin_id = outcome.plugin.id.clone();
+                let plugin_skill_roots = outcome
                     .plugin
+                    .plugin_root
+                    .as_ref()
+                    .zip(outcome.plugin.plugin_namespace.as_ref())
+                    .map(|(plugin_root, plugin_namespace)| {
+                        outcome
+                            .plugin
+                            .skill_roots
+                            .iter()
+                            .cloned()
+                            .map(|path| codex_utils_plugins::PluginSkillRoot {
+                                path,
+                                plugin_id: plugin_id.clone(),
+                                plugin_namespace: plugin_namespace.clone(),
+                                plugin_root: plugin_root.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let skills_snapshot = self
+                    .skills_service
+                    .snapshot_for_plugin_roots(plugin_skill_roots, &config.config_layer_stack)
+                    .await;
+                let visible_skills = skills_snapshot
+                    .outcome()
                     .skills
                     .iter()
-                    .filter(|skill| {
-                        skill.matches_product_restriction_for_product(
-                            self.thread_manager.session_source().restriction_product(),
-                        )
-                    })
+                    .filter(|skill| skill.plugin_id.as_deref() == Some(plugin_id.as_str()))
                     .cloned()
                     .collect::<Vec<_>>();
                 PluginDetail {
@@ -1100,7 +1128,7 @@ impl PluginRequestProcessor {
                     description: outcome.plugin.description,
                     skills: plugin_skills_to_info(
                         &visible_skills,
-                        &outcome.plugin.disabled_skill_paths,
+                        &skills_snapshot.outcome().disabled_paths,
                     ),
                     hooks: outcome
                         .plugin

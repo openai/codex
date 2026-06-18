@@ -4,7 +4,6 @@ use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginLoadOutcome;
 use crate::installed_marketplaces::marketplace_install_root;
-use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
@@ -34,7 +33,6 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
-use codex_core_skills::config_rules::SkillConfigRules;
 use codex_login::CodexAuth;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
@@ -630,8 +628,6 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
             enabled: true,
             skill_roots: vec![plugin_root.join("skills").abs()],
-            disabled_skill_paths: HashSet::new(),
-            has_enabled_skills: true,
             mcp_servers: HashMap::from([(
                 "sample".to_string(),
                 McpServerConfig {
@@ -1036,93 +1032,6 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_filters_by_market
 }
 
 #[tokio::test]
-async fn load_plugins_resolves_disabled_skill_names_against_loaded_plugin_skills() {
-    let codex_home = TempDir::new().unwrap();
-    let plugin_root = codex_home
-        .path()
-        .join("plugins/cache")
-        .join("test/sample/local");
-    let skill_path = plugin_root.join("skills/sample-search/SKILL.md");
-
-    write_file(
-        &plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"sample"}"#,
-    );
-    write_file(
-        &skill_path,
-        "---\nname: sample-search\ndescription: search sample data\n---\n",
-    );
-
-    let config_toml = r#"[features]
-plugins = true
-
-[[skills.config]]
-name = "sample:sample-search"
-enabled = false
-
-[plugins."sample@test"]
-enabled = true
-"#;
-    let outcome =
-        load_plugins_from_config(config_toml, codex_home.path(), /*auth_mode*/ None).await;
-    let skill_path = std::fs::canonicalize(skill_path)
-        .expect("skill path should canonicalize")
-        .abs();
-
-    assert_eq!(
-        outcome.plugins()[0].disabled_skill_paths,
-        HashSet::from([skill_path])
-    );
-    assert!(!outcome.plugins()[0].has_enabled_skills);
-    assert!(outcome.capability_summaries().is_empty());
-}
-
-#[tokio::test]
-async fn load_plugins_ignores_unknown_disabled_skill_names() {
-    let codex_home = TempDir::new().unwrap();
-    let plugin_root = codex_home
-        .path()
-        .join("plugins/cache")
-        .join("test/sample/local");
-
-    write_file(
-        &plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"sample"}"#,
-    );
-    write_file(
-        &plugin_root.join("skills/sample-search/SKILL.md"),
-        "---\nname: sample-search\ndescription: search sample data\n---\n",
-    );
-
-    let config_toml = r#"[features]
-plugins = true
-
-[[skills.config]]
-name = "sample:missing-skill"
-enabled = false
-
-[plugins."sample@test"]
-enabled = true
-"#;
-    let outcome =
-        load_plugins_from_config(config_toml, codex_home.path(), /*auth_mode*/ None).await;
-
-    assert!(outcome.plugins()[0].disabled_skill_paths.is_empty());
-    assert!(outcome.plugins()[0].has_enabled_skills);
-    assert_eq!(
-        outcome.capability_summaries(),
-        &[PluginCapabilitySummary {
-            config_name: "sample@test".to_string(),
-            display_name: "sample".to_string(),
-            description: None,
-            has_skills: true,
-            mcp_server_names: Vec::new(),
-            app_connector_ids: Vec::new(),
-        }]
-    );
-}
-
-#[tokio::test]
 async fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
@@ -1432,71 +1341,6 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
 }
 
 #[tokio::test]
-async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
-    let codex_home = TempDir::new().unwrap();
-    let plugin_root = codex_home
-        .path()
-        .join("plugins/cache")
-        .join("test/sample/local")
-        .abs();
-    write_file(
-        &plugin_root.join("skills/abc/SKILL.md"),
-        "---\nname: abc\ndescription: abc skill\n---\n",
-    );
-    write_file(
-        &plugin_root.join("skills/edk/SKILL.md"),
-        "---\nname: edk\ndescription: edk skill\n---\n",
-    );
-    let manifest = crate::manifest::PluginManifest {
-        name: "sample".to_string(),
-        version: None,
-        description: None,
-        keywords: Vec::new(),
-        paths: crate::manifest::PluginManifestPaths {
-            skills: vec![
-                plugin_root.join("skills"),
-                plugin_root.join("skills/abc"),
-                plugin_root.join("skills/edk"),
-                plugin_root.join("skills/abc"),
-            ],
-            mcp_servers: None,
-            apps: None,
-            hooks: None,
-        },
-        interface: None,
-    };
-    let plugin_id = PluginId::parse("sample@test").expect("plugin id should parse");
-
-    let resolved = load_plugin_skills(
-        &plugin_root,
-        &plugin_id,
-        &manifest,
-        /*restriction_product*/ None,
-        &SkillConfigRules::default(),
-    )
-    .await;
-
-    let skill_paths = resolved
-        .skills
-        .iter()
-        .map(|skill| skill.path_to_skills_md.clone())
-        .collect::<Vec<_>>();
-    let canonical_skill_path = |path| {
-        AbsolutePathBuf::from_absolute_path_checked(
-            fs::canonicalize(plugin_root.join(path)).expect("canonical skill path"),
-        )
-        .expect("absolute skill path")
-    };
-    assert_eq!(
-        skill_paths,
-        vec![
-            canonical_skill_path("skills/abc/SKILL.md"),
-            canonical_skill_path("skills/edk/SKILL.md")
-        ]
-    );
-}
-
-#[tokio::test]
 async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
@@ -1690,8 +1534,6 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             root: AbsolutePathBuf::try_from(plugin_root).unwrap(),
             enabled: false,
             skill_roots: Vec::new(),
-            disabled_skill_paths: HashSet::new(),
-            has_enabled_skills: false,
             mcp_servers: HashMap::new(),
             apps: Vec::new(),
             hook_sources: Vec::new(),
@@ -1864,8 +1706,6 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         root: AbsolutePathBuf::try_from(codex_home.path().join(dir_name)).unwrap(),
         enabled: true,
         skill_roots: Vec::new(),
-        disabled_skill_paths: HashSet::new(),
-        has_enabled_skills: false,
         mcp_servers: HashMap::new(),
         apps: Vec::new(),
         hook_sources: Vec::new(),
@@ -1881,7 +1721,6 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
     let outcome = PluginLoadOutcome::from_plugins(vec![
         LoadedPlugin {
             skill_roots: vec![codex_home.path().join("skills-plugin/skills").abs()],
-            has_enabled_skills: true,
             ..plugin("skills@test", "skills-plugin", "skills-plugin")
         },
         LoadedPlugin {
@@ -2042,7 +1881,6 @@ fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
     let cache_key = PluginLoadCacheKey {
         configured_plugins: HashMap::new(),
-        skill_config_rules: SkillConfigRules::default(),
         remote_plugin_enabled: false,
     };
     let stale_generation = manager.loaded_plugins_cache_generation();
@@ -2827,7 +2665,7 @@ enabled = false
         .await
         .unwrap();
 
-    assert!(outcome.plugin.disabled_skill_paths.is_empty());
+    assert_eq!(outcome.plugin.skill_roots.len(), 1);
 }
 
 #[tokio::test]
@@ -2895,7 +2733,7 @@ plugins = true
         outcome.plugin.description.as_deref(),
         Some(expected_description.as_str())
     );
-    assert!(outcome.plugin.skills.is_empty());
+    assert!(outcome.plugin.skill_roots.is_empty());
     assert!(outcome.plugin.apps.is_empty());
     assert!(outcome.plugin.mcp_server_names.is_empty());
     assert!(
@@ -3040,8 +2878,8 @@ enabled = false
         })
     );
     assert!(outcome.plugin.installed);
-    assert_eq!(outcome.plugin.skills.len(), 1);
-    assert_eq!(outcome.plugin.skills[0].name, "toolkit:search");
+    assert_eq!(outcome.plugin.skill_roots.len(), 1);
+    assert!(outcome.plugin.skill_roots[0].ends_with("skills"));
     assert_eq!(
         outcome.plugin.apps,
         vec![AppConnectorId("connector_calendar".to_string())]

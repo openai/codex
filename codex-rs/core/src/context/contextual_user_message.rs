@@ -11,7 +11,6 @@ use super::LegacyApplyPatchExecCommandWarning;
 use super::LegacyModelMismatchWarning;
 use super::LegacyUnifiedExecProcessLimitWarning;
 use super::RecommendedPluginsInstructions;
-use super::SkillInstructions;
 use super::SubagentNotification;
 use super::TurnAborted;
 use super::UserInstructions;
@@ -22,8 +21,6 @@ static USER_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<UserInstruction
 static ENVIRONMENT_CONTEXT_REGISTRATION: FragmentRegistrationProxy<EnvironmentContext> =
     FragmentRegistrationProxy::new();
 static ADDITIONAL_CONTEXT_REGISTRATION: FragmentRegistrationProxy<AdditionalContextUserFragment> =
-    FragmentRegistrationProxy::new();
-static SKILL_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<SkillInstructions> =
     FragmentRegistrationProxy::new();
 static USER_SHELL_COMMAND_REGISTRATION: FragmentRegistrationProxy<UserShellCommand> =
     FragmentRegistrationProxy::new();
@@ -50,7 +47,6 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &USER_INSTRUCTIONS_REGISTRATION,
     &ENVIRONMENT_CONTEXT_REGISTRATION,
     &ADDITIONAL_CONTEXT_REGISTRATION,
-    &SKILL_INSTRUCTIONS_REGISTRATION,
     &USER_SHELL_COMMAND_REGISTRATION,
     &TURN_ABORTED_REGISTRATION,
     &SUBAGENT_NOTIFICATION_REGISTRATION,
@@ -62,9 +58,19 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
 ];
 
 fn is_standard_contextual_user_text(text: &str) -> bool {
-    CONTEXTUAL_USER_FRAGMENTS
-        .iter()
-        .any(|fragment| fragment.matches_text(text))
+    is_legacy_skill_instructions(text)
+        || CONTEXTUAL_USER_FRAGMENTS
+            .iter()
+            .any(|fragment| fragment.matches_text(text))
+}
+
+fn is_legacy_skill_instructions(text: &str) -> bool {
+    let text = text.trim();
+    text.get(.."<skill>".len())
+        .is_some_and(|marker| marker.eq_ignore_ascii_case("<skill>"))
+        && text
+            .get(text.len().saturating_sub("</skill>".len())..)
+            .is_some_and(|marker| marker.eq_ignore_ascii_case("</skill>"))
 }
 
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {

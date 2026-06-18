@@ -331,6 +331,13 @@ impl MessageProcessor {
         let environment_manager_for_requests = Arc::clone(&environment_manager);
         let environment_manager_for_extensions = Arc::clone(&environment_manager);
         let restriction_product = session_source.restriction_product();
+        let skills_service = Arc::new(
+            codex_core_skills::SkillsService::new_with_restriction_product(
+                config.codex_home.clone(),
+                config.bundled_skills_enabled(),
+                restriction_product,
+            ),
+        );
         let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
                 Arc::clone(&environment_manager_for_extensions),
@@ -358,6 +365,7 @@ impl MessageProcessor {
                         goal_service: Arc::clone(&goal_service),
                         environment_manager: Arc::clone(&environment_manager_for_extensions),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        skills_service: Arc::clone(&skills_service),
                         thread_store: Arc::clone(&thread_store),
                     },
                 ),
@@ -379,7 +387,7 @@ impl MessageProcessor {
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
-        let skills_watcher = SkillsWatcher::new(thread_manager.skills_service(), outgoing.clone());
+        let skills_watcher = SkillsWatcher::new(Arc::clone(&skills_service), outgoing.clone());
 
         let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
         let thread_watch_manager =
@@ -391,6 +399,7 @@ impl MessageProcessor {
         let account_processor = AccountRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
+            Arc::clone(&skills_service),
             outgoing.clone(),
             Arc::clone(&config),
             config_manager.clone(),
@@ -453,6 +462,7 @@ impl MessageProcessor {
         let plugin_processor = PluginRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
+            Arc::clone(&skills_service),
             outgoing.clone(),
             analytics_events_client.clone(),
             config_manager.clone(),
@@ -515,6 +525,7 @@ impl MessageProcessor {
             outgoing.clone(),
             config_manager.clone(),
             thread_manager.clone(),
+            Arc::clone(&skills_service),
             analytics_events_client.clone(),
         );
         let external_agent_config_processor =
@@ -528,6 +539,7 @@ impl MessageProcessor {
                 analytics_events_client,
                 arg0_paths,
                 codex_home: config.codex_home.to_path_buf(),
+                skills_service,
             });
         let environment_processor =
             EnvironmentRequestProcessor::new(thread_manager.environment_manager());

@@ -2,13 +2,13 @@ use std::collections::HashSet;
 
 use codex_protocol::user_input::UserInput;
 
-use crate::injection::ToolMentionKind;
-use crate::injection::app_id_from_path;
-use crate::injection::extract_tool_mentions_with_sigil;
-use crate::injection::plugin_config_name_from_path;
-use crate::injection::tool_kind_for_path;
 use crate::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
 use crate::mention_syntax::TOOL_MENTION_SIGIL;
+use codex_utils_plugins::tool_mentions::ToolMentionKind;
+use codex_utils_plugins::tool_mentions::app_id_from_path;
+use codex_utils_plugins::tool_mentions::extract_tool_mentions_with_sigil;
+use codex_utils_plugins::tool_mentions::plugin_config_name_from_path;
+use codex_utils_plugins::tool_mentions::tool_kind_for_path;
 
 use super::PluginCapabilitySummary;
 

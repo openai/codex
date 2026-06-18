@@ -6,6 +6,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 pub mod mcp_connector;
 pub mod mention_syntax;
 pub mod plugin_namespace;
+pub mod tool_mentions;
 
 pub use plugin_namespace::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
 pub use plugin_namespace::find_plugin_manifest_path;
