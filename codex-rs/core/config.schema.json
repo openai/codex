@@ -611,6 +611,9 @@
             "responses_websockets_v2": {
               "type": "boolean"
             },
+            "rollout_budget": {
+              "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
+            },
             "runtime_metrics": {
               "type": "boolean"
             },
@@ -905,6 +908,16 @@
         },
         {
           "$ref": "#/definitions/NetworkProxyConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_RolloutBudgetConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/RolloutBudgetConfigToml"
         }
       ]
     },
@@ -2571,6 +2584,35 @@
           "type": "string"
         }
       ]
+    },
+    "RolloutBudgetConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "limit_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "prefill_token_weight": {
+          "format": "double",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "reminder_interval_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "sampling_token_weight": {
+          "format": "double",
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "type": "object"
     },
     "SandboxMode": {
       "enum": [
@@ -4771,6 +4813,9 @@
         },
         "responses_websockets_v2": {
           "type": "boolean"
+        },
+        "rollout_budget": {
+          "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
         },
         "runtime_metrics": {
           "type": "boolean"
