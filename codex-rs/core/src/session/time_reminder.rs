@@ -12,15 +12,17 @@ pub(crate) struct CurrentTimeReminderState {
 }
 
 impl CurrentTimeReminderState {
-    fn begin_model_request(&mut self, window_id: &str, interval: u64) -> bool {
+    fn take_reminder_due(&mut self, window_id: &str, interval: u64) -> bool {
         self.model_requests_since_delivery = self.model_requests_since_delivery.saturating_add(1);
-        self.last_window_id.as_deref() != Some(window_id)
-            || self.model_requests_since_delivery >= interval
-    }
+        let reminder_is_due = self.last_window_id.as_deref() != Some(window_id)
+            || self.model_requests_since_delivery >= interval;
 
-    fn record_delivery(&mut self, window_id: &str) {
-        self.model_requests_since_delivery = 0;
-        self.last_window_id = Some(window_id.to_string());
+        if reminder_is_due {
+            self.model_requests_since_delivery = 0;
+            self.last_window_id = Some(window_id.to_string());
+        }
+
+        reminder_is_due
     }
 }
 
@@ -37,7 +39,7 @@ pub(super) async fn maybe_record_current_time_reminder(
         let mut state = sess.state.lock().await;
         state
             .current_time_reminder
-            .begin_model_request(window_id, config.reminder_interval_model_requests)
+            .take_reminder_due(window_id, config.reminder_interval_model_requests)
     };
     if !reminder_is_due {
         return Ok(());
@@ -55,7 +57,5 @@ pub(super) async fn maybe_record_current_time_reminder(
     sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
         .await;
 
-    let mut state = sess.state.lock().await;
-    state.current_time_reminder.record_delivery(window_id);
     Ok(())
 }
