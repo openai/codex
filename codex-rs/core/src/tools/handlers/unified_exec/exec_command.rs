@@ -172,7 +172,7 @@ impl ExecCommandHandler {
                 )));
             }
         };
-        let args: ExecCommandArgs = match native_cwd.as_ref() {
+        let mut args: ExecCommandArgs = match native_cwd.as_ref() {
             Some(native_cwd) => {
                 // The base path only resolves paths nested in the permissions config types.
                 parse_arguments_with_base_path(&arguments, native_cwd)?
@@ -195,7 +195,6 @@ impl ExecCommandHandler {
             )
             .await;
         }
-        let process_id = manager.allocate_process_id().await;
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
         // Remote environments may use a different OS and must build commands with their native
@@ -205,6 +204,28 @@ impl ExecCommandHandler {
             .clone()
             .map(Arc::new)
             .unwrap_or_else(|| session.user_shell());
+        // TODO(anp): Resolve requested shells in remote environments instead of restricting
+        // commands to the reported default shell.
+        if environment.is_remote()
+            && let Some(requested_shell) = args.shell.take()
+        {
+            let Some(remote_shell) = turn_environment.shell.as_ref() else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "environment `{}` does not report a shell",
+                    turn_environment.environment_id
+                )));
+            };
+            if requested_shell != remote_shell.name()
+                && requested_shell.as_str() != remote_shell.shell_path.to_string_lossy().as_ref()
+            {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "environment `{}` only supports `{}`",
+                    turn_environment.environment_id,
+                    remote_shell.name()
+                )));
+            }
+        }
+        let process_id = manager.allocate_process_id().await;
         let resolved_command = get_command(
             &args,
             shell,
