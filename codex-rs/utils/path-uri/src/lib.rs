@@ -98,7 +98,10 @@ impl PathUri {
     }
 
     /// Parses an absolute native path using the specified path convention.
-    pub fn from_absolute_native_path(path: &str, convention: PathConvention) -> Option<Self> {
+    pub(crate) fn from_absolute_native_path(
+        path: &str,
+        convention: PathConvention,
+    ) -> Option<Self> {
         match convention {
             PathConvention::Posix => parse_posix_path(path),
             PathConvention::Windows => parse_windows_path(path),
@@ -199,14 +202,6 @@ impl PathUri {
             .path_segments()?
             .rfind(|segment| !segment.is_empty())
             .map(decode_uri_path)
-    }
-
-    /// Returns the final URI path segment without its final extension.
-    pub fn file_stem(&self) -> Option<String> {
-        let basename = self.basename()?;
-        Path::new(&basename)
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
     }
 
     /// Renders this URI as a path-flavored string using its inferred convention.
@@ -390,12 +385,6 @@ impl PathUri {
     /// Returns a clone of the canonical URL.
     pub fn to_url(&self) -> Url {
         self.0.clone()
-    }
-}
-
-impl From<PathUri> for PathBuf {
-    fn from(path: PathUri) -> Self {
-        path.to_path_buf()
     }
 }
 

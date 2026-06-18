@@ -508,25 +508,12 @@ fn basename_uses_decoded_uri_segments() {
 }
 
 #[test]
-fn file_stem_uses_the_decoded_basename() {
-    for (uri, expected) in [
-        ("file:///workspace/archive.tar.gz", Some("archive.tar")),
-        ("file:///C:/Program%20Files/pwsh.exe", Some("pwsh")),
-        ("file:///workspace/.env", Some(".env")),
-        ("file:///", None),
-    ] {
-        let path = PathUri::parse(uri).expect("valid path URI");
-        assert_eq!(path.file_stem().as_deref(), expected, "file stem for {uri}");
-    }
-}
-
-#[test]
 fn path_buf_uses_the_inferred_native_spelling() {
     let windows = PathUri::parse("file:///C:/Program%20Files/pwsh.exe").expect("Windows URI");
     let posix = PathUri::parse("file:///usr/local/bin/bash").expect("POSIX URI");
 
     assert_eq!(
-        (windows.to_path_buf(), PathBuf::from(posix)),
+        (windows.to_path_buf(), posix.to_path_buf()),
         (
             PathBuf::from(r"C:\Program Files\pwsh.exe"),
             PathBuf::from("/usr/local/bin/bash"),
