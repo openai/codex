@@ -215,7 +215,7 @@ pub enum SearchResponseLength {
 #[serde(rename_all = "snake_case")]
 pub enum ExternalWebAccessMode {
     Offline,
-    IndexOnly,
+    Indexed,
     Online,
 }
 
