@@ -17,7 +17,7 @@ pub(crate) fn attach_item_ids(payload_json: &mut Value, original_items: &[Respon
     };
 
     for (value, item) in items.iter_mut().zip(original_items.iter()) {
-        if let ResponseItem::Reasoning { id, .. }
+        if let ResponseItem::Reasoning { id: Some(id), .. }
         | ResponseItem::Message { id: Some(id), .. }
         | ResponseItem::WebSearchCall { id: Some(id), .. }
         | ResponseItem::FunctionCall { id: Some(id), .. }

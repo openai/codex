@@ -60,6 +60,7 @@ pub async fn build_prompt_input(
         state_db.clone(),
         installation_id,
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let thread = thread_manager.start_thread(config).await?;
 

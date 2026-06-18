@@ -2,10 +2,12 @@ use anyhow::Context;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::MemoriesToml;
+use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::Feature;
 use codex_features::FeatureToml;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
+use codex_features::RolloutBudgetConfigToml;
 use codex_protocol::ThreadId;
 
 use crate::config::Config;
@@ -148,6 +150,18 @@ fn save_config_resolved_fields(
         resolved_config_to_toml(&config.multi_agent_v2, "features.multi_agent_v2")?;
     multi_agent_v2.enabled = Some(config.features.enabled(Feature::MultiAgentV2));
     features.multi_agent_v2 = Some(FeatureToml::Config(multi_agent_v2));
+    if let Some(rollout_budget) = config.rollout_budget.as_ref() {
+        let mut rollout_budget: RolloutBudgetConfigToml =
+            resolved_config_to_toml(rollout_budget, "features.rollout_budget")?;
+        rollout_budget.enabled = Some(config.features.enabled(Feature::RolloutBudget));
+        features.rollout_budget = Some(FeatureToml::Config(rollout_budget));
+    }
+    if let Some(current_time_reminder) = config.current_time_reminder.as_ref() {
+        let mut current_time_reminder: CurrentTimeReminderConfigToml =
+            resolved_config_to_toml(current_time_reminder, "features.current_time_reminder")?;
+        current_time_reminder.enabled = Some(config.features.enabled(Feature::CurrentTimeReminder));
+        features.current_time_reminder = Some(FeatureToml::Config(current_time_reminder));
+    }
     lock_config.memories = Some(resolved_config_to_toml::<MemoriesToml>(
         &config.memories,
         "memories",
@@ -209,6 +223,23 @@ mod tests {
     #[tokio::test]
     async fn lock_contains_prompts_and_materializes_features() {
         let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let mut config = (*sc.original_config_do_not_use).clone();
+        config.rollout_budget = Some(crate::config::RolloutBudgetConfig {
+            limit_tokens: 100_000,
+            reminder_interval_tokens: 10_000,
+            sampling_token_weight: 1.0,
+            prefill_token_weight: 0.25,
+        });
+        config
+            .features
+            .enable(Feature::RolloutBudget)
+            .expect("rollout_budget should be enableable in tests");
+        config.current_time_reminder = Some(crate::config::CurrentTimeReminderConfig::default());
+        config
+            .features
+            .enable(Feature::CurrentTimeReminder)
+            .expect("current_time_reminder should be enableable in tests");
+        sc.original_config_do_not_use = Arc::new(config);
         sc.base_instructions = "resolved instructions".to_string();
         sc.developer_instructions = Some("resolved developer instructions".to_string());
         sc.compact_prompt = Some("resolved compact prompt".to_string());
@@ -272,6 +303,25 @@ mod tests {
                 ..
             })
         ));
+
+        assert_eq!(
+            features.rollout_budget,
+            Some(FeatureToml::Config(RolloutBudgetConfigToml {
+                enabled: Some(true),
+                limit_tokens: Some(100_000),
+                reminder_interval_tokens: Some(10_000),
+                sampling_token_weight: Some(1.0),
+                prefill_token_weight: Some(0.25),
+            }))
+        );
+        assert_eq!(
+            features.current_time_reminder,
+            Some(FeatureToml::Config(CurrentTimeReminderConfigToml {
+                enabled: Some(true),
+                reminder_interval_model_requests: Some(1),
+                clock_source: Some(codex_features::CurrentTimeSource::System),
+            }))
+        );
 
         assert_eq!(lockfile.version, crate::config_lock::CONFIG_LOCK_VERSION);
     }

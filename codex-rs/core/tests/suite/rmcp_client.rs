@@ -50,6 +50,7 @@ use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
@@ -340,12 +341,22 @@ async fn call_cwd_tool(
     server_name: &str,
     call_id: &str,
 ) -> anyhow::Result<Value> {
+    call_structured_tool(server, fixture, server_name, "cwd", call_id).await
+}
+
+async fn call_structured_tool(
+    server: &MockServer,
+    fixture: &TestCodex,
+    server_name: &str,
+    tool_name: &str,
+    call_id: &str,
+) -> anyhow::Result<Value> {
     let namespace = format!("mcp__{server_name}");
     mount_sse_once(
         server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call_with_namespace(call_id, &namespace, "cwd", r#"{}"#),
+            responses::ev_function_call_with_namespace(call_id, &namespace, tool_name, r#"{}"#),
             responses::ev_completed("resp-1"),
         ]),
     )
@@ -353,7 +364,7 @@ async fn call_cwd_tool(
     mount_sse_once(
         server,
         responses::sse(vec![
-            responses::ev_assistant_message("msg-1", "rmcp cwd tool completed successfully."),
+            responses::ev_assistant_message("msg-1", "rmcp tool completed successfully."),
             responses::ev_completed("resp-2"),
         ]),
     )
@@ -361,7 +372,7 @@ async fn call_cwd_tool(
 
     fixture
         .codex
-        .submit(read_only_user_turn(fixture, "call the rmcp cwd tool"))
+        .submit(read_only_user_turn(fixture, "call the requested rmcp tool"))
         .await?;
 
     wait_for_event(&fixture.codex, |ev| {
@@ -378,7 +389,7 @@ async fn call_cwd_tool(
     let structured_content = end
         .result
         .as_ref()
-        .expect("rmcp cwd tool should return success")
+        .expect("rmcp tool should return success")
         .structured_content
         .as_ref()
         .expect("structured content")
@@ -386,6 +397,106 @@ async fn call_cwd_tool(
 
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     Ok(structured_content)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn openai_form_capability_is_advertised_to_mcp_servers() -> anyhow::Result<()> {
+    assert_openai_form_capability_advertisement(/*expected*/ true).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn openai_form_capability_is_not_advertised_by_default() -> anyhow::Result<()> {
+    assert_openai_form_capability_advertisement(/*expected*/ false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn openai_form_capability_updates_for_loaded_thread() -> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+
+    let server = start_mock_server().await;
+    let server_name = "capabilities";
+    let command = stdio_server_bin()?;
+    let fixture = test_codex()
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(command, /*env*/ None, Vec::new()),
+                TestMcpServerOptions::default(),
+            );
+        })
+        .build(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
+    let unsupported = call_structured_tool(
+        &server,
+        &fixture,
+        server_name,
+        "client_capabilities",
+        "call-client-capabilities-unsupported",
+    )
+    .await?;
+    assert_eq!(
+        unsupported,
+        json!({ "supportsOpenaiFormElicitation": false })
+    );
+
+    fixture
+        .codex
+        .set_openai_form_elicitation_support(/*supported*/ true)
+        .await?;
+    let supported = call_structured_tool(
+        &server,
+        &fixture,
+        server_name,
+        "client_capabilities",
+        "call-client-capabilities-supported",
+    )
+    .await?;
+    assert_eq!(supported, json!({ "supportsOpenaiFormElicitation": true }));
+    Ok(())
+}
+
+async fn assert_openai_form_capability_advertisement(expected: bool) -> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+
+    let server = start_mock_server().await;
+    let server_name = "capabilities";
+    let command = stdio_server_bin()?;
+    let mut builder = test_codex().with_config(move |config| {
+        insert_mcp_server(
+            config,
+            server_name,
+            stdio_transport(command, /*env*/ None, Vec::new()),
+            TestMcpServerOptions::default(),
+        );
+    });
+    if expected {
+        builder = builder.with_openai_form_elicitation();
+    }
+    let fixture = builder.build(&server).await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
+    let structured = call_structured_tool(
+        &server,
+        &fixture,
+        server_name,
+        "client_capabilities",
+        "call-client-capabilities",
+    )
+    .await?;
+    assert_eq!(
+        structured,
+        json!({ "supportsOpenaiFormElicitation": expected })
+    );
+    Ok(())
 }
 
 fn assert_cwd_tool_output(structured: &Value, expected_cwd: &Path) {
@@ -815,16 +926,11 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let sandbox_meta = meta
         .get(MCP_SANDBOX_STATE_META_CAPABILITY)
         .expect("sandbox state metadata should be present");
-    let (sandbox_policy, _) =
-        turn_permission_fields(PermissionProfile::read_only(), fixture.config.cwd.as_path());
-    let expected_sandbox_policy = serde_json::to_value(&sandbox_policy)?;
-    assert_eq!(
-        sandbox_meta.get("sandboxPolicy"),
-        Some(&expected_sandbox_policy)
-    );
+    assert_eq!(sandbox_meta.get("sandboxPolicy"), None);
+    let expected_sandbox_cwd = PathUri::from_abs_path(&fixture.config.cwd).to_string();
     assert_eq!(
         sandbox_meta.get("sandboxCwd").and_then(Value::as_str),
-        fixture.config.cwd.as_path().to_str()
+        Some(expected_sandbox_cwd.as_str())
     );
     assert_eq!(sandbox_meta.get("useLegacyLandlock"), Some(&json!(false)));
 
@@ -1231,7 +1337,9 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                 tool: "image".to_string(),
                 arguments: Some(json!({})),
             },
+            connector_id: None,
             mcp_app_resource_uri: None,
+            link_id: None,
             plugin_id: None,
         },
     );

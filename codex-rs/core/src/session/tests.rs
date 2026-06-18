@@ -1664,6 +1664,7 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
     )
     .await;
     let item = ResponseItem::FunctionCallOutput {
+        id: None,
         call_id: "call-1".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
@@ -1689,6 +1690,7 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
         .await;
 
     let expected = vec![ResponseItem::FunctionCallOutput {
+        id: None,
         call_id: "call-1".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
@@ -4854,6 +4856,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
+        /*supports_openai_form_elicitation*/ false,
         AgentControl::default(),
         environment_manager,
         /*inherited_environments*/ None,
@@ -4864,6 +4867,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await;
@@ -5016,6 +5020,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
+        supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
@@ -5028,6 +5033,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*state_db*/ None,
         )),
         attestation_provider: None,
+        time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             thread_id,
@@ -5044,13 +5050,18 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         turn_environments: Arc::clone(&turn_environments),
     };
 
+    let plugins_input = per_turn_config.plugins_config_input();
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config.plugins_config_input())
+        .plugins_for_config(&plugins_input)
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
+    let plugin_skill_snapshots = services
+        .plugins_manager
+        .plugin_skill_snapshots_for_config(&plugins_input);
     let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots)
+            .with_plugin_skill_snapshots(plugin_skill_snapshots);
     let skill_fs = environment.get_filesystem();
     let skills_snapshot = services
         .skills_service
@@ -5201,6 +5212,7 @@ async fn make_session_with_config_and_rx(
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
+        /*supports_openai_form_elicitation*/ false,
         AgentControl::default(),
         environment_manager,
         /*inherited_environments*/ None,
@@ -5211,6 +5223,7 @@ async fn make_session_with_config_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -5305,6 +5318,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
+        /*supports_openai_form_elicitation*/ false,
         agent_control,
         environment_manager,
         /*inherited_environments*/ None,
@@ -5322,6 +5336,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -7059,6 +7074,7 @@ where
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
+        supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
@@ -7071,6 +7087,7 @@ where
             state_db,
         )),
         attestation_provider: None,
+        time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             thread_id,
@@ -7087,13 +7104,18 @@ where
         turn_environments: Arc::clone(&turn_environments),
     };
 
+    let plugins_input = per_turn_config.plugins_config_input();
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config.plugins_config_input())
+        .plugins_for_config(&plugins_input)
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
+    let plugin_skill_snapshots = services
+        .plugins_manager
+        .plugin_skill_snapshots_for_config(&plugins_input);
     let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots)
+            .with_plugin_skill_snapshots(plugin_skill_snapshots);
     let skill_fs = environment.get_filesystem();
     let skills_snapshot = services
         .skills_service
@@ -7538,9 +7560,13 @@ async fn make_multi_agent_v2_usage_hint_test_session(
 
 struct PromptExtensionTestContributor;
 struct PromptExtensionTestState;
+struct TurnContextExtensionTestContributor;
+struct TurnContextExtensionTestState {
+    expected_model_context_window: Option<i64>,
+}
 
 impl codex_extension_api::ContextContributor for PromptExtensionTestContributor {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
         thread_store: &'a codex_extension_api::ExtensionData,
@@ -7569,6 +7595,31 @@ fn prompt_extension_test_registry()
     Arc::new(builder.build())
 }
 
+impl codex_extension_api::ContextContributor for TurnContextExtensionTestContributor {
+    fn contribute_turn_context<'a>(
+        &'a self,
+        input: codex_extension_api::TurnContextContributionInput<'a>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Vec<codex_extension_api::PromptFragment>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let Some(state) = input.turn_store.get::<TurnContextExtensionTestState>() else {
+                return Vec::new();
+            };
+            (input.model_context_window == state.expected_model_context_window
+                && input.model_context_window.is_some()
+                && !input.turn_id.is_empty())
+            .then(|| {
+                codex_extension_api::PromptFragment::developer_policy(
+                    "turn context extension enabled",
+                )
+            })
+            .into_iter()
+            .collect()
+        })
+    }
+}
+
 #[tokio::test]
 async fn build_initial_context_includes_prompt_fragments_from_extensions() {
     let (mut session, turn_context) = make_session_and_context().await;
@@ -7587,6 +7638,67 @@ async fn build_initial_context_includes_prompt_fragments_from_extensions() {
             .flatten()
             .any(|text| *text == "prompt extension enabled"),
         "expected prompt extension developer text, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_includes_turn_context_fragments_from_extensions() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.prompt_contributor(Arc::new(TurnContextExtensionTestContributor));
+    session.services.extensions = Arc::new(builder.build());
+    turn_context.model_info.context_window = Some(100);
+    turn_context.model_info.effective_context_window_percent = 50;
+    turn_context
+        .extension_data
+        .insert(TurnContextExtensionTestState {
+            expected_model_context_window: Some(50),
+        });
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_messages = developer_message_texts(&initial_context);
+
+    assert!(
+        developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "turn context extension enabled"),
+        "expected turn context extension developer text, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn record_context_updates_includes_turn_context_fragments_on_steady_state_turns() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.prompt_contributor(Arc::new(TurnContextExtensionTestContributor));
+    session.services.extensions = Arc::new(builder.build());
+    turn_context.model_info.context_window = Some(200);
+    turn_context.model_info.effective_context_window_percent = 25;
+    turn_context
+        .extension_data
+        .insert(TurnContextExtensionTestState {
+            expected_model_context_window: Some(50),
+        });
+    let mut previous_context_item = turn_context.to_turn_context_item();
+    previous_context_item.turn_id = Some("previous-turn-id".to_string());
+    {
+        let mut state = session.state.lock().await;
+        state.set_reference_context_item(Some(previous_context_item));
+    }
+
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await;
+
+    let history = session.clone_history().await;
+    let developer_messages = developer_message_texts(history.raw_items());
+    assert!(
+        developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "turn context extension enabled"),
+        "expected steady-state turn context extension developer text, got {developer_messages:?}"
     );
 }
 
@@ -7720,7 +7832,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
     session
         .replace_history(
             vec![ResponseItem::ImageGenerationCall {
-                id: "ig-test".to_string(),
+                id: Some("ig-test".to_string()),
                 status: "completed".to_string(),
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
@@ -7973,7 +8085,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
     );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
-        id: call_id.to_string(),
+        id: Some(call_id.to_string()),
         status: "completed".to_string(),
         revised_prompt: Some("a tiny blue square".to_string()),
         result: "Zm9v".to_string(),
@@ -8030,7 +8142,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
-        id: call_id.to_string(),
+        id: Some(call_id.to_string()),
         status: "completed".to_string(),
         revised_prompt: Some("broken payload".to_string()),
         result: "_-8".to_string(),

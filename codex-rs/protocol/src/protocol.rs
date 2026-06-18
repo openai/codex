@@ -182,10 +182,16 @@ pub struct McpServerRefreshConfig {
 pub struct ConversationStartParams {
     /// Overrides the configured realtime architecture for this session only.
     pub architecture: Option<RealtimeConversationArchitecture>,
+    /// Whether Codex response handoffs are managed through explicit client append calls.
+    pub client_managed_handoffs: bool,
     /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
     pub codex_responses_as_items: bool,
     /// Optional prefix added to automatic Codex response items when `codex_responses_as_items` is set.
     pub codex_response_item_prefix: Option<String>,
+    /// Optional prefix added to automatic V1 Codex commentary sent with
+    /// `conversation.handoff.append` when `codex_responses_as_items` is not set. Final answers are
+    /// sent without the prefix.
+    pub codex_response_handoff_prefix: Option<String>,
     /// Overrides the configured realtime model for this session only.
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.
@@ -411,6 +417,7 @@ pub enum ConversationTextRole {
     #[default]
     User,
     Developer,
+    Assistant,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -762,6 +769,7 @@ impl InterAgentCommunication {
             }],
         };
         ResponseItem::AgentMessage {
+            id: None,
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
             content,
@@ -2316,7 +2324,13 @@ pub struct McpToolCallBeginEvent {
     pub invocation: McpInvocation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub connector_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub link_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plugin_id: Option<String>,
@@ -2329,7 +2343,13 @@ pub struct McpToolCallEndEvent {
     pub invocation: McpInvocation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub connector_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub link_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plugin_id: Option<String>,
@@ -2984,7 +3004,7 @@ pub struct TurnContextNetworkItem {
 /// context updates, and again after mid-turn compaction when replacement
 /// history re-establishes full context, so resume/fork replay can recover the
 /// latest durable baseline.
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
@@ -3238,7 +3258,7 @@ pub struct ExecCommandBeginEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -3264,7 +3284,7 @@ pub struct ExecCommandEndEvent {
     /// The command that was executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -4284,6 +4304,7 @@ mod tests {
         assert_eq!(
             communication.to_model_input_item(),
             ResponseItem::AgentMessage {
+                id: None,
                 author: "/root/worker".to_string(),
                 recipient: "/root".to_string(),
                 content: vec![
@@ -4931,7 +4952,9 @@ mod tests {
                 server: "server".into(),
                 tool: "tool".into(),
                 arguments: json!({"arg": "value"}),
+                connector_id: Some("connector".into()),
                 mcp_app_resource_uri: Some("app://connector".into()),
+                link_id: Some("link_123".into()),
                 plugin_id: Some("sample@test".into()),
                 status: McpToolCallStatus::InProgress,
                 result: None,
@@ -4947,10 +4970,12 @@ mod tests {
                 assert_eq!(event.call_id, "mcp-1");
                 assert_eq!(event.invocation.server, "server");
                 assert_eq!(event.invocation.tool, "tool");
+                assert_eq!(event.connector_id.as_deref(), Some("connector"));
                 assert_eq!(
                     event.mcp_app_resource_uri.as_deref(),
                     Some("app://connector")
                 );
+                assert_eq!(event.link_id.as_deref(), Some("link_123"));
                 assert_eq!(event.plugin_id.as_deref(), Some("sample@test"));
             }
             _ => panic!("expected McpToolCallBegin event"),
@@ -5038,7 +5063,9 @@ mod tests {
                 server: "server".into(),
                 tool: "tool".into(),
                 arguments: json!({"arg": "value"}),
+                connector_id: Some("connector".into()),
                 mcp_app_resource_uri: Some("app://connector".into()),
+                link_id: Some("link_123".into()),
                 plugin_id: Some("sample@test".into()),
                 status: McpToolCallStatus::Completed,
                 result: Some(CallToolResult {
@@ -5059,10 +5086,12 @@ mod tests {
                 assert_eq!(event.call_id, "mcp-1");
                 assert_eq!(event.invocation.server, "server");
                 assert_eq!(event.invocation.tool, "tool");
+                assert_eq!(event.connector_id.as_deref(), Some("connector"));
                 assert_eq!(
                     event.mcp_app_resource_uri.as_deref(),
                     Some("app://connector")
                 );
+                assert_eq!(event.link_id.as_deref(), Some("link_123"));
                 assert_eq!(event.plugin_id.as_deref(), Some("sample@test"));
                 assert_eq!(event.duration, Duration::from_millis(42));
                 assert!(event.is_success());

@@ -231,7 +231,10 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await?;
     let mut input = prompt_input.clone();
-    input.push(ResponseItem::CompactionTrigger { metadata: None });
+    input.push(ResponseItem::CompactionTrigger {
+        id: None,
+        metadata: None,
+    });
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
@@ -281,6 +284,7 @@ async fn run_remote_compact_task_inner_impl(
         token_usage,
     } = compaction_output_result?;
     if let Some(token_usage) = token_usage {
+        sess.record_rollout_budget_usage(&token_usage);
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
         analytics_details.compaction_summary_tokens = Some(token_usage.output_tokens);
         analytics_details.cached_input_tokens = Some(token_usage.cached_input_tokens);
@@ -609,11 +613,13 @@ mod tests {
                 metadata: None,
             },
             ResponseItem::Compaction {
+                id: None,
                 encrypted_content: "old".to_string(),
                 metadata: None,
             },
         ];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
             metadata: None,
         };
@@ -642,6 +648,7 @@ mod tests {
             new.clone(),
         ];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
             metadata: None,
         };
@@ -673,6 +680,7 @@ mod tests {
             metadata: None,
         }];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
             metadata: None,
         };
@@ -800,6 +808,7 @@ mod tests {
     #[tokio::test]
     async fn collect_compaction_output_accepts_additional_output_items() {
         let compaction = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "encrypted".to_string(),
             metadata: None,
         };

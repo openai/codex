@@ -15,7 +15,6 @@ use crate::tools::ToolInfo;
 use anyhow::Context;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::McpServerInfo;
-use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
 use codex_utils_plugins::mcp_connector::sanitize_name;
 use serde::Deserialize;
 use serde::Serialize;
@@ -220,7 +219,7 @@ pub(crate) fn load_cached_codex_apps_tools(
     if cache.schema_version != CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION {
         return CachedCodexAppsToolsLoad::Invalid;
     }
-    CachedCodexAppsToolsLoad::Hit(filter_disallowed_codex_apps_tools(cache.tools))
+    CachedCodexAppsToolsLoad::Hit(cache.tools)
 }
 
 pub(crate) fn write_cached_codex_apps_tools(
@@ -233,10 +232,9 @@ pub(crate) fn write_cached_codex_apps_tools(
     {
         return;
     }
-    let tools = filter_disallowed_codex_apps_tools(tools.to_vec());
     let Ok(bytes) = serde_json::to_vec_pretty(&CodexAppsToolsDiskCache {
         schema_version: CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION,
-        tools,
+        tools: tools.to_vec(),
     }) else {
         return;
     };
@@ -279,17 +277,6 @@ fn write_cached_codex_apps_server_info(
     Ok(())
 }
 
-pub(crate) fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
-    tools
-        .into_iter()
-        .filter(|tool| {
-            tool.connector_id
-                .as_deref()
-                .is_none_or(is_connector_id_allowed)
-        })
-        .collect()
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CodexAppsToolsDiskCache {
     schema_version: u8,
@@ -303,7 +290,7 @@ struct CodexAppsServerInfoDiskCache {
 }
 
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
-pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 3;
+pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 4;
 
 const CODEX_APPS_SERVER_INFO_CACHE_DIR: &str = "cache/codex_apps_server_info";
 const CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION: u8 = 1;

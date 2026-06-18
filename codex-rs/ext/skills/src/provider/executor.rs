@@ -76,13 +76,17 @@ impl SkillProvider for ExecutorSkillProvider {
                 };
                 let file_system = environment.get_filesystem();
                 let outcome = filter_skill_load_outcome_for_product(
-                    load_skills_from_roots([SkillRoot {
-                        path: root_path.clone(),
-                        scope: SkillScope::User,
-                        file_system: Arc::clone(&file_system),
-                        plugin_id: None,
-                        plugin_root: None,
-                    }])
+                    load_skills_from_roots(
+                        [SkillRoot {
+                            path: root_path.clone(),
+                            scope: SkillScope::User,
+                            file_system: Arc::clone(&file_system),
+                            plugin_id: None,
+                            plugin_namespace: None,
+                            plugin_root: None,
+                        }],
+                        /*plugin_skill_snapshots*/ None,
+                    )
                     .await,
                     self.restriction_product,
                 );

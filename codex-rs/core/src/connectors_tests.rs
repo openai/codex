@@ -17,6 +17,7 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
+use rmcp::model::Meta;
 use rmcp::model::Tool;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -137,6 +138,69 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
             is_enabled: true,
             plugin_display_names: plugin_names(&["beta", "sample"]),
         }]
+    );
+}
+
+#[test]
+fn synthetic_links_are_exposed_to_the_agent_but_not_accessible_in_app_list() {
+    let mut synthetic_tool = codex_app_tool("gmail_batch_read_email", "gmail", Some("Gmail"), &[]);
+    synthetic_tool.tool.meta = Some(Meta(
+        serde_json::json!({
+            "resource_name": "gmail.batch_read_email",
+            "_codex_apps": {
+                "resource_uri": "/connector/gmail/batch_read_email",
+                "contains_mcp_source": false,
+                "synthetic_link": true
+            }
+        })
+        .as_object()
+        .expect("meta should be an object")
+        .clone(),
+    ));
+    let tools = vec![
+        synthetic_tool,
+        codex_app_tool("calendar_list_events", "calendar", Some("Calendar"), &[]),
+    ];
+
+    let calendar = AppInfo {
+        id: "calendar".to_string(),
+        name: "Calendar".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        install_url: Some(connector_install_url("Calendar", "calendar")),
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        is_accessible: true,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    };
+    assert_eq!(
+        accessible_connectors_for_app_list_from_mcp_tools(&tools),
+        vec![calendar.clone()]
+    );
+    assert_eq!(
+        accessible_connectors_from_mcp_tools(&tools),
+        vec![
+            calendar,
+            AppInfo {
+                id: "gmail".to_string(),
+                name: "Gmail".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Gmail", "gmail")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }
+        ]
     );
 }
 

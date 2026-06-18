@@ -362,6 +362,13 @@
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "direct_only_tool_namespaces": {
+          "description": "Exact tool namespaces to expose only as direct model tools. These tools bypass deferral, remain top-level in code-mode-only sessions, and are omitted from the nested code-mode tool surface.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "enabled": {
           "type": "boolean"
         },
@@ -439,9 +446,6 @@
             "browser_use_external": {
               "type": "boolean"
             },
-            "child_agents_md": {
-              "type": "boolean"
-            },
             "chronicle": {
               "type": "boolean"
             },
@@ -468,6 +472,9 @@
             },
             "connectors": {
               "type": "boolean"
+            },
+            "current_time_reminder": {
+              "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
             },
             "default_mode_request_user_input": {
               "type": "boolean"
@@ -604,6 +611,9 @@
             "responses_websockets_v2": {
               "type": "boolean"
             },
+            "rollout_budget": {
+              "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
+            },
             "runtime_metrics": {
               "type": "boolean"
             },
@@ -677,6 +687,9 @@
               "type": "boolean"
             },
             "unified_exec_zsh_fork": {
+              "type": "boolean"
+            },
+            "use_agent_identity": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -789,6 +802,30 @@
       },
       "type": "object"
     },
+    "CurrentTimeReminderConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "clock_source": {
+          "$ref": "#/definitions/CurrentTimeSource"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "reminder_interval_model_requests": {
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CurrentTimeSource": {
+      "enum": [
+        "system",
+        "external"
+      ],
+      "type": "string"
+    },
     "DebugConfigLockToml": {
       "additionalProperties": false,
       "properties": {
@@ -881,6 +918,16 @@
         }
       ]
     },
+    "FeatureToml_for_CurrentTimeReminderConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/CurrentTimeReminderConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
         {
@@ -898,6 +945,16 @@
         },
         {
           "$ref": "#/definitions/NetworkProxyConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_RolloutBudgetConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/RolloutBudgetConfigToml"
         }
       ]
     },
@@ -2564,6 +2621,35 @@
           "type": "string"
         }
       ]
+    },
+    "RolloutBudgetConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "limit_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "prefill_token_weight": {
+          "format": "double",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "reminder_interval_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "sampling_token_weight": {
+          "format": "double",
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "type": "object"
     },
     "SandboxMode": {
       "enum": [
@@ -4600,9 +4686,6 @@
         "browser_use_external": {
           "type": "boolean"
         },
-        "child_agents_md": {
-          "type": "boolean"
-        },
         "chronicle": {
           "type": "boolean"
         },
@@ -4629,6 +4712,9 @@
         },
         "connectors": {
           "type": "boolean"
+        },
+        "current_time_reminder": {
+          "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
         },
         "default_mode_request_user_input": {
           "type": "boolean"
@@ -4765,6 +4851,9 @@
         "responses_websockets_v2": {
           "type": "boolean"
         },
+        "rollout_budget": {
+          "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
+        },
         "runtime_metrics": {
           "type": "boolean"
         },
@@ -4838,6 +4927,9 @@
           "type": "boolean"
         },
         "unified_exec_zsh_fork": {
+          "type": "boolean"
+        },
+        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {

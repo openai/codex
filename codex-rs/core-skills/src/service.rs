@@ -14,6 +14,7 @@ use tracing::instrument;
 use tracing::warn;
 
 use crate::HostSkillsSnapshot;
+use crate::PluginSkillSnapshots;
 use crate::SkillLoadOutcome;
 use crate::build_implicit_skill_path_indexes;
 use crate::config_rules::SkillConfigRules;
@@ -32,6 +33,7 @@ pub struct SkillsLoadInput {
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
+    plugin_skill_snapshots: Option<PluginSkillSnapshots>,
 }
 
 impl SkillsLoadInput {
@@ -46,7 +48,17 @@ impl SkillsLoadInput {
             effective_skill_roots,
             config_layer_stack,
             bundled_skills_enabled,
+            plugin_skill_snapshots: None,
         }
+    }
+
+    /// Attaches plugin skill snapshots parsed during plugin loading, when available.
+    pub fn with_plugin_skill_snapshots(
+        mut self,
+        plugin_skill_snapshots: Option<PluginSkillSnapshots>,
+    ) -> Self {
+        self.plugin_skill_snapshots = plugin_skill_snapshots;
+        self
     }
 }
 
@@ -105,7 +117,12 @@ impl SkillsService {
     /// This path uses a cache keyed by the effective skill-relevant config state rather than just
     /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
     /// to share a directory.
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(
+        name = "skills_for_config",
+        level = "info",
+        skip_all,
+        fields(otel.name = "skills_for_config")
+    )]
     pub async fn snapshot_for_config(
         &self,
         input: &SkillsLoadInput,
@@ -119,7 +136,8 @@ impl SkillsService {
         }
 
         let snapshot = HostSkillsSnapshot::new(Arc::new(
-            self.build_skill_outcome(roots, &skill_config_rules).await,
+            self.build_skill_outcome(input, roots, &skill_config_rules)
+                .await,
         ));
         let mut cache = self
             .cache_by_config
@@ -175,7 +193,8 @@ impl SkillsService {
         }
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let snapshot = HostSkillsSnapshot::new(Arc::new(
-            self.build_skill_outcome(roots, &skill_config_rules).await,
+            self.build_skill_outcome(input, roots, &skill_config_rules)
+                .await,
         ));
         if use_cwd_cache {
             let mut cache = self
@@ -190,13 +209,13 @@ impl SkillsService {
     #[instrument(level = "trace", skip_all)]
     async fn build_skill_outcome(
         &self,
+        input: &SkillsLoadInput,
         roots: Vec<SkillRoot>,
         skill_config_rules: &SkillConfigRules,
     ) -> SkillLoadOutcome {
-        let outcome = crate::filter_skill_load_outcome_for_product(
-            load_skills_from_roots(roots).await,
-            self.restriction_product,
-        );
+        let outcome = load_skills_from_roots(roots, input.plugin_skill_snapshots.as_ref()).await;
+        let outcome =
+            crate::filter_skill_load_outcome_for_product(outcome, self.restriction_product);
         let disabled_paths = resolve_disabled_skill_paths(&outcome.skills, skill_config_rules);
         finalize_skill_outcome(outcome, disabled_paths)
     }
@@ -251,7 +270,7 @@ impl SkillsService {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
-    roots: Vec<(AbsolutePathBuf, u8, Option<String>)>,
+    roots: Vec<(AbsolutePathBuf, u8, Option<String>, Option<String>)>,
     skill_config_rules: SkillConfigRules,
 }
 
@@ -291,7 +310,12 @@ fn config_skills_cache_key(
                     SkillScope::System => 2,
                     SkillScope::Admin => 3,
                 };
-                (root.path.clone(), scope_rank, root.plugin_id.clone())
+                (
+                    root.path.clone(),
+                    scope_rank,
+                    root.plugin_id.clone(),
+                    root.plugin_namespace.clone(),
+                )
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),

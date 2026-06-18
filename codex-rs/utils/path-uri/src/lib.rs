@@ -12,6 +12,7 @@ use serde::Serializer;
 use std::fmt;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
 use ts_rs::TS;
@@ -21,7 +22,6 @@ mod api_path_string;
 
 pub use api_path_string::LegacyAppPathString;
 pub use api_path_string::LegacyAppPathStringError;
-pub use api_path_string::PathConvention;
 
 pub const FILE_SCHEME: &str = "file";
 const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
@@ -95,6 +95,17 @@ impl PathUri {
                 .collect::<Vec<_>>()
         };
         Self::from_opaque_path_bytes(&path_bytes)
+    }
+
+    /// Parses an absolute native path using the specified path convention.
+    pub(crate) fn from_absolute_native_path(
+        path: &str,
+        convention: PathConvention,
+    ) -> Option<Self> {
+        match convention {
+            PathConvention::Posix => parse_posix_path(path),
+            PathConvention::Windows => parse_windows_path(path),
+        }
     }
 
     fn from_opaque_path_bytes(path_bytes: &[u8]) -> Self {
@@ -193,13 +204,33 @@ impl PathUri {
             .map(decode_uri_path)
     }
 
-    /// Returns the parent URI, or `None` for the URI root or an opaque fallback
-    /// URI created by [`Self::from_abs_path`].
+    /// Renders this URI as a path-flavored string using its inferred convention.
+    pub fn to_path_buf(&self) -> PathBuf {
+        PathBuf::from(self.inferred_native_path_string())
+    }
+
+    /// Returns the lexical parent without crossing the inferred native path root.
+    ///
+    /// POSIX `/`, Windows drive roots, Windows UNC share roots, and opaque fallback
+    /// URIs created by [`Self::from_abs_path`] have no parent.
     pub fn parent(&self) -> Option<Self> {
-        if self.encoded_path() == "/" || decode_bad_path_uri(&self.0).is_some() {
+        if decode_bad_path_uri(&self.0).is_some() {
             return None;
         }
 
+        let convention = self.infer_path_convention()?;
+        // In URI form, both a Windows drive root (`file:///C:`) and a UNC share root
+        // (`file://server/share`) retain one non-empty path segment. Keep that segment as the
+        // anchor so parent traversal cannot produce a URI that is not an absolute Windows path.
+        let anchor_depth = usize::from(convention == PathConvention::Windows);
+        let depth = self
+            .0
+            .path_segments()?
+            .filter(|segment| !segment.is_empty())
+            .count();
+        if depth <= anchor_depth {
+            return None;
+        }
         let mut url = self.0.clone();
         {
             let mut segments = match url.path_segments_mut() {
@@ -209,6 +240,11 @@ impl PathUri {
             segments.pop_if_empty().pop();
         }
         Some(Self(url))
+    }
+
+    /// Returns this URI and each lexical parent up to its inferred native path root.
+    pub fn ancestors(&self) -> impl Iterator<Item = Self> {
+        std::iter::successors(Some(self.clone()), Self::parent)
     }
 
     /// Lexically resolves native absolute or relative path text against this URI.
@@ -240,7 +276,7 @@ impl PathUri {
                 })?;
         // An absolute native path is already fully resolved, so replace the base URI's main path
         // instead of appending it.
-        if let Ok(absolute) = LegacyAppPathString::from_str(path).to_path_uri(convention) {
+        if let Some(absolute) = Self::from_absolute_native_path(path, convention) {
             return Ok(absolute);
         }
         let path_bytes = path.as_bytes();
@@ -301,15 +337,19 @@ impl PathUri {
 
     /// Converts this file URI to a path using the current host's path rules.
     ///
-    /// Conversion should succeed when the URI was created from an
-    /// [`AbsolutePathBuf`] on the current host, including fallback URIs created
-    /// by [`Self::from_abs_path`]. It may fail when the URI came from a different
-    /// operating system and its `file:` URI form cannot be represented using
-    /// the current host's path rules, such as a UNC authority on POSIX or a
-    /// POSIX root on Windows. Because a `file:` URI does not record its source
-    /// operating system, callers should only use this method when the URI is
-    /// known to identify a path on the current host.
+    /// The URI's inferred path convention must match the current host. Conversion should succeed
+    /// when the URI was created from an [`AbsolutePathBuf`] on the current host, including fallback
+    /// URIs created by [`Self::from_abs_path`]. Foreign conventions are rejected rather than being
+    /// projected onto a syntactically valid but unrelated host path.
     pub fn to_abs_path(&self) -> io::Result<AbsolutePathBuf> {
+        if self.infer_path_convention() != Some(PathConvention::native()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                PathUriParseError::InvalidFileUriPath {
+                    path: self.to_string(),
+                },
+            ));
+        }
         if let Some(path_bytes) = decode_bad_path_uri(&self.0) {
             #[cfg(unix)]
             let decoded_path = {
@@ -521,6 +561,88 @@ fn infer_opaque_path_convention(path_bytes: &[u8]) -> Option<PathConvention> {
     (has_drive || has_unc_prefix).then_some(PathConvention::Windows)
 }
 
+fn parse_posix_path(path: &str) -> Option<PathUri> {
+    let path = path.strip_prefix('/')?;
+    if path.contains('\0') {
+        return Some(PathUri::from_opaque_path_bytes(
+            format!("/{path}").as_bytes(),
+        ));
+    }
+    path_uri_from_segments(/*host*/ None, path.split('/'))
+}
+
+fn parse_windows_path(path: &str) -> Option<PathUri> {
+    let bytes = path.as_bytes();
+    let uses_namespace = matches!(
+        bytes,
+        [first, second, namespace @ (b'.' | b'?'), separator, ..]
+            if is_windows_separator_byte(*first)
+                && is_windows_separator_byte(*second)
+                && is_windows_separator_byte(*separator)
+                && matches!(*namespace, b'.' | b'?')
+    );
+    if uses_namespace || path.contains('\0') {
+        return Some(windows_opaque_path_uri(path));
+    }
+
+    if matches!(
+        bytes,
+        [drive, b':', separator, ..]
+            if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
+    ) {
+        return path_uri_from_segments(
+            /*host*/ None,
+            std::iter::once(&path[..2]).chain(path[3..].split(is_windows_separator_char)),
+        );
+    }
+
+    if matches!(bytes, [first, second, ..]
+        if is_windows_separator_byte(*first) && is_windows_separator_byte(*second))
+    {
+        let mut components = path[2..].split(is_windows_separator_char);
+        let host = components.next().filter(|host| !host.is_empty())?;
+        let share = components.next().filter(|share| !share.is_empty())?;
+        return path_uri_from_segments(Some(host), std::iter::once(share).chain(components))
+            .or_else(|| Some(windows_opaque_path_uri(path)));
+    }
+
+    None
+}
+
+fn path_uri_from_segments<'a>(
+    host: Option<&str>,
+    segments: impl Iterator<Item = &'a str>,
+) -> Option<PathUri> {
+    let mut url = Url::parse("file:///").ok()?;
+    if let Some(host) = host {
+        url.set_host(Some(host)).ok()?;
+    }
+    {
+        let mut url_segments = url.path_segments_mut().ok()?;
+        url_segments.clear();
+        for segment in segments {
+            url_segments.push(segment);
+        }
+    }
+    PathUri::try_from(url).ok()
+}
+
+fn windows_opaque_path_uri(path: &str) -> PathUri {
+    let path_bytes = path
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    PathUri::from_opaque_path_bytes(&path_bytes)
+}
+
+fn is_windows_separator_char(character: char) -> bool {
+    matches!(character, '\\' | '/')
+}
+
+pub(crate) fn is_windows_separator_byte(character: u8) -> bool {
+    matches!(character, b'\\' | b'/')
+}
+
 /// Rejects URI metadata that has no defined meaning for `file:` URIs.
 fn validate_common_known_uri(url: &Url) -> Result<(), PathUriParseError> {
     if !url.username().is_empty() || url.password().is_some() {
@@ -571,6 +693,52 @@ pub enum PathUriParseError {
     FragmentNotAllowed,
     #[error("path `{0}` must be relative when joining a path URI")]
     JoinPathMustBeRelative(String),
+}
+
+/// Path syntax used to render a [`PathUri`] as an operating-system path.
+///
+/// This describes path grammar rather than a specific operating system because
+/// Linux and macOS share the POSIX representation relevant here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum PathConvention {
+    Posix,
+    Windows,
+}
+
+impl PathConvention {
+    /// Returns the path convention used by the current process.
+    #[cfg(windows)]
+    pub const fn native() -> Self {
+        Self::Windows
+    }
+
+    /// Returns the path convention used by the current process.
+    #[cfg(unix)]
+    pub const fn native() -> Self {
+        Self::Posix
+    }
+
+    /// Splits absolute or relative native path text into lexical segments.
+    ///
+    /// This does not validate the path or require it to be absolute. POSIX paths split on `/`,
+    /// while Windows paths split on both `\\` and `/`. Empty segments are retained.
+    pub fn path_segments(self, path: &str) -> impl DoubleEndedIterator<Item = &str> {
+        path.split(move |character| match self {
+            Self::Posix => character == '/',
+            Self::Windows => matches!(character, '/' | '\\'),
+        })
+    }
+}
+
+impl fmt::Display for PathConvention {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Posix => f.write_str("POSIX"),
+            Self::Windows => f.write_str("Windows"),
+        }
+    }
 }
 
 #[cfg(test)]
