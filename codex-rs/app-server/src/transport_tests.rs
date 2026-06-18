@@ -250,6 +250,7 @@ async fn command_execution_request_approval_strips_additional_permissions_withou
                     item_id: "call_123".to_string(),
                     started_at_ms: 0,
                     approval_id: None,
+                    environment_id: None,
                     reason: Some("Need extra read access".to_string()),
                     network_approval_context: None,
                     command: Some("cat file".to_string()),
@@ -260,7 +261,7 @@ async fn command_execution_request_approval_strips_additional_permissions_withou
                             network: None,
                             file_system: Some(
                                 codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                    read: Some(vec![absolute_path("/tmp/allowed")]),
+                                    read: Some(vec![absolute_path("/tmp/allowed").into()]),
                                     write: None,
                                     glob_scan_max_depth: None,
                                     entries: None,
@@ -315,6 +316,7 @@ async fn command_execution_request_approval_keeps_additional_permissions_with_ca
                     item_id: "call_123".to_string(),
                     started_at_ms: 0,
                     approval_id: None,
+                    environment_id: None,
                     reason: Some("Need extra read access".to_string()),
                     network_approval_context: None,
                     command: Some("cat file".to_string()),
@@ -325,7 +327,7 @@ async fn command_execution_request_approval_keeps_additional_permissions_with_ca
                             network: None,
                             file_system: Some(
                                 codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                    read: Some(vec![absolute_path("/tmp/allowed")]),
+                                    read: Some(vec![absolute_path("/tmp/allowed").into()]),
                                     write: None,
                                     glob_scan_max_depth: None,
                                     entries: None,

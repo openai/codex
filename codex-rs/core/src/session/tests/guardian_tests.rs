@@ -1,6 +1,5 @@
 use super::*;
 use crate::compact::InitialContextInjection;
-use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
@@ -96,11 +95,11 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
-    turn_context_raw
+    let mut config = (*turn_context_raw.config).clone();
+    config
         .features
         .enable(Feature::GuardianApproval)
         .expect("test setup should allow enabling guardian approvals");
-    let mut config = (*turn_context_raw.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
@@ -184,11 +183,11 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
-    turn_context_raw
+    let mut config = (*turn_context_raw.config).clone();
+    config
         .features
         .enable(Feature::GuardianApproval)
         .expect("test setup should allow enabling guardian approvals");
-    let mut config = (*turn_context_raw.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
@@ -293,21 +292,21 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
     .await;
 
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
-    turn_context_raw.codex_linux_sandbox_exe = codex_linux_sandbox_exe_or_skip!();
     turn_context_raw
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
-    turn_context_raw
-        .features
-        .enable(Feature::GuardianApproval)
-        .expect("test setup should allow enabling guardian approvals");
     session
         .features
         .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
     turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let mut config = (*turn_context_raw.config).clone();
+    config.codex_linux_sandbox_exe = codex_linux_sandbox_exe_or_skip!();
+    config
+        .features
+        .enable(Feature::GuardianApproval)
+        .expect("test setup should allow enabling guardian approvals");
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
     let models_manager = models_manager_with_provider(
@@ -468,7 +467,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
-    turn_context_raw
+    Arc::make_mut(&mut turn_context_raw.config)
         .features
         .enable(Feature::GuardianApproval)
         .expect("test setup should allow enabling guardian approvals");
@@ -536,6 +535,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "stale developer message".to_string(),
                 }],
                 phase: None,
+                metadata: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -544,6 +544,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "summary".to_string(),
                 }],
                 phase: None,
+                metadata: None,
             },
         ],
         InitialContextInjection::BeforeLastUserMessage,
@@ -693,7 +694,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         config.model_provider.clone(),
     );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -710,7 +711,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         auth_manager,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         extensions: codex_extension_api::empty_extension_registry(),
@@ -724,14 +725,12 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         agent_control: AgentControl::default(),
         dynamic_tools: Vec::new(),
         metrics_service_name: None,
-        inherited_shell_snapshot: None,
+        inherited_environments: None,
         inherited_exec_policy: Some(Arc::new(parent_exec_policy)),
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell_override: None,
         parent_trace: None,
-        environment_selections: ResolvedTurnEnvironments {
-            turn_environments: Vec::new(),
-        },
+        environment_selections: Vec::new(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         analytics_events_client: None,
         thread_store,

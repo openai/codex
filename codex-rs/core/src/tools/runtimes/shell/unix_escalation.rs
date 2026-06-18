@@ -172,6 +172,14 @@ pub(super) async fn try_run_zsh_fork(
     let exec_policy = Arc::new(RwLock::new(
         ctx.session.services.exec_policy.current().as_ref().clone(),
     ));
+    // TODO(anp): Keep PathUri through the shell escalation boundary.
+    let sandbox_cwd = sandbox_cwd
+        .to_abs_path()
+        .map_err(|err| ToolError::Rejected(err.to_string()))?;
+    // TODO(anp): Keep PathUri through the shell sandbox policy boundary.
+    let sandbox_policy_cwd = sandbox_policy_cwd
+        .to_abs_path()
+        .map_err(|err| ToolError::Rejected(err.to_string()))?;
     let command_executor = CoreShellCommandExecutor {
         command,
         cwd: sandbox_cwd,
@@ -185,8 +193,8 @@ pub(super) async fn try_run_zsh_fork(
         arg0,
         sandbox_policy_cwd,
         windows_sandbox_workspace_roots,
-        codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
-        use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
+        codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
+        use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
     };
     let main_execve_wrapper_exe = ctx
         .session
@@ -222,6 +230,7 @@ pub(super) async fn try_run_zsh_fork(
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
+        environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: ctx.turn.approval_policy.value(),
         permission_profile: command_executor.permission_profile.clone(),
@@ -273,9 +282,19 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     let exec_policy = Arc::new(RwLock::new(
         ctx.session.services.exec_policy.current().as_ref().clone(),
     ));
+    // TODO(anp): Keep PathUri through the zsh-fork executor boundary.
+    let cwd = exec_request
+        .cwd
+        .to_abs_path()
+        .map_err(|err| ToolError::Rejected(err.to_string()))?;
+    // TODO(anp): Keep PathUri through the zsh-fork sandbox policy boundary.
+    let sandbox_policy_cwd = exec_request
+        .windows_sandbox_policy_cwd
+        .to_abs_path()
+        .map_err(|err| ToolError::Rejected(err.to_string()))?;
     let command_executor = CoreShellCommandExecutor {
         command: exec_request.command.clone(),
-        cwd: exec_request.cwd.clone(),
+        cwd,
         permission_profile: exec_request.permission_profile.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         network_sandbox_policy: exec_request.network_sandbox_policy,
@@ -284,16 +303,17 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         network: exec_request.network.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: exec_request.windows_sandbox_policy_cwd.clone(),
+        sandbox_policy_cwd,
         windows_sandbox_workspace_roots: exec_request.windows_sandbox_workspace_roots.clone(),
-        codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
-        use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
+        codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
+        use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
     };
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
+        environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::UnifiedExec,
         approval_policy: ctx.turn.approval_policy.value(),
         permission_profile: exec_request.permission_profile.clone(),
@@ -328,6 +348,7 @@ struct CoreShellActionProvider {
     session: Arc<crate::session::session::Session>,
     turn: Arc<crate::session::turn_context::TurnContext>,
     call_id: String,
+    environment_id: String,
     tool_name: GuardianCommandSource,
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
@@ -424,6 +445,7 @@ impl CoreShellActionProvider {
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
+        let environment_id = Some(self.environment_id.clone());
         let source = self.tool_name;
         let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
@@ -489,6 +511,7 @@ impl CoreShellActionProvider {
                         &turn,
                         call_id,
                         approval_id,
+                        environment_id,
                         command,
                         workdir.clone(),
                         /*reason*/ None,
@@ -852,14 +875,14 @@ impl CoreShellCommandExecutor {
         let result = crate::sandboxing::execute_exec_request_with_after_spawn(
             crate::sandboxing::ExecRequest {
                 command: self.command.clone(),
-                cwd: self.cwd.clone(),
+                cwd: self.cwd.clone().into(),
                 env: exec_env,
                 exec_server_env_config: None,
                 network: self.network.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
                 capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox: self.sandbox,
-                windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
+                windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone().into(),
                 windows_sandbox_workspace_roots: self.windows_sandbox_workspace_roots.clone(),
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
@@ -1005,7 +1028,8 @@ impl CoreShellCommandExecutor {
 
         Ok(PreparedExec {
             command: exec_request.command,
-            cwd: exec_request.cwd.to_path_buf(),
+            // TODO(anp): Keep PathUri through the execve-wrapper boundary.
+            cwd: exec_request.cwd.to_abs_path()?.to_path_buf(),
             env: exec_request.env,
             arg0: exec_request.arg0,
         })

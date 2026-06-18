@@ -2,6 +2,7 @@
 compile_error!("wine_test_support can only run on Linux");
 
 use std::ffi::OsString;
+use std::fs;
 use std::future::Future;
 use std::io::Write;
 use std::path::Path;
@@ -42,6 +43,7 @@ struct WineProcesses {
 
 struct WineRuntimePaths {
     dll_path: PathBuf,
+    powershell_runtime: PathBuf,
     wine: PathBuf,
     wineserver: PathBuf,
 }
@@ -74,6 +76,7 @@ impl WineTestCommand {
     pub fn spawn(self) -> Result<WineTestProcess> {
         let runtime = WineRuntimePaths::from_runfiles()?;
         let prefix = TempDir::new().context("create isolated Wine prefix")?;
+        install_powershell_runtime(prefix.path(), &runtime.powershell_runtime)?;
         let mut command = StdCommand::new(&runtime.wine);
         configure_wine_environment(&mut command, &runtime, prefix.path());
         command
@@ -164,8 +167,13 @@ impl WineRuntimePaths {
             .context("locate Wine runtime directory")?
             .to_path_buf();
         let wineserver = codex_utils_cargo_bin::cargo_bin("wineserver")?;
+        let powershell_runtime = codex_utils_cargo_bin::cargo_bin("pwsh-runtime-marker")?
+            .parent()
+            .context("locate PowerShell runtime directory")?
+            .to_path_buf();
         Ok(Self {
             dll_path,
+            powershell_runtime,
             wine,
             wineserver,
         })
@@ -296,6 +304,89 @@ fn configure_wine_environment(command: &mut StdCommand, runtime: &WineRuntimePat
         .env("LC_CTYPE", "C.UTF-8")
         .env("TEMP", r"C:\windows\temp")
         .env("TMP", r"C:\windows\temp");
+}
+
+/// Installs the complete pinned PowerShell distribution where Windows tooling
+/// expects to discover PowerShell 7.
+///
+/// `pwsh.exe` is not a standalone executable: it loads its adjacent .NET host,
+/// managed assemblies, native libraries, modules, and configuration files at
+/// startup. The Bazel archive is exposed through runfiles rather than a normal
+/// Windows installation, while shell detection deliberately probes the
+/// conventional `C:\Program Files\PowerShell\7` fallback. We therefore have to
+/// reproduce the archive's directory tree inside each isolated Wine prefix;
+/// copying only the executable would fail before a command could run.
+fn install_powershell_runtime(prefix: &Path, runtime: &Path) -> Result<()> {
+    let powershell_parent = prefix
+        .join("drive_c")
+        .join("Program Files")
+        .join("PowerShell");
+    fs::create_dir_all(&powershell_parent).context("create PowerShell installation parent")?;
+    let destination = powershell_parent.join("7");
+    materialize_runtime_directory(runtime, &destination)
+}
+
+/// Recursively reproduces a runfiles directory in a writable Wine prefix.
+///
+/// Bazel runfiles may be immutable, represented by a symlink forest, and may
+/// contain the PowerShell distribution on a different filesystem from the
+/// temporary prefix. Hard links avoid repeatedly copying the roughly
+/// hundred-megabyte runtime when both locations share a filesystem; the copy
+/// fallback preserves correctness for sandbox or remote-execution layouts
+/// where cross-device hard links are unavailable.
+fn materialize_runtime_directory(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination).with_context(|| {
+        format!(
+            "create PowerShell runtime directory {}",
+            destination.display()
+        )
+    })?;
+    for entry in fs::read_dir(source)
+        .with_context(|| format!("read PowerShell runtime directory {}", source.display()))?
+    {
+        let entry = entry.context("read PowerShell runtime entry")?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        // Local Bazel runfiles trees expose external-repository files as
+        // symlinks. Resolve those trusted runfiles entries before inspecting
+        // or linking them so the writable prefix contains ordinary files.
+        let resolved_source_path = fs::canonicalize(&source_path).with_context(|| {
+            format!("resolve PowerShell runtime entry {}", source_path.display())
+        })?;
+        let file_type = fs::metadata(&resolved_source_path)
+            .with_context(|| {
+                format!(
+                    "inspect PowerShell runtime entry {}",
+                    resolved_source_path.display()
+                )
+            })?
+            .file_type();
+        if file_type.is_dir() {
+            // PowerShell resolves assemblies and modules by their relative
+            // locations, so flattening the archive is not an option.
+            materialize_runtime_directory(&resolved_source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            // A hard link gives each prefix the expected installation layout
+            // without duplicating the large runtime in the common local case.
+            if fs::hard_link(&resolved_source_path, &destination_path).is_err() {
+                // Cross-device links are common under Bazel sandboxing and
+                // remote execution, where an ordinary copy is still valid.
+                fs::copy(&resolved_source_path, &destination_path).with_context(|| {
+                    format!(
+                        "copy PowerShell runtime file {} to {}",
+                        resolved_source_path.display(),
+                        destination_path.display()
+                    )
+                })?;
+            }
+        } else {
+            anyhow::bail!(
+                "unsupported PowerShell runtime entry type at {}",
+                source_path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

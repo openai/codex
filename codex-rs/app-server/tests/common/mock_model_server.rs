@@ -57,10 +57,11 @@ struct SeqResponder {
 impl Respond for SeqResponder {
     fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
         let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
-        match self.responses.get(call_num) {
-            Some(response) => responses::sse_response(response.clone()),
-            None => panic!("no response for {call_num}"),
-        }
+        let response = self
+            .responses
+            .get(call_num)
+            .expect("mock model response should exist");
+        responses::sse_response(response.clone())
     }
 }
 

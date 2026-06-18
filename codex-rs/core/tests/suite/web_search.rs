@@ -12,7 +12,6 @@ use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
 
-#[allow(clippy::expect_used)]
 fn find_web_search_tool(body: &Value) -> &Value {
     body["tools"]
         .as_array()

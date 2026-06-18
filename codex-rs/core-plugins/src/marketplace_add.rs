@@ -1,5 +1,5 @@
-use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::installed_marketplaces::marketplace_install_root;
+use crate::is_openai_curated_marketplace_name;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 use std::path::Path;
@@ -121,9 +121,9 @@ where
 
     if let MarketplaceSource::Local { path } = &source {
         let marketplace_name = validate_marketplace_source_root(path)?;
-        if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
+        if is_openai_curated_marketplace_name(&marketplace_name) {
             return Err(MarketplaceAddError::InvalidRequest(format!(
-                "marketplace '{OPENAI_CURATED_MARKETPLACE_NAME}' is reserved and cannot be added from this source"
+                "marketplace '{marketplace_name}' is reserved and cannot be added from this source"
             )));
         }
         if find_marketplace_root_by_name(codex_home, &install_root, &marketplace_name)?.is_some() {
@@ -165,9 +165,9 @@ where
     stage_marketplace_source(&source, &sparse_paths, &staged_root, clone_source)?;
 
     let marketplace_name = validate_marketplace_source_root(&staged_root)?;
-    if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
+    if is_openai_curated_marketplace_name(&marketplace_name) {
         return Err(MarketplaceAddError::InvalidRequest(format!(
-            "marketplace '{OPENAI_CURATED_MARKETPLACE_NAME}' is reserved and cannot be added from this source"
+            "marketplace '{marketplace_name}' is reserved and cannot be added from this source"
         )));
     }
 

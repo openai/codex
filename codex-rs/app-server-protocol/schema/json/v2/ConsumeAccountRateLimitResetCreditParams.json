@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "idempotencyKey": {
+      "description": "Identifies one logical reset attempt. A UUID is recommended; reuse the same value when retrying that attempt.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "idempotencyKey"
+  ],
+  "title": "ConsumeAccountRateLimitResetCreditParams",
+  "type": "object"
+}

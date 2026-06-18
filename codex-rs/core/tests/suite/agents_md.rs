@@ -25,11 +25,11 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::RecordingUserInstructionsProvider;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
@@ -138,6 +138,8 @@ fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agents_override_is_preferred_over_agents_md() -> Result<()> {
+    // TODO(anp): Remove after instruction-source helpers use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     let instructions =
         agents_instructions(test_codex().with_workspace_setup(|cwd, fs| async move {
             let agents_md = cwd.join("AGENTS.md");
@@ -170,6 +172,8 @@ async fn agents_override_is_preferred_over_agents_md() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn configured_fallback_is_used_when_agents_candidate_is_directory() -> Result<()> {
+    // TODO(anp): Remove after instruction-source helpers use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     let instructions = agents_instructions(
         test_codex()
             .with_config(|config| {
@@ -351,6 +355,8 @@ async fn symlinked_cwd_uses_logical_parent_for_agents_discovery() -> Result<()> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn selected_environment_sources_match_model_visible_instructions() -> Result<()> {
+    // TODO(anp): Remove after instruction-source helpers use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(
         &server,
@@ -478,6 +484,8 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Result<()> {
+    // TODO(anp): Remove after instruction-source helpers use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     // Set up one global source, one project source, and two ordinary model turns.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -588,6 +596,8 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapshot() -> Result<()> {
+    // TODO(anp): Remove after instruction-source helpers use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -646,11 +656,11 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
             environments: vec![
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: test.config.cwd.clone(),
+                    cwd: PathUri::from_abs_path(&test.config.cwd),
                 },
                 TurnEnvironmentSelection {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: local_root.path().to_path_buf().try_into()?,
+                    cwd: PathUri::from_path(local_root.path())?,
                 },
             ],
             thread_extension_init: Default::default(),
@@ -707,8 +717,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> {
-    // Set up a malformed global instruction file and one model response.
+async fn invalid_utf8_global_instructions_are_lossy() -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_once(
         &server,
@@ -725,29 +734,12 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
         b"global\xFFinstructions",
     )?;
 
-    // Create the thread, capture its load warning, and submit one turn for rendered output.
     let mut builder = test_codex().with_home(home);
     let test = builder.build(&server).await?;
-    let warning = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::Warning(warning)
-            if warning
-                .message
-                .contains(source.as_path().display().to_string().as_str()) =>
-        {
-            Some(warning.message.clone())
-        }
-        _ => None,
-    })
-    .await;
     test.submit_turn("inspect lossy global instructions")
         .await?;
 
-    // Assert the source is reported, the warning is specific, and rendering is lossily decoded.
     assert_eq!(test.codex.instruction_sources().await, vec![source.clone()]);
-    assert!(
-        warning.contains("invalid UTF-8"),
-        "expected warning to contain \"invalid UTF-8\"; observed: {warning}"
-    );
     let expected_fragment =
         expected_provider_only_instruction_fragment("global\u{FFFD}instructions");
     assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);

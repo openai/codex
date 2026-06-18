@@ -4,6 +4,7 @@ use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use crossterm::event::KeyEvent;
+use std::time::Instant;
 
 use super::CancellationEvent;
 
@@ -85,6 +86,14 @@ pub(crate) trait BottomPaneView: Renderable {
     /// When `true`, the bottom pane will schedule a short delayed redraw to
     /// give the burst time window a chance to flush.
     fn is_in_paste_burst(&self) -> bool {
+        false
+    }
+
+    /// Process time-based state immediately before rendering.
+    ///
+    /// Return true when state changed and the bottom pane should redraw or
+    /// complete the active view.
+    fn pre_draw_tick(&mut self, _now: Instant) -> bool {
         false
     }
 

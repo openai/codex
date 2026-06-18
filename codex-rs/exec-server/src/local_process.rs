@@ -81,8 +81,10 @@ struct RunningProcess {
     closed: bool,
 }
 
+struct ProcessStart;
+
 enum ProcessEntry {
-    Starting,
+    Starting(Arc<ProcessStart>),
     Running(Box<RunningProcess>),
 }
 
@@ -128,7 +130,7 @@ impl LocalProcess {
             processes
                 .drain()
                 .filter_map(|(_, process)| match process {
-                    ProcessEntry::Starting => None,
+                    ProcessEntry::Starting(_) => None,
                     ProcessEntry::Running(process) => Some(process),
                 })
                 .collect::<Vec<_>>()
@@ -156,7 +158,14 @@ impl LocalProcess {
             .argv
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
+        let native_cwd = params.cwd.to_abs_path().map_err(|err| {
+            invalid_params(format!(
+                "cwd URI `{}` is not valid on this exec-server host: {err}",
+                params.cwd
+            ))
+        })?;
 
+        let start = Arc::new(ProcessStart);
         {
             let mut process_map = self.inner.processes.lock().await;
             if process_map.contains_key(&process_id) {
@@ -164,7 +173,10 @@ impl LocalProcess {
                     "process {process_id} already exists"
                 )));
             }
-            process_map.insert(process_id.clone(), ProcessEntry::Starting);
+            process_map.insert(
+                process_id.clone(),
+                ProcessEntry::Starting(Arc::clone(&start)),
+            );
         }
 
         let env = child_env(&params);
@@ -172,7 +184,7 @@ impl LocalProcess {
             codex_utils_pty::spawn_pty_process(
                 program,
                 args,
-                params.cwd.as_path(),
+                native_cwd.as_path(),
                 &env,
                 &params.arg0,
                 TerminalSize::default(),
@@ -182,7 +194,7 @@ impl LocalProcess {
             codex_utils_pty::spawn_pipe_process(
                 program,
                 args,
-                params.cwd.as_path(),
+                native_cwd.as_path(),
                 &env,
                 &params.arg0,
             )
@@ -191,7 +203,7 @@ impl LocalProcess {
             codex_utils_pty::spawn_pipe_process_no_stdin(
                 program,
                 args,
-                params.cwd.as_path(),
+                native_cwd.as_path(),
                 &env,
                 &params.arg0,
             )
@@ -201,7 +213,10 @@ impl LocalProcess {
             Ok(spawned) => spawned,
             Err(err) => {
                 let mut process_map = self.inner.processes.lock().await;
-                if matches!(process_map.get(&process_id), Some(ProcessEntry::Starting)) {
+                if matches!(
+                    process_map.get(&process_id),
+                    Some(ProcessEntry::Starting(current)) if Arc::ptr_eq(current, &start)
+                ) {
                     process_map.remove(&process_id);
                 }
                 return Err(internal_error(err.to_string()));
@@ -216,6 +231,16 @@ impl LocalProcess {
         );
         {
             let mut process_map = self.inner.processes.lock().await;
+            if !matches!(
+                process_map.get(&process_id),
+                Some(ProcessEntry::Starting(current)) if Arc::ptr_eq(current, &start)
+            ) {
+                drop(process_map);
+                spawned.session.terminate();
+                return Err(invalid_request(format!(
+                    "process {process_id} start was cancelled"
+                )));
+            }
             process_map.insert(
                 process_id.clone(),
                 ProcessEntry::Running(Box::new(RunningProcess {
@@ -314,7 +339,9 @@ impl LocalProcess {
                         break;
                     }
                 }
-
+                if params.max_bytes.is_none() {
+                    next_seq = process.next_seq;
+                }
                 (
                     ReadResponse {
                         chunks,
@@ -402,7 +429,7 @@ impl LocalProcess {
                         .signal(pty_process_signal(params.signal))
                         .map_err(|err| internal_error(format!("failed to signal process: {err}")))?
                 }
-                Some(ProcessEntry::Starting) | None => {}
+                Some(ProcessEntry::Starting(_)) | None => {}
             }
         }
 
@@ -414,7 +441,7 @@ impl LocalProcess {
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         let running = {
-            let process_map = self.inner.processes.lock().await;
+            let mut process_map = self.inner.processes.lock().await;
             match process_map.get(&params.process_id) {
                 Some(ProcessEntry::Running(process)) => {
                     if process.exit_code.is_some() {
@@ -423,7 +450,11 @@ impl LocalProcess {
                     process.session.terminate();
                     true
                 }
-                Some(ProcessEntry::Starting) | None => false,
+                Some(ProcessEntry::Starting(_)) => {
+                    process_map.remove(&params.process_id);
+                    true
+                }
+                None => false,
             }
         };
 
@@ -783,6 +814,7 @@ fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
 mod tests {
     use super::*;
     use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+    use codex_utils_path_uri::PathUri;
     use codex_utils_pty::ProcessDriver;
     use pretty_assertions::assert_eq;
     use tokio::sync::oneshot;
@@ -792,13 +824,37 @@ mod tests {
         ExecParams {
             process_id: ProcessId::from("env-test"),
             argv: vec!["true".to_string()],
-            cwd: std::path::PathBuf::from("/tmp"),
+            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,
             pipe_stdin: false,
             arg0: None,
         }
+    }
+
+    #[tokio::test]
+    async fn start_process_rejects_non_native_cwd_before_launch() {
+        #[cfg(unix)]
+        let uri = "file://server/share/checkout";
+        #[cfg(windows)]
+        let uri = "file:///usr/local/checkout";
+        let cwd = PathUri::parse(uri).expect("non-native cwd URI");
+        let source = cwd
+            .to_abs_path()
+            .expect_err("cwd should not be native to this host");
+        let expected = invalid_params(format!(
+            "cwd URI `{cwd}` is not valid on this exec-server host: {source}"
+        ));
+        let mut params = test_exec_params(HashMap::new());
+        params.cwd = cwd;
+
+        let result = LocalProcess::default().start_process(params).await;
+        let Err(error) = result else {
+            panic!("non-native cwd should be rejected");
+        };
+
+        assert_eq!(error, expected);
     }
 
     #[test]
@@ -884,6 +940,16 @@ mod tests {
         )
         .await
         .expect("process should close");
+        let replay_after_exit = backend
+            .exec_read(ReadParams {
+                process_id: process.process_id.clone(),
+                after_seq: Some(1),
+                max_bytes: None,
+                wait_ms: Some(0),
+            })
+            .await
+            .expect("closed process should remain readable");
+        assert_eq!(replay_after_exit.next_seq, 4);
         backend.shutdown().await;
     }
 

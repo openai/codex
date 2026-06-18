@@ -4,6 +4,7 @@ pub use elicitation::ElicitationReviewRequest;
 pub use elicitation::ElicitationReviewer;
 pub use elicitation::ElicitationReviewerHandle;
 pub use resource_client::McpResourceClient;
+pub use resource_client::McpResourceClientCacheKey;
 pub use resource_client::McpResourcePage;
 pub use resource_client::McpResourceReadResult;
 pub use rmcp_client::MCP_SANDBOX_STATE_META_CAPABILITY;
@@ -12,6 +13,7 @@ pub use runtime::SandboxState;
 pub use tools::ToolInfo;
 
 pub use catalog::McpCatalogBuilder;
+pub use catalog::McpPluginAttribution;
 pub use catalog::McpServerConflict;
 pub use catalog::McpServerConflictAction;
 pub use catalog::McpServerRegistration;

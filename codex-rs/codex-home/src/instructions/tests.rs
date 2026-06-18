@@ -126,7 +126,7 @@ async fn recoverable_override_read_error_warns_and_falls_back_to_default() {
 }
 
 #[tokio::test]
-async fn invalid_utf8_is_lossy_and_warned() {
+async fn invalid_utf8_is_lossy() {
     let home = TempDir::new().expect("temp dir");
     let path = home.path().join(DEFAULT_AGENTS_MD_FILENAME);
     let mut invalid_utf8 = b"global".to_vec();
@@ -135,18 +135,13 @@ async fn invalid_utf8_is_lossy_and_warned() {
     fs::write(&path, &invalid_utf8).expect("write invalid utf-8");
 
     let outcome = provider(&home).load_user_instructions().await;
-    let utf8_error = std::str::from_utf8(&invalid_utf8).expect_err("invalid utf-8");
-    let warning = format!(
-        "Global AGENTS.md instructions from `{}` contain invalid UTF-8: {utf8_error}. Invalid byte sequences were replaced.",
-        path.display(),
-    );
     assert_eq!(
         outcome,
         expected(
             &home,
             DEFAULT_AGENTS_MD_FILENAME,
             "global\u{fffd} doc",
-            vec![warning]
+            Vec::new()
         )
     );
 }

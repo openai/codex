@@ -750,11 +750,13 @@ async fn run_review_on_session(
         .unwrap_or_default();
     let guardian_permission_profile = PermissionProfile::read_only();
     let parent_turn_environments = params.parent_turn.environments.to_selections();
+    // TODO(anp): Migrate guardian review thread settings to a PathUri fallback cwd so foreign
+    // parent environments do not fall back to the host-native config cwd.
     let parent_turn_legacy_fallback_cwd = params
         .parent_turn
         .environments
         .primary()
-        .map(|environment| environment.cwd().clone())
+        .and_then(|environment| environment.cwd().to_abs_path().ok())
         .unwrap_or_else(|| params.parent_turn.config.cwd.clone());
 
     let submit_result = run_before_review_deadline(
@@ -957,6 +959,8 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.model_provider.request_max_retries = Some(1);
     guardian_config.model_provider.stream_max_retries = Some(1);
     guardian_config.include_skill_instructions = false;
+    guardian_config.memories.use_memories = false;
+    guardian_config.memories.dedicated_tools = false;
     guardian_config.base_instructions = Some(
         parent_config
             .guardian_policy_config
