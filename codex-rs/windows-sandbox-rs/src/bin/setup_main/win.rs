@@ -819,7 +819,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     }
 
     if refresh_only {
-        setup_runtime_bin::ensure_codex_app_runtime_bin_readable(
+        setup_runtime_bin::ensure_codex_app_runtime_paths_readable(
             sandbox_group_psid,
             &mut refresh_errors,
             log,
