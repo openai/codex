@@ -1471,7 +1471,7 @@ Desktop hosts that provide upstream attestation should set `capabilities.request
 
 ### Current time
 
-Hosts that provide an external clock should set `capabilities.requestCurrentTime` during `initialize` and handle the server-initiated `currentTime/read` request. When `[features.current_time_reminder]` is enabled with `clock_source = "app_server_client"`, app-server sends `{ "threadId": "thr_123" }` when a time reminder is due. The client responds with `{ "currentTimeAt": 1781717655 }`, where `currentTimeAt` is an integer Unix timestamp in seconds. A failed, canceled, timed-out, or malformed response stops the turn before the model request is sent.
+Hosts that provide an external clock should set `capabilities.requestCurrentTime` during `initialize` and handle the server-initiated `currentTime/read` request. When `[features.current_time_reminder]` is enabled with `clock_source = "external"`, app-server sends `{ "threadId": "thr_123" }` when a time reminder is due. The client responds with `{ "currentTimeAt": 1781717655 }`, where `currentTimeAt` is an integer Unix timestamp in seconds. A failed, canceled, timed-out, or malformed response stops the turn before the model request is sent.
 
 ### MCP server elicitations
 
