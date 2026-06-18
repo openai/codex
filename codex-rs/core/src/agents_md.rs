@@ -132,9 +132,9 @@ async fn read_agents_md(
 
         if size > remaining {
             tracing::warn!(
-                "Project doc `{}` exceeds remaining budget ({} bytes) - truncating.",
-                p.inferred_native_path_string(),
-                remaining,
+                path = %p,
+                remaining_bytes = remaining,
+                "project doc exceeds remaining budget; truncating"
             );
         }
 
