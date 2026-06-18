@@ -1,6 +1,9 @@
 use codex_client::OutboundProxyConfig;
 
-/// Auth-owned policy marker that keeps platform-specific resolution in the client layer.
+/// Auth-layer adapter around client-owned proxy policy.
+///
+/// `AuthConfig` carries this value while endpoint resolution and platform details remain in the
+/// client layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthRouteConfig {
     route_config: OutboundProxyConfig,
