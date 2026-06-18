@@ -9842,11 +9842,12 @@ async fn sample_rollout(
     let user_messages1 = collect_user_messages(&snapshot1);
     let rebuilt1 = compact::build_compacted_history(Vec::new(), &user_messages1, summary1);
     live_history.replace(rebuilt1);
+    let (window_number, window_id) = session.advance_auto_compact_window().await;
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary1.to_string(),
         replacement_history: None,
-        window_number: None,
-        window_id: None,
+        window_number: Some(window_number),
+        window_id: Some(window_id),
     }));
 
     let user2 = ResponseItem::Message {
@@ -9886,11 +9887,12 @@ async fn sample_rollout(
     let user_messages2 = collect_user_messages(&snapshot2);
     let rebuilt2 = compact::build_compacted_history(Vec::new(), &user_messages2, summary2);
     live_history.replace(rebuilt2);
+    let (window_number, window_id) = session.advance_auto_compact_window().await;
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary2.to_string(),
         replacement_history: None,
-        window_number: None,
-        window_id: None,
+        window_number: Some(window_number),
+        window_id: Some(window_id),
     }));
 
     let user3 = ResponseItem::Message {
