@@ -2821,6 +2821,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-credentialed-routes"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-backend-client",
+ "codex-login",
+ "codex-network-proxy",
+ "http 1.4.0",
+ "tracing",
+]
+
+[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [
