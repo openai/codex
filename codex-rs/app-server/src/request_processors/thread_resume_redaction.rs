@@ -80,7 +80,7 @@ mod tests {
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"secret":"argument"}),
                 app_context: Some(McpToolCallAppContext {
-                    id: "calendar".to_string(),
+                    connector_id: "calendar".to_string(),
                     link_id: Some("link_calendar".to_string()),
                     mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 }),
@@ -127,7 +127,7 @@ mod tests {
                 status: McpToolCallStatus::Completed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
                 app_context: Some(McpToolCallAppContext {
-                    id: "calendar".to_string(),
+                    connector_id: "calendar".to_string(),
                     link_id: Some("link_calendar".to_string()),
                     mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 }),

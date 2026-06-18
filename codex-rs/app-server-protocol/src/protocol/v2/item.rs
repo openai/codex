@@ -293,7 +293,7 @@ pub enum ThreadItem {
         app_context: Option<McpToolCallAppContext>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        /// TODO: to be removed/deprecated in later PR. use `appContext.mcpAppResourceUri` instead.
+        /// Deprecated: use `appContext.mcpAppResourceUri` instead.
         mcp_app_resource_uri: Option<String>,
         plugin_id: Option<String>,
         result: Option<Box<McpToolCallResult>>,
@@ -390,7 +390,7 @@ pub enum ThreadItem {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct McpToolCallAppContext {
-    pub id: String,
+    pub connector_id: String,
     pub link_id: Option<String>,
     pub mcp_app_resource_uri: Option<String>,
 }
@@ -888,8 +888,8 @@ impl From<CoreTurnItem> for ThreadItem {
                     tool: mcp.tool,
                     status: McpToolCallStatus::from(mcp.status),
                     arguments: mcp.arguments,
-                    app_context: mcp.connector_id.map(|id| McpToolCallAppContext {
-                        id,
+                    app_context: mcp.connector_id.map(|connector_id| McpToolCallAppContext {
+                        connector_id,
                         link_id: mcp.link_id,
                         mcp_app_resource_uri: mcp.mcp_app_resource_uri.clone(),
                     }),

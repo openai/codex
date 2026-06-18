@@ -769,8 +769,8 @@ impl ThreadHistoryBuilder {
             app_context: payload
                 .connector_id
                 .clone()
-                .map(|id| McpToolCallAppContext {
-                    id,
+                .map(|connector_id| McpToolCallAppContext {
+                    connector_id,
                     link_id: payload.link_id.clone(),
                     mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
                 }),
@@ -819,8 +819,8 @@ impl ThreadHistoryBuilder {
             app_context: payload
                 .connector_id
                 .clone()
-                .map(|id| McpToolCallAppContext {
-                    id,
+                .map(|connector_id| McpToolCallAppContext {
+                    connector_id,
                     link_id: payload.link_id.clone(),
                     mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
                 }),
@@ -2528,7 +2528,7 @@ mod tests {
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"id":"123"}),
                 app_context: Some(McpToolCallAppContext {
-                    id: "calendar".into(),
+                    connector_id: "calendar".into(),
                     link_id: Some("link_calendar".into()),
                     mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
                 }),

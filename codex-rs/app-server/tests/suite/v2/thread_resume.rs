@@ -742,7 +742,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
             assert_eq!(
                 app_context,
                 &Some(McpToolCallAppContext {
-                    id: "calendar".to_string(),
+                    connector_id: "calendar".to_string(),
                     link_id: Some("link_calendar".to_string()),
                     mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 })
@@ -792,7 +792,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
     assert_eq!(
         app_context,
         &Some(McpToolCallAppContext {
-            id: "calendar".to_string(),
+            connector_id: "calendar".to_string(),
             link_id: Some("link_calendar".to_string()),
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
         })

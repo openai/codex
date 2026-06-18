@@ -2634,7 +2634,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             status: McpToolCallStatus::InProgress,
             arguments: json!({"arg": "value"}),
             app_context: Some(McpToolCallAppContext {
-                id: "calendar".to_string(),
+                connector_id: "calendar".to_string(),
                 link_id: Some("link_calendar".to_string()),
                 mcp_app_resource_uri: Some("app://connector".to_string()),
             }),
@@ -2685,6 +2685,49 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             error: None,
             duration_ms: Some(42),
         }
+    );
+}
+
+#[test]
+fn mcp_tool_call_app_context_serializes_connector_id() {
+    let item = ThreadItem::McpToolCall {
+        id: "mcp-1".to_string(),
+        server: "codex_apps".to_string(),
+        tool: "calendar.create_event".to_string(),
+        status: McpToolCallStatus::InProgress,
+        arguments: json!({}),
+        app_context: Some(McpToolCallAppContext {
+            connector_id: "calendar".to_string(),
+            link_id: Some("link_calendar".to_string()),
+            mcp_app_resource_uri: Some("app://connector".to_string()),
+        }),
+        mcp_app_resource_uri: Some("app://connector".to_string()),
+        plugin_id: None,
+        result: None,
+        error: None,
+        duration_ms: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(item).expect("MCP tool call should serialize"),
+        json!({
+            "type": "mcpToolCall",
+            "id": "mcp-1",
+            "server": "codex_apps",
+            "tool": "calendar.create_event",
+            "status": "inProgress",
+            "arguments": {},
+            "appContext": {
+                "connectorId": "calendar",
+                "linkId": "link_calendar",
+                "mcpAppResourceUri": "app://connector",
+            },
+            "mcpAppResourceUri": "app://connector",
+            "pluginId": null,
+            "result": null,
+            "error": null,
+            "durationMs": null,
+        })
     );
 }
 
