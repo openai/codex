@@ -83,7 +83,7 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
 fn external_web_access_for_mode(web_search_mode: WebSearchMode) -> ExternalWebAccess {
     match web_search_mode {
         WebSearchMode::Disabled | WebSearchMode::Cached => ExternalWebAccess::Boolean(false),
-        WebSearchMode::IndexGated => ExternalWebAccess::Mode(ExternalWebAccessMode::IndexOnly),
+        WebSearchMode::Indexed => ExternalWebAccess::Mode(ExternalWebAccessMode::IndexOnly),
         WebSearchMode::Live => ExternalWebAccess::Boolean(true),
     }
 }
@@ -165,12 +165,12 @@ mod tests {
     use codex_protocol::config_types::WebSearchMode;
 
     #[test]
-    fn external_web_access_preserves_legacy_values_until_index_gated() {
+    fn external_web_access_preserves_legacy_values_until_indexed() {
         assert_eq!(
             [
                 WebSearchMode::Disabled,
                 WebSearchMode::Cached,
-                WebSearchMode::IndexGated,
+                WebSearchMode::Indexed,
                 WebSearchMode::Live,
             ]
             .map(external_web_access_for_mode),

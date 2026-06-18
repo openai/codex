@@ -20216,7 +20216,7 @@
         "enum": [
           "disabled",
           "cached",
-          "index_gated",
+          "indexed",
           "live"
         ],
         "type": "string"

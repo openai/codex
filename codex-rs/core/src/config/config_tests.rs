@@ -4975,11 +4975,11 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 }
 
 #[test]
-fn web_search_mode_for_turn_preserves_index_gated_for_disabled_permissions() {
-    let web_search_mode = Constrained::allow_any(WebSearchMode::IndexGated);
+fn web_search_mode_for_turn_preserves_indexed_for_disabled_permissions() {
+    let web_search_mode = Constrained::allow_any(WebSearchMode::Indexed);
     let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
-    assert_eq!(mode, WebSearchMode::IndexGated);
+    assert_eq!(mode, WebSearchMode::Indexed);
 }
 
 #[test]
@@ -5029,11 +5029,11 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
 }
 
 #[test]
-fn web_search_mode_for_turn_does_not_implicitly_select_index_gated() -> anyhow::Result<()> {
+fn web_search_mode_for_turn_does_not_implicitly_select_indexed() -> anyhow::Result<()> {
     let allowed = [
         WebSearchMode::Disabled,
         WebSearchMode::Cached,
-        WebSearchMode::IndexGated,
+        WebSearchMode::Indexed,
     ];
     let web_search_mode = Constrained::new(WebSearchMode::Cached, move |candidate| {
         if allowed.contains(candidate) {

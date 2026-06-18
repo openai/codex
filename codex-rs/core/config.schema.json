@@ -4323,7 +4323,7 @@
       "enum": [
         "disabled",
         "cached",
-        "index_gated",
+        "indexed",
         "live"
       ],
       "type": "string"
@@ -5267,7 +5267,7 @@
           "$ref": "#/definitions/WebSearchMode"
         }
       ],
-      "description": "Controls the web search tool mode: disabled, cached, index-gated, or live."
+      "description": "Controls the web search tool mode: disabled, cached, indexed, or live."
     },
     "windows": {
       "allOf": [
