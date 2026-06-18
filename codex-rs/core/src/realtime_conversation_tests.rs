@@ -130,8 +130,10 @@ async fn clears_active_handoff_explicitly() {
     let (tx, _rx) = bounded(1);
     let state = RealtimeHandoffState::new(
         tx,
+        /*client_managed_handoffs*/ false,
         /*codex_responses_as_items*/ false,
         /*codex_response_item_prefix*/ None,
+        /*codex_response_handoff_prefix*/ None,
         RealtimeSessionKind::V1,
     );
 
