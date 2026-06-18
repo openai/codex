@@ -266,6 +266,8 @@ pub(crate) fn build_default_auth_reqwest_client(
     };
 
     if is_sandboxed() {
+        // Preserve the sandbox's existing no-proxy policy; sandboxed command egress is routed
+        // separately through network-proxy.
         return Ok(build_reqwest_client());
     }
     build_reqwest_client_for_route(
