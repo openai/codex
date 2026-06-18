@@ -1299,7 +1299,7 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
         (r#""./skills/""#, &["skills"][..]),
         (
             r#"["./skills/abc/", "./skills/edk/"]"#,
-            &["skills", "skills/abc", "skills/edk"][..],
+            &["skills/abc", "skills/edk"][..],
         ),
     ] {
         let codex_home = TempDir::new().unwrap();
@@ -1390,7 +1390,6 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
         let mut expected_skill_roots = expected_skill_dirs
             .iter()
             .map(|dir| plugin_root.join(dir).abs())
-            .chain(std::iter::once(plugin_root.join("skills").abs()))
             .collect::<Vec<_>>();
         expected_skill_roots.sort_unstable();
         expected_skill_roots.dedup();
