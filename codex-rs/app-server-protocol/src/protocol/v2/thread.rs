@@ -241,6 +241,10 @@ pub struct ThreadSettingsUpdateParams {
     #[experimental("thread/settings/update.collaborationMode")]
     #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,
+    /// Select the multi-agent mode for subsequent turns.
+    #[experimental("thread/settings/update.multiAgentMode")]
+    #[ts(optional = nullable)]
+    pub multi_agent_mode: Option<MultiAgentMode>,
     /// Override the personality for subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
