@@ -1,6 +1,6 @@
 use codex_core_skills::AvailableSkills;
-use codex_core_skills::render_available_skills_body;
 use codex_core_skills::render::render_legacy_available_skills_body;
+use codex_core_skills::render_available_skills_body;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 

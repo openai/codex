@@ -3,6 +3,7 @@ use crate::agents_md::LoadedAgentsMd;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_skills::HostSkillsSnapshot;
+use codex_core_skills::LegacySkillsInstructions;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -712,6 +713,15 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
+        if model_requires_legacy_skills_instructions(&model_info.slug) {
+            self.services
+                .thread_extension_data
+                .insert(LegacySkillsInstructions);
+        } else {
+            self.services
+                .thread_extension_data
+                .remove::<LegacySkillsInstructions>();
+        }
 
         let multi_agent_version = match multi_agent_runtime {
             TurnMultiAgentRuntime::ResolveAndStore => {

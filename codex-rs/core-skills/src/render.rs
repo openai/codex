@@ -59,8 +59,11 @@ pub const SKILLS_HOW_TO_USE_WITH_ALIASES: &str = r###"- Discovery: The list abov
   - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
 - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."###;
 
+#[derive(Clone, Copy, Debug)]
+pub struct LegacySkillsInstructions;
+
 pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[String]) -> String {
-    render_skills_body(skill_root_lines, skill_lines, None)
+    render_skills_body(skill_root_lines, skill_lines, /*how_to_use*/ None)
 }
 
 pub fn render_legacy_available_skills_body(

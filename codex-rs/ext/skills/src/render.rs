@@ -12,6 +12,7 @@ pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
 pub(crate) fn available_skills_fragment(
     catalog: &SkillCatalog,
+    include_legacy_usage_instructions: bool,
 ) -> Option<AvailableSkillsInstructions> {
     let mut total_bytes = 0usize;
     let mut omitted = 0usize;
@@ -46,7 +47,10 @@ pub(crate) fn available_skills_fragment(
         ));
     }
 
-    Some(AvailableSkillsInstructions::from_skill_lines(skill_lines))
+    Some(AvailableSkillsInstructions::from_skill_lines(
+        skill_lines,
+        include_legacy_usage_instructions,
+    ))
 }
 
 fn render_skill_line(entry: &SkillCatalogEntry, description: &str) -> String {

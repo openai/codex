@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_core_skills::HostSkillsSnapshot;
+use codex_core_skills::LegacySkillsInstructions;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ConfigContributor;
@@ -133,7 +134,8 @@ where
             for warning in &catalog.warnings {
                 self.emit_warning(thread_store.level_id(), warning.clone());
             }
-            available_skills_fragment(&catalog)
+            let legacy = thread_store.get::<LegacySkillsInstructions>().is_some();
+            available_skills_fragment(&catalog, legacy)
                 .map(|fragment| PromptFragment::developer_capability(fragment.render()))
                 .into_iter()
                 .collect()
@@ -207,7 +209,8 @@ where
                     entry.authority.kind != SkillSourceKind::Executor
                         && entry.authority.kind != SkillSourceKind::Orchestrator
                 });
-                if let Some(fragment) = available_skills_fragment(&turn_catalog) {
+                let legacy = thread_store.get::<LegacySkillsInstructions>().is_some();
+                if let Some(fragment) = available_skills_fragment(&turn_catalog, legacy) {
                     fragments.push(Box::new(fragment));
                 }
             }

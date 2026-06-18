@@ -138,7 +138,7 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("mock-model".to_string()),
+            model: Some("gpt-5.5".to_string()),
             environments: Some(Vec::new()),
             ..Default::default()
         })
