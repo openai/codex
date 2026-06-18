@@ -58,6 +58,8 @@ use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::CodeModeConfigToml;
+use codex_features::CurrentTimeReminderConfigToml;
+use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -1022,6 +1024,8 @@ pub struct Config {
 
     /// Shared token budget for the root thread and its sub-agents.
     pub rollout_budget: Option<RolloutBudgetConfig>,
+    /// Current-time reminder configuration, when enabled.
+    pub current_time_reminder: Option<CurrentTimeReminderConfig>,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
@@ -1073,6 +1077,21 @@ pub struct RolloutBudgetConfig {
     pub reminder_interval_tokens: i64,
     pub sampling_token_weight: f64,
     pub prefill_token_weight: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CurrentTimeReminderConfig {
+    pub reminder_interval_model_requests: u64,
+    pub clock_source: CurrentTimeSource,
+}
+
+impl Default for CurrentTimeReminderConfig {
+    fn default() -> Self {
+        Self {
+            reminder_interval_model_requests: 1,
+            clock_source: CurrentTimeSource::System,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2539,6 +2558,34 @@ fn resolve_rollout_budget_config(
     }))
 }
 
+fn resolve_current_time_reminder_config(
+    config_toml: &ConfigToml,
+    features: &ManagedFeatures,
+) -> std::io::Result<Option<CurrentTimeReminderConfig>> {
+    if !features.enabled(Feature::CurrentTimeReminder) {
+        return Ok(None);
+    }
+
+    let base = current_time_reminder_toml_config(config_toml.features.as_ref());
+    let default = CurrentTimeReminderConfig::default();
+    let reminder_interval_model_requests = base
+        .and_then(|config| config.reminder_interval_model_requests)
+        .unwrap_or(default.reminder_interval_model_requests);
+    if reminder_interval_model_requests == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.current_time_reminder.reminder_interval_model_requests must be positive",
+        ));
+    }
+
+    Ok(Some(CurrentTimeReminderConfig {
+        reminder_interval_model_requests,
+        clock_source: base
+            .and_then(|config| config.clock_source)
+            .unwrap_or(default.clock_source),
+    }))
+}
+
 fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
     let Some(tui) = config_toml.tui.as_ref() else {
         return TerminalResizeReflowConfig::default();
@@ -2573,6 +2620,15 @@ fn code_mode_toml_config(features: Option<&FeaturesToml>) -> Option<&CodeModeCon
 
 fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
     match features?.multi_agent_v2.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
+fn current_time_reminder_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&CurrentTimeReminderConfigToml> {
+    match features?.current_time_reminder.as_ref()? {
         FeatureToml::Enabled(_) => None,
         FeatureToml::Config(config) => Some(config),
     }
@@ -3217,6 +3273,7 @@ impl Config {
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
+        let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
         let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
@@ -3758,6 +3815,7 @@ impl Config {
             ghost_snapshot,
             multi_agent_v2,
             rollout_budget,
+            current_time_reminder,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
