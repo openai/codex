@@ -65,6 +65,11 @@ impl StatusSurfaceSelections {
                 .status_line_items
                 .contains(&StatusLineItem::BranchChanges)
     }
+
+    fn uses_workspace_headline(&self) -> bool {
+        self.status_line_items
+            .contains(&StatusLineItem::WorkspaceHeadline)
+    }
 }
 
 /// Cached project-root display name keyed by the cwd used for the last lookup.
@@ -156,6 +161,15 @@ impl ChatWidget {
             if !self.status_line_git_summary_lookup_complete {
                 self.request_status_line_git_summary(cwd);
             }
+        }
+
+        if !selections.uses_workspace_headline() {
+            self.status_line_workspace_headline = None;
+            self.status_line_workspace_headline_pending = false;
+            self.status_line_workspace_headline_last_requested_at = None;
+            self.status_line_workspace_messages_disabled = false;
+        } else {
+            self.request_status_line_workspace_headline_if_due(Instant::now());
         }
     }
 
@@ -553,6 +567,76 @@ impl ChatWidget {
         });
     }
 
+    fn request_status_line_workspace_headline_if_due(&mut self, now: Instant) {
+        if !self.status_line_workspace_headline_should_fetch(now) {
+            return;
+        }
+        self.status_line_workspace_headline_pending = true;
+        self.status_line_workspace_headline_last_requested_at = Some(now);
+        self.app_event_tx
+            .send(AppEvent::RefreshStatusLineWorkspaceHeadline);
+    }
+
+    fn status_line_workspace_headline_should_fetch(&self, now: Instant) -> bool {
+        if self.status_line_workspace_headline_pending
+            || self.status_line_workspace_messages_disabled
+            || !self.has_chatgpt_account
+            || !self.has_codex_backend_auth
+            || !crate::workspace_messages::plan_type_allows_workspace_headline(self.plan_type)
+        {
+            return false;
+        }
+
+        self.status_line_workspace_headline_last_requested_at
+            .is_none_or(|last_requested_at| {
+                now.saturating_duration_since(last_requested_at)
+                    >= crate::workspace_messages::WORKSPACE_HEADLINE_REFRESH_INTERVAL
+            })
+    }
+
+    pub(super) fn refresh_status_line_if_workspace_headline_due(&mut self) {
+        let now = Instant::now();
+        if self.status_line_workspace_headline_should_fetch(now)
+            && self
+                .status_line_items_with_invalids()
+                .0
+                .contains(&StatusLineItem::WorkspaceHeadline)
+        {
+            self.refresh_status_line();
+        }
+    }
+
+    pub(crate) fn set_status_line_workspace_headline(
+        &mut self,
+        result: Result<crate::workspace_messages::WorkspaceHeadlineFetchResult, String>,
+    ) {
+        self.status_line_workspace_headline_pending = false;
+        match result {
+            Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(headline)) => {
+                self.status_line_workspace_messages_disabled = false;
+                self.status_line_workspace_headline = headline;
+            }
+            Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled) => {
+                self.status_line_workspace_messages_disabled = true;
+                self.status_line_workspace_headline = None;
+            }
+            Err(err) => {
+                tracing::debug!(error = %err, "failed to fetch workspace headline");
+            }
+        }
+
+        if !self.status_line_workspace_messages_disabled
+            && self
+                .status_line_items_with_invalids()
+                .0
+                .contains(&StatusLineItem::WorkspaceHeadline)
+        {
+            self.frame_requester
+                .schedule_frame_in(crate::workspace_messages::WORKSPACE_HEADLINE_REFRESH_INTERVAL);
+        }
+        self.refresh_status_line();
+    }
+
     /// Resolves a display string for one configured status-line item.
     ///
     /// Returning `None` means "omit this item for now", not "configuration error". Callers rely on
@@ -653,6 +737,7 @@ impl ChatWidget {
                     }
                 },
             ),
+            StatusLineItem::WorkspaceHeadline => self.status_line_workspace_headline.clone(),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
         }
     }
@@ -693,6 +778,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::SessionId => StatusLineItem::SessionId,
             StatusSurfacePreviewItem::FastMode => StatusLineItem::FastMode,
             StatusSurfacePreviewItem::RawOutput => StatusLineItem::RawOutput,
+            StatusSurfacePreviewItem::WorkspaceHeadline => StatusLineItem::WorkspaceHeadline,
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
             StatusSurfacePreviewItem::Reasoning => StatusLineItem::Reasoning,

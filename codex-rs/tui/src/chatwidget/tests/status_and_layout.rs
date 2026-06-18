@@ -2142,6 +2142,75 @@ async fn status_line_legacy_context_usage_renders_context_used_percent() {
 }
 
 #[tokio::test]
+async fn status_line_workspace_headline_renders_cached_value() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Workspace maintenance starts at 5pm".to_string());
+
+    chat.refresh_status_line();
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Workspace maintenance starts at 5pm".to_string())
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace-headline should be a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn status_line_workspace_headline_omits_when_unavailable() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec![
+        "workspace-headline".to_string(),
+        "run-state".to_string(),
+    ]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Ready".to_string()));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace-headline should be omitted without warning when no headline is cached"
+    );
+}
+
+#[tokio::test]
+async fn workspace_headline_update_applies_feature_disabled_result() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Old headline".to_string());
+
+    chat.set_status_line_workspace_headline(Ok(
+        crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled,
+    ));
+
+    assert_eq!(status_line_text(&chat), None);
+    assert!(chat.status_line_workspace_messages_disabled);
+}
+
+#[tokio::test]
+async fn workspace_headline_update_applies_available_headline() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+
+    chat.set_status_line_workspace_headline(Ok(
+        crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+            "Fresh workspace headline".to_string(),
+        )),
+    ));
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Fresh workspace headline".to_string())
+    );
+    assert!(!chat.status_line_workspace_messages_disabled);
+}
+
+#[tokio::test]
 async fn status_line_branch_state_resets_when_git_branch_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("main".to_string());
