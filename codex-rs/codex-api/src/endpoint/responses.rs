@@ -15,6 +15,7 @@ use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
 use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -71,7 +72,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
     )]
     pub async fn stream_request(
         &self,
-        request: ResponsesApiRequest,
+        mut request: ResponsesApiRequest,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
         let ResponsesOptions {
@@ -86,22 +87,18 @@ impl<T: HttpTransport> ResponsesClient<T> {
 
         let attach_azure_item_ids =
             request.store && self.session.provider().is_azure_responses_endpoint();
-        let body = if !include_item_ids || attach_azure_item_ids {
+        let azure_item_ids = attach_azure_item_ids.then(|| request.input.clone());
+        if !include_item_ids {
+            request
+                .input
+                .iter_mut()
+                .for_each(ResponseItem::clear_feature_gated_id);
+        }
+        let body = if let Some(azure_item_ids) = azure_item_ids {
             let mut body = serde_json::to_value(&request).map_err(|e| {
                 ApiError::Stream(format!("failed to encode responses request: {e}"))
             })?;
-            if !include_item_ids
-                && let Some(items) = body.get_mut("input").and_then(Value::as_array_mut)
-            {
-                for item in items {
-                    if let Some(item) = item.as_object_mut() {
-                        item.remove("id");
-                    }
-                }
-            }
-            if attach_azure_item_ids {
-                attach_item_ids(&mut body, &request.input);
-            }
+            attach_item_ids(&mut body, &azure_item_ids);
             EncodedJsonBody::encode(&body)
         } else {
             EncodedJsonBody::encode(&request)

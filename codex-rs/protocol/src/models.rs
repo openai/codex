@@ -1189,8 +1189,10 @@ impl ResponseItem {
         }
     }
 
-    /// Clears the Responses API item ID for variants that carry one.
-    pub fn clear_id(&mut self) {
+    /// Clears IDs whose serialization is controlled by the `item_ids` feature.
+    ///
+    /// Image generation call IDs predate that feature and remain serialized for compatibility.
+    pub fn clear_feature_gated_id(&mut self) {
         match self {
             Self::Message { id, .. }
             | Self::AgentMessage { id, .. }
@@ -1203,10 +1205,9 @@ impl ResponseItem {
             | Self::ToolSearchOutput { id, .. }
             | Self::WebSearchCall { id, .. }
             | Self::Reasoning { id, .. }
-            | Self::ImageGenerationCall { id, .. }
             | Self::Compaction { id, .. }
             | Self::ContextCompaction { id, .. } => *id = None,
-            Self::CompactionTrigger { .. } | Self::Other => {}
+            Self::ImageGenerationCall { .. } | Self::CompactionTrigger { .. } | Self::Other => {}
         }
     }
 

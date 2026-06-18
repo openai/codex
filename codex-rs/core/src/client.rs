@@ -518,7 +518,10 @@ impl ModelClient {
             responses_metadata,
         )?;
         if !prompt.include_item_ids {
-            request.input.iter_mut().for_each(ResponseItem::clear_id);
+            request
+                .input
+                .iter_mut()
+                .for_each(ResponseItem::clear_feature_gated_id);
         }
         let ResponsesApiRequest {
             model,
@@ -1474,7 +1477,10 @@ impl ModelClientSession {
                 self.prepare_websocket_request(ws_payload, &request);
             if !prompt.include_item_ids {
                 let ResponsesWsRequest::ResponseCreate(payload) = &mut ws_request;
-                payload.input.iter_mut().for_each(ResponseItem::clear_id);
+                payload
+                    .input
+                    .iter_mut()
+                    .for_each(ResponseItem::clear_feature_gated_id);
             }
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a
