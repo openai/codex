@@ -631,10 +631,31 @@ fn plugin_install_elicitation_telemetry_metadata(
         return None;
     }
 
+    let nested_entry_meta = meta
+        .get("entries")
+        .and_then(Value::as_array)
+        .and_then(|entries| entries.first())
+        .and_then(Value::as_object)
+        .or_else(|| {
+            meta.get("categories")
+                .and_then(Value::as_array)
+                .and_then(|categories| categories.first())
+                .and_then(Value::as_object)
+                .and_then(|category| category.get("entries"))
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(Value::as_object)
+        });
+    let tool_meta = if meta.contains_key(TOOL_SUGGESTION_TOOL_TYPE_KEY) {
+        meta
+    } else {
+        nested_entry_meta?
+    };
+
     Some(PluginInstallElicitationTelemetryMetadata {
-        tool_type: metadata_owned_string(meta, TOOL_SUGGESTION_TOOL_TYPE_KEY)?,
-        tool_id: metadata_owned_string(meta, TOOL_SUGGESTION_TOOL_ID_KEY)?,
-        tool_name: metadata_owned_string(meta, MCP_ELICITATION_TOOL_NAME_KEY)?,
+        tool_type: metadata_owned_string(tool_meta, TOOL_SUGGESTION_TOOL_TYPE_KEY)?,
+        tool_id: metadata_owned_string(tool_meta, TOOL_SUGGESTION_TOOL_ID_KEY)?,
+        tool_name: metadata_owned_string(tool_meta, MCP_ELICITATION_TOOL_NAME_KEY)?,
     })
 }
 

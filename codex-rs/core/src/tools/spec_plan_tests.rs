@@ -8,6 +8,13 @@ use codex_mcp::ToolInfo;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_plugin_installs_extension::RequestPluginInstallsBackend;
+use codex_plugin_installs_extension::RequestPluginInstallsBackendFuture;
+use codex_plugin_installs_extension::RequestPluginInstallsMode;
+use codex_plugin_installs_extension::RequestPluginInstallsRequest;
+use codex_plugin_installs_extension::ToolSuggestPresentation;
+use codex_plugin_installs_extension::create_request_plugin_installs_tool_for_tui;
+use codex_plugin_installs_extension::request_plugin_installs_tool;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ApplyPatchToolType;
@@ -37,7 +44,6 @@ use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::ToolSuggestCandidates;
-use crate::tools::router::ToolSuggestPresentation;
 
 #[derive(Default)]
 struct ToolPlanInputs {
@@ -178,18 +184,55 @@ async fn probe_with(
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
     configure_turn(&mut turn);
+    let mut extension_tool_executors = inputs.extension_tool_executors;
+    let features = turn.config.features.get();
+    let plugin_installs_enabled = [Feature::ToolSuggest, Feature::Apps, Feature::Plugins]
+        .into_iter()
+        .all(|feature| features.enabled(feature));
+    if let Some(candidates) = inputs
+        .tool_suggest_candidates
+        .as_ref()
+        .filter(|candidates| plugin_installs_enabled && !candidates.tools.is_empty())
+    {
+        let mode = if turn.app_server_client_name.as_deref() == Some("codex-tui") {
+            RequestPluginInstallsMode::SingleEntry
+        } else {
+            RequestPluginInstallsMode::MultipleEntries
+        };
+        extension_tool_executors.push(request_plugin_installs_tool(
+            Arc::new(UnusedPluginInstallsBackend),
+            candidates.tools.clone(),
+            candidates.presentation,
+            mode,
+        ));
+    }
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
             tool_suggest_candidates: inputs.tool_suggest_candidates,
             mcp_tools: inputs.mcp_tools,
             deferred_mcp_tools: inputs.deferred_mcp_tools,
-            extension_tool_executors: inputs.extension_tool_executors,
+            extension_tool_executors,
             dynamic_tools: inputs.dynamic_tools.as_slice(),
         },
         &Default::default(),
     );
     ToolPlanProbe::from_router(router)
+}
+
+struct UnusedPluginInstallsBackend;
+
+impl RequestPluginInstallsBackend for UnusedPluginInstallsBackend {
+    fn execute(
+        &self,
+        _request: RequestPluginInstallsRequest,
+    ) -> RequestPluginInstallsBackendFuture<'_> {
+        Box::pin(async {
+            Err(codex_tools::FunctionCallError::Fatal(
+                "unused test backend".to_string(),
+            ))
+        })
+    }
 }
 
 async fn probe(configure_turn: impl FnOnce(&mut TurnContext)) -> ToolPlanProbe {
@@ -856,7 +899,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
         .await;
         plan.assert_visible_lacks(&[
             "list_available_plugins_to_install",
-            "request_plugin_install",
+            "request_plugin_installs",
         ]);
     }
 
@@ -882,7 +925,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
         .await;
         plan.assert_visible_lacks(&[
             "list_available_plugins_to_install",
-            "request_plugin_install",
+            "request_plugin_installs",
         ]);
     }
 
@@ -901,7 +944,11 @@ async fn request_plugin_install_requires_all_discovery_features() {
     .await;
     enabled.assert_visible_contains(&[
         "list_available_plugins_to_install",
-        "request_plugin_install",
+        "request_plugin_installs",
+    ]);
+    enabled.assert_registered_contains(&[
+        "list_available_plugins_to_install",
+        "request_plugin_installs",
     ]);
 }
 
@@ -924,9 +971,32 @@ async fn request_plugin_install_stays_visible_without_tool_search() {
 
     plan.assert_visible_contains(&[
         "list_available_plugins_to_install",
-        "request_plugin_install",
+        "request_plugin_installs",
     ]);
     plan.assert_visible_lacks(&["tool_search"]);
+}
+
+#[tokio::test]
+async fn request_plugin_installs_uses_single_entry_schema_for_tui() {
+    let plan = probe_with(
+        |turn| {
+            turn.app_server_client_name = Some("codex-tui".to_string());
+            set_features(
+                turn,
+                &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+            );
+        },
+        ToolPlanInputs {
+            tool_suggest_candidates: Some(plugin_candidates(ToolSuggestPresentation::ListTool)),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        plan.visible_spec("request_plugin_installs"),
+        &create_request_plugin_installs_tool_for_tui(ToolSuggestPresentation::ListTool),
+    );
 }
 
 #[tokio::test]
@@ -947,24 +1017,27 @@ async fn request_plugin_install_description_refers_to_recommended_plugins_hint()
     )
     .await;
 
-    let request_spec = plan.visible_spec("request_plugin_install");
+    let request_spec = plan.visible_spec("request_plugin_installs");
     let ToolSpec::Function(ResponsesApiTool {
         description: request_description,
         ..
     }) = request_spec
     else {
-        panic!("expected request_plugin_install function spec");
+        panic!("expected request_plugin_installs function spec");
     };
     assert!(request_description.contains("the `<recommended_plugins>` list"));
     assert!(!request_description.contains("list_available_plugins_to_install"));
     assert!(!request_description.contains("github"));
-    assert!(has_parameter(request_spec, "plugin_id"));
-    assert!(has_parameter(request_spec, "suggest_reason"));
+    assert!(has_parameter(request_spec, "entries"));
+    assert!(has_parameter(request_spec, "categories"));
+    assert!(has_parameter(request_spec, "action_type"));
+    assert!(!has_parameter(request_spec, "plugin_id"));
+    assert!(!has_parameter(request_spec, "suggest_reason"));
     assert!(!has_parameter(request_spec, "tool_id"));
     assert!(!has_parameter(request_spec, "tool_type"));
-    assert!(!has_parameter(request_spec, "action_type"));
     plan.assert_visible_lacks(&["list_available_plugins_to_install"]);
     plan.assert_registered_lacks(&["list_available_plugins_to_install"]);
+    plan.assert_registered_contains(&["request_plugin_installs"]);
 }
 
 #[tokio::test]

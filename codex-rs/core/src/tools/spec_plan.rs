@@ -19,7 +19,6 @@ use crate::tools::handlers::NewContextWindowHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
-use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
@@ -689,15 +688,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         && let Some(candidates) = context
             .tool_suggest_candidates
             .filter(|candidates| !candidates.tools.is_empty())
+        && candidates.presentation == crate::tools::router::ToolSuggestPresentation::ListTool
     {
-        if candidates.presentation == crate::tools::router::ToolSuggestPresentation::ListTool {
-            planned_tools.add(ListAvailablePluginsToInstallHandler::new(
-                collect_request_plugin_install_entries(&candidates.tools),
-            ));
-        }
-        planned_tools.add(RequestPluginInstallHandler::new(
-            candidates.tools.clone(),
-            candidates.presentation,
+        planned_tools.add(ListAvailablePluginsToInstallHandler::new(
+            collect_request_plugin_install_entries(&candidates.tools),
         ));
     }
 

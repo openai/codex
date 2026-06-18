@@ -43,9 +43,8 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
-const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME: &str = "list_available_plugins_to_install";
-const REQUEST_PLUGIN_INSTALL_TOOL_NAME: &str = "request_plugin_install";
+const REQUEST_PLUGIN_INSTALLS_TOOL_NAME: &str = "request_plugin_installs";
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
 
 fn tool_names(body: &Value) -> Vec<String> {
@@ -63,6 +62,36 @@ fn tool_names(body: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn function_tool_description(body: &Value, name: &str) -> Option<String> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("name").and_then(Value::as_str) == Some(name) {
+                    tool.get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn function_tool_parameters<'a>(body: &'a Value, name: &str) -> Option<&'a Value> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("name").and_then(Value::as_str) == Some(name) {
+                    tool.get("parameters")
+                } else {
+                    None
+                }
+            })
+        })
 }
 
 fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) {
@@ -101,23 +130,6 @@ async fn mount_recommendations(server: &wiremock::MockServer, response: Response
         .respond_with(response)
         .mount(server)
         .await;
-}
-
-fn assert_legacy_tools(body: &Value) {
-    let tools = tool_names(body);
-    assert!(!tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME));
-    assert!(
-        tools
-            .iter()
-            .any(|name| name == LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME),
-        "legacy mode should expose {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}: {tools:?}"
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
-        "legacy mode should expose {REQUEST_PLUGIN_INSTALL_TOOL_NAME}: {tools:?}"
-    );
 }
 
 async fn build_test(
@@ -178,7 +190,65 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
             .join("\n")
             .contains("<recommended_plugins>")
     );
-    assert_legacy_tools(&request.body_json());
+    let body = request.body_json();
+    let tools = tool_names(&body);
+    assert!(
+        tools
+            .iter()
+            .any(|name| name == LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME),
+        "tools list should include {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}: {tools:?}"
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|name| name == REQUEST_PLUGIN_INSTALLS_TOOL_NAME),
+        "tools list should include {REQUEST_PLUGIN_INSTALLS_TOOL_NAME}: {tools:?}"
+    );
+    let list_description =
+        function_tool_description(&body, LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
+            .expect("description");
+    assert!(list_description.contains(
+        "The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list."
+    ));
+    assert!(list_description.contains(
+        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
+    ));
+    assert!(list_description.contains(
+        "When both a plugin and a connector match, prefer the plugin; use the connector only when its corresponding plugin is already installed."
+    ));
+
+    let description =
+        function_tool_description(&body, REQUEST_PLUGIN_INSTALLS_TOOL_NAME).expect("description");
+    assert!(description.contains(
+        "Use this tool only after `list_available_plugins_to_install` returns one or more plugins or connectors that exactly match the user's explicit request."
+    ));
+    assert!(description.contains("Make one call with `entries` for a flat list or `categories`"));
+    assert!(description.contains("use one flat `entries` item for a single target"));
+    assert!(description.contains("Pass only exact `tool_type` and `tool_id` values"));
+    assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
+    assert!(!description.contains(DISCOVERABLE_GMAIL_ID));
+    assert!(!description.contains("tool_search fails to find a good match"));
+
+    let parameters =
+        function_tool_parameters(&body, REQUEST_PLUGIN_INSTALLS_TOOL_NAME).expect("parameters");
+    assert_eq!(
+        parameters.get("type").and_then(Value::as_str),
+        Some("object")
+    );
+    assert!(parameters.pointer("/properties/entries").is_some());
+    assert!(parameters.pointer("/properties/categories").is_some());
+    assert!(parameters.pointer("/properties/suggest_reason").is_none());
+    assert!(
+        parameters
+            .pointer("/properties/entries/items/properties/tool_name")
+            .is_none()
+    );
+    assert!(
+        parameters
+            .pointer("/properties/entries/items/properties/description")
+            .is_none()
+    );
+
     let output = requests[1]
         .function_call_output_text(call_id)
         .expect("list tool output");
@@ -228,10 +298,13 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
                 ev_response_created("resp-1"),
                 ev_function_call(
                     call_id,
-                    REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+                    REQUEST_PLUGIN_INSTALLS_TOOL_NAME,
                     &serde_json::to_string(&json!({
-                        "plugin_id": "invented@openai-curated-remote",
-                        "suggest_reason": "Try this"
+                        "action_type": "install",
+                        "entries": [{
+                            "tool_id": "invented@openai-curated-remote",
+                            "tool_type": "plugin"
+                        }]
                     }))?,
                 ),
                 ev_completed("resp-1"),
@@ -264,7 +337,7 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
     assert!(
         tools
             .iter()
-            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
+            .any(|name| name == REQUEST_PLUGIN_INSTALLS_TOOL_NAME)
     );
     let output = requests[1]
         .function_call_output_text(call_id)
@@ -308,10 +381,13 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
                 ev_response_created("resp-1"),
                 ev_function_call(
                     call_id,
-                    REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+                    REQUEST_PLUGIN_INSTALLS_TOOL_NAME,
                     &serde_json::to_string(&json!({
-                        "plugin_id": "github@openai-curated-remote",
-                        "suggest_reason": "Use GitHub for this request"
+                        "action_type": "install",
+                        "entries": [{
+                            "tool_id": "github@openai-curated-remote",
+                            "tool_type": "plugin"
+                        }]
                     }))?,
                 ),
                 ev_completed("resp-1"),
@@ -365,8 +441,11 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
     else {
         panic!("expected form elicitation metadata");
     };
-    assert_eq!(meta["remote_plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(meta["app_connector_ids"], json!([APP_CONNECTOR_ID]));
+    assert_eq!(meta["entries"][0]["remote_plugin_id"], REMOTE_PLUGIN_ID);
+    assert_eq!(
+        meta["entries"][0]["app_connector_ids"],
+        json!([APP_CONNECTOR_ID])
+    );
 
     test.codex
         .submit(Op::ResolveElicitation {
@@ -450,7 +529,7 @@ async fn endpoint_mode_with_no_eligible_candidates_exposes_no_suggestion_tools()
     assert!(
         !tools
             .iter()
-            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
+            .any(|name| name == REQUEST_PLUGIN_INSTALLS_TOOL_NAME)
     );
     Ok(())
 }

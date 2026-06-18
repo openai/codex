@@ -1056,7 +1056,7 @@ async fn run_sampling_request(
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
-    let router = built_tools(sess.as_ref(), turn_context.as_ref(), &cancellation_token).await?;
+    let router = built_tools(&sess, turn_context.as_ref(), &cancellation_token).await?;
 
     let base_instructions = sess.get_base_instructions().await;
 
@@ -1151,7 +1151,7 @@ async fn run_sampling_request(
     )
 )]
 pub(crate) async fn built_tools(
-    sess: &Session,
+    sess: &Arc<Session>,
     turn_context: &TurnContext,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
@@ -1270,13 +1270,36 @@ pub(crate) async fn built_tools(
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
+    let mut extension_tool_executors = extension_tool_executors(sess);
+    if let Some(candidates) = tool_suggest_candidates
+        .as_ref()
+        .filter(|candidates| !candidates.tools.is_empty())
+    {
+        let mode = if turn_context.app_server_client_name.as_deref() == Some("codex-tui") {
+            codex_plugin_installs_extension::RequestPluginInstallsMode::SingleEntry
+        } else {
+            codex_plugin_installs_extension::RequestPluginInstallsMode::MultipleEntries
+        };
+        extension_tool_executors.push(
+            codex_plugin_installs_extension::request_plugin_installs_tool(
+                Arc::new(
+                    crate::tools::request_plugin_installs::CoreRequestPluginInstallsBackend::new(
+                        sess,
+                    ),
+                ),
+                candidates.tools.clone(),
+                candidates.presentation,
+                mode,
+            ),
+        );
+    }
     Ok(Arc::new(ToolRouter::from_turn_context(
         turn_context,
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
             tool_suggest_candidates,
-            extension_tool_executors: extension_tool_executors(sess),
+            extension_tool_executors,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
         &sess.services.tool_search_handler_cache,
