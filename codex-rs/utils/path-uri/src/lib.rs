@@ -710,6 +710,17 @@ impl PathConvention {
     pub const fn native() -> Self {
         Self::Posix
     }
+
+    /// Splits absolute or relative native path text into lexical segments.
+    ///
+    /// This does not validate the path or require it to be absolute. POSIX paths split on `/`,
+    /// while Windows paths split on both `\\` and `/`. Empty segments are retained.
+    pub fn path_segments(self, path: &str) -> impl DoubleEndedIterator<Item = &str> {
+        path.split(move |character| match self {
+            Self::Posix => character == '/',
+            Self::Windows => matches!(character, '/' | '\\'),
+        })
+    }
 }
 
 impl fmt::Display for PathConvention {

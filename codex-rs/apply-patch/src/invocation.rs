@@ -50,27 +50,17 @@ pub enum ExtractHeredocError {
     FailedToFindHeredocBody,
 }
 
-fn classify_shell_name(shell: &PathUri) -> Option<String> {
-    shell.file_stem().map(|name| name.to_ascii_lowercase())
+fn classify_shell_name(shell: &str, convention: PathConvention) -> Option<String> {
+    let basename = convention.path_segments(shell).next_back()?;
+    let stem = basename
+        .rsplit_once('.')
+        .and_then(|(stem, _extension)| (!stem.is_empty()).then_some(stem))
+        .unwrap_or(basename);
+    Some(stem.to_ascii_lowercase())
 }
 
-fn shell_path_uri(shell: &str) -> Option<PathUri> {
-    [PathConvention::Windows, PathConvention::Posix]
-        .into_iter()
-        .find_map(|convention| PathUri::from_absolute_native_path(shell, convention))
-        .or_else(|| {
-            // Bare executable names and relative executable paths have no cwd at this parsing
-            // layer. Anchor them to a synthetic URI root because only lexical basename handling
-            // is needed here.
-            PathUri::parse("file:///")
-                .ok()?
-                .join(&shell.replace('\\', "/"))
-                .ok()
-        })
-}
-
-fn classify_shell(shell: &PathUri, flag: &str) -> Option<ApplyPatchShell> {
-    classify_shell_name(shell).and_then(|name| match name.as_str() {
+fn classify_shell(shell: &str, flag: &str, convention: PathConvention) -> Option<ApplyPatchShell> {
+    classify_shell_name(shell, convention).and_then(|name| match name.as_str() {
         "bash" | "zsh" | "sh" if matches!(flag, "-lc" | "-c") => Some(ApplyPatchShell::Unix),
         "pwsh" | "powershell" if flag.eq_ignore_ascii_case("-command") => {
             Some(ApplyPatchShell::PowerShell)
@@ -80,27 +70,24 @@ fn classify_shell(shell: &PathUri, flag: &str) -> Option<ApplyPatchShell> {
     })
 }
 
-fn can_skip_flag(shell: &PathUri, flag: &str) -> bool {
-    classify_shell_name(shell).is_some_and(|name| {
+fn can_skip_flag(shell: &str, flag: &str, convention: PathConvention) -> bool {
+    classify_shell_name(shell, convention).is_some_and(|name| {
         matches!(name.as_str(), "pwsh" | "powershell") && flag.eq_ignore_ascii_case("-noprofile")
     })
 }
 
-fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
+fn parse_shell_script<'a>(argv: &'a [String], cwd: &PathUri) -> Option<(ApplyPatchShell, &'a str)> {
+    let convention = cwd.infer_path_convention()?;
     match argv {
-        [shell, flag, script] => {
-            let shell = shell_path_uri(shell)?;
-            classify_shell(&shell, flag).map(|shell_type| {
-                let script = script.as_str();
-                (shell_type, script)
-            })
-        }
+        [shell, flag, script] => classify_shell(shell, flag, convention).map(|shell_type| {
+            let script = script.as_str();
+            (shell_type, script)
+        }),
         [shell, skip_flag, flag, script] => {
-            let shell = shell_path_uri(shell)?;
-            if !can_skip_flag(&shell, skip_flag) {
+            if !can_skip_flag(shell, skip_flag, convention) {
                 return None;
             }
-            classify_shell(&shell, flag).map(|shell_type| {
+            classify_shell(shell, flag, convention).map(|shell_type| {
                 let script = script.as_str();
                 (shell_type, script)
             })
@@ -121,7 +108,8 @@ fn extract_apply_patch_from_shell(
 }
 
 // TODO: make private once we remove tests in lib.rs
-pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
+/// `cwd` supplies the path convention used to interpret the shell executable in `argv`.
+pub fn maybe_parse_apply_patch(argv: &[String], cwd: &PathUri) -> MaybeApplyPatch {
     match argv {
         // Direct invocation: apply_patch <patch>
         [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
@@ -129,7 +117,7 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
         // Shell heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
-        _ => match parse_shell_script(argv) {
+        _ => match parse_shell_script(argv, cwd) {
             Some((shell, script)) => match extract_apply_patch_from_shell(shell, script) {
                 Ok((body, workdir)) => match parse_patch(&body) {
                     Ok(mut source) => {
@@ -163,13 +151,13 @@ pub async fn maybe_parse_apply_patch_verified(
     {
         return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
     }
-    if let Some((_, script)) = parse_shell_script(argv)
+    if let Some((_, script)) = parse_shell_script(argv, cwd)
         && parse_patch(script).is_ok()
     {
         return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
     }
 
-    match maybe_parse_apply_patch(argv) {
+    match maybe_parse_apply_patch(argv, cwd) {
         MaybeApplyPatch::Body(args) => verify_apply_patch_args(args, cwd, fs, sandbox).await,
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
@@ -463,8 +451,20 @@ mod tests {
         }]
     }
 
+    fn posix_cwd() -> PathUri {
+        PathUri::parse("file:///workspace").expect("valid POSIX test cwd")
+    }
+
     fn assert_match_args(args: Vec<String>, expected_workdir: Option<&str>) {
-        match maybe_parse_apply_patch(&args) {
+        assert_match_args_with_cwd(args, &posix_cwd(), expected_workdir);
+    }
+
+    fn assert_match_args_with_cwd(
+        args: Vec<String>,
+        cwd: &PathUri,
+        expected_workdir: Option<&str>,
+    ) {
+        match maybe_parse_apply_patch(&args, cwd) {
             MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
                 assert_eq!(workdir.as_deref(), expected_workdir);
                 assert_eq!(hunks, expected_single_add());
@@ -481,7 +481,7 @@ mod tests {
     fn assert_not_match(script: &str) {
         let args = args_bash(script);
         assert_matches!(
-            maybe_parse_apply_patch(&args),
+            maybe_parse_apply_patch(&args, &posix_cwd()),
             MaybeApplyPatch::NotApplyPatch
         );
     }
@@ -531,7 +531,7 @@ mod tests {
 "#,
         ]);
 
-        match maybe_parse_apply_patch(&args) {
+        match maybe_parse_apply_patch(&args, &posix_cwd()) {
             MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
                 assert_eq!(
                     hunks,
@@ -556,7 +556,7 @@ mod tests {
 "#,
         ]);
 
-        match maybe_parse_apply_patch(&args) {
+        match maybe_parse_apply_patch(&args, &posix_cwd()) {
             MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
                 assert_eq!(
                     hunks,
@@ -595,7 +595,7 @@ mod tests {
 PATCH"#,
         ]);
 
-        match maybe_parse_apply_patch(&args) {
+        match maybe_parse_apply_patch(&args, &posix_cwd()) {
             MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
                 assert_eq!(workdir, None);
                 assert_eq!(
@@ -630,15 +630,16 @@ PATCH"#,
     }
 
     #[tokio::test]
-    async fn test_apply_patch_interception_recognizes_foreign_windows_pwsh_path() {
+    async fn test_apply_patch_interception_uses_cwd_convention_for_windows_pwsh_path() {
         let script = heredoc_script("");
-        assert_match_args(
+        assert_match_args_with_cwd(
             strs_to_strings(&[
                 r"C:\Program Files\PowerShell\7\pwsh.exe",
                 "-NoProfile",
                 "-Command",
                 &script,
             ]),
+            &PathUri::parse("file:///C:/windows").expect("valid Windows test cwd"),
             /*expected_workdir*/ None,
         );
     }

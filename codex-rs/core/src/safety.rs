@@ -142,6 +142,8 @@ fn is_write_patch_constrained_to_writable_paths(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &PathUri,
 ) -> bool {
+    // A full-disk policy permits every patch target, so no per-path writable-root check can
+    // further constrain the result.
     if file_system_sandbox_policy.has_full_disk_write_access() {
         return true;
     }
@@ -169,6 +171,7 @@ fn is_write_patch_constrained_to_writable_paths(
     // and roots are converted to absolute, normalized forms before the
     // prefix check.
     let is_path_writable = |path: &PathUri| {
+        // TODO(anp): Make sandbox policy path checks accept PathUri without host projection.
         let Ok(path) = path.to_abs_path() else {
             return false;
         };

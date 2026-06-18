@@ -94,6 +94,35 @@ fn infers_path_conventions_from_uri_shape() {
 }
 
 #[test]
+fn path_convention_splits_absolute_relative_and_bare_path_text() {
+    for (convention, path, expected) in [
+        (
+            PathConvention::Posix,
+            "/usr/local/bin/bash",
+            vec!["", "usr", "local", "bin", "bash"],
+        ),
+        (
+            PathConvention::Posix,
+            r"tools\pwsh.exe",
+            vec![r"tools\pwsh.exe"],
+        ),
+        (
+            PathConvention::Windows,
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            vec!["C:", "Program Files", "PowerShell", "7", "pwsh.exe"],
+        ),
+        (
+            PathConvention::Windows,
+            "tools/pwsh.exe",
+            vec!["tools", "pwsh.exe"],
+        ),
+        (PathConvention::Windows, "cmd.exe", vec!["cmd.exe"]),
+    ] {
+        assert_eq!(convention.path_segments(path).collect::<Vec<_>>(), expected);
+    }
+}
+
+#[test]
 fn drive_shaped_posix_uri_is_intentionally_inferred_as_windows() {
     let path = PathUri::parse("file:///C:/actually/a/posix/path").expect("valid path URI");
 
