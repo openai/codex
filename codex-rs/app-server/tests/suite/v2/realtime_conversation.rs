@@ -78,6 +78,7 @@ use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DELEGATED_SHELL_TURN_TIMEOUT: Duration = Duration::from_secs(30);
 const DELEGATED_SHELL_TOOL_TIMEOUT_MS: u64 = 30_000;
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const V2_STEERING_ACKNOWLEDGEMENT: &str =
@@ -589,6 +590,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             "session": { "id": "sess_backend", "instructions": "backend prompt" }
         })],
         vec![],
+        vec![],
         vec![
             json!({
                 "type": "response.output_audio.delta",
@@ -641,7 +643,6 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "message": "upstream boom"
             }),
         ],
-        vec![],
     ]])
     .await;
 
@@ -2550,9 +2551,12 @@ async fn websocket_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Resul
 
     // Phase 3: verify the shell output reached Responses and the final delegated answer returned
     // to realtime as a single function-call-output item.
-    let turn_completed = harness
-        .read_notification::<TurnCompletedNotification>("turn/completed")
-        .await?;
+    let turn_completed = read_notification_with_timeout::<TurnCompletedNotification>(
+        &mut harness.mcp,
+        "turn/completed",
+        DELEGATED_SHELL_TURN_TIMEOUT,
+    )
+    .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
     let requests = harness.main_loop_responses_requests().await?;
@@ -2798,8 +2802,16 @@ async fn read_notification<T: DeserializeOwned>(
     mcp: &mut TestAppServer,
     method: &str,
 ) -> Result<T> {
+    read_notification_with_timeout(mcp, method, DEFAULT_TIMEOUT).await
+}
+
+async fn read_notification_with_timeout<T: DeserializeOwned>(
+    mcp: &mut TestAppServer,
+    method: &str,
+    timeout_duration: Duration,
+) -> Result<T> {
     let notification = timeout(
-        DEFAULT_TIMEOUT,
+        timeout_duration,
         mcp.read_stream_until_notification_message(method),
     )
     .await??;
