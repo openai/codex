@@ -262,8 +262,8 @@ async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<PathUri>> {
 fn resolved_local_environments<const N: usize>(
     environments: [(&str, AbsolutePathBuf); N],
 ) -> TurnEnvironmentSnapshot {
-    TurnEnvironmentSnapshot::from_turn_environments(
-        environments
+    TurnEnvironmentSnapshot {
+        turn_environments: environments
             .into_iter()
             .map(|(environment_id, cwd)| {
                 TurnEnvironment::new(
@@ -277,7 +277,8 @@ fn resolved_local_environments<const N: usize>(
                 )
             })
             .collect(),
-    )
+        starting: Vec::new(),
+    }
 }
 
 fn project_provenance(path: AbsolutePathBuf, cwd: AbsolutePathBuf) -> InstructionProvenance {

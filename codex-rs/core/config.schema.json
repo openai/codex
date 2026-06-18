@@ -479,6 +479,9 @@
             "default_mode_request_user_input": {
               "type": "boolean"
             },
+            "deferred_executor": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -4710,6 +4713,9 @@
           "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
         },
         "default_mode_request_user_input": {
+          "type": "boolean"
+        },
+        "deferred_executor": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
