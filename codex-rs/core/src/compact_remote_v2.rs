@@ -291,7 +291,7 @@ async fn run_remote_compact_task_inner_impl(
     let (compacted_history, retained_images) =
         build_v2_compacted_history(&prompt_input, compaction_output);
     analytics_details.retained_image_count = Some(retained_images);
-    let new_window_id = sess.advance_auto_compact_window_id().await;
+    let (new_window_number, new_window_id) = sess.advance_auto_compact_window().await;
     let new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -307,6 +307,7 @@ async fn run_remote_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
+        window_number: Some(new_window_number),
         window_id: Some(new_window_id),
     };
     compaction_trace.record_installed(&CompactionCheckpointTracePayload {
