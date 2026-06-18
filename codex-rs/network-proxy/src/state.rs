@@ -15,6 +15,8 @@ use crate::runtime::ConfigState;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 pub use crate::runtime::BlockedRequest;
 pub use crate::runtime::BlockedRequestArgs;
@@ -22,6 +24,10 @@ pub use crate::runtime::NetworkProxyAuditMetadata;
 pub use crate::runtime::NetworkProxyState;
 #[cfg(test)]
 pub(crate) use crate::runtime::network_proxy_state_for_policy;
+
+// Managed MITM CA files live under the shared test CODEX_HOME.
+#[cfg(test)]
+static MITM_CONFIG_STATE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NetworkProxyConstraints {
@@ -65,6 +71,11 @@ pub fn build_config_state(
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
+    #[cfg(test)]
+    let _mitm_config_state_guard = config
+        .network
+        .mitm
+        .then(|| MITM_CONFIG_STATE_LOCK.lock().unwrap());
     crate::config::validate_unix_socket_allowlist_paths(&config)?;
     let allowed_domains = config.network.allowed_domains().unwrap_or_default();
     let denied_domains = config.network.denied_domains().unwrap_or_default();
