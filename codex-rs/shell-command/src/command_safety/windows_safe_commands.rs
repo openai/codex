@@ -443,6 +443,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_powershell_trap_blocks() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "trap { Set-Content codex_poc.txt pwned; continue } Get-Content missing -ErrorAction Stop",
+        ])));
+    }
+
+    #[test]
     fn rejects_powershell_commands_with_side_effects() {
         assert!(!is_safe_command_windows(&vec_str(&[
             "powershell.exe",

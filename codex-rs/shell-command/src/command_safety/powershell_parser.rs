@@ -352,4 +352,20 @@ mod tests {
             .unwrap();
         assert_eq!(parsed, PowershellParseOutcome::Unsupported);
     }
+
+    #[test]
+    fn parser_process_rejects_trap_blocks() {
+        let Some(powershell) = try_find_powershell_executable_blocking() else {
+            return;
+        };
+        let powershell = powershell.as_path().to_str().unwrap();
+        let mut parser = PowershellParserProcess::spawn(powershell).unwrap();
+
+        let parsed = parser
+            .parse(
+                "trap { Set-Content codex_poc.txt pwned; continue } Get-Content missing -ErrorAction Stop",
+            )
+            .unwrap();
+        assert_eq!(parsed, PowershellParseOutcome::Unsupported);
+    }
 }

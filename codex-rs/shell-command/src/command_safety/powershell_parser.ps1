@@ -42,8 +42,8 @@ function Invoke-ParseRequest {
         return @{ id = $RequestId; status = 'parse_errors' }
     }
 
-    # Top-level AST regions outside the end block can execute code that the
-    # command lowering below does not inspect.
+    # Top-level AST regions and collections outside the end-block statement list
+    # can execute code that the command lowering below does not inspect.
     $cleanBlock = $ast.PSObject.Properties['CleanBlock']
     if (
         $ast.ParamBlock -ne $null -or
@@ -51,7 +51,8 @@ function Invoke-ParseRequest {
         $ast.BeginBlock -ne $null -or
         $ast.ProcessBlock -ne $null -or
         ($cleanBlock -ne $null -and $cleanBlock.Value -ne $null) -or
-        $ast.UsingStatements.Count -gt 0
+        $ast.UsingStatements.Count -gt 0 -or
+        $ast.EndBlock.Traps.Count -gt 0
     ) {
         return @{ id = $RequestId; status = 'unsupported' }
     }
