@@ -34,6 +34,7 @@ Keep these requirements in mind while migrating code to conform with the above g
 * URIs should not yet be stored in rollouts, databases, or other persistent storage
 * path conversion errors: fail-closed for security-relevant paths, fail-open for UI/diagnostics
 * prefer small focused methods on `PathUri` or `LegacyAppPathString` over local helpers
+* represent `PathUri` values as URIs in diagnostics
 
 It is OK if the conversion between paths and URIs is somewhat lossy as long as it will do the right
 thing for real users.
