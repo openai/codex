@@ -291,6 +291,7 @@ pub enum ThreadItem {
         status: McpToolCallStatus,
         arguments: JsonValue,
         app_context: Option<McpToolCallAppContext>,
+        /// Deprecated: use `appContext.mcpAppResourceUri` instead.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         mcp_app_resource_uri: Option<String>,
@@ -391,6 +392,7 @@ pub enum ThreadItem {
 pub struct McpToolCallAppContext {
     pub id: String,
     pub link_id: Option<String>,
+    pub mcp_app_resource_uri: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -889,6 +891,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     app_context: mcp.connector_id.map(|id| McpToolCallAppContext {
                         id,
                         link_id: mcp.link_id,
+                        mcp_app_resource_uri: mcp.mcp_app_resource_uri.clone(),
                     }),
                     mcp_app_resource_uri: mcp.mcp_app_resource_uri,
                     plugin_id: mcp.plugin_id,

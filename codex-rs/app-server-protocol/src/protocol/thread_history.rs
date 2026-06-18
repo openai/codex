@@ -772,6 +772,7 @@ impl ThreadHistoryBuilder {
                 .map(|id| McpToolCallAppContext {
                     id,
                     link_id: payload.link_id.clone(),
+                    mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
                 }),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             plugin_id: payload.plugin_id.clone(),
@@ -821,6 +822,7 @@ impl ThreadHistoryBuilder {
                 .map(|id| McpToolCallAppContext {
                     id,
                     link_id: payload.link_id.clone(),
+                    mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
                 }),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             plugin_id: payload.plugin_id.clone(),
@@ -2528,6 +2530,7 @@ mod tests {
                 app_context: Some(McpToolCallAppContext {
                     id: "calendar".into(),
                     link_id: Some("link_calendar".into()),
+                    mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
                 }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
                 plugin_id: Some("sample@test".into()),

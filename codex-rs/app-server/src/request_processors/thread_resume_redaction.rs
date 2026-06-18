@@ -82,6 +82,7 @@ mod tests {
                 app_context: Some(McpToolCallAppContext {
                     id: "calendar".to_string(),
                     link_id: Some("link_calendar".to_string()),
+                    mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 plugin_id: Some("sample@test".to_string()),
@@ -128,6 +129,7 @@ mod tests {
                 app_context: Some(McpToolCallAppContext {
                     id: "calendar".to_string(),
                     link_id: Some("link_calendar".to_string()),
+                    mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 plugin_id: Some("sample@test".to_string()),
