@@ -616,21 +616,10 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
-            let is_agent_command = self
-                .composer_text()
-                .lines()
-                .next()
-                .and_then(parse_slash_name)
-                .is_some_and(|(name, _, _)| name == "agent");
-
             // If a task is running and a status line is visible, allow the
             // configured action to interrupt even while the composer has focus.
             // When a popup is active, prefer dismissing it over interrupting the task.
-            if self.keymap.chat.interrupt_turn.is_pressed(key_event)
-                && self.is_task_running
-                && !(is_agent_command && key_event.code == KeyCode::Esc)
-                && !self.composer.popup_active()
-                && !self.composer_should_handle_vim_insert_escape(key_event)
+            if self.should_interrupt_running_task(key_event)
                 && let Some(status) = &self.status
             {
                 // Send Op::Interrupt
@@ -1306,6 +1295,22 @@ impl BottomPane {
         self.is_task_running
     }
 
+    pub(crate) fn should_interrupt_running_task(&self, key_event: KeyEvent) -> bool {
+        let is_agent_command = self
+            .composer_text()
+            .lines()
+            .next()
+            .and_then(parse_slash_name)
+            .is_some_and(|(name, _, _)| name == "agent");
+
+        self.keymap.chat.interrupt_turn.is_pressed(key_event)
+            && self.is_task_running
+            && !(is_agent_command && key_event.code == KeyCode::Esc)
+            && self.no_modal_or_popup_active()
+            && !self.composer_should_handle_vim_insert_escape(key_event)
+            && self.status.is_some()
+    }
+
     pub(crate) fn terminal_title_requires_action(&self) -> bool {
         self.active_view()
             .is_some_and(bottom_pane_view::BottomPaneView::terminal_title_requires_action)
@@ -1313,6 +1318,13 @@ impl BottomPane {
 
     pub(crate) fn has_active_view(&self) -> bool {
         !self.view_stack.is_empty()
+    }
+
+    pub(crate) fn active_view_will_interrupt_turn_on_key_event(&self, key_event: KeyEvent) -> bool {
+        self.is_task_running
+            && self
+                .active_view()
+                .is_some_and(|view| view.will_interrupt_turn_on_key_event(key_event))
     }
 
     #[cfg(test)]

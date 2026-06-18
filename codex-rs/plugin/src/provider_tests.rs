@@ -37,7 +37,7 @@ fn environment_descriptor_binds_every_manifest_resource() {
         description: None,
         keywords: Vec::new(),
         paths: PluginManifestPaths {
-            skills: Some(skills.clone()),
+            skills: vec![skills.clone()],
             mcp_servers: Some(PluginManifestMcpServers::Path(mcp_servers.clone())),
             apps: Some(apps.clone()),
             hooks: Some(PluginManifestHooks::Paths(vec![hooks.clone()])),
@@ -71,7 +71,7 @@ fn environment_descriptor_binds_every_manifest_resource() {
             description: None,
             keywords: Vec::new(),
             paths: PluginManifestPaths {
-                skills: Some(resource("executor-1", skills)),
+                skills: vec![resource("executor-1", skills)],
                 mcp_servers: Some(PluginManifestMcpServers::Path(resource(
                     "executor-1",
                     mcp_servers,
@@ -103,7 +103,7 @@ fn environment_descriptor_rejects_resources_outside_package_root() {
         description: None,
         keywords: Vec::new(),
         paths: PluginManifestPaths {
-            skills: None,
+            skills: Vec::new(),
             mcp_servers: Some(PluginManifestMcpServers::Path(outside.clone())),
             apps: None,
             hooks: None,

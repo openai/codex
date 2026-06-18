@@ -180,10 +180,16 @@ pub struct McpServerRefreshConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationStartParams {
+    /// Whether Codex response handoffs are managed through explicit client append calls.
+    pub client_managed_handoffs: bool,
     /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
     pub codex_responses_as_items: bool,
     /// Optional prefix added to automatic Codex response items when `codex_responses_as_items` is set.
     pub codex_response_item_prefix: Option<String>,
+    /// Optional prefix added to automatic V1 Codex commentary sent with
+    /// `conversation.handoff.append` when `codex_responses_as_items` is not set. Final answers are
+    /// sent without the prefix.
+    pub codex_response_handoff_prefix: Option<String>,
     /// Overrides the configured realtime model for this session only.
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.
@@ -409,6 +415,7 @@ pub enum ConversationTextRole {
     #[default]
     User,
     Developer,
+    Assistant,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -760,6 +767,7 @@ impl InterAgentCommunication {
             }],
         };
         ResponseItem::AgentMessage {
+            id: None,
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
             content,
@@ -3227,7 +3235,7 @@ pub struct ExecCommandBeginEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -3253,7 +3261,7 @@ pub struct ExecCommandEndEvent {
     /// The command that was executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -4273,6 +4281,7 @@ mod tests {
         assert_eq!(
             communication.to_model_input_item(),
             ResponseItem::AgentMessage {
+                id: None,
                 author: "/root/worker".to_string(),
                 recipient: "/root".to_string(),
                 content: vec![

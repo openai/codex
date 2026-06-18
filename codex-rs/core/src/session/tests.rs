@@ -1664,6 +1664,7 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
     )
     .await;
     let item = ResponseItem::FunctionCallOutput {
+        id: None,
         call_id: "call-1".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
@@ -1689,6 +1690,7 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
         .await;
 
     let expected = vec![ResponseItem::FunctionCallOutput {
+        id: None,
         call_id: "call-1".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
@@ -7720,7 +7722,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
     session
         .replace_history(
             vec![ResponseItem::ImageGenerationCall {
-                id: "ig-test".to_string(),
+                id: Some("ig-test".to_string()),
                 status: "completed".to_string(),
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
@@ -7973,7 +7975,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
     );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
-        id: call_id.to_string(),
+        id: Some(call_id.to_string()),
         status: "completed".to_string(),
         revised_prompt: Some("a tiny blue square".to_string()),
         result: "Zm9v".to_string(),
@@ -8030,7 +8032,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
-        id: call_id.to_string(),
+        id: Some(call_id.to_string()),
         status: "completed".to_string(),
         revised_prompt: Some("broken payload".to_string()),
         result: "_-8".to_string(),

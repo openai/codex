@@ -3080,8 +3080,10 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                client_managed_handoffs: Some(true),
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
+                codex_response_handoff_prefix: Some("silent context".to_string()),
                 thread_id: "thr_123".to_string(),
                 model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
@@ -3099,8 +3101,10 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "clientManagedHandoffs": true,
                     "codexResponsesAsItems": null,
                     "codexResponseItemPrefix": null,
+                    "codexResponseHandoffPrefix": "silent context",
                     "model": "realtime-treatment-model",
                     "outputModality": "audio",
                     "includeStartupContext": false,
@@ -3121,8 +3125,10 @@ mod tests {
         let default_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                client_managed_handoffs: None,
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
+                codex_response_handoff_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -3140,8 +3146,10 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "clientManagedHandoffs": null,
                     "codexResponsesAsItems": null,
                     "codexResponseItemPrefix": null,
+                    "codexResponseHandoffPrefix": null,
                     "model": null,
                     "outputModality": "audio",
                     "includeStartupContext": null,
@@ -3157,8 +3165,10 @@ mod tests {
         let null_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                client_managed_handoffs: None,
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
+                codex_response_handoff_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -3176,8 +3186,10 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "clientManagedHandoffs": null,
                     "codexResponsesAsItems": null,
                     "codexResponseItemPrefix": null,
+                    "codexResponseHandoffPrefix": null,
                     "model": null,
                     "outputModality": "audio",
                     "includeStartupContext": null,
@@ -3359,8 +3371,10 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
+                client_managed_handoffs: None,
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
+                codex_response_handoff_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,

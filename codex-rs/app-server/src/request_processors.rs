@@ -553,8 +553,7 @@ fn resolve_turn_environment_selections(
         let environment_id = environment.environment_id;
         let cwd = environment
             .cwd
-            .infer_absolute_path_convention()
-            .and_then(|convention| environment.cwd.to_path_uri(convention).ok())
+            .to_inferred_path_uri()
             .ok_or_else(|| {
                 invalid_request(format!(
                     "invalid cwd for environment `{environment_id}`: path `{}` does not use absolute POSIX or Windows path syntax",
