@@ -96,14 +96,13 @@ impl ServerOptions {
         }
     }
 
-    pub fn for_chatgpt_base_url(
+    pub fn for_oauth_config(
         codex_home: PathBuf,
-        chatgpt_base_url: Option<&str>,
+        oauth_config: ChatgptOAuthConfig,
         forced_chatgpt_workspace_id: Option<Vec<String>>,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
         auth_keyring_backend_kind: AuthKeyringBackendKind,
     ) -> Self {
-        let oauth_config = ChatgptOAuthConfig::for_chatgpt_base_url(chatgpt_base_url);
         let mut opts = Self::new(
             codex_home,
             oauth_config.client_id,

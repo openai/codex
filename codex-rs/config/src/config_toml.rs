@@ -58,6 +58,14 @@ use serde::Serialize;
 use serde::de::Error as SerdeError;
 use serde_json::Value as JsonValue;
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ChatgptOAuthToml {
+    pub issuer: String,
+    pub client_id: String,
+}
+
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     AMAZON_BEDROCK_PROVIDER_ID,
     OPENAI_PROVIDER_ID,
@@ -356,6 +364,9 @@ pub struct ConfigToml {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+
+    /// OAuth issuer and client ID used for ChatGPT authentication.
+    pub chatgpt_oauth: Option<ChatgptOAuthToml>,
 
     /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
     pub apps_mcp_product_sku: Option<String>,

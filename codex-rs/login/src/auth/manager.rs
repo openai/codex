@@ -216,6 +216,7 @@ impl CodexAuth {
         auth_dot_json: AuthDotJson,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<&str>,
+        oauth_config: &ChatgptOAuthConfig,
         keyring_backend_kind: AuthKeyringBackendKind,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
@@ -255,7 +256,7 @@ impl CodexAuth {
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
-            oauth_config: ChatgptOAuthConfig::for_chatgpt_base_url(chatgpt_base_url),
+            oauth_config: oauth_config.clone(),
         };
 
         match auth_mode {
@@ -605,20 +606,20 @@ pub async fn logout_with_revoke(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<bool> {
-    logout_with_revoke_for_chatgpt_base_url(
+    logout_with_revoke_for_oauth_config(
         codex_home,
         auth_credentials_store_mode,
         keyring_backend_kind,
-        /*chatgpt_base_url*/ None,
+        &ChatgptOAuthConfig::default(),
     )
     .await
 }
 
-pub async fn logout_with_revoke_for_chatgpt_base_url(
+pub async fn logout_with_revoke_for_oauth_config(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
-    chatgpt_base_url: Option<&str>,
+    oauth_config: &ChatgptOAuthConfig,
 ) -> std::io::Result<bool> {
     let auth_dot_json = match load_auth_dot_json(
         codex_home,
@@ -631,8 +632,7 @@ pub async fn logout_with_revoke_for_chatgpt_base_url(
             None
         }
     };
-    let oauth_config = ChatgptOAuthConfig::for_chatgpt_base_url(chatgpt_base_url);
-    if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref(), &oauth_config).await {
+    if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref(), oauth_config).await {
         tracing::warn!("failed to revoke auth tokens during logout: {err}");
     }
     logout_all_stores(
@@ -938,6 +938,27 @@ async fn load_auth(
     chatgpt_base_url: Option<&str>,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<Option<CodexAuth>> {
+    load_auth_with_oauth_config(
+        codex_home,
+        enable_codex_api_key_env,
+        auth_credentials_store_mode,
+        forced_chatgpt_workspace_id,
+        chatgpt_base_url,
+        &ChatgptOAuthConfig::default(),
+        keyring_backend_kind,
+    )
+    .await
+}
+
+async fn load_auth_with_oauth_config(
+    codex_home: &Path,
+    enable_codex_api_key_env: bool,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    forced_chatgpt_workspace_id: Option<&[String]>,
+    chatgpt_base_url: Option<&str>,
+    oauth_config: &ChatgptOAuthConfig,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> std::io::Result<Option<CodexAuth>> {
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
         return Ok(Some(CodexAuth::from_api_key(api_key.as_str())));
@@ -956,6 +977,7 @@ async fn load_auth(
             auth_dot_json,
             AuthCredentialsStoreMode::Ephemeral,
             chatgpt_base_url,
+            oauth_config,
             keyring_backend_kind,
         )
         .await?;
@@ -1001,6 +1023,7 @@ async fn load_auth(
         auth_dot_json,
         auth_credentials_store_mode,
         chatgpt_base_url,
+        oauth_config,
         keyring_backend_kind,
     )
     .await?;
@@ -1501,6 +1524,7 @@ pub struct AuthManager {
     keyring_backend_kind: AuthKeyringBackendKind,
     forced_chatgpt_workspace_id: RwLock<Option<Vec<String>>>,
     chatgpt_base_url: Option<String>,
+    oauth_config: ChatgptOAuthConfig,
     refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
 }
@@ -1526,6 +1550,9 @@ pub trait AuthManagerConfig {
 
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
     fn chatgpt_base_url(&self) -> String;
+
+    /// Returns the OAuth issuer and client ID used for ChatGPT authentication.
+    fn chatgpt_oauth(&self) -> ChatgptOAuthConfig;
 }
 
 impl Debug for AuthManager {
@@ -1544,6 +1571,7 @@ impl Debug for AuthManager {
                 &self.forced_chatgpt_workspace_id,
             )
             .field("chatgpt_base_url", &self.chatgpt_base_url)
+            .field("oauth_config", &self.oauth_config)
             .field("has_external_auth", &self.has_external_auth())
             .finish_non_exhaustive()
     }
@@ -1567,6 +1595,7 @@ impl AuthManager {
             auth_credentials_store_mode,
             /*forced_chatgpt_workspace_id*/ None,
             chatgpt_base_url,
+            ChatgptOAuthConfig::default(),
             keyring_backend_kind,
         )
         .await
@@ -1578,14 +1607,16 @@ impl AuthManager {
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         forced_chatgpt_workspace_id: Option<Vec<String>>,
         chatgpt_base_url: Option<String>,
+        oauth_config: ChatgptOAuthConfig,
         keyring_backend_kind: AuthKeyringBackendKind,
     ) -> Self {
-        let managed_auth = load_auth(
+        let managed_auth = load_auth_with_oauth_config(
             &codex_home,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id.as_deref(),
             chatgpt_base_url.as_deref(),
+            &oauth_config,
             keyring_backend_kind,
         )
         .await
@@ -1604,6 +1635,7 @@ impl AuthManager {
             keyring_backend_kind,
             forced_chatgpt_workspace_id: RwLock::new(forced_chatgpt_workspace_id),
             chatgpt_base_url,
+            oauth_config,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
         }
@@ -1626,6 +1658,7 @@ impl AuthManager {
             keyring_backend_kind: AuthKeyringBackendKind::default(),
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
+            oauth_config: ChatgptOAuthConfig::default(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
         })
@@ -1647,6 +1680,7 @@ impl AuthManager {
             keyring_backend_kind: AuthKeyringBackendKind::default(),
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
+            oauth_config: ChatgptOAuthConfig::default(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
         })
@@ -1666,6 +1700,7 @@ impl AuthManager {
             keyring_backend_kind: AuthKeyringBackendKind::default(),
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
+            oauth_config: ChatgptOAuthConfig::default(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
@@ -1806,12 +1841,13 @@ impl AuthManager {
 
     async fn load_auth_from_storage(&self) -> Option<CodexAuth> {
         let forced_chatgpt_workspace_id = self.forced_chatgpt_workspace_id();
-        load_auth(
+        load_auth_with_oauth_config(
             &self.codex_home,
             self.enable_codex_api_key_env,
             self.auth_credentials_store_mode,
             forced_chatgpt_workspace_id.as_deref(),
             self.chatgpt_base_url.as_deref(),
+            &self.oauth_config,
             self.keyring_backend_kind,
         )
         .await
@@ -1900,6 +1936,28 @@ impl AuthManager {
         )
     }
 
+    pub async fn shared_with_oauth_config(
+        codex_home: PathBuf,
+        enable_codex_api_key_env: bool,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+        chatgpt_base_url: Option<String>,
+        oauth_config: ChatgptOAuthConfig,
+        keyring_backend_kind: AuthKeyringBackendKind,
+    ) -> Arc<Self> {
+        Arc::new(
+            Self::new_with_workspace_restriction(
+                codex_home,
+                enable_codex_api_key_env,
+                auth_credentials_store_mode,
+                /*forced_chatgpt_workspace_id*/ None,
+                chatgpt_base_url,
+                oauth_config,
+                keyring_backend_kind,
+            )
+            .await,
+        )
+    }
+
     /// Convenience constructor returning an `Arc` wrapper from resolved config.
     pub async fn shared_from_config(
         config: &impl AuthManagerConfig,
@@ -1912,6 +1970,7 @@ impl AuthManager {
                 config.cli_auth_credentials_store_mode(),
                 config.forced_chatgpt_workspace_id(),
                 Some(config.chatgpt_base_url()),
+                config.chatgpt_oauth(),
                 config.auth_keyring_backend_kind(),
             )
             .await,

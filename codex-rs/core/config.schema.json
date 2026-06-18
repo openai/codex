@@ -351,6 +351,22 @@
       },
       "type": "object"
     },
+    "ChatgptOAuthToml": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "issuer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_id",
+        "issuer"
+      ],
+      "type": "object"
+    },
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -382,6 +398,9 @@
         },
         "chatgpt_base_url": {
           "type": "string"
+        },
+        "chatgpt_oauth": {
+          "$ref": "#/definitions/ChatgptOAuthToml"
         },
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
@@ -4457,6 +4476,14 @@
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"
+    },
+    "chatgpt_oauth": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ChatgptOAuthToml"
+        }
+      ],
+      "description": "OAuth issuer and client ID used for ChatGPT authentication."
     },
     "check_for_update_on_startup": {
       "description": "When `true`, checks for Codex updates on startup and surfaces update prompts. Set to `false` only if your Codex updates are centrally managed. Defaults to `true`.",

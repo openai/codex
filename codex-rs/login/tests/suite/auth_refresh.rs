@@ -8,9 +8,9 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
+use codex_login::ChatgptOAuthConfig;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::RefreshTokenError;
-use codex_login::STAGING_CLIENT_ID;
 use codex_login::load_auth_dot_json;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
@@ -32,6 +32,7 @@ use wiremock::matchers::path;
 
 const INITIAL_ACCESS_TOKEN: &str = "initial-access-token";
 const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";
+const CUSTOM_OAUTH_CLIENT_ID: &str = "custom-oauth-client";
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
@@ -101,14 +102,14 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
-async fn staging_refresh_uses_staging_oauth_client_id() -> Result<()> {
+async fn refresh_uses_configured_oauth_client_id() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .and(body_json(json!({
-            "client_id": STAGING_CLIENT_ID,
+            "client_id": CUSTOM_OAUTH_CLIENT_ID,
             "grant_type": "refresh_token",
             "refresh_token": INITIAL_REFRESH_TOKEN,
         })))
@@ -120,9 +121,12 @@ async fn staging_refresh_uses_staging_oauth_client_id() -> Result<()> {
         .mount(&server)
         .await;
 
-    let ctx = RefreshTokenTestContext::new_with_chatgpt_base_url(
+    let ctx = RefreshTokenTestContext::new_with_oauth_config(
         &server,
-        Some("https://chatgpt-staging.com/backend-api/"),
+        ChatgptOAuthConfig::new(
+            CUSTOM_OAUTH_CLIENT_ID.to_string(),
+            "https://auth.example.com".to_string(),
+        ),
     )
     .await?;
     let initial_auth = AuthDotJson {
@@ -1241,23 +1245,24 @@ struct RefreshTokenTestContext {
 
 impl RefreshTokenTestContext {
     async fn new(server: &MockServer) -> Result<Self> {
-        Self::new_with_chatgpt_base_url(server, /*chatgpt_base_url*/ None).await
+        Self::new_with_oauth_config(server, ChatgptOAuthConfig::default()).await
     }
 
-    async fn new_with_chatgpt_base_url(
+    async fn new_with_oauth_config(
         server: &MockServer,
-        chatgpt_base_url: Option<&str>,
+        oauth_config: ChatgptOAuthConfig,
     ) -> Result<Self> {
         let codex_home = TempDir::new()?;
 
         let endpoint = format!("{}/oauth/token", server.uri());
         let env_guard = EnvGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, endpoint);
 
-        let auth_manager = AuthManager::shared(
+        let auth_manager = AuthManager::shared_with_oauth_config(
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
-            chatgpt_base_url.map(str::to_string),
+            /*chatgpt_base_url*/ None,
+            oauth_config,
             AuthKeyringBackendKind::default(),
         )
         .await;

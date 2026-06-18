@@ -1313,6 +1313,33 @@ async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> s
 }
 
 #[tokio::test]
+async fn chatgpt_oauth_config_overrides_production_defaults() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[chatgpt_oauth]
+issuer = "https://auth.example.com"
+client_id = "custom-client"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.chatgpt_oauth,
+        ChatgptOAuthConfig::new(
+            "custom-client".to_string(),
+            "https://auth.example.com".to_string(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn network_proxy_cli_overrides_merge_toggle_with_proxy_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;

@@ -518,6 +518,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         updated_auth_dot_json,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        &ChatgptOAuthConfig::default(),
         AuthKeyringBackendKind::Direct,
     )
     .await
@@ -1004,6 +1005,7 @@ async fn auth_manager_rejects_env_personal_access_token_workspace_mismatch() {
         /*forced_chatgpt_workspace_id*/
         Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         /*chatgpt_base_url*/ None,
+        ChatgptOAuthConfig::default(),
         AuthKeyringBackendKind::default(),
     )
     .await;
@@ -1055,6 +1057,7 @@ async fn auth_manager_rejects_stored_personal_access_token_workspace_mismatch() 
             /*forced_chatgpt_workspace_id*/
             Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
             /*chatgpt_base_url*/ None,
+            ChatgptOAuthConfig::default(),
             AuthKeyringBackendKind::default(),
         )
         .await;

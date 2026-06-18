@@ -22,6 +22,7 @@ use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
+use codex_config::config_toml::ChatgptOAuthToml;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
@@ -69,6 +70,7 @@ use codex_features::NetworkProxyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
+use codex_login::ChatgptOAuthConfig;
 use codex_mcp::McpConfig;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::ResolvedMcpCatalog;
@@ -937,6 +939,9 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// OAuth issuer and client ID used for ChatGPT authentication.
+    pub chatgpt_oauth: ChatgptOAuthConfig,
+
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
 
@@ -1132,6 +1137,10 @@ impl AuthManagerConfig for Config {
 
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
+    }
+
+    fn chatgpt_oauth(&self) -> ChatgptOAuthConfig {
+        self.chatgpt_oauth.clone()
     }
 }
 
@@ -3579,6 +3588,12 @@ impl Config {
             chatgpt_base_url: cfg
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            chatgpt_oauth: cfg.chatgpt_oauth.map_or_else(
+                ChatgptOAuthConfig::default,
+                |ChatgptOAuthToml { issuer, client_id }| {
+                    ChatgptOAuthConfig::new(client_id, issuer)
+                },
+            ),
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
             realtime_audio: cfg
                 .audio
