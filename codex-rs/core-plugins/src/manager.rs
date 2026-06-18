@@ -39,6 +39,7 @@ use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
+use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
@@ -1098,6 +1099,19 @@ impl PluginsManager {
             .iter()
             .map(|plugin| plugin.config_name.as_str())
             .collect::<HashSet<_>>();
+        let installed_remote_plugin_ids = {
+            let cache = match self.remote_installed_plugins_cache.read() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            cache
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(|plugin| plugin.marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME)
+                .map(|plugin| plugin.id.clone())
+                .collect::<HashSet<_>>()
+        };
         let disabled_plugin_ids = input
             .disabled_tools
             .iter()
@@ -1109,6 +1123,7 @@ impl PluginsManager {
             .into_iter()
             .filter(|plugin| {
                 !installed_plugin_ids.contains(plugin.config_id.as_str())
+                    && !installed_remote_plugin_ids.contains(plugin.remote_plugin_id.as_str())
                     && !disabled_plugin_ids.contains(plugin.config_id.as_str())
             })
             .map(|plugin| {

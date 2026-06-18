@@ -4464,8 +4464,6 @@ plugins = true
 remote_plugin = true
 "#,
     );
-    write_cached_plugin(tmp.path(), REMOTE_GLOBAL_MARKETPLACE_NAME, "linear");
-
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/ps/plugins/suggested"))
@@ -4496,7 +4494,9 @@ remote_plugin = true
     let mut config = load_config(tmp.path(), tmp.path()).await;
     config.chatgpt_base_url = server.uri();
     let manager = PluginsManager::new(tmp.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin("linear")]);
+    let mut installed_linear = remote_installed_plugin("linear");
+    installed_linear.id = "plugin_linear".to_string();
+    manager.write_remote_installed_plugins_cache(vec![installed_linear]);
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let disabled_tools = [ToolSuggestDisabledTool::plugin(
         "github@openai-curated-remote",
