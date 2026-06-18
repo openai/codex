@@ -102,7 +102,7 @@ impl LiveThread {
         thread_store: Arc<dyn ThreadStore>,
         params: ResumeThreadParams,
     ) -> ThreadStoreResult<Self> {
-        Self::resume_with_observed_history(thread_store, params, None).await
+        Self::resume_with_observed_history(thread_store, params, /*observed_history*/ None).await
     }
 
     pub async fn resume_with_observed_history(
