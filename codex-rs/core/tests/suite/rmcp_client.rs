@@ -401,12 +401,12 @@ async fn call_structured_tool(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn openai_form_capability_is_advertised_to_mcp_servers() -> anyhow::Result<()> {
-    assert_openai_form_capability_advertisement(true).await
+    assert_openai_form_capability_advertisement(/*expected*/ true).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn openai_form_capability_is_not_advertised_by_default() -> anyhow::Result<()> {
-    assert_openai_form_capability_advertisement(false).await
+    assert_openai_form_capability_advertisement(/*expected*/ false).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -447,7 +447,7 @@ async fn openai_form_capability_updates_for_loaded_thread() -> anyhow::Result<()
 
     fixture
         .codex
-        .set_openai_form_elicitation_support(true)
+        .set_openai_form_elicitation_support(/*supported*/ true)
         .await?;
     let supported = call_structured_tool(
         &server,

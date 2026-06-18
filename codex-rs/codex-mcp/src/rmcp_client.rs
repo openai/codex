@@ -693,10 +693,16 @@ mod tests {
 
     #[test]
     fn mcp_initialize_advertises_openai_form_only_when_supported() {
-        let unsupported = mcp_initialize_request_params(ElicitationCapability::default(), false);
+        let unsupported = mcp_initialize_request_params(
+            ElicitationCapability::default(),
+            /*supports_openai_form_elicitation*/ false,
+        );
         assert_eq!(unsupported.capabilities.extensions, None);
 
-        let supported = mcp_initialize_request_params(ElicitationCapability::default(), true);
+        let supported = mcp_initialize_request_params(
+            ElicitationCapability::default(),
+            /*supports_openai_form_elicitation*/ true,
+        );
         assert_eq!(
             supported.capabilities.extensions,
             Some(BTreeMap::from([(
