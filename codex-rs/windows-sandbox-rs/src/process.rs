@@ -11,6 +11,7 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
 use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Foundation::ERROR_NO_SUCH_LOGON_SESSION;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
@@ -34,6 +35,10 @@ pub struct CreatedProcess {
     pub process_info: PROCESS_INFORMATION,
     pub startup_info: STARTUPINFOW,
     _desktop: LaunchDesktop,
+}
+
+fn should_retry_on_default_desktop(err: i32, use_private_desktop: bool) -> bool {
+    use_private_desktop && err == ERROR_NO_SUCH_LOGON_SESSION as i32
 }
 
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
@@ -87,22 +92,11 @@ pub unsafe fn create_process_as_user(
     let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
-    let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
     let cwd_wide = to_wide(cwd);
     let env_block_len = env_block.len();
     match stdio {
         Some((stdin_h, stdout_h, stderr_h)) => {
-            let mut si: STARTUPINFOEXW = std::mem::zeroed();
-            si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-            // Some processes (e.g., PowerShell) can fail with STATUS_DLL_INIT_FAILED
-            // if lpDesktop is not set when launching with a restricted token.
-            // Point explicitly at the interactive desktop or a private desktop.
-            si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
-            si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
-            si.StartupInfo.hStdInput = stdin_h;
-            si.StartupInfo.hStdOutput = stdout_h;
-            si.StartupInfo.hStdError = stderr_h;
             let mut inherited_handles = vec![stdin_h, stdout_h];
             if !inherited_handles.contains(&stderr_h) {
                 inherited_handles.push(stderr_h);
@@ -115,25 +109,46 @@ pub unsafe fn create_process_as_user(
                     ));
                 }
             }
-            let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
-            attrs.set_handle_list(inherited_handles)?;
-            si.lpAttributeList = attrs.as_mut_ptr();
 
             let creation_flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
-            let ok = CreateProcessAsUserW(
-                h_token,
-                std::ptr::null(),
-                cmdline.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                1,
-                creation_flags,
-                env_block.as_ptr() as *mut c_void,
-                cwd_wide.as_ptr(),
-                &si.StartupInfo,
-                &mut pi,
-            );
-            if ok == 0 {
+            let mut attempt_private_desktop = use_private_desktop;
+            loop {
+                let desktop = LaunchDesktop::prepare(attempt_private_desktop, logs_base_dir)?;
+                let mut si: STARTUPINFOEXW = std::mem::zeroed();
+                si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+                // Some processes (e.g., PowerShell) can fail with STATUS_DLL_INIT_FAILED
+                // if lpDesktop is not set when launching with a restricted token.
+                // Point explicitly at the interactive desktop or a private desktop.
+                si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
+                si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+                si.StartupInfo.hStdInput = stdin_h;
+                si.StartupInfo.hStdOutput = stdout_h;
+                si.StartupInfo.hStdError = stderr_h;
+                let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
+                attrs.set_handle_list(inherited_handles.clone())?;
+                si.lpAttributeList = attrs.as_mut_ptr();
+
+                let ok = CreateProcessAsUserW(
+                    h_token,
+                    std::ptr::null(),
+                    cmdline.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    1,
+                    creation_flags,
+                    env_block.as_ptr() as *mut c_void,
+                    cwd_wide.as_ptr(),
+                    &si.StartupInfo,
+                    &mut pi,
+                );
+                if ok != 0 {
+                    return Ok(CreatedProcess {
+                        process_info: pi,
+                        startup_info: si.StartupInfo,
+                        _desktop: desktop,
+                    });
+                }
+
                 let err = GetLastError() as i32;
                 let msg = format!(
                     "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
@@ -146,35 +161,48 @@ pub unsafe fn create_process_as_user(
                     creation_flags,
                 );
                 logging::debug_log(&msg, logs_base_dir);
+                if should_retry_on_default_desktop(err, attempt_private_desktop) {
+                    logging::debug_log(
+                        "CreateProcessAsUserW returned ERROR_NO_SUCH_LOGON_SESSION on a private desktop; retrying on Winsta0\\Default",
+                        logs_base_dir,
+                    );
+                    attempt_private_desktop = false;
+                    continue;
+                }
                 return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
             }
-            Ok(CreatedProcess {
-                process_info: pi,
-                startup_info: si.StartupInfo,
-                _desktop: desktop,
-            })
         }
         None => {
-            let mut si: STARTUPINFOW = std::mem::zeroed();
-            si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-            si.lpDesktop = desktop.startup_info_desktop();
-            ensure_inheritable_stdio(&mut si)?;
-
             let creation_flags = CREATE_UNICODE_ENVIRONMENT;
-            let ok = CreateProcessAsUserW(
-                h_token,
-                std::ptr::null(),
-                cmdline.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                1,
-                creation_flags,
-                env_block.as_ptr() as *mut c_void,
-                cwd_wide.as_ptr(),
-                &si,
-                &mut pi,
-            );
-            if ok == 0 {
+            let mut attempt_private_desktop = use_private_desktop;
+            loop {
+                let desktop = LaunchDesktop::prepare(attempt_private_desktop, logs_base_dir)?;
+                let mut si: STARTUPINFOW = std::mem::zeroed();
+                si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+                si.lpDesktop = desktop.startup_info_desktop();
+                ensure_inheritable_stdio(&mut si)?;
+
+                let ok = CreateProcessAsUserW(
+                    h_token,
+                    std::ptr::null(),
+                    cmdline.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    1,
+                    creation_flags,
+                    env_block.as_ptr() as *mut c_void,
+                    cwd_wide.as_ptr(),
+                    &si,
+                    &mut pi,
+                );
+                if ok != 0 {
+                    return Ok(CreatedProcess {
+                        process_info: pi,
+                        startup_info: si,
+                        _desktop: desktop,
+                    });
+                }
+
                 let err = GetLastError() as i32;
                 let msg = format!(
                     "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
@@ -187,13 +215,16 @@ pub unsafe fn create_process_as_user(
                     creation_flags,
                 );
                 logging::debug_log(&msg, logs_base_dir);
+                if should_retry_on_default_desktop(err, attempt_private_desktop) {
+                    logging::debug_log(
+                        "CreateProcessAsUserW returned ERROR_NO_SUCH_LOGON_SESSION on a private desktop; retrying on Winsta0\\Default",
+                        logs_base_dir,
+                    );
+                    attempt_private_desktop = false;
+                    continue;
+                }
                 return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
             }
-            Ok(CreatedProcess {
-                process_info: pi,
-                startup_info: si,
-                _desktop: desktop,
-            })
         }
     }
 }
