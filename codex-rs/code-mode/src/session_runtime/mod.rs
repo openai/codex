@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -46,7 +45,6 @@ struct Inner<D: SessionRuntimeDelegate> {
     cell_count_tx: watch::Sender<usize>,
     shutdown_token: CancellationToken,
     delegate: Arc<D>,
-    shutting_down: AtomicBool,
     next_cell_id: AtomicU64,
 }
 
@@ -65,14 +63,13 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
                 cell_count_tx,
                 shutdown_token: CancellationToken::new(),
                 delegate,
-                shutting_down: AtomicBool::new(false),
                 next_cell_id: AtomicU64::new(1),
             }),
         }
     }
 
     pub fn is_alive(&self) -> bool {
-        !self.inner.shutting_down.load(Ordering::Acquire)
+        !self.inner.shutdown_token.is_cancelled()
     }
 
     pub async fn execute(
@@ -80,7 +77,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         request: ExecuteRequest,
         initial_observe_mode: ObserveMode,
     ) -> Result<StartedCell, Error> {
-        if self.inner.shutting_down.load(Ordering::Acquire) {
+        if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
         let cell_id = self.allocate_cell_id();
@@ -174,7 +171,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             inner: Arc::clone(&self.inner),
         });
         let mut cells = self.inner.cells.lock().await;
-        if self.inner.shutting_down.load(Ordering::Acquire) {
+        if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
         if cells.contains_key(&cell_id) {
@@ -185,7 +182,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             stored_values,
             host,
             initial_observe_mode,
-            self.inner.shutdown_token.clone(),
+            self.inner.shutdown_token.child_token(),
         )
         .map_err(Error::Runtime)?;
         cells.insert(cell_id.clone(), CellState::Live(handle));
@@ -196,7 +193,6 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     }
 
     fn begin_shutdown(&self) {
-        self.inner.shutting_down.store(true, Ordering::Release);
         self.inner.shutdown_token.cancel();
         // The token reaches every cell if the registry is temporarily locked.
         if let Ok(cells) = self.inner.cells.try_lock() {

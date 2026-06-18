@@ -104,11 +104,16 @@ struct Termination {
     response_tx: Option<oneshot::Sender<Result<CellEvent, CellError>>>,
 }
 
+enum CommandEvent {
+    Received(Option<CellCommand>),
+    SessionShutdown,
+}
+
 async fn run_cell<H: CellHost>(
     host: Arc<H>,
     context: CellContext,
     mut event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
-    mut command_rx: mpsc::UnboundedReceiver<CellCommand>,
+    command_rx: mpsc::UnboundedReceiver<CellCommand>,
     initial_observer: Observer,
 ) {
     let CellContext {
@@ -128,21 +133,39 @@ async fn run_cell<H: CellHost>(
     let mut yield_timer: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
     let mut notification_tasks = JoinSet::new();
     let mut tool_tasks = JoinSet::new();
+    let mut command_rx = Some(command_rx);
     loop {
         let yield_deadline_elapsed = yield_timer
             .as_ref()
             .is_some_and(|yield_timer| yield_timer.deadline() <= tokio::time::Instant::now());
         tokio::select! {
             biased;
-            maybe_command = async {
+            command_event = async {
                 tokio::select! {
                     biased;
-                    command = command_rx.recv() => command,
-                    _ = session_shutdown_token.cancelled(), if termination.is_none() => {
-                        Some(CellCommand::Terminate { response_tx: None })
+                    _ = session_shutdown_token.cancelled(), if command_rx.is_some() => {
+                        CommandEvent::SessionShutdown
+                    }
+                    command = async {
+                        match command_rx.as_mut() {
+                            Some(command_rx) => command_rx.recv().await,
+                            None => std::future::pending::<Option<CellCommand>>().await,
+                        }
+                    } => {
+                        CommandEvent::Received(command)
                     }
                 }
             } => {
+                let maybe_command = match command_event {
+                    CommandEvent::Received(command) => command,
+                    CommandEvent::SessionShutdown => {
+                        drop(command_rx.take());
+                        if termination.is_some() {
+                            continue;
+                        }
+                        Some(CellCommand::Terminate { response_tx: None })
+                    }
+                };
                 let Some(command) = maybe_command else {
                     if completed_event.is_some() {
                         break;
@@ -396,7 +419,7 @@ async fn run_cell<H: CellHost>(
         }
     }
     // Reject requests that arrive while asynchronous terminal cleanup runs.
-    drop(command_rx);
+    drop(command_rx.take());
     begin_termination(
         &runtime_tx,
         &runtime_control_tx,
