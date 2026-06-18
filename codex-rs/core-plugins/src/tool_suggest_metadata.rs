@@ -210,8 +210,14 @@ async fn load_plugin_metadata(
     }
     let manifest = load_plugin_manifest(plugin_root.as_path())
         .ok_or_else(|| "missing or invalid plugin.json".to_string())?;
-    let skill_inventory =
-        load_plugin_skill_inventory(plugin_root, &plugin_id, &manifest, restriction_product).await;
+    let skill_inventory = load_plugin_skill_inventory(
+        plugin_root,
+        &plugin_id,
+        &manifest,
+        restriction_product,
+        /*plugin_skill_snapshots*/ None,
+    )
+    .await;
     let mut mcp_server_names =
         load_plugin_mcp_servers(plugin_root.as_path(), /*auth_mode*/ None)
             .await

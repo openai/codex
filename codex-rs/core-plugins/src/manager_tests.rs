@@ -37,6 +37,9 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core_skills::PluginSkillSnapshots;
+use codex_core_skills::SkillsLoadInput;
+use codex_core_skills::SkillsService;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_login::CodexAuth;
 use codex_plugin::AppDeclaration;
@@ -1476,6 +1479,7 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
         &manifest,
         /*restriction_product*/ None,
         &SkillConfigRules::default(),
+        /*plugin_skill_snapshots*/ None,
     )
     .await;
 
@@ -2039,6 +2043,55 @@ async fn plugin_cache_ignores_unrelated_session_overrides() {
     assert_eq!(second.plugins()[0].mcp_servers.len(), 1);
 }
 
+#[tokio::test]
+async fn skills_service_reuses_skills_parsed_during_plugin_load() {
+    let codex_home = TempDir::new().unwrap();
+    let codex_home_abs = codex_home.path().to_path_buf().abs();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    write_plugin(
+        codex_home.path().join("plugins/cache/test").as_path(),
+        "sample/local",
+        "sample",
+    );
+    let skill_path = plugin_root.join("skills/SKILL.md");
+    write_file(&skill_path, "---\nname: search\ndescription: first\n---\n");
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+    );
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let plugin_outcome = manager.plugins_for_config(&config).await;
+    let plugin_skill_snapshots = manager.plugin_skill_snapshots_for_config(&config);
+    write_file(&skill_path, "---\nname: search\ndescription: second\n---\n");
+
+    let skills_input = SkillsLoadInput::new(
+        codex_home_abs.clone(),
+        plugin_outcome.effective_plugin_skill_roots(),
+        config.config_layer_stack.clone(),
+        /*bundled_skills_enabled*/ false,
+    )
+    .with_plugin_skill_snapshots(plugin_skill_snapshots);
+    let skills_service = SkillsService::new(codex_home_abs, /*bundled_skills_enabled*/ false);
+    let cached = skills_service
+        .snapshot_for_config(&skills_input, /*fs*/ None)
+        .await;
+
+    assert_eq!(
+        cached
+            .outcome()
+            .skills
+            .iter()
+            .map(|skill| skill.description.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first"]
+    );
+}
+
 #[test]
 fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
     let codex_home = TempDir::new().unwrap();
@@ -2051,7 +2104,12 @@ fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
     let stale_generation = manager.loaded_plugins_cache_generation();
 
     manager.clear_loaded_plugins_cache();
-    manager.cache_loaded_plugins_if_current(stale_generation, cache_key.clone(), Vec::new());
+    manager.cache_loaded_plugins_if_current(
+        stale_generation,
+        cache_key.clone(),
+        Vec::new(),
+        PluginSkillSnapshots::for_plugin_load(),
+    );
 
     assert_eq!(manager.cached_loaded_plugins(&cache_key), None);
 }
@@ -5164,6 +5222,7 @@ async fn load_plugins_ignores_project_config_files() {
         &stack,
         std::collections::HashMap::new(),
         &PluginStore::new(codex_home.path().to_path_buf()),
+        /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
         /*prefer_remote_curated_conflicts*/ false,
     )

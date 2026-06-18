@@ -128,6 +128,7 @@ async fn load_skills_for_test(config: &TestConfig) -> SkillLoadOutcome {
             /*home_dir*/ None,
         )
         .await,
+        /*plugin_skill_snapshots*/ None,
     )
     .await
 }
@@ -315,7 +316,7 @@ async fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()
         Some(&home_folder_abs),
     )
     .await;
-    let outcome = load_skills_from_roots(roots).await;
+    let outcome = load_skills_from_roots(roots, /*plugin_skill_snapshots*/ None).await;
     assert!(
         outcome.errors.is_empty(),
         "unexpected errors: {:?}",
@@ -845,14 +846,17 @@ interface:
     );
 
     let plugin_root_abs = plugin_root.abs();
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_namespace: None,
-        plugin_root: Some(plugin_root_abs.clone()),
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: plugin_root.join("skills").abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: Some("twilio-developer-kit@test".to_string()),
+            plugin_namespace: None,
+            plugin_root: Some(plugin_root_abs.clone()),
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
 
     assert!(
@@ -903,14 +907,17 @@ interface:
 "##,
     );
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_namespace: None,
-        plugin_root: Some(plugin_root.abs()),
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: plugin_root.join("skills").abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: Some("twilio-developer-kit@test".to_string()),
+            plugin_namespace: None,
+            plugin_root: Some(plugin_root.abs()),
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
 
     assert!(
@@ -1050,14 +1057,17 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
     fs::create_dir_all(admin_root.path()).unwrap();
     symlink_dir(shared.path(), &admin_root.path().join("shared"));
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: admin_root.path().abs(),
-        scope: SkillScope::Admin,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
-        plugin_namespace: None,
-        plugin_root: None,
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: admin_root.path().abs(),
+            scope: SkillScope::Admin,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+            plugin_namespace: None,
+            plugin_root: None,
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
 
     assert!(
@@ -1133,14 +1143,17 @@ async fn system_scope_ignores_symlinked_subdir() {
     fs::create_dir_all(&system_root).unwrap();
     symlink_dir(shared.path(), &system_root.join("shared"));
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: system_root.abs(),
-        scope: SkillScope::System,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
-        plugin_namespace: None,
-        plugin_root: None,
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: system_root.abs(),
+            scope: SkillScope::System,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+            plugin_namespace: None,
+            plugin_root: None,
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
     assert!(
         outcome.errors.is_empty(),
@@ -1168,14 +1181,17 @@ async fn respects_max_scan_depth_for_user_scope() {
     );
 
     let skills_root = codex_home.path().join("skills");
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: skills_root.abs(),
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
-        plugin_namespace: None,
-        plugin_root: None,
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: skills_root.abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+            plugin_namespace: None,
+            plugin_root: None,
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
 
     assert!(
@@ -1276,14 +1292,17 @@ async fn namespaces_plugin_skills_using_provided_namespace() {
     )
     .unwrap();
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: Some("sample@test".to_string()),
-        plugin_namespace: Some("sample".to_string()),
-        plugin_root: Some(plugin_root.abs()),
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: plugin_root.join("skills").abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: Some("sample@test".to_string()),
+            plugin_namespace: Some("sample".to_string()),
+            plugin_root: Some(plugin_root.abs()),
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
 
     assert!(
@@ -1322,14 +1341,17 @@ async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
     )
     .unwrap();
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: Some("sample@test".to_string()),
-        plugin_namespace: Some(plugin_name.clone()),
-        plugin_root: Some(plugin_root.abs()),
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: plugin_root.join("skills").abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: Some("sample@test".to_string()),
+            plugin_namespace: Some(plugin_name.clone()),
+            plugin_root: Some(plugin_root.abs()),
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
 
     assert!(
@@ -1368,14 +1390,17 @@ async fn plugin_skill_name_length_limit_rejects_overlong_qualified_name() {
     )
     .unwrap();
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: Some("sample@test".to_string()),
-        plugin_namespace: Some(plugin_name.clone()),
-        plugin_root: Some(plugin_root.abs()),
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: plugin_root.join("skills").abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: Some("sample@test".to_string()),
+            plugin_namespace: Some(plugin_name.clone()),
+            plugin_root: Some(plugin_root.abs()),
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
 
     assert_eq!(outcome.skills, Vec::new());
@@ -1807,24 +1832,27 @@ async fn deduplicates_by_path_preferring_first_root() {
 
     let skill_path = write_skill_at(root.path(), "dupe", "dupe-skill", "from repo");
 
-    let outcome = load_skills_from_roots([
-        SkillRoot {
-            path: root.path().abs(),
-            scope: SkillScope::Repo,
-            file_system: Arc::clone(&LOCAL_FS),
-            plugin_id: None,
-            plugin_namespace: None,
-            plugin_root: None,
-        },
-        SkillRoot {
-            path: root.path().abs(),
-            scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
-            plugin_id: None,
-            plugin_namespace: None,
-            plugin_root: None,
-        },
-    ])
+    let outcome = load_skills_from_roots(
+        [
+            SkillRoot {
+                path: root.path().abs(),
+                scope: SkillScope::Repo,
+                file_system: Arc::clone(&LOCAL_FS),
+                plugin_id: None,
+                plugin_namespace: None,
+                plugin_root: None,
+            },
+            SkillRoot {
+                path: root.path().abs(),
+                scope: SkillScope::User,
+                file_system: Arc::clone(&LOCAL_FS),
+                plugin_id: None,
+                plugin_namespace: None,
+                plugin_root: None,
+            },
+        ],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
 
     assert!(
