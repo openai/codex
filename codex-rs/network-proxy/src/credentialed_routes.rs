@@ -42,6 +42,13 @@ pub struct CredentialedRoutesConfig {
 
 impl CredentialedRoutesConfig {
     pub fn route_prefixes(&self) -> Vec<String> {
+        if self
+            .proxy_url
+            .as_deref()
+            .is_none_or(|proxy_url| Url::parse(proxy_url).is_err())
+        {
+            return Vec::new();
+        }
         self.routes
             .iter()
             .filter_map(|route| parse_route_base_url(route).ok())
@@ -211,6 +218,7 @@ fn route_mitm_hook(
     proxy_url: &str,
 ) -> Result<MitmHookConfig> {
     let base_url = parse_route_base_url(route)?;
+    let proxy_url = Url::parse(proxy_url)?;
     let host = base_url
         .host_str()
         .ok_or_else(|| anyhow::anyhow!("credentialed route must include a host"))?
