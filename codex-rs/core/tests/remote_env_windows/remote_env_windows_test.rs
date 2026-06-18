@@ -20,6 +20,7 @@ use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
@@ -127,10 +128,6 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
                 })
                 .await?;
 
-            // TODO(anp): Re-enable these event assertions once exec command events retain a
-            // PathUri cwd. Today the host-native event conversion drops begin/end events for a
-            // foreign cwd.
-            /*
             let mut begin = None;
             let mut end = None;
             let mut turn_complete = false;
@@ -161,13 +158,9 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
             assert_eq!(&begin.command[1..], ["-NoProfile", "-Command", COMMAND]);
 
             let end = end.context("exec_command should emit an end event")?;
+            let expected_cwd = PathUri::parse("file:///C:/windows")?;
+            assert_eq!((&begin.cwd, &end.cwd), (&expected_cwd, &expected_cwd));
             assert_eq!((end.exit_code, end.status), (0, ExecCommandStatus::Completed));
-            */
-
-            wait_for_event(&test.codex, |event| {
-                matches!(event, EventMsg::TurnComplete(_))
-            })
-            .await;
 
             let request = response_mock
                 .last_request()

@@ -431,6 +431,9 @@
       ],
       "type": "string"
     },
+    "LegacyAppPathString": {
+      "type": "string"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -831,7 +834,7 @@
             "cwd": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/AbsolutePathBuf"
+                  "$ref": "#/definitions/LegacyAppPathString"
                 }
               ],
               "description": "The command's working directory."

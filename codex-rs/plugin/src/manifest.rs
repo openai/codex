@@ -17,7 +17,7 @@ pub struct PluginManifest<Resource> {
 /// Component resources declared by a plugin manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManifestPaths<Resource> {
-    pub skills: Option<Resource>,
+    pub skills: Vec<Resource>,
     pub mcp_servers: Option<PluginManifestMcpServers<Resource>>,
     pub apps: Option<Resource>,
     pub hooks: Option<PluginManifestHooks<Resource>>,
@@ -172,7 +172,10 @@ impl<Resource> PluginManifest<Resource> {
             description,
             keywords,
             paths: PluginManifestPaths {
-                skills: skills.map(&mut map).transpose()?,
+                skills: skills
+                    .into_iter()
+                    .map(&mut map)
+                    .collect::<Result<Vec<_>, _>>()?,
                 mcp_servers,
                 apps: apps.map(&mut map).transpose()?,
                 hooks,

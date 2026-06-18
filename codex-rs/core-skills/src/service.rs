@@ -105,7 +105,12 @@ impl SkillsService {
     /// This path uses a cache keyed by the effective skill-relevant config state rather than just
     /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
     /// to share a directory.
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(
+        name = "skills_for_config",
+        level = "info",
+        skip_all,
+        fields(otel.name = "skills_for_config")
+    )]
     pub async fn snapshot_for_config(
         &self,
         input: &SkillsLoadInput,
@@ -251,7 +256,7 @@ impl SkillsService {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
-    roots: Vec<(AbsolutePathBuf, u8, Option<String>)>,
+    roots: Vec<(AbsolutePathBuf, u8, Option<String>, Option<String>)>,
     skill_config_rules: SkillConfigRules,
 }
 
@@ -291,7 +296,12 @@ fn config_skills_cache_key(
                     SkillScope::System => 2,
                     SkillScope::Admin => 3,
                 };
-                (root.path.clone(), scope_rank, root.plugin_id.clone())
+                (
+                    root.path.clone(),
+                    scope_rank,
+                    root.plugin_id.clone(),
+                    root.plugin_namespace.clone(),
+                )
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),

@@ -466,9 +466,14 @@ impl PluginsManager {
     }
 
     #[instrument(
-        level = "trace",
+        name = "plugins_for_config",
+        level = "info",
         skip_all,
-        fields(force_reload, plugins_enabled = config.plugins_enabled)
+        fields(
+            otel.name = "plugins_for_config",
+            force_reload,
+            plugins_enabled = config.plugins_enabled
+        )
     )]
     pub(crate) async fn plugins_for_config_with_force_reload(
         &self,
@@ -1586,7 +1591,7 @@ impl PluginsManager {
         let resolved_skills = load_plugin_skills(
             &source_path,
             &plugin_id,
-            &manifest.paths,
+            &manifest,
             self.restriction_product,
             &codex_core_skills::config_rules::skill_config_rules_from_stack(
                 &config.config_layer_stack,

@@ -2992,7 +2992,7 @@ pub struct TurnContextNetworkItem {
 /// context updates, and again after mid-turn compaction when replacement
 /// history re-establishes full context, so resume/fork replay can recover the
 /// latest durable baseline.
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
@@ -3246,7 +3246,7 @@ pub struct ExecCommandBeginEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -3272,7 +3272,7 @@ pub struct ExecCommandEndEvent {
     /// The command that was executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
