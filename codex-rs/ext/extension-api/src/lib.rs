@@ -54,6 +54,7 @@ pub use contributors::ToolLifecycleContributor;
 pub use contributors::ToolLifecycleFuture;
 pub use contributors::ToolStartInput;
 pub use contributors::TurnAbortInput;
+pub use contributors::TurnContextContributionInput;
 pub use contributors::TurnErrorInput;
 pub use contributors::TurnInputContext;
 pub use contributors::TurnInputContributor;

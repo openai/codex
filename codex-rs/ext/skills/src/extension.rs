@@ -103,7 +103,7 @@ impl<C> ContextContributor for SkillsExtension<C>
 where
     C: Send + Sync + 'static,
 {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,

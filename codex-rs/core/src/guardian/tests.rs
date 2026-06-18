@@ -107,7 +107,7 @@ impl codex_extension_api::ThreadLifecycleContributor<Config> for GuardianMemoryC
 }
 
 impl codex_extension_api::ContextContributor for GuardianMemoryContextProbe {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
         thread_store: &'a codex_extension_api::ExtensionData,

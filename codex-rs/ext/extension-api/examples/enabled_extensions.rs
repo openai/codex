@@ -74,7 +74,11 @@ async fn contribute_prompt(
 ) -> Vec<codex_extension_api::PromptFragment> {
     let mut fragments = Vec::new();
     for contributor in registry.context_contributors() {
-        fragments.extend(contributor.contribute(session_store, thread_store).await);
+        fragments.extend(
+            contributor
+                .contribute_thread_context(session_store, thread_store)
+                .await,
+        );
     }
     fragments
 }
