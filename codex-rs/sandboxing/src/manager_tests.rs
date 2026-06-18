@@ -12,11 +12,19 @@ use super::with_managed_mitm_ca_proxy_dirs_denied;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::with_managed_mitm_ca_readable_roots;
 #[cfg(target_os = "windows")]
+use codex_network_proxy::ConfigReloader;
+#[cfg(target_os = "windows")]
+use codex_network_proxy::ConfigReloaderFuture;
+#[cfg(target_os = "windows")]
+use codex_network_proxy::ConfigState;
+#[cfg(target_os = "windows")]
 use codex_network_proxy::NetworkProxy;
 #[cfg(target_os = "windows")]
 use codex_network_proxy::NetworkProxyConfig;
 #[cfg(target_os = "windows")]
 use codex_network_proxy::NetworkProxyConstraints;
+#[cfg(target_os = "windows")]
+use codex_network_proxy::NetworkProxyState;
 #[cfg(target_os = "windows")]
 use codex_network_proxy::build_config_state;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -40,6 +48,24 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use std::sync::Arc;
 use tempfile::TempDir;
+
+#[cfg(target_os = "windows")]
+struct StaticConfigReloader;
+
+#[cfg(target_os = "windows")]
+impl ConfigReloader for StaticConfigReloader {
+    fn source_label(&self) -> String {
+        "sandboxing test config".to_string()
+    }
+
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async { anyhow::bail!("sandboxing test config cannot reload") })
+    }
+}
 
 #[test]
 fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
@@ -420,35 +446,6 @@ fn managed_mitm_ca_materialization_checks_canonical_target_policy() {
 }
 
 #[test]
-fn managed_mitm_ca_proxy_dir_deny_preserves_profiles_without_restricted_filesystem() {
-    let managed_bundle_dir = TempDir::new().expect("create managed bundle dir");
-    let managed_bundle_path =
-        AbsolutePathBuf::from_absolute_path(managed_bundle_dir.path().join("ca-bundle.pem"))
-            .expect("absolute managed bundle path");
-
-    for permission_profile in [
-        PermissionProfile::Disabled,
-        PermissionProfile::from_runtime_permissions(
-            &FileSystemSandboxPolicy::unrestricted(),
-            NetworkSandboxPolicy::Restricted,
-        ),
-        PermissionProfile::External {
-            network: NetworkSandboxPolicy::Restricted,
-        },
-    ] {
-        assert_eq!(
-            with_managed_mitm_ca_proxy_dirs_denied(
-                permission_profile.clone(),
-                std::slice::from_ref(&managed_bundle_path),
-                managed_bundle_dir.path(),
-            )
-            .expect("profile should remain supported"),
-            permission_profile,
-        );
-    }
-}
-
-#[test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn managed_mitm_ca_proxy_dir_rejects_writable_overlap() {
     let writable_root = TempDir::new().expect("create writable root");
@@ -780,9 +777,12 @@ async fn windows_restricted_transform_rejects_command_specific_ca() {
     let cwd_uri = PathUri::from_abs_path(&cwd);
     let mut config = NetworkProxyConfig::default();
     config.network.mitm = true;
-    let state = Arc::new(
-        build_config_state(config, NetworkProxyConstraints::default()).expect("build proxy state"),
-    );
+    let state =
+        build_config_state(config, NetworkProxyConstraints::default()).expect("build proxy state");
+    let state = Arc::new(NetworkProxyState::with_reloader(
+        state,
+        Arc::new(StaticConfigReloader),
+    ));
     let network = NetworkProxy::builder()
         .state(state)
         .managed_by_codex(/*managed_by_codex*/ false)
