@@ -34,21 +34,24 @@ fn file_uri_round_trips_an_absolute_path() {
 #[test]
 fn non_native_uri_io_conversion_is_invalid_input() {
     #[cfg(unix)]
-    let uri = PathUri::parse("file://server/share/file.txt").expect("valid file URI");
+    let uris = ["file://server/share/file.txt", "file:///C:/workspace"];
     #[cfg(windows)]
-    let uri = PathUri::parse("file:///usr/local/file.txt").expect("valid file URI");
+    let uris = ["file:///usr/local/file.txt"];
 
-    let error = uri
-        .to_abs_path()
-        .expect_err("URI should not be host-native");
+    for uri in uris {
+        let uri = PathUri::parse(uri).expect("valid file URI");
+        let error = uri
+            .to_abs_path()
+            .expect_err("URI should not be host-native");
 
-    assert_eq!(
-        (error.kind(), error.to_string()),
-        (
-            io::ErrorKind::InvalidInput,
-            format!("'{uri}' is invalid on '{}'", std::env::consts::OS),
-        )
-    );
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (
+                io::ErrorKind::InvalidInput,
+                format!("'{uri}' is invalid on '{}'", std::env::consts::OS),
+            )
+        );
+    }
 }
 
 #[test]
@@ -87,6 +90,35 @@ fn infers_path_conventions_from_uri_shape() {
         let path = PathUri::parse(uri).expect("valid path URI");
 
         assert_eq!(path.infer_path_convention(), expected, "inferring {uri}");
+    }
+}
+
+#[test]
+fn path_convention_splits_absolute_relative_and_bare_path_text() {
+    for (convention, path, expected) in [
+        (
+            PathConvention::Posix,
+            "/usr/local/bin/bash",
+            vec!["", "usr", "local", "bin", "bash"],
+        ),
+        (
+            PathConvention::Posix,
+            r"tools\pwsh.exe",
+            vec![r"tools\pwsh.exe"],
+        ),
+        (
+            PathConvention::Windows,
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            vec!["C:", "Program Files", "PowerShell", "7", "pwsh.exe"],
+        ),
+        (
+            PathConvention::Windows,
+            "tools/pwsh.exe",
+            vec!["tools", "pwsh.exe"],
+        ),
+        (PathConvention::Windows, "cmd.exe", vec!["cmd.exe"]),
+    ] {
+        assert_eq!(convention.path_segments(path).collect::<Vec<_>>(), expected);
     }
 }
 
@@ -473,6 +505,20 @@ fn basename_uses_decoded_uri_segments() {
             "basename for {input}"
         );
     }
+}
+
+#[test]
+fn path_buf_uses_the_inferred_native_spelling() {
+    let windows = PathUri::parse("file:///C:/Program%20Files/pwsh.exe").expect("Windows URI");
+    let posix = PathUri::parse("file:///usr/local/bin/bash").expect("POSIX URI");
+
+    assert_eq!(
+        (windows.to_path_buf(), posix.to_path_buf()),
+        (
+            PathBuf::from(r"C:\Program Files\pwsh.exe"),
+            PathBuf::from("/usr/local/bin/bash"),
+        )
+    );
 }
 
 #[test]
