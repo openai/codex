@@ -104,6 +104,9 @@ impl From<BuildRouteAwareHttpClientError> for io::Error {
 }
 
 /// Builds a reqwest client with conservative route selection and shared CA handling.
+///
+/// Unavailable platform resolution falls back to environment proxies and then direct. Errors after
+/// a route is selected are returned without trying another route.
 pub fn build_reqwest_client_for_route(
     builder: reqwest::ClientBuilder,
     request_url: &str,
