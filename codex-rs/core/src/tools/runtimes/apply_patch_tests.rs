@@ -53,7 +53,6 @@ async fn guardian_review_request_includes_patch_context() {
     let path = std::env::temp_dir()
         .join("guardian-apply-patch-test.txt")
         .abs();
-    // TODO(anp): Construct apply_patch runtime fixtures with PathUri directly.
     let action =
         ApplyPatchAction::new_add_for_test(&PathUri::from_abs_path(&path), "hello".to_string());
     let expected_cwd = action.cwd.to_abs_path().expect("native patch cwd");
