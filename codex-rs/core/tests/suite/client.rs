@@ -3400,7 +3400,6 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         },
         {
             "type": "message",
-            "id": "msg-1",
             "role": "assistant",
             "content": [{"type":"output_text","text":"Hey there!\n"}]
         },
@@ -3411,7 +3410,6 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         },
         {
             "type": "message",
-            "id": "msg-1",
             "role": "assistant",
             "content": [{"type":"output_text","text":"Hey there!\n"}]
         },
