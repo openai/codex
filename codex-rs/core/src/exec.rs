@@ -128,6 +128,25 @@ fn select_process_exec_tool_sandbox_type(
     )
 }
 
+fn apply_network_to_env(
+    network: &NetworkProxy,
+    network_environment_id: Option<&str>,
+    env: &mut HashMap<String, String>,
+) -> Result<()> {
+    if let Some(environment_id) = network_environment_id {
+        network
+            .apply_to_env_for_environment(env, environment_id)
+            .map_err(|err| {
+                CodexErr::Io(io::Error::other(format!(
+                    "failed to prepare network proxy for environment `{environment_id}`: {err}"
+                )))
+            })?;
+    } else {
+        network.apply_to_env(env);
+    }
+    Ok(())
+}
+
 /// Mechanism to terminate an exec invocation before it finishes naturally.
 #[derive(Clone, Debug)]
 pub enum ExecExpiration {
@@ -345,7 +364,7 @@ pub fn build_exec_request(
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        apply_network_to_env(network, network_environment_id.as_deref(), &mut env)?;
     }
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -598,7 +617,7 @@ async fn exec_windows_sandbox(
         cwd,
         mut env,
         network,
-        network_environment_id: _,
+        network_environment_id,
         expiration,
         capture_policy,
         windows_sandbox_level,
@@ -606,7 +625,7 @@ async fn exec_windows_sandbox(
         ..
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        apply_network_to_env(network, network_environment_id.as_deref(), &mut env)?;
     }
 
     // Windows sandbox capture still receives timeout and cancellation separately.
@@ -947,7 +966,7 @@ async fn exec(
         cwd,
         mut env,
         network,
-        network_environment_id: _,
+        network_environment_id,
         arg0,
         expiration,
         capture_policy,
@@ -961,7 +980,7 @@ async fn exec(
         justification: _,
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        apply_network_to_env(network, network_environment_id.as_deref(), &mut env)?;
     }
 
     let (program, args) = command.split_first().ok_or_else(|| {
