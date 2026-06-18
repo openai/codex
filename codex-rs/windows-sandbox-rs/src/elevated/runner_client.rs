@@ -38,7 +38,6 @@ use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::Win32::System::Threading::GetCurrentThread;
-use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
 use windows_sys::Win32::System::Threading::TerminateProcess;
@@ -48,6 +47,7 @@ const RUNNER_SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_SPAWN_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RUNNER_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
+const RUNNER_LOGON_FLAGS: u32 = 0;
 const WAIT_OBJECT_0: u32 = 0;
 
 #[derive(Debug)]
@@ -276,7 +276,10 @@ pub(crate) fn spawn_runner_transport(
             user_w.as_ptr(),
             domain_w.as_ptr(),
             password_w.as_ptr(),
-            LOGON_WITH_PROFILE,
+            // The helper only needs the sandbox user's token. Loading the full profile for every
+            // runner spawn can leave behind unhealthy TEMP.* profile state that later breaks
+            // restricted-token child launches with ERROR_NO_SUCH_LOGON_SESSION / Win32 1312.
+            RUNNER_LOGON_FLAGS,
             exe_w.as_ptr(),
             cmdline_vec.as_mut_ptr(),
             windows_sys::Win32::System::Threading::CREATE_NO_WINDOW
