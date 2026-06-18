@@ -409,6 +409,12 @@ pub struct CodexSpawnOk {
     pub thread_id: ThreadId,
 }
 
+#[derive(Clone)]
+pub(crate) struct InitialRolloutCopy {
+    pub(crate) parent_ref: codex_rollout::ForkParentRolloutRef,
+    pub(crate) source_history_item_count: usize,
+}
+
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
     pub(crate) user_instructions: LoadedUserInstructions,
@@ -423,7 +429,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
-    pub(crate) initial_rollout_copy: Option<PathBuf>,
+    pub(crate) initial_rollout_copy: Option<InitialRolloutCopy>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
@@ -1262,14 +1268,18 @@ impl Session {
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
-        let (is_subagent, skip_fork_history_persistence) = {
+        let (is_subagent, fork_source_history_item_count) = {
             let state = self.state.lock().await;
             (
                 state
                     .session_configuration
                     .session_source
                     .is_non_root_agent(),
-                state.session_configuration.initial_rollout_copy.is_some(),
+                state
+                    .session_configuration
+                    .initial_rollout_copy
+                    .as_ref()
+                    .map(|copy| copy.source_history_item_count),
             )
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
@@ -1337,8 +1347,10 @@ impl Session {
                 }
 
                 // If persisting, persist all rollout items as-is (the store filters).
-                if skip_fork_history_persistence {
-                    let suffix = Self::fork_rollout_copy_suffix(&rollout_items);
+                if let Some(source_history_item_count) = fork_source_history_item_count {
+                    let suffix = rollout_items
+                        .get(source_history_item_count..)
+                        .unwrap_or_default();
                     if !suffix.is_empty() {
                         self.persist_rollout_items(suffix).await;
                     }
@@ -1354,17 +1366,6 @@ impl Session {
                     let _ = self.flush_rollout().await;
                 }
             }
-        }
-    }
-
-    fn fork_rollout_copy_suffix(rollout_items: &[RolloutItem]) -> &[RolloutItem] {
-        let Some(RolloutItem::EventMsg(EventMsg::TurnAborted(event))) = rollout_items.last() else {
-            return &[];
-        };
-        if event.reason == TurnAbortReason::Interrupted {
-            &rollout_items[rollout_items.len() - 1..]
-        } else {
-            &[]
         }
     }
 

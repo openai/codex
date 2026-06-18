@@ -67,7 +67,6 @@ pub use recorder::ForkParentRolloutRef;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use recorder::append_rollout_item_to_path;
-pub use recorder::read_fork_parent_rollout_ref;
 pub use search::first_rollout_content_match_snippet;
 pub use search::search_rollout_matches;
 pub use search::search_rollout_paths;
