@@ -5,6 +5,7 @@ use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
+use crate::requests::strip_response_item_ids;
 use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
@@ -216,6 +217,7 @@ impl ResponsesWebsocketConnection {
         request: ResponsesWsRequest,
         connection_reused: bool,
         turn_state: Option<Arc<OnceLock<String>>>,
+        include_item_ids: bool,
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -225,7 +227,7 @@ impl ResponsesWebsocketConnection {
         let models_etag = self.models_etag.clone();
         let server_model = self.server_model.clone();
         let telemetry = self.telemetry.clone();
-        let request_text = serialize_websocket_request(&request)?;
+        let request_text = serialize_websocket_request(&request, include_item_ids)?;
 
         let current_span = Span::current();
         tokio::spawn(
@@ -787,8 +789,16 @@ async fn send_websocket_request(
     Ok(())
 }
 
-fn serialize_websocket_request(request: &ResponsesWsRequest) -> Result<String, ApiError> {
-    serde_json::to_string(request)
+fn serialize_websocket_request(
+    request: &ResponsesWsRequest,
+    include_item_ids: bool,
+) -> Result<String, ApiError> {
+    let mut payload = serde_json::to_value(request)
+        .map_err(|err| ApiError::Stream(format!("failed to encode websocket request: {err}")))?;
+    if !include_item_ids {
+        strip_response_item_ids(&mut payload);
+    }
+    serde_json::to_string(&payload)
         .map_err(|err| ApiError::Stream(format!("failed to encode websocket request: {err}")))
 }
 
@@ -839,12 +849,49 @@ mod tests {
         });
 
         let previous_payload = serde_json::to_value(&request).expect("serialize previous payload");
-        let request_text =
-            serialize_websocket_request(&request).expect("serialize websocket request");
+        let request_text = serialize_websocket_request(&request, /*include_item_ids*/ true)
+            .expect("serialize websocket request");
         let wire_payload =
             serde_json::from_str::<Value>(&request_text).expect("parse websocket request");
 
         assert_eq!(wire_payload, previous_payload);
+    }
+
+    #[test]
+    fn websocket_serialization_strips_item_ids_by_default() {
+        let request = ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
+            model: "gpt-test".to_string(),
+            instructions: "Use the available tools.".to_string(),
+            previous_response_id: None,
+            input: vec![ResponseItem::Message {
+                id: Some("msg-1".to_string()),
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hello".to_string(),
+                }],
+                phase: None,
+                metadata: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: true,
+            reasoning: None,
+            store: false,
+            stream: true,
+            include: Vec::new(),
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+            generate: None,
+            client_metadata: None,
+        });
+
+        let request_text = serialize_websocket_request(&request, /*include_item_ids*/ false)
+            .expect("serialize websocket request");
+        let wire_payload =
+            serde_json::from_str::<Value>(&request_text).expect("parse websocket request");
+
+        assert_eq!(wire_payload["input"][0].get("id"), None);
     }
 
     #[test]

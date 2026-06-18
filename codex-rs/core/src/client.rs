@@ -178,6 +178,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
+    item_ids_enabled: bool,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
@@ -378,6 +379,7 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
+        item_ids_enabled: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
@@ -398,6 +400,7 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
+                item_ids_enabled,
                 include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
@@ -572,6 +575,7 @@ impl ModelClient {
                 extra_headers,
                 compact_request_timeout,
                 turn_state.as_deref(),
+                /*include_item_ids*/ self.state.item_ids_enabled,
             )
             .await
             .map_err(map_api_error);
@@ -1033,6 +1037,7 @@ impl ModelClientSession {
             },
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
+            include_item_ids: self.client.state.item_ids_enabled,
         }
     }
 
@@ -1496,6 +1501,7 @@ impl ModelClientSession {
                     ws_request,
                     self.websocket_session.connection_reused(),
                     Some(Arc::clone(&self.turn_state)),
+                    /*include_item_ids*/ self.client.state.item_ids_enabled,
                 )
                 .await
                 .map_err(|err| {

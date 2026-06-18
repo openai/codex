@@ -2189,6 +2189,7 @@ async fn websocket_harness_with_provider_options(
         /*enable_request_compression*/ false,
         runtime_metrics_enabled,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
         /*attestation_provider*/ None,
     );
 

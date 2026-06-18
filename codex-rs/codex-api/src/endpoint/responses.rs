@@ -5,10 +5,10 @@ use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::requests::Compression;
-use crate::requests::attach_item_ids;
 use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
+use crate::requests::strip_response_item_ids;
 use crate::sse::spawn_response_stream;
 use crate::telemetry::SseTelemetry;
 use codex_client::EncodedJsonBody;
@@ -37,6 +37,7 @@ pub struct ResponsesOptions {
     pub extra_headers: HeaderMap,
     pub compression: Compression,
     pub turn_state: Option<Arc<OnceLock<String>>>,
+    pub include_item_ids: bool,
 }
 
 impl<T: HttpTransport> ResponsesClient<T> {
@@ -80,18 +81,16 @@ impl<T: HttpTransport> ResponsesClient<T> {
             extra_headers,
             compression,
             turn_state,
+            include_item_ids,
         } = options;
 
-        let body = if request.store && self.session.provider().is_azure_responses_endpoint() {
-            let mut body = serde_json::to_value(&request).map_err(|e| {
-                ApiError::Stream(format!("failed to encode responses request: {e}"))
-            })?;
-            attach_item_ids(&mut body, &request.input);
-            EncodedJsonBody::encode(&body)
-        } else {
-            EncodedJsonBody::encode(&request)
+        let mut body = serde_json::to_value(&request)
+            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        if !include_item_ids {
+            strip_response_item_ids(&mut body);
         }
-        .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        let body = EncodedJsonBody::encode(&body)
+            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         let mut headers = extra_headers;
         if let Some(ref thread_id) = thread_id {
