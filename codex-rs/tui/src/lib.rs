@@ -1996,6 +1996,12 @@ fn should_show_onboarding(
 }
 
 fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
+    // Workload identity is authoritative: resolution failures must not fall back to an
+    // interactive credential with different privileges.
+    if config.workload_identity.is_some() {
+        return false;
+    }
+
     // Only show the login screen for providers that actually require OpenAI auth
     // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
     if !config.model_provider.requires_openai_auth {
@@ -2025,6 +2031,33 @@ mod tests {
             .codex_home(temp_dir.path().to_path_buf())
             .build()
             .await
+    }
+
+    #[tokio::test]
+    async fn workload_identity_skips_interactive_login_screen() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        std::fs::write(
+            temp_dir.path().join("config.toml"),
+            r#"
+[workload_identity]
+identity_provider_id = "idp_test"
+identity_provider_mapping_id = "idpm_test"
+audience = "api://codex-test"
+token_url = "http://127.0.0.1:8080/oauth/token"
+
+[workload_identity.credential_source]
+type = "environment"
+variable = "CODEX_TEST_WIF_TOKEN"
+"#,
+        )?;
+        let config = build_config(&temp_dir).await?;
+
+        assert!(config.workload_identity.is_some());
+        assert!(!should_show_login_screen(
+            LoginStatus::NotAuthenticated,
+            &config
+        ));
+        Ok(())
     }
 
     fn write_session_rollout(
