@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::RwLock;
 
 use crate::ExecServerError;
@@ -26,6 +27,7 @@ use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 use codex_shell_command::shell_detect::DetectedShell;
+use tokio_util::task::AbortOnDropHandle;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 pub const CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR: &str =
@@ -408,6 +410,8 @@ fn optional_environment_value(name: &str) -> Option<String> {
 pub struct Environment {
     exec_server_url: Option<String>,
     remote_client: Option<LazyRemoteExecServerClient>,
+    // Dropping the environment stops unfinished background startup work.
+    startup_task: Arc<Mutex<Option<AbortOnDropHandle<()>>>>,
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
     http_client: Arc<dyn HttpClient>,
@@ -420,6 +424,7 @@ impl Environment {
         Self {
             exec_server_url: None,
             remote_client: None,
+            startup_task: Arc::new(Mutex::new(None)),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
             http_client: Arc::new(ReqwestHttpClient),
@@ -476,6 +481,7 @@ impl Environment {
         Self {
             exec_server_url: None,
             remote_client: None,
+            startup_task: Arc::new(Mutex::new(None)),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
@@ -515,6 +521,7 @@ impl Environment {
         Self {
             exec_server_url,
             remote_client: Some(client.clone()),
+            startup_task: Arc::new(Mutex::new(None)),
             exec_backend,
             filesystem,
             http_client: Arc::new(client),
@@ -544,9 +551,17 @@ impl Environment {
     }
 
     /// Starts connecting a remote environment without waiting for it.
+    /// Requires an active Tokio runtime when background startup is supported.
     pub fn start_connecting(&self) {
-        if let Some(client) = &self.remote_client {
-            client.start_connecting();
+        let Some(client) = &self.remote_client else {
+            return;
+        };
+        let mut startup_task = self
+            .startup_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if startup_task.is_none() {
+            *startup_task = client.start_connecting();
         }
     }
 
@@ -597,6 +612,7 @@ impl From<DetectedShell> for ShellInfo {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -607,6 +623,8 @@ mod tests {
     use super::noise_environment_config_from_values;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
+    use crate::client_api::ExecServerTransportParams;
+    use crate::client_api::StdioExecServerCommand;
     use crate::environment_provider::EnvironmentDefault;
     use crate::environment_provider::EnvironmentProviderSnapshot;
     use codex_utils_path_uri::PathUri;
@@ -1000,6 +1018,88 @@ mod tests {
             .await
             .expect("environment should start connecting when registered")
             .expect("accept connection");
+    }
+
+    #[tokio::test]
+    async fn environment_manager_leaves_stdio_environment_lazy() {
+        let environment = Environment::remote_with_transport(
+            ExecServerTransportParams::StdioCommand {
+                command: StdioExecServerCommand {
+                    program: "codex-missing-exec-server-for-test".to_string(),
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                },
+                initialize_timeout: Duration::from_secs(1),
+            },
+            /*local_runtime_paths*/ None,
+        );
+        let manager = EnvironmentManager::from_snapshot(
+            EnvironmentProviderSnapshot {
+                environments: vec![("stdio".to_string(), environment)],
+                default: EnvironmentDefault::Disabled,
+                include_local: false,
+            },
+            /*local_runtime_paths*/ None,
+        )
+        .expect("environment manager");
+        let environment = manager.get_environment("stdio").expect("stdio environment");
+
+        assert!(!environment.startup_finished());
+        assert!(environment.wait_until_ready().await.is_err());
+        assert!(environment.startup_finished());
+    }
+
+    #[tokio::test]
+    async fn replacing_environment_stops_its_startup_task() {
+        let first_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind first websocket listener");
+        let second_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind second websocket listener");
+        let manager = EnvironmentManager::without_environments();
+        manager
+            .upsert_environment(
+                "executor-a".to_string(),
+                format!(
+                    "ws://{}",
+                    first_listener.local_addr().expect("first listener address")
+                ),
+            )
+            .expect("first remote environment");
+        let environment = manager
+            .get_environment("executor-a")
+            .expect("first remote environment");
+        let startup_abort = environment
+            .startup_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .expect("startup task")
+            .abort_handle();
+        assert!(!startup_abort.is_finished());
+        drop(environment);
+
+        manager
+            .upsert_environment(
+                "executor-a".to_string(),
+                format!(
+                    "ws://{}",
+                    second_listener
+                        .local_addr()
+                        .expect("second listener address")
+                ),
+            )
+            .expect("replacement remote environment");
+
+        timeout(Duration::from_secs(1), async {
+            while !startup_abort.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replacing the environment should cancel its startup task");
     }
 
     #[tokio::test]

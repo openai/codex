@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio_util::task::AbortOnDropHandle;
 
 use tokio::time::timeout;
 use tracing::debug;
@@ -253,13 +254,20 @@ impl LazyRemoteExecServerClient {
         }
     }
 
-    pub(crate) fn start_connecting(&self) {
+    pub(crate) fn start_connecting(&self) -> Option<AbortOnDropHandle<()>> {
+        // Stdio starts a process, so keep it lazy until the environment is used.
+        if matches!(
+            self.transport_params,
+            ExecServerTransportParams::StdioCommand { .. }
+        ) {
+            return None;
+        }
         let client = self.clone();
-        drop(tokio::spawn(async move {
+        Some(AbortOnDropHandle::new(tokio::spawn(async move {
             if let Err(error) = client.wait_until_ready().await {
                 debug!(%error, "exec-server environment startup failed");
             }
-        }));
+        })))
     }
 
     pub(crate) fn startup_finished(&self) -> bool {
@@ -2135,7 +2143,7 @@ mod tests {
         });
 
         assert!(!client.startup_finished());
-        client.start_connecting();
+        let _startup_task = client.start_connecting();
         let (ready, first, second) =
             tokio::join!(client.wait_until_ready(), client.get(), client.get());
         ready.expect("background startup should finish");
@@ -2164,6 +2172,8 @@ mod tests {
             initialize_timeout: Duration::from_secs(1),
         });
 
+        assert!(client.start_connecting().is_none());
+        assert!(!client.startup_finished());
         let first = match client.get().await {
             Ok(_) => panic!("missing executable should fail"),
             Err(error) => error,
@@ -2249,6 +2259,14 @@ mod tests {
         })
         .await
         .expect("client should observe disconnect");
+        let failed_reconnect = match client.get().await {
+            Ok(_) => panic!("first lazy reconnect should fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            failed_reconnect,
+            super::ExecServerError::ConnectionAttempt(_)
+        ));
         allow_replacement_tx
             .send(true)
             .expect("server should allow a fresh client");
