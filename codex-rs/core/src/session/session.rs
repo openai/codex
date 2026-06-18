@@ -897,23 +897,14 @@ impl Session {
                             Arc::clone(network_policy_decider_session),
                         )
                     });
-            let credentialed_routes = if config.permissions.network.is_some() {
-                crate::credentialed_routes::load_for_session(&config.chatgpt_base_url, auth).await
-            } else {
-                codex_network_proxy::CredentialedRoutesConfig::default()
-            };
-            let credentialed_routes_source = crate::credentialed_routes::source(
-                config.chatgpt_base_url.clone(),
-                Arc::clone(&auth_manager),
-            );
             let (network_proxy, session_network_proxy, credentialed_routes_reloader) =
                 if let Some(spec) = config.permissions.network.as_ref() {
                     let current_exec_policy = exec_policy.current();
                     let (network_proxy, session_network_proxy, credentialed_routes_reloader) =
                         Self::start_managed_network_proxy(ManagedNetworkProxyStartRequest {
                             spec,
-                            credentialed_routes,
-                            credentialed_routes_source: Arc::clone(&credentialed_routes_source),
+                            chatgpt_base_url: &config.chatgpt_base_url,
+                            auth_manager: Arc::clone(&auth_manager),
                             exec_policy: current_exec_policy.as_ref(),
                             permission_profile: config.permissions.permission_profile(),
                             network_policy_decider: network_policy_decider.as_ref().map(Arc::clone),

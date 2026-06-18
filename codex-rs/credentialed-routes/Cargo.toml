@@ -1,0 +1,21 @@
+[package]
+name = "codex-credentialed-routes"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_credentialed_routes"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-backend-client = { workspace = true }
+codex-login = { workspace = true }
+codex-network-proxy = { workspace = true }
+http = { workspace = true }
+tracing = { workspace = true }

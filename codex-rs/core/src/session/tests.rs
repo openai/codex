@@ -180,10 +180,6 @@ use std::time::Duration as StdDuration;
 
 mod guardian_tests;
 
-fn empty_credentialed_routes_source() -> Arc<dyn codex_network_proxy::CredentialedRoutesSource> {
-    Arc::new(|| async { Ok(codex_network_proxy::CredentialedRoutesConfig::default()) })
-}
-
 fn managed_network_proxy_start_request<'a>(
     spec: &'a crate::config::NetworkProxySpec,
     exec_policy: &'a Policy,
@@ -191,8 +187,8 @@ fn managed_network_proxy_start_request<'a>(
 ) -> ManagedNetworkProxyStartRequest<'a> {
     ManagedNetworkProxyStartRequest {
         spec,
-        credentialed_routes: codex_network_proxy::CredentialedRoutesConfig::default(),
-        credentialed_routes_source: empty_credentialed_routes_source(),
+        chatgpt_base_url: "https://chatgpt.com/backend-api/codex",
+        auth_manager: AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
         exec_policy,
         permission_profile,
         network_policy_decider: None,
@@ -7758,7 +7754,7 @@ async fn build_initial_context_adds_credentialed_route_instructions_as_developer
                 }],
                 ..codex_network_proxy::CredentialedRoutesConfig::default()
             },
-            empty_credentialed_routes_source(),
+            Arc::new(|| async { Ok(codex_network_proxy::CredentialedRoutesConfig::default()) }),
         ));
     session
         .services

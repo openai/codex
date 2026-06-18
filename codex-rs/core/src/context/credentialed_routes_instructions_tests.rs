@@ -48,5 +48,9 @@ fn instructions_have_a_hard_size_cap() {
         .expect("routes should render instructions");
 
     assert!(instructions.body().len() <= MAX_INSTRUCTION_CHARS);
-    assert!(instructions.body().contains("[additional credentialed routes omitted]"));
+    assert!(
+        instructions
+            .body()
+            .contains("[additional credentialed routes omitted]")
+    );
 }

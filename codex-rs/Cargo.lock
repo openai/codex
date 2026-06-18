@@ -2615,13 +2615,13 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-async-utils",
- "codex-backend-client",
  "codex-code-mode",
  "codex-config",
  "codex-connectors",
  "codex-context-fragments",
  "codex-core-plugins",
  "codex-core-skills",
+ "codex-credentialed-routes",
  "codex-exec-server",
  "codex-execpolicy",
  "codex-extension-api",
@@ -2819,6 +2819,18 @@ dependencies = [
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "zip 2.4.2",
+]
+
+[[package]]
+name = "codex-credentialed-routes"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-backend-client",
+ "codex-login",
+ "codex-network-proxy",
+ "http 1.4.0",
+ "tracing",
 ]
 
 [[package]]

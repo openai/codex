@@ -925,8 +925,8 @@ async fn thread_title_from_thread_store(
 
 struct ManagedNetworkProxyStartRequest<'a> {
     spec: &'a crate::config::NetworkProxySpec,
-    credentialed_routes: codex_network_proxy::CredentialedRoutesConfig,
-    credentialed_routes_source: Arc<dyn codex_network_proxy::CredentialedRoutesSource>,
+    chatgpt_base_url: &'a str,
+    auth_manager: Arc<AuthManager>,
     exec_policy: &'a codex_execpolicy::Policy,
     permission_profile: &'a PermissionProfile,
     network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
@@ -1009,8 +1009,8 @@ impl Session {
     )> {
         let ManagedNetworkProxyStartRequest {
             spec,
-            credentialed_routes,
-            credentialed_routes_source,
+            chatgpt_base_url,
+            auth_manager,
             exec_policy,
             permission_profile,
             network_policy_decider,
@@ -1027,20 +1027,15 @@ impl Session {
                 err
             })
             .unwrap_or_else(|_| spec.clone());
-        let credentialed_routes_reloader =
-            Arc::new(codex_network_proxy::CredentialedRoutesReloader::new(
-                spec.build_config_state_for_spec().map_err(|err| {
-                    anyhow::anyhow!("failed to build managed proxy base state: {err}")
-                })?,
-                credentialed_routes,
-                credentialed_routes_source,
-            ));
-        let state =
-            codex_network_proxy::ConfigReloader::reload_now(credentialed_routes_reloader.as_ref())
-                .await
-                .map_err(|err| {
-                    anyhow::anyhow!("failed to build credentialed route proxy state: {err}")
-                })?;
+        let (state, credentialed_routes_reloader) = codex_credentialed_routes::prepare_proxy_state(
+            spec.build_config_state_for_spec().map_err(|err| {
+                anyhow::anyhow!("failed to build managed proxy base state: {err}")
+            })?,
+            chatgpt_base_url,
+            auth_manager,
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to build credentialed route proxy state: {err}"))?;
         let network_proxy = spec
             .start_proxy_with_runtime_state(
                 permission_profile,
@@ -1136,25 +1131,12 @@ impl Session {
             return;
         }
 
-        let auth = self.services.auth_manager.auth().await;
-        let credentialed_routes = crate::credentialed_routes::load_for_session(
-            &session_configuration
-                .original_config_do_not_use
-                .chatgpt_base_url,
-            auth.as_ref(),
-        )
-        .await;
-        let credentialed_routes_source = crate::credentialed_routes::source(
-            session_configuration
-                .original_config_do_not_use
-                .chatgpt_base_url
-                .clone(),
-            Arc::clone(&self.services.auth_manager),
-        );
         match Self::start_managed_network_proxy(ManagedNetworkProxyStartRequest {
             spec: &spec,
-            credentialed_routes,
-            credentialed_routes_source,
+            chatgpt_base_url: &session_configuration
+                .original_config_do_not_use
+                .chatgpt_base_url,
+            auth_manager: Arc::clone(&self.services.auth_manager),
             exec_policy: current_exec_policy.as_ref(),
             permission_profile: &session_configuration.permission_profile(),
             network_policy_decider: None,
@@ -3092,9 +3074,10 @@ impl Session {
         }
         if let Some(credentialed_routes_reloader) =
             self.services.credentialed_routes_reloader.load_full()
-            && let Some(credentialed_route_instructions) = CredentialedRoutesInstructions::from_config(
-                &credentialed_routes_reloader.current_routes().await,
-            )
+            && let Some(credentialed_route_instructions) =
+                CredentialedRoutesInstructions::from_config(
+                    &credentialed_routes_reloader.current_routes().await,
+                )
         {
             developer_sections.push(credentialed_route_instructions.render());
         }

@@ -33,6 +33,7 @@ members = [
     "connectors",
     "config",
     "context-fragments",
+    "credentialed-routes",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -165,6 +166,7 @@ codex-home = { path = "codex-home" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-context-fragments = { path = "context-fragments" }
+codex-credentialed-routes = { path = "credentialed-routes" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }

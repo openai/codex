@@ -28,10 +28,10 @@ codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
-codex-backend-client = { workspace = true }
 codex-code-mode = { workspace = true }
 codex-connectors = { workspace = true }
 codex-context-fragments = { workspace = true }
+codex-credentialed-routes = { workspace = true }
 codex-config = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-core-skills = { workspace = true }
