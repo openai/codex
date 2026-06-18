@@ -2547,12 +2547,24 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_multi_agent_mode(&self) -> Option<MultiAgentMode> {
-        match self {
-            InitialHistory::New | InitialHistory::Cleared => None,
-            InitialHistory::Resumed(resumed) => multi_agent_mode_from_items(&resumed.history),
-            InitialHistory::Forked(items) => multi_agent_mode_from_items(items),
-        }
+    pub fn get_latest_effective_multi_agent_mode(&self) -> Option<MultiAgentMode> {
+        let items = match self {
+            InitialHistory::New | InitialHistory::Cleared => return None,
+            InitialHistory::Resumed(resumed) => &resumed.history,
+            InitialHistory::Forked(items) => items,
+        };
+        items
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::TurnContext(turn_context) => Some(turn_context),
+                RolloutItem::SessionMeta(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::InterAgentCommunication(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::EventMsg(_) => None,
+            })
+            .and_then(|turn_context| turn_context.multi_agent_mode)
     }
 
     pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
@@ -2864,17 +2876,6 @@ fn multi_agent_version_from_items(
             | RolloutItem::Compacted(_)
             | RolloutItem::EventMsg(_) => None,
         })
-    })
-}
-
-fn multi_agent_mode_from_items(items: &[RolloutItem]) -> Option<MultiAgentMode> {
-    items.iter().rev().find_map(|item| match item {
-        RolloutItem::TurnContext(turn_context) => turn_context.multi_agent_mode,
-        RolloutItem::SessionMeta(_)
-        | RolloutItem::ResponseItem(_)
-        | RolloutItem::InterAgentCommunication(_)
-        | RolloutItem::Compacted(_)
-        | RolloutItem::EventMsg(_) => None,
     })
 }
 
@@ -5375,6 +5376,31 @@ mod tests {
                 Some(thread_id),
             ),
             Some(MultiAgentVersion::V2)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn latest_effective_multi_agent_mode_uses_latest_turn_context_even_when_unset() -> Result<()> {
+        let turn_context_item = |multi_agent_mode| -> Result<RolloutItem> {
+            let mut value = json!({
+                "cwd": test_path_buf("/tmp"),
+                "approval_policy": "never",
+                "sandbox_policy": { "type": "danger-full-access" },
+                "model": "gpt-5",
+                "summary": "auto",
+            });
+            value["multi_agent_mode"] = serde_json::to_value(multi_agent_mode)?;
+            Ok(RolloutItem::TurnContext(serde_json::from_value(value)?))
+        };
+
+        assert_eq!(
+            InitialHistory::Forked(vec![
+                turn_context_item(Some(MultiAgentMode::Proactive))?,
+                turn_context_item(/*multi_agent_mode*/ None)?,
+            ])
+            .get_latest_effective_multi_agent_mode(),
+            None
         );
         Ok(())
     }
