@@ -386,6 +386,11 @@ enum ResumeResponseHistory {
     Missing,
 }
 
+struct ResumeResponseSource<'a> {
+    history: &'a ResumeResponseHistory,
+    items: Option<&'a [RolloutItem]>,
+}
+
 impl ResumeResponseHistory {
     fn from_initial_history(history: &InitialHistory) -> Self {
         match history {
@@ -2841,8 +2846,10 @@ impl ThreadRequestProcessor {
                     .load_thread_from_resume_source_or_send_internal(
                         thread_id,
                         codex_thread.as_ref(),
-                        &response_history,
-                        response_history_items.as_deref(),
+                        ResumeResponseSource {
+                            history: &response_history,
+                            items: response_history_items.as_deref(),
+                        },
                         rollout_path.as_path(),
                         resume_source_thread,
                         include_turns,
@@ -2885,6 +2892,22 @@ impl ThreadRequestProcessor {
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
                 );
+                let inline_history_items = if include_turns {
+                    let Some(history_items) = response_history_items.as_deref() else {
+                        self.outgoing
+                            .send_error(
+                                request_id,
+                                internal_error(
+                                    "response history items missing for inline resume turns",
+                                ),
+                            )
+                            .await;
+                        return Ok(());
+                    };
+                    Some(history_items)
+                } else {
+                    None
+                };
                 let token_usage_thread = include_turns.then(|| thread.clone());
                 let mut initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
                     if let Some(recent) = initial_turns_recent_items.take() {
@@ -2900,10 +2923,19 @@ impl ThreadRequestProcessor {
                             }
                         }
                     } else {
+                        let Some(history_items) = response_history_items.as_deref() else {
+                            self.outgoing
+                                .send_error(
+                                    request_id,
+                                    internal_error(
+                                        "response history items missing for resume initial turns page",
+                                    ),
+                                )
+                                .await;
+                            return Ok(());
+                        };
                         match build_thread_resume_initial_turns_page(
-                            response_history_items.as_deref().expect(
-                                "response history items loaded for resume initial turns page",
-                            ),
+                            history_items,
                             thread.status.clone(),
                             /*has_live_running_thread*/ false,
                             /*active_turn*/ None,
@@ -2947,11 +2979,11 @@ impl ThreadRequestProcessor {
                 self.outgoing.send_response(request_id, response).await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
-                if let Some(token_usage_thread) = token_usage_thread {
+                if let (Some(token_usage_thread), Some(history_items)) =
+                    (token_usage_thread, inline_history_items)
+                {
                     let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                        response_history_items
-                            .as_deref()
-                            .expect("response history items loaded for resume token usage update"),
+                        history_items,
                         token_usage_thread.turns.as_slice(),
                     );
                     // The client needs restored usage before it starts another turn.
@@ -3460,15 +3492,14 @@ impl ThreadRequestProcessor {
         &self,
         thread_id: ThreadId,
         thread: &CodexThread,
-        response_history: &ResumeResponseHistory,
-        response_history_items: Option<&[RolloutItem]>,
+        response_source: ResumeResponseSource<'_>,
         rollout_path: &Path,
         resume_source_thread: Option<StoredThread>,
         include_turns: bool,
     ) -> std::result::Result<Thread, String> {
         let config_snapshot = thread.config_snapshot().await;
         let session_id = thread.session_configured().session_id.to_string();
-        let (mut thread, name_loaded_from_store) = match response_history {
+        let (mut thread, name_loaded_from_store) = match response_source.history {
             ResumeResponseHistory::Resumed { conversation_id } => {
                 let fallback_provider = config_snapshot.model_provider_id.as_str();
                 if let Some(mut stored_thread) = resume_source_thread {
@@ -3525,7 +3556,7 @@ impl ThreadRequestProcessor {
         thread.session_id = session_id;
         thread.path = Some(rollout_path.to_path_buf());
         if include_turns {
-            let history_items = response_history_items.ok_or_else(|| {
+            let history_items = response_source.items.ok_or_else(|| {
                 "failed to build resume response: history items missing for inline turns"
                     .to_string()
             })?;
@@ -4242,11 +4273,12 @@ fn read_compacted_resume_prefix_items(
                 Err(_) => return Ok(None),
             };
         match &rollout_line.item {
-            RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == expected_thread_id
-                && !saw_session_meta => {
-                    saw_session_meta = true;
-                    prefix_items.push(rollout_line.item);
-                }
+            RolloutItem::SessionMeta(meta_line)
+                if meta_line.meta.id == expected_thread_id && !saw_session_meta =>
+            {
+                saw_session_meta = true;
+                prefix_items.push(rollout_line.item);
+            }
             RolloutItem::SessionMeta(_) => return Ok(None),
             RolloutItem::EventMsg(EventMsg::UserMessage(_)) if !saw_user_event => {
                 saw_user_event = true;

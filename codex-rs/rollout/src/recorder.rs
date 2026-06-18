@@ -89,6 +89,7 @@ pub struct RolloutRecorder {
 }
 
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum RolloutRecorderParams {
     Create {
         conversation_id: ThreadId,
@@ -913,9 +914,11 @@ impl RolloutRecorder {
             saw_non_empty_line = true;
             match serde_json::from_str::<RolloutLine>(&line) {
                 Ok(rollout_line) if rollout_item_may_need_legacy_cleanup(&rollout_line.item) => {
-                    if let Some(rollout_line) =
-                        parse_rollout_line_after_legacy_cleanup(&line, &mut parse_errors, None)
-                    {
+                    if let Some(rollout_line) = parse_rollout_line_after_legacy_cleanup(
+                        &line,
+                        &mut parse_errors,
+                        /*rollout_error*/ None,
+                    ) {
                         push_loaded_rollout_item(&mut items, &mut thread_id, rollout_line.item);
                     }
                 }
@@ -978,9 +981,11 @@ impl RolloutRecorder {
             saw_non_empty_line = true;
             match serde_json::from_str::<RolloutLine>(&line) {
                 Ok(rollout_line) if rollout_item_may_need_legacy_cleanup(&rollout_line.item) => {
-                    if let Some(rollout_line) =
-                        parse_rollout_line_after_legacy_cleanup(&line, &mut parse_errors, None)
-                    {
+                    if let Some(rollout_line) = parse_rollout_line_after_legacy_cleanup(
+                        &line,
+                        &mut parse_errors,
+                        /*rollout_error*/ None,
+                    ) {
                         push_loaded_rollout_item(&mut items, &mut thread_id, rollout_line.item);
                     }
                 }
