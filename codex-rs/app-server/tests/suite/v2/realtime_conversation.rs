@@ -585,12 +585,11 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                     "arguments": "{\"input_transcript\":\"delegate now\"}"
                 }
             }),
-            json!({
-                "type": "error",
-                "message": "upstream boom"
-            }),
         ],
-        vec![],
+        vec![json!({
+            "type": "error",
+            "message": "upstream boom"
+        })],
     ]])
     .await;
 
