@@ -112,12 +112,6 @@ description = "Day-to-day coding work."
 
 [permissions.dev.filesystem]
 ":workspace_roots" = "write"
-
-[permissions.audit]
-description = "Inspect without writes."
-
-[permissions.audit.filesystem]
-":workspace_roots" = "read"
 "#,
     )?;
     std::fs::write(
@@ -130,6 +124,12 @@ default_permissions = "audit"
 [allowed_permission_profiles]
 ":read-only" = true
 audit = true
+
+[permissions.audit]
+description = "Inspect without writes."
+
+[permissions.audit.filesystem]
+":workspace_roots" = "read"
 "#,
     )?;
 
@@ -167,6 +167,132 @@ audit = true
             ],
             next_cursor: None,
         }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_preset_list_matches_legacy_read_only_as_default() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+sandbox_mode = "read-only"
+approval_policy = "on-request"
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_permission_preset_list_request(PermissionPresetListParams {
+            cursor: None,
+            limit: None,
+            cwd: None,
+        })
+        .await?;
+    let actual = read_response::<PermissionPresetListResponse>(&mut mcp, request_id).await?;
+
+    assert_eq!(
+        actual
+            .data
+            .into_iter()
+            .filter(|preset| preset.is_default)
+            .collect::<Vec<_>>(),
+        vec![preset(
+            "read-only",
+            BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
+            true,
+        )]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_preset_list_marks_managed_legacy_fallback_as_default() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"
+allowed_sandbox_modes = ["read-only"]
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_permission_preset_list_request(PermissionPresetListParams {
+            cursor: None,
+            limit: None,
+            cwd: None,
+        })
+        .await?;
+    let actual = read_response::<PermissionPresetListResponse>(&mut mcp, request_id).await?;
+
+    assert_eq!(
+        actual
+            .data
+            .into_iter()
+            .filter(|preset| preset.is_default)
+            .collect::<Vec<_>>(),
+        vec![preset(
+            "read-only",
+            BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
+            true,
+        )]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_preset_list_matches_legacy_full_access_as_default() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+sandbox_mode = "danger-full-access"
+approval_policy = "never"
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_permission_preset_list_request(PermissionPresetListParams {
+            cursor: None,
+            limit: None,
+            cwd: None,
+        })
+        .await?;
+    let actual = read_response::<PermissionPresetListResponse>(&mut mcp, request_id).await?;
+
+    assert_eq!(
+        actual
+            .data
+            .into_iter()
+            .filter(|preset| preset.is_default)
+            .collect::<Vec<_>>(),
+        vec![preset(
+            "full-access",
+            BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
+            AskForApproval::Never,
+            ApprovalsReviewer::User,
+            true,
+        )]
     );
     Ok(())
 }

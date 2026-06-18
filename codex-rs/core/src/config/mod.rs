@@ -153,6 +153,7 @@ mod permissions;
 mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
+mod selectable_permission_profiles;
 pub use auth_keyring::resolve_bootstrap_auth_keyring_backend_kind;
 pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
@@ -175,6 +176,7 @@ pub(crate) use permissions::reject_unknown_builtin_permission_profile;
 pub(crate) use permissions::resolve_permission_profile;
 pub use resolved_permission_profile::PermissionProfileSnapshot;
 pub(crate) use resolved_permission_profile::PermissionProfileState;
+pub use selectable_permission_profiles::SelectablePermissionProfile;
 
 const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
 const DEFAULT_IGNORE_LARGE_UNTRACKED_FILES: i64 = 10 * 1024 * 1024;
