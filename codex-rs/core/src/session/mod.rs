@@ -3298,6 +3298,13 @@ impl Session {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
+        if reference_context_item
+            .as_ref()
+            .and_then(|item| item.turn_id.as_deref())
+            == Some(turn_context.sub_id.as_str())
+        {
+            return;
+        }
         let should_inject_full_context = reference_context_item.is_none();
         let mut context_items = if should_inject_full_context {
             self.build_initial_context(turn_context).await
