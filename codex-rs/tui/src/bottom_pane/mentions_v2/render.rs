@@ -9,8 +9,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
-use crate::render::Insets;
-use crate::render::RectExt;
+use crate::style::accent_style;
 
 use super::candidate::MentionType;
 use super::candidate::SearchResult;
@@ -46,15 +45,7 @@ pub(super) fn render_popup(
         (area, None)
     };
 
-    render_rows(
-        list_area.inset(Insets::tlbr(
-            /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-        )),
-        buf,
-        rows,
-        state,
-        empty_message,
-    );
+    render_rows(list_area, buf, rows, state, empty_message);
 
     if let Some(hint_area) = hint_area {
         let hint_area = Rect {
@@ -78,7 +69,7 @@ fn render_rows(
         return;
     }
     if rows.is_empty() {
-        Line::from(empty_message.italic()).render(area, buf);
+        Line::from(vec!["  ".into(), empty_message.italic()]).render(area, buf);
         return;
     }
 
@@ -131,31 +122,34 @@ fn build_line(
     width: usize,
     primary_column_width: usize,
 ) -> Line<'static> {
-    let base_style = if selected {
-        Style::default().bold()
-    } else {
-        Style::default()
-    };
-    let dim_style = if selected {
-        Style::default().bold()
-    } else {
-        Style::default().dim()
-    };
+    let base_style = Style::default();
+    let dim_style = Style::default().dim();
     let tag = row.mention_type.span(base_style);
     let tag_width = tag.width();
-    let content_width = width.saturating_sub(tag_width.saturating_add(2));
+    let gutter = if selected { "> " } else { "  " };
+    let gutter_width = gutter.len();
+    let content_width =
+        width.saturating_sub(gutter_width.saturating_add(tag_width).saturating_add(2));
     let content = truncate_line_with_ellipsis_if_overflow(
         content_line(row, base_style, dim_style, primary_column_width),
         content_width,
     );
     let rendered_content_width = content.width();
-    let mut spans = Vec::new();
+    let mut spans = vec![gutter.into()];
     spans.extend(content.spans);
-    let padding = width.saturating_sub(rendered_content_width.saturating_add(tag_width));
+    let padding = width.saturating_sub(
+        gutter_width
+            .saturating_add(rendered_content_width)
+            .saturating_add(tag_width),
+    );
     if padding > 0 {
         spans.push(" ".repeat(padding).set_style(dim_style));
     }
     spans.push(tag);
+    if selected {
+        let style = accent_style();
+        spans.iter_mut().for_each(|span| span.style = style);
+    }
 
     Line::from(spans)
 }
