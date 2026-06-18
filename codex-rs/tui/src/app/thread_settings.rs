@@ -5,10 +5,12 @@ use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerSession;
 use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 
 impl App {
@@ -101,7 +103,7 @@ impl App {
             cwd,
             approval_policy,
             approvals_reviewer,
-            permission_profile: _,
+            permission_profile,
             active_permission_profile,
             windows_sandbox_level: _,
             model,
@@ -115,14 +117,21 @@ impl App {
             return;
         };
 
+        let effective_cwd = cwd
+            .clone()
+            .unwrap_or_else(|| self.chat_widget.config_ref().cwd.to_path_buf());
+        let (sandbox_policy, permissions) = thread_settings_permissions_update(
+            effective_cwd.as_path(),
+            permission_profile.as_ref(),
+            active_permission_profile.as_ref(),
+        );
         let params = ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
             cwd: cwd.clone(),
             approval_policy: *approval_policy,
             approvals_reviewer: approvals_reviewer.map(AppServerApprovalsReviewer::from),
-            permissions: active_permission_profile
-                .as_ref()
-                .map(|profile| profile.id.clone()),
+            sandbox_policy,
+            permissions,
             model: model.clone(),
             effort: effort.clone().unwrap_or_default(),
             summary: *summary,
@@ -169,6 +178,27 @@ impl App {
     }
 }
 
+fn thread_settings_permissions_update(
+    cwd: &std::path::Path,
+    permission_profile: Option<&PermissionProfile>,
+    active_permission_profile: Option<&ActivePermissionProfile>,
+) -> (Option<SandboxPolicy>, Option<String>) {
+    if let Some(active_permission_profile) = active_permission_profile {
+        return (None, Some(active_permission_profile.id.clone()));
+    }
+
+    let Some(permission_profile) = permission_profile else {
+        return (None, None);
+    };
+
+    let sandbox_policy = permission_profile
+        .to_legacy_sandbox_policy(cwd)
+        .unwrap_or_else(|err| {
+            unreachable!("thread settings permission profile must be legacy-compatible: {err}")
+        });
+    (Some(sandbox_policy.into()), None)
+}
+
 fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: &ThreadSettings) {
     if settings.collaboration_mode.mode == ModeKind::Default {
         session.model = settings.model.clone();
@@ -206,4 +236,47 @@ fn thread_settings_update_has_changes(params: &ThreadSettingsUpdateParams) -> bo
         || params.summary.is_some()
         || params.collaboration_mode.is_some()
         || params.personality.is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::thread_settings_permissions_update;
+    use codex_protocol::models::ActivePermissionProfile;
+    use codex_protocol::models::PermissionProfile;
+
+    #[cfg(test)]
+    use crate::test_support::test_path_buf;
+
+    #[test]
+    fn thread_settings_use_active_profile_id_when_available() {
+        let cwd = test_path_buf("/workspace/project").abs();
+        let active_permission_profile = ActivePermissionProfile::new(":workspace");
+
+        let (sandbox_policy, permissions) = thread_settings_permissions_update(
+            cwd.as_path(),
+            Some(&PermissionProfile::workspace_write()),
+            Some(&active_permission_profile),
+        );
+
+        assert_eq!(sandbox_policy, None);
+        assert_eq!(permissions, Some(":workspace".to_string()));
+    }
+
+    #[test]
+    fn thread_settings_fall_back_to_legacy_sandbox_for_custom_permissions() {
+        let cwd = test_path_buf("/workspace/project").abs();
+        let expected_sandbox = PermissionProfile::workspace_write()
+            .to_legacy_sandbox_policy(cwd.as_path())
+            .expect("workspace-write must be legacy-compatible")
+            .into();
+
+        let (sandbox_policy, permissions) = thread_settings_permissions_update(
+            cwd.as_path(),
+            Some(&PermissionProfile::workspace_write()),
+            None,
+        );
+
+        assert_eq!(sandbox_policy, Some(expected_sandbox));
+        assert_eq!(permissions, None);
+    }
 }
