@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -42,6 +43,7 @@ pub struct SessionRuntime<D: SessionRuntimeDelegate> {
 struct Inner<D: SessionRuntimeDelegate> {
     stored_values: Mutex<HashMap<String, JsonValue>>,
     cells: Mutex<HashMap<CellId, CellState>>,
+    cell_count_tx: watch::Sender<usize>,
     delegate: Arc<D>,
     shutting_down: AtomicBool,
     next_cell_id: AtomicU64,
@@ -54,10 +56,12 @@ enum CellState {
 
 impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     pub fn new(delegate: Arc<D>) -> Self {
+        let (cell_count_tx, _) = watch::channel(/*init*/ 0);
         Self {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
                 cells: Mutex::new(HashMap::new()),
+                cell_count_tx,
                 delegate,
                 shutting_down: AtomicBool::new(false),
                 next_cell_id: AtomicU64::new(1),
@@ -122,6 +126,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     }
 
     pub async fn shutdown(&self) -> Result<(), Error> {
+        let mut cell_count = self.inner.cell_count_tx.subscribe();
         self.inner.shutting_down.store(true, Ordering::Release);
         let handles = self
             .inner
@@ -137,8 +142,10 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         for handle in handles {
             handle.shutdown();
         }
-        while !self.inner.cells.lock().await.is_empty() {
-            tokio::task::yield_now().await;
+        while *cell_count.borrow_and_update() != 0 {
+            if cell_count.changed().await.is_err() {
+                break;
+            }
         }
         Ok(())
     }
@@ -174,6 +181,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             CellActor::prepare(request, stored_values, host, initial_observe_mode)
                 .map_err(Error::Runtime)?;
         cells.insert(cell_id.clone(), CellState::Live(handle));
+        self.inner.cell_count_tx.send_replace(cells.len());
         drop(cells);
         tokio::spawn(task);
         Ok(map_actor_event(cell_id, initial_event))
@@ -278,7 +286,10 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
                 self.cell_id
             );
         }
-        self.inner.cells.lock().await.remove(&self.cell_id);
+        let mut cells = self.inner.cells.lock().await;
+        if cells.remove(&self.cell_id).is_some() {
+            self.inner.cell_count_tx.send_replace(cells.len());
+        }
     }
 }
 
