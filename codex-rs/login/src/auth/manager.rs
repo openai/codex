@@ -811,13 +811,11 @@ pub struct AuthConfig {
     pub chatgpt_base_url: Option<String>,
     pub agent_identity_authapi_base_url: Option<String>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
+    pub auth_route_config: Option<AuthRouteConfig>,
 }
 
 /// Enforces configured login restrictions using auth-owned HTTP settings.
-pub async fn enforce_login_restrictions(
-    config: &AuthConfig,
-    auth_route_config: Option<&AuthRouteConfig>,
-) -> std::io::Result<()> {
+pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
     let Some(auth) = load_auth(
         &config.codex_home,
         /*enable_codex_api_key_env*/ true,
@@ -826,7 +824,7 @@ pub async fn enforce_login_restrictions(
         config.chatgpt_base_url.as_deref(),
         config.keyring_backend_kind,
         config.agent_identity_authapi_base_url.as_deref(),
-        auth_route_config,
+        config.auth_route_config.as_ref(),
     )
     .await?
     else {

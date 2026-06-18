@@ -841,6 +841,7 @@ async fn build_config(
         forced_chatgpt_workspace_id,
         chatgpt_base_url: None,
         agent_identity_authapi_base_url: None,
+        auth_route_config: None,
     }
 }
 
@@ -1173,7 +1174,7 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
     )
     .await;
 
-    let err = super::enforce_login_restrictions(&config, /*auth_route_config*/ None)
+    let err = super::enforce_login_restrictions(&config)
         .await
         .expect_err("expected method mismatch to error");
     assert!(err.to_string().contains("ChatGPT login is required"));
@@ -1205,7 +1206,7 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
     )
     .await;
 
-    let err = super::enforce_login_restrictions(&config, /*auth_route_config*/ None)
+    let err = super::enforce_login_restrictions(&config)
         .await
         .expect_err("expected workspace mismatch to error");
     assert!(
@@ -1254,9 +1255,10 @@ async fn enforce_login_restrictions_logs_out_for_personal_access_token_workspace
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         chatgpt_base_url: None,
         agent_identity_authapi_base_url: None,
+        auth_route_config: None,
     };
 
-    let err = super::enforce_login_restrictions(&config, /*auth_route_config*/ None)
+    let err = super::enforce_login_restrictions(&config)
         .await
         .expect_err("expected workspace mismatch to error");
     assert!(err.to_string().contains(&format!(
@@ -1291,7 +1293,7 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
     )
     .await;
 
-    super::enforce_login_restrictions(&config, /*auth_route_config*/ None)
+    super::enforce_login_restrictions(&config)
         .await
         .expect("matching workspace should succeed");
     assert!(
@@ -1324,7 +1326,7 @@ async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
     )
     .await;
 
-    super::enforce_login_restrictions(&config, /*auth_route_config*/ None)
+    super::enforce_login_restrictions(&config)
         .await
         .expect("any matching workspace in the allowed list should succeed");
 }
@@ -1378,9 +1380,10 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         chatgpt_base_url: Some(chatgpt_base_url),
         agent_identity_authapi_base_url: Some(authapi_base_url),
+        auth_route_config: None,
     };
 
-    let err = super::enforce_login_restrictions(&config, /*auth_route_config*/ None)
+    let err = super::enforce_login_restrictions(&config)
         .await
         .expect_err("expected workspace mismatch to error");
     assert!(err.to_string().contains(&format!(
@@ -1414,7 +1417,7 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
     )
     .await;
 
-    super::enforce_login_restrictions(&config, /*auth_route_config*/ None)
+    super::enforce_login_restrictions(&config)
         .await
         .expect("matching workspace should succeed");
     assert!(
@@ -1437,7 +1440,7 @@ async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
     )
     .await;
 
-    let err = super::enforce_login_restrictions(&config, /*auth_route_config*/ None)
+    let err = super::enforce_login_restrictions(&config)
         .await
         .expect_err("environment API key should not satisfy forced ChatGPT login");
     assert!(

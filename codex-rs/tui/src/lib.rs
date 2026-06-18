@@ -1165,18 +1165,16 @@ pub async fn run_main(
     if !app_server_target.uses_remote_workspace() {
         let auth_route_config = config.auth_route_config();
         #[allow(clippy::print_stderr)]
-        if let Err(err) = enforce_login_restrictions(
-            &AuthConfig {
-                codex_home: config.codex_home.to_path_buf(),
-                auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
-                keyring_backend_kind: config.auth_keyring_backend_kind(),
-                forced_login_method: config.forced_login_method,
-                forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
-                chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
-                agent_identity_authapi_base_url: None,
-            },
-            auth_route_config.as_ref(),
-        )
+        if let Err(err) = enforce_login_restrictions(&AuthConfig {
+            codex_home: config.codex_home.to_path_buf(),
+            auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+            keyring_backend_kind: config.auth_keyring_backend_kind(),
+            forced_login_method: config.forced_login_method,
+            forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+            chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
+            agent_identity_authapi_base_url: None,
+            auth_route_config,
+        })
         .await
         {
             eprintln!("{err}");
