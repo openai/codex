@@ -36,9 +36,9 @@ pub(crate) fn resolve_current_time_provider(
 
     match config.clock_source {
         CurrentTimeSource::System => Ok(Some(Arc::new(SystemCurrentTimeProvider))),
-        CurrentTimeSource::AppServerClient => external_provider.map(Some).ok_or_else(|| {
+        CurrentTimeSource::External => external_provider.map(Some).ok_or_else(|| {
             anyhow!(
-                "features.current_time_reminder.clock_source is app_server_client, but no external current-time provider is available"
+                "features.current_time_reminder.clock_source is external, but no external current-time provider is available"
             )
         }),
     }

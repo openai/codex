@@ -75,7 +75,7 @@ fn enable_current_time_reminder(config: &mut codex_core::config::Config, interva
         .expect("test config should allow current-time reminders");
     config.current_time_reminder = Some(CurrentTimeReminderConfig {
         reminder_interval_model_requests: interval,
-        clock_source: CurrentTimeSource::AppServerClient,
+        clock_source: CurrentTimeSource::External,
     });
 }
 
