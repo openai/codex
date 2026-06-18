@@ -7540,9 +7540,13 @@ async fn make_multi_agent_v2_usage_hint_test_session(
 
 struct PromptExtensionTestContributor;
 struct PromptExtensionTestState;
+struct TurnContextExtensionTestContributor;
+struct TurnContextExtensionTestState {
+    expected_model_context_window: Option<i64>,
+}
 
 impl codex_extension_api::ContextContributor for PromptExtensionTestContributor {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
         thread_store: &'a codex_extension_api::ExtensionData,
@@ -7571,6 +7575,31 @@ fn prompt_extension_test_registry()
     Arc::new(builder.build())
 }
 
+impl codex_extension_api::ContextContributor for TurnContextExtensionTestContributor {
+    fn contribute_turn_context<'a>(
+        &'a self,
+        input: codex_extension_api::TurnContextContributionInput<'a>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Vec<codex_extension_api::PromptFragment>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let Some(state) = input.turn_store.get::<TurnContextExtensionTestState>() else {
+                return Vec::new();
+            };
+            (input.model_context_window == state.expected_model_context_window
+                && input.model_context_window.is_some()
+                && !input.turn_id.is_empty())
+            .then(|| {
+                codex_extension_api::PromptFragment::developer_policy(
+                    "turn context extension enabled",
+                )
+            })
+            .into_iter()
+            .collect()
+        })
+    }
+}
+
 #[tokio::test]
 async fn build_initial_context_includes_prompt_fragments_from_extensions() {
     let (mut session, turn_context) = make_session_and_context().await;
@@ -7589,6 +7618,65 @@ async fn build_initial_context_includes_prompt_fragments_from_extensions() {
             .flatten()
             .any(|text| *text == "prompt extension enabled"),
         "expected prompt extension developer text, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_includes_turn_context_fragments_from_extensions() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.prompt_contributor(Arc::new(TurnContextExtensionTestContributor));
+    session.services.extensions = Arc::new(builder.build());
+    turn_context.model_info.context_window = Some(100);
+    turn_context.model_info.effective_context_window_percent = 50;
+    turn_context
+        .extension_data
+        .insert(TurnContextExtensionTestState {
+            expected_model_context_window: Some(50),
+        });
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_messages = developer_message_texts(&initial_context);
+
+    assert!(
+        developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "turn context extension enabled"),
+        "expected turn context extension developer text, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn record_context_updates_includes_turn_context_fragments_on_steady_state_turns() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.prompt_contributor(Arc::new(TurnContextExtensionTestContributor));
+    session.services.extensions = Arc::new(builder.build());
+    turn_context.model_info.context_window = Some(200);
+    turn_context.model_info.effective_context_window_percent = 25;
+    turn_context
+        .extension_data
+        .insert(TurnContextExtensionTestState {
+            expected_model_context_window: Some(50),
+        });
+    {
+        let mut state = session.state.lock().await;
+        state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+    }
+
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await;
+
+    let history = session.clone_history().await;
+    let developer_messages = developer_message_texts(history.raw_items());
+    assert!(
+        developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "turn context extension enabled"),
+        "expected steady-state turn context extension developer text, got {developer_messages:?}"
     );
 }
 

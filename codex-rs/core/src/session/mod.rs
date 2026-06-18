@@ -58,7 +58,9 @@ use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::LoadedUserInstructions;
+use codex_extension_api::PromptFragment;
 use codex_extension_api::PromptSlot;
+use codex_extension_api::TurnContextContributionInput;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
@@ -909,6 +911,25 @@ async fn thread_title_from_thread_store(
 
     let title = thread.name.as_deref()?.trim();
     (!title.is_empty() && thread.preview.trim() != title).then(|| title.to_string())
+}
+
+fn push_prompt_fragment(
+    fragment: PromptFragment,
+    developer_sections: &mut Vec<String>,
+    contextual_user_sections: &mut Vec<String>,
+    separate_developer_sections: &mut Vec<String>,
+) {
+    match fragment.slot() {
+        PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
+            developer_sections.push(fragment.text().to_string());
+        }
+        PromptSlot::ContextualUser => {
+            contextual_user_sections.push(fragment.text().to_string());
+        }
+        PromptSlot::SeparateDeveloper => {
+            separate_developer_sections.push(fragment.text().to_string());
+        }
+    }
 }
 
 impl Session {
@@ -2860,6 +2881,57 @@ impl Session {
         }
     }
 
+    async fn build_turn_context_contribution_items(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        let mut developer_sections = Vec::new();
+        let mut contextual_user_sections = Vec::new();
+        let mut separate_developer_sections = Vec::new();
+        let context_contributors = self.services.extensions.context_contributors().to_vec();
+
+        for contributor in &context_contributors {
+            for fragment in contributor
+                .contribute_turn_context(TurnContextContributionInput {
+                    thread_id: self.thread_id(),
+                    turn_id: turn_context.sub_id.as_str(),
+                    session_store: &self.services.session_extension_data,
+                    thread_store: &self.services.thread_extension_data,
+                    turn_store: turn_context.extension_data.as_ref(),
+                    model_context_window: turn_context.model_context_window(),
+                })
+                .await
+            {
+                push_prompt_fragment(
+                    fragment,
+                    &mut developer_sections,
+                    &mut contextual_user_sections,
+                    &mut separate_developer_sections,
+                );
+            }
+        }
+
+        let mut items = Vec::with_capacity(3);
+        if let Some(developer_message) =
+            crate::context_manager::updates::build_developer_update_item(developer_sections)
+        {
+            items.push(developer_message);
+        }
+        for section in separate_developer_sections {
+            if let Some(developer_message) =
+                crate::context_manager::updates::build_developer_update_item(vec![section])
+            {
+                items.push(developer_message);
+            }
+        }
+        if let Some(contextual_user_message) =
+            crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
+        {
+            items.push(contextual_user_message);
+        }
+        items
+    }
+
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
@@ -3026,25 +3098,40 @@ impl Session {
             developer_sections.push(plugin_instructions.render());
         }
         let context_contributors = self.services.extensions.context_contributors().to_vec();
-        for contributor in context_contributors {
+        for contributor in &context_contributors {
             for fragment in contributor
-                .contribute(
+                .contribute_thread_context(
                     &self.services.session_extension_data,
                     &self.services.thread_extension_data,
                 )
                 .await
             {
-                match fragment.slot() {
-                    PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
-                        developer_sections.push(fragment.text().to_string());
-                    }
-                    PromptSlot::ContextualUser => {
-                        contextual_user_sections.push(fragment.text().to_string());
-                    }
-                    PromptSlot::SeparateDeveloper => {
-                        separate_developer_sections.push(fragment.text().to_string());
-                    }
-                }
+                push_prompt_fragment(
+                    fragment,
+                    &mut developer_sections,
+                    &mut contextual_user_sections,
+                    &mut separate_developer_sections,
+                );
+            }
+        }
+        for contributor in &context_contributors {
+            for fragment in contributor
+                .contribute_turn_context(TurnContextContributionInput {
+                    thread_id: self.thread_id(),
+                    turn_id: turn_context.sub_id.as_str(),
+                    session_store: &self.services.session_extension_data,
+                    thread_store: &self.services.thread_extension_data,
+                    turn_store: turn_context.extension_data.as_ref(),
+                    model_context_window: turn_context.model_context_window(),
+                })
+                .await
+            {
+                push_prompt_fragment(
+                    fragment,
+                    &mut developer_sections,
+                    &mut contextual_user_sections,
+                    &mut separate_developer_sections,
+                );
             }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
@@ -3212,13 +3299,20 @@ impl Session {
             state.reference_context_item()
         };
         let should_inject_full_context = reference_context_item.is_none();
-        let context_items = if should_inject_full_context {
+        let mut context_items = if should_inject_full_context {
             self.build_initial_context(turn_context).await
         } else {
-            // Steady-state path: append only context diffs to minimize token overhead.
+            // Steady-state path: append only built-in context diffs here; turn-scoped extension
+            // context is added below.
             self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
                 .await
         };
+        if !should_inject_full_context {
+            context_items.extend(
+                self.build_turn_context_contribution_items(turn_context)
+                    .await,
+            );
+        }
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
