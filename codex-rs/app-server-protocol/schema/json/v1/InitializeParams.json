@@ -48,6 +48,11 @@
           "default": false,
           "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
           "type": "boolean"
+        },
+        "requestCurrentTime": {
+          "default": false,
+          "description": "Opt into `currentTime/read` requests for an external clock.",
+          "type": "boolean"
         }
       },
       "type": "object"

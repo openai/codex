@@ -71,6 +71,7 @@ impl InitializeRequestProcessor {
         let experimental_api_enabled = capabilities.experimental_api;
         let request_attestation = capabilities.request_attestation;
         let supports_openai_form_elicitation = capabilities.mcp_server_openai_form_elicitation;
+        let request_current_time = capabilities.request_current_time;
         let opt_out_notification_methods = capabilities
             .opt_out_notification_methods
             .unwrap_or_default();
@@ -98,6 +99,7 @@ impl InitializeRequestProcessor {
                 client_version: version,
                 request_attestation,
                 supports_openai_form_elicitation,
+                request_current_time,
             })
             .is_err()
         {

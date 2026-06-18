@@ -2469,6 +2469,34 @@
       "title": "CommandExecutionRequestApprovalResponse",
       "type": "object"
     },
+    "CurrentTimeReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "CurrentTimeReadParams",
+      "type": "object"
+    },
+    "CurrentTimeReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "currentTimeAt": {
+          "description": "Current time as whole Unix seconds.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "currentTimeAt"
+      ],
+      "title": "CurrentTimeReadResponse",
+      "type": "object"
+    },
     "DynamicToolCallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2917,6 +2945,11 @@
         "requestAttestation": {
           "default": false,
           "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "type": "boolean"
+        },
+        "requestCurrentTime": {
+          "default": false,
+          "description": "Opt into `currentTime/read` requests for an external clock.",
           "type": "boolean"
         }
       },
@@ -5636,6 +5669,31 @@
             "params"
           ],
           "title": "Attestation/generateRequest",
+          "type": "object"
+        },
+        {
+          "description": "Read the current time from an external clock owned by the client.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "currentTime/read"
+              ],
+              "title": "CurrentTime/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CurrentTimeReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "CurrentTime/readRequest",
           "type": "object"
         },
         {

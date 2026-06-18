@@ -1662,6 +1662,7 @@ impl CodexClient {
                 capabilities: Some(InitializeCapabilities {
                     experimental_api,
                     request_attestation: false,
+                    request_current_time: false,
                     opt_out_notification_methods: Some(
                         NOTIFICATIONS_TO_OPT_OUT
                             .iter()

@@ -281,6 +281,7 @@ struct ThreadStateManagerInner {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ConnectionCapabilities {
     pub(crate) request_attestation: bool,
+    pub(crate) request_current_time: bool,
 }
 
 #[derive(Clone, Default)]
@@ -313,6 +314,27 @@ impl ThreadStateManager {
         &self,
         thread_id: ThreadId,
     ) -> Option<ConnectionId> {
+        self.first_capable_connection_for_thread(thread_id, |capabilities| {
+            capabilities.request_attestation
+        })
+        .await
+    }
+
+    pub(crate) async fn first_current_time_capable_connection_for_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<ConnectionId> {
+        self.first_capable_connection_for_thread(thread_id, |capabilities| {
+            capabilities.request_current_time
+        })
+        .await
+    }
+
+    async fn first_capable_connection_for_thread(
+        &self,
+        thread_id: ThreadId,
+        is_capable: impl Fn(&ConnectionCapabilities) -> bool,
+    ) -> Option<ConnectionId> {
         let state = self.state.lock().await;
         state
             .threads
@@ -320,11 +342,8 @@ impl ThreadStateManager {
             .connection_ids
             .iter()
             .filter_map(|connection_id| {
-                state
-                    .live_connections
-                    .get(connection_id)?
-                    .request_attestation
-                    .then_some(*connection_id)
+                let capabilities = state.live_connections.get(connection_id)?;
+                is_capable(capabilities).then_some(*connection_id)
             })
             .min_by_key(|connection_id| connection_id.0)
     }
