@@ -186,9 +186,11 @@ async fn assert_user_turn_local_image_resizes_to(
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(move |config| {
-        if resize_policy == TestImageResizePolicy::AllImages {
-            let _ = config.features.enable(Feature::ResizeAllImages);
+        match resize_policy {
+            TestImageResizePolicy::Legacy => config.features.disable(Feature::ResizeAllImages),
+            TestImageResizePolicy::AllImages => config.features.enable(Feature::ResizeAllImages),
         }
+        .expect("test config should allow feature update");
     });
     let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
@@ -1214,7 +1216,12 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .disable(Feature::ResizeAllImages)
+            .expect("test config should allow feature update");
+    });
     let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
@@ -1286,13 +1293,11 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resize_all_images_turns_invalid_view_image_into_placeholder() -> anyhow::Result<()> {
+async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        let _ = config.features.enable(Feature::ResizeAllImages);
-    });
+    let mut builder = test_codex();
     let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
