@@ -460,9 +460,7 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
-// Snapshot of the models in bundled models.json when skills guidance moved into
-// model-owned instructions. Do not add new models here: new slugs should carry
-// the guidance in their resolved model instructions.
+// Compatibility list for models through GPT-5.5. Newer models own this guidance.
 const MODELS_REQUIRING_LEGACY_SKILLS_INSTRUCTIONS: &[&str] = &[
     "gpt-5.5",
     "gpt-5.4",

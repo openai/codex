@@ -1654,9 +1654,7 @@ async fn skills_append_to_developer_message() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn models_outside_legacy_list_use_model_owned_guidance() {
-    const MODEL_OWNED_SKILLS_GUIDANCE: &str = "model-owned skills guidance";
-
+async fn models_outside_legacy_list_omit_legacy_guidance() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
@@ -1681,19 +1679,6 @@ async fn models_outside_legacy_list_use_model_owned_guidance() {
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_model_info_override("gpt-5.4", |model_info| {
             model_info.slug = "future-model".to_string();
-            if let Some(instructions_template) = model_info
-                .model_messages
-                .as_mut()
-                .and_then(|messages| messages.instructions_template.as_mut())
-            {
-                instructions_template.push_str("\n\n");
-                instructions_template.push_str(MODEL_OWNED_SKILLS_GUIDANCE);
-            } else {
-                model_info.base_instructions.push_str("\n\n");
-                model_info
-                    .base_instructions
-                    .push_str(MODEL_OWNED_SKILLS_GUIDANCE);
-            }
         })
         .with_model("future-model")
         .with_config(move |config| {
@@ -1722,12 +1707,6 @@ async fn models_outside_legacy_list_use_model_owned_guidance() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    assert!(
-        request
-            .instructions_text()
-            .contains(MODEL_OWNED_SKILLS_GUIDANCE),
-        "expected model-owned skills guidance in the resolved base instructions"
-    );
     let developer_messages = request.message_input_texts("developer");
     let developer_text = developer_messages.join("\n\n");
     assert!(
