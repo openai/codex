@@ -1134,7 +1134,7 @@ impl Session {
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
         handlers::user_input_or_turn_inner(
             self,
-            self.next_internal_sub_id(),
+            Uuid::now_v7().to_string(),
             Op::UserInput {
                 items: vec![UserInput::Text {
                     text,
