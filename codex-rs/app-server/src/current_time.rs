@@ -10,8 +10,8 @@ use chrono::Utc;
 use codex_app_server_protocol::CurrentTimeReadParams;
 use codex_app_server_protocol::CurrentTimeReadResponse;
 use codex_app_server_protocol::ServerRequestPayload;
-use codex_core::CurrentTimeFuture;
-use codex_core::CurrentTimeProvider;
+use codex_core::TimeFuture;
+use codex_core::TimeProvider;
 use codex_protocol::ThreadId;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -23,23 +23,23 @@ use crate::thread_state::ThreadStateManager;
 
 const CURRENT_TIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) fn app_server_current_time_provider(
+pub(crate) fn app_server_time_provider(
     outgoing: Arc<OutgoingMessageSender>,
     thread_state_manager: ThreadStateManager,
-) -> Arc<dyn CurrentTimeProvider> {
-    Arc::new(AppServerCurrentTimeProvider {
+) -> Arc<dyn TimeProvider> {
+    Arc::new(AppServerTimeProvider {
         outgoing: Arc::downgrade(&outgoing),
         thread_state_manager,
     })
 }
 
-struct AppServerCurrentTimeProvider {
+struct AppServerTimeProvider {
     outgoing: Weak<OutgoingMessageSender>,
     thread_state_manager: ThreadStateManager,
 }
 
-impl CurrentTimeProvider for AppServerCurrentTimeProvider {
-    fn current_time(&self, thread_id: ThreadId) -> CurrentTimeFuture<'_> {
+impl TimeProvider for AppServerTimeProvider {
+    fn current_time(&self, thread_id: ThreadId) -> TimeFuture<'_> {
         let outgoing = self.outgoing.clone();
         let thread_state_manager = self.thread_state_manager.clone();
         Box::pin(async move {
