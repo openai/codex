@@ -21,7 +21,7 @@ mcpServerOpenaiFormElicitation?: boolean,
 /**
  * Opt into `currentTime/read` requests for an external clock.
  */
-requestCurrentTime: boolean,
+requestCurrentTime?: boolean,
 /**
  * Exact notification method names that should be suppressed for this
  * connection (for example `thread/started`).

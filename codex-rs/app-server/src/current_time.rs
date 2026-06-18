@@ -66,7 +66,7 @@ async fn request_current_time(
             ServerRequestPayload::CurrentTimeRead(CurrentTimeReadParams {
                 thread_id: thread_id.to_string(),
             }),
-            Some(thread_id),
+            /*thread_id*/ None,
         )
         .await;
 

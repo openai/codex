@@ -2192,7 +2192,6 @@ mod tests {
                         "experimentalApi": true,
                         "requestAttestation": true,
                         "mcpServerOpenaiFormElicitation": true,
-                        "requestCurrentTime": false,
                         "optOutNotificationMethods": [
                             "thread/started",
                             "item/agentMessage/delta"

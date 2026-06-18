@@ -15,5 +15,6 @@ pub struct CurrentTimeReadParams {
 #[ts(export_to = "v2/")]
 pub struct CurrentTimeReadResponse {
     /// Current time as whole Unix seconds.
+    #[ts(type = "number")]
     pub current_time_at: i64,
 }
