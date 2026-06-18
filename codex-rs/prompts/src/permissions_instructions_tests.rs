@@ -269,7 +269,8 @@ fn auto_review_approvals_append_auto_review_specific_guidance() {
         /*request_permissions_tool_enabled*/ false,
     );
 
-    assert!(!text.contains("`approvals_reviewer` is `auto_review`"));
+    assert!(text.contains("`approvals_reviewer` is `auto_review`"));
+    assert!(text.contains("materially safer alternative"));
     assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
     assert!(text.contains(
         "When the sandbox is likely to block a command needed for the task, request escalation up front"
@@ -277,13 +278,15 @@ fn auto_review_approvals_append_auto_review_specific_guidance() {
     assert!(text.contains(
         "When unsure, prefer requesting escalation unnecessarily over failing to request it when needed"
     ));
-    assert!(text.contains(
-        "Request escalation for commands that need write access outside permitted directories"
-    ));
+    assert!(
+        text.contains(
+            "Request escalation for commands that need write access outside writable roots"
+        )
+    );
     assert!(text.contains(
         "Request escalation for git operations that may write lock files, such as updating the index or refs"
     ));
-    assert!(text.contains("Request escalation for GUI commands"));
+    assert!(!text.contains("Request escalation for GUI commands"));
     assert!(text.contains("Use escalation when it is the direct or most reliable way"));
     assert!(text.contains("Do not spend extra turns running likely-to-fail sandbox probes first"));
     assert!(text.contains("Do not include a `prefix_rule` parameter."));
@@ -308,7 +311,8 @@ fn auto_review_approvals_append_auto_review_specific_guidance() {
         "If a command may be hanging on sandbox-blocked access, stop after a short timeout and rerun with `require_escalated`"
     ));
     assert!(!text.contains("Be judicious with escalating"));
-    assert!(!text.contains("Approved command prefixes"));
+    assert!(text.contains("Approved command prefixes"));
+    assert!(text.contains(r#"["git", "pull"]"#));
     assert!(!text.contains("prefix_rule guidance"));
 }
 

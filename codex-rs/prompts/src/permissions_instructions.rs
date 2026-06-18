@@ -219,9 +219,7 @@ fn approval_text(
         if request_permissions_tool_enabled {
             sections.push(request_permissions_tool_prompt_section().to_string());
         }
-        if approvals_reviewer != ApprovalsReviewer::AutoReview
-            && let Some(prefixes) = approved_command_prefixes_text(exec_policy)
-        {
+        if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
             sections.push(format!(
                 "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
             ));
@@ -243,12 +241,8 @@ fn approval_text(
         ),
     };
 
-    let uses_auto_review_on_request_prompt = approval_policy == AskForApproval::OnRequest
-        && approvals_reviewer == ApprovalsReviewer::AutoReview
-        && !exec_permission_approvals_enabled;
     if approvals_reviewer == ApprovalsReviewer::AutoReview
         && approval_policy != AskForApproval::Never
-        && !uses_auto_review_on_request_prompt
     {
         format!("{text}\n\n{AUTO_REVIEW_APPROVAL_SUFFIX}")
     } else {
