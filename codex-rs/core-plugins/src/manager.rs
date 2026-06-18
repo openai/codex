@@ -942,6 +942,14 @@ impl PluginsManager {
         Ok(featured_plugin_ids)
     }
 
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(
+            plugins_enabled = config.plugins_enabled,
+            remote_plugin_enabled = config.remote_plugin_enabled
+        )
+    )]
     pub async fn recommended_plugins_mode_for_config(
         &self,
         config: &PluginsConfigInput,
@@ -1014,6 +1022,7 @@ impl PluginsManager {
 
     /// Returns endpoint recommendations eligible for installation in the current client.
     /// `None` selects the legacy discovery workflow.
+    #[instrument(level = "trace", skip_all)]
     pub async fn recommended_plugin_candidates_for_config(
         &self,
         input: RecommendedPluginCandidatesInput<'_>,
