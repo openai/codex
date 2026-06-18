@@ -45,44 +45,87 @@ pub struct WindowsSandboxSessionRequest<'a> {
 pub async fn spawn_windows_sandbox_session_for_level(
     request: WindowsSandboxSessionRequest<'_>,
 ) -> Result<SpawnedProcess> {
-    if request.proxy_enforced
-        || matches!(request.windows_sandbox_level, WindowsSandboxLevel::Elevated)
-    {
+    let WindowsSandboxSessionRequest {
+        permission_profile,
+        workspace_roots,
+        codex_home,
+        command,
+        cwd,
+        env_map,
+        windows_sandbox_level,
+        proxy_enforced,
+        timeout_ms,
+        read_roots_override,
+        read_roots_include_platform_defaults,
+        write_roots_override,
+        deny_read_paths_override,
+        deny_write_paths_override,
+        tty,
+        stdin_open,
+        use_private_desktop,
+    } = request;
+
+    if proxy_enforced || matches!(windows_sandbox_level, WindowsSandboxLevel::Elevated) {
         spawn_windows_sandbox_session_elevated_for_permission_profile(
-            request.permission_profile,
-            request.workspace_roots,
-            request.codex_home,
-            request.command,
-            request.cwd,
-            request.env_map,
-            request.proxy_enforced,
-            request.timeout_ms,
-            request.read_roots_override,
-            request.read_roots_include_platform_defaults,
-            request.write_roots_override,
-            request.deny_read_paths_override,
-            request.deny_write_paths_override,
-            request.tty,
-            request.stdin_open,
-            request.use_private_desktop,
+            permission_profile,
+            workspace_roots,
+            codex_home,
+            command,
+            cwd,
+            env_map,
+            proxy_enforced,
+            timeout_ms,
+            read_roots_override,
+            read_roots_include_platform_defaults,
+            write_roots_override,
+            deny_read_paths_override,
+            deny_write_paths_override,
+            tty,
+            stdin_open,
+            use_private_desktop,
         )
         .await
     } else {
-        spawn_windows_sandbox_session_legacy(
-            request.permission_profile,
-            request.workspace_roots,
-            request.codex_home,
-            request.command,
-            request.cwd,
-            request.env_map,
-            request.timeout_ms,
-            request.deny_read_paths_override,
-            request.deny_write_paths_override,
-            request.tty,
-            request.stdin_open,
-            request.use_private_desktop,
+        match spawn_windows_sandbox_session_legacy(
+            permission_profile,
+            workspace_roots,
+            codex_home,
+            command.clone(),
+            cwd,
+            env_map.clone(),
+            timeout_ms,
+            deny_read_paths_override,
+            deny_write_paths_override,
+            tty,
+            stdin_open,
+            use_private_desktop,
         )
         .await
+        {
+            Ok(spawned) => Ok(spawned),
+            Err(err) if crate::legacy_spawn_error_should_retry_elevated(&err) => {
+                spawn_windows_sandbox_session_elevated_for_permission_profile(
+                    permission_profile,
+                    workspace_roots,
+                    codex_home,
+                    command,
+                    cwd,
+                    env_map,
+                    proxy_enforced,
+                    timeout_ms,
+                    read_roots_override,
+                    read_roots_include_platform_defaults,
+                    write_roots_override,
+                    deny_read_paths_override,
+                    deny_write_paths_override,
+                    tty,
+                    stdin_open,
+                    use_private_desktop,
+                )
+                .await
+            }
+            Err(err) => Err(err),
+        }
     }
 }
 

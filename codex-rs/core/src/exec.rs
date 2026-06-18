@@ -577,6 +577,66 @@ fn record_windows_sandbox_spawn_failure(
 }
 
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
+fn run_windows_sandbox_capture_blocking(
+    use_elevated: bool,
+    permission_profile: PermissionProfile,
+    workspace_roots: Vec<AbsolutePathBuf>,
+    codex_home: PathBuf,
+    command: Vec<String>,
+    cwd: PathBuf,
+    env: HashMap<String, String>,
+    timeout_ms: Option<u64>,
+    cancellation: Option<codex_windows_sandbox::WindowsSandboxCancellationToken>,
+    windows_sandbox_private_desktop: bool,
+    proxy_enforced: bool,
+    elevated_read_roots_override: Option<Vec<PathBuf>>,
+    elevated_read_roots_include_platform_defaults: bool,
+    elevated_write_roots_override: Option<Vec<PathBuf>>,
+    additional_deny_read_paths: Vec<AbsolutePathBuf>,
+    additional_deny_write_paths: Vec<AbsolutePathBuf>,
+) -> anyhow::Result<codex_windows_sandbox::CaptureResult> {
+    use codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated;
+    use codex_windows_sandbox::run_windows_sandbox_capture_with_filesystem_overrides;
+
+    if use_elevated {
+        run_windows_sandbox_capture_for_permission_profile_elevated(
+            codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
+                permission_profile: &permission_profile,
+                workspace_roots: workspace_roots.as_slice(),
+                codex_home: codex_home.as_ref(),
+                command,
+                cwd: &cwd,
+                env_map: env,
+                timeout_ms,
+                cancellation,
+                use_private_desktop: windows_sandbox_private_desktop,
+                proxy_enforced,
+                read_roots_override: elevated_read_roots_override.as_deref(),
+                read_roots_include_platform_defaults: elevated_read_roots_include_platform_defaults,
+                write_roots_override: elevated_write_roots_override.as_deref(),
+                deny_read_paths_override: &additional_deny_read_paths,
+                deny_write_paths_override: &additional_deny_write_paths,
+            },
+        )
+    } else {
+        run_windows_sandbox_capture_with_filesystem_overrides(
+            &permission_profile,
+            workspace_roots.as_slice(),
+            codex_home.as_ref(),
+            command,
+            &cwd,
+            env,
+            timeout_ms,
+            cancellation,
+            &additional_deny_read_paths,
+            &additional_deny_write_paths,
+            windows_sandbox_private_desktop,
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
 async fn exec_windows_sandbox(
     params: ExecParams,
     permission_profile: &PermissionProfile,
@@ -585,8 +645,6 @@ async fn exec_windows_sandbox(
     windows_sandbox_filesystem_overrides: Option<&WindowsSandboxFilesystemOverrides>,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
-    use codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated;
-    use codex_windows_sandbox::run_windows_sandbox_capture_with_filesystem_overrides;
 
     let ExecParams {
         command,
@@ -642,48 +700,86 @@ async fn exec_windows_sandbox(
         .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
     let elevated_write_roots_override = windows_sandbox_filesystem_overrides
         .and_then(|overrides| overrides.write_roots_override.clone());
+    let retry_command = command.clone();
+    let retry_cwd = cwd.clone();
+    let retry_env = env.clone();
+    let retry_cancellation = cancellation.clone();
+    let retry_workspace_roots = workspace_roots.clone();
+    let retry_permission_profile = permission_profile.clone();
+    let retry_codex_home = codex_home.clone();
+    let retry_deny_read_paths = additional_deny_read_paths.clone();
+    let retry_deny_write_paths = additional_deny_write_paths.clone();
+    let retry_read_roots_override = elevated_read_roots_override.clone();
+    let retry_write_roots_override = elevated_write_roots_override.clone();
+
     let spawn_res = tokio::task::spawn_blocking(move || {
-        if use_elevated {
-            run_windows_sandbox_capture_for_permission_profile_elevated(
-                codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
-                    permission_profile: &permission_profile,
-                    workspace_roots: workspace_roots.as_slice(),
-                    codex_home: codex_home.as_ref(),
-                    command,
-                    cwd: &cwd,
-                    env_map: env,
-                    timeout_ms,
-                    cancellation,
-                    use_private_desktop: windows_sandbox_private_desktop,
-                    proxy_enforced,
-                    read_roots_override: elevated_read_roots_override.as_deref(),
-                    read_roots_include_platform_defaults:
-                        elevated_read_roots_include_platform_defaults,
-                    write_roots_override: elevated_write_roots_override.as_deref(),
-                    deny_read_paths_override: &additional_deny_read_paths,
-                    deny_write_paths_override: &additional_deny_write_paths,
-                },
-            )
-        } else {
-            run_windows_sandbox_capture_with_filesystem_overrides(
-                &permission_profile,
-                workspace_roots.as_slice(),
-                codex_home.as_ref(),
-                command,
-                &cwd,
-                env,
-                timeout_ms,
-                cancellation,
-                &additional_deny_read_paths,
-                &additional_deny_write_paths,
-                windows_sandbox_private_desktop,
-            )
-        }
+        run_windows_sandbox_capture_blocking(
+            use_elevated,
+            permission_profile,
+            workspace_roots,
+            codex_home,
+            command,
+            cwd,
+            env,
+            timeout_ms,
+            cancellation,
+            windows_sandbox_private_desktop,
+            proxy_enforced,
+            elevated_read_roots_override,
+            elevated_read_roots_include_platform_defaults,
+            elevated_write_roots_override,
+            additional_deny_read_paths,
+            additional_deny_write_paths,
+        )
     })
     .await;
 
     let capture = match spawn_res {
         Ok(Ok(v)) => v,
+        Ok(Err(err))
+            if !use_elevated
+                && codex_windows_sandbox::legacy_spawn_error_should_retry_elevated(&err) =>
+        {
+            record_windows_sandbox_spawn_failure(
+                command_path.as_deref(),
+                sandbox_level,
+                &err.to_string(),
+            );
+            tokio::task::spawn_blocking(move || {
+                run_windows_sandbox_capture_blocking(
+                    /*use_elevated*/ true,
+                    retry_permission_profile,
+                    retry_workspace_roots,
+                    retry_codex_home,
+                    retry_command,
+                    retry_cwd,
+                    retry_env,
+                    timeout_ms,
+                    retry_cancellation,
+                    windows_sandbox_private_desktop,
+                    proxy_enforced,
+                    retry_read_roots_override,
+                    elevated_read_roots_include_platform_defaults,
+                    retry_write_roots_override,
+                    retry_deny_read_paths,
+                    retry_deny_write_paths,
+                )
+            })
+            .await
+            .map_err(|join_err| {
+                CodexErr::Io(io::Error::other(format!(
+                    "windows sandbox join error: {join_err}"
+                )))
+            })?
+            .map_err(|retry_err| {
+                record_windows_sandbox_spawn_failure(
+                    command_path.as_deref(),
+                    sandbox_level,
+                    &retry_err.to_string(),
+                );
+                CodexErr::Io(io::Error::other(format!("windows sandbox: {retry_err}")))
+            })?
+        }
         Ok(Err(err)) => {
             record_windows_sandbox_spawn_failure(
                 command_path.as_deref(),

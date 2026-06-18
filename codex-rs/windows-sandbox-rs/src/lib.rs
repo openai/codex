@@ -36,6 +36,15 @@ impl fmt::Debug for WindowsSandboxCancellationToken {
 }
 
 #[cfg(target_os = "windows")]
+pub fn legacy_spawn_error_should_retry_elevated(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .to_string()
+            .contains("CreateProcessAsUserW failed: 1312")
+    })
+}
+
+#[cfg(target_os = "windows")]
 mod acl;
 #[cfg(target_os = "windows")]
 mod allow;
@@ -720,6 +729,7 @@ mod windows_impl {
 
     #[cfg(test)]
     mod tests {
+        use crate::legacy_spawn_error_should_retry_elevated;
         use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
         use codex_protocol::models::PermissionProfile;
         use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -761,6 +771,15 @@ mod windows_impl {
         #[test]
         fn applies_network_block_for_read_only() {
             assert!(should_apply_network_block(&PermissionProfile::read_only()));
+        }
+
+        #[test]
+        fn legacy_spawn_error_retries_only_for_no_logon_session_failures() {
+            let retryable = anyhow::anyhow!("CreateProcessAsUserW failed: 1312");
+            assert!(legacy_spawn_error_should_retry_elevated(&retryable));
+
+            let other = anyhow::anyhow!("CreateProcessAsUserW failed: 5");
+            assert!(!legacy_spawn_error_should_retry_elevated(&other));
         }
 
         #[test]
