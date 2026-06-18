@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
+use std::io::BufRead;
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
@@ -959,14 +960,15 @@ impl RolloutRecorder {
 fn load_plain_rollout_items_blocking(
     path: &Path,
 ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
-    let contents = std::fs::read_to_string(path)?;
+    let reader = std::io::BufReader::new(File::open(path)?);
     let mut items: Vec<RolloutItem> = Vec::new();
     let mut thread_id: Option<ThreadId> = None;
     let mut parse_errors = 0usize;
     let mut saw_non_empty_line = false;
-    for line in contents.lines() {
+    for line in reader.lines() {
+        let line = line?;
         parse_rollout_item_line(
-            line,
+            line.as_str(),
             &mut items,
             &mut thread_id,
             &mut parse_errors,
@@ -1875,6 +1877,10 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
 }
 
 fn thread_item_from_state_list_item(item: codex_state::ThreadListItem) -> ThreadItem {
+    let source = serde_json::from_str(item.source.as_str())
+        .or_else(|_| serde_json::from_value(Value::String(item.source)))
+        .unwrap_or(SessionSource::Unknown);
+    let parent_thread_id = source.parent_thread_id();
     ThreadItem {
         path: item.rollout_path,
         thread_id: Some(item.id),
@@ -1885,12 +1891,8 @@ fn thread_item_from_state_list_item(item: codex_state::ThreadListItem) -> Thread
         git_branch: item.git_branch,
         git_sha: item.git_sha,
         git_origin_url: item.git_origin_url,
-        source: Some(
-            serde_json::from_str(item.source.as_str())
-                .or_else(|_| serde_json::from_value(Value::String(item.source)))
-                .unwrap_or(SessionSource::Unknown),
-        ),
-        parent_thread_id: None,
+        source: Some(source),
+        parent_thread_id,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         model_provider: Some(item.model_provider),

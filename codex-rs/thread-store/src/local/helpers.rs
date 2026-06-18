@@ -210,6 +210,7 @@ pub(super) fn stored_thread_from_state_list_item(
     } else {
         model_provider
     };
+    let source = parse_session_source(&source);
     let created_at = truncate_datetime_to_seconds(created_at);
     let updated_at = truncate_datetime_to_millis(updated_at);
     let recency_at = truncate_datetime_to_millis(recency_at);
@@ -219,7 +220,7 @@ pub(super) fn stored_thread_from_state_list_item(
         extra_config: None,
         rollout_path: Some(rollout_path),
         forked_from_id: None,
-        parent_thread_id,
+        parent_thread_id: parent_thread_id.or_else(|| source.parent_thread_id()),
         preview,
         name,
         model_provider,
@@ -231,7 +232,7 @@ pub(super) fn stored_thread_from_state_list_item(
         archived_at: archived.then_some(updated_at),
         cwd,
         cli_version,
-        source: parse_session_source(&source),
+        source,
         thread_source: None,
         agent_nickname,
         agent_role,
