@@ -830,9 +830,9 @@ async fn spawn_thread_subagent_inherits_parent_selected_multi_agent_mode_without
         })
         .await
         .expect("update parent multi-agent mode");
+    let control = parent_thread.codex.session.services.agent_control.clone();
 
-    let child_thread_id = harness
-        .control
+    let child_thread_id = control
         .spawn_agent(
             harness.config.clone(),
             text_input("child task"),
@@ -857,6 +857,27 @@ async fn spawn_thread_subagent_inherits_parent_selected_multi_agent_mode_without
     assert_eq!(
         child_snapshot.multi_agent_mode,
         Some(MultiAgentMode::Proactive)
+    );
+
+    parent_thread
+        .codex
+        .session
+        .update_settings(crate::session::SessionSettingsUpdate {
+            multi_agent_mode: Some(MultiAgentMode::ExplicitRequestOnly),
+            ..Default::default()
+        })
+        .await
+        .expect("update parent multi-agent mode after child spawn");
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should remain registered");
+    let child_turn = child_thread.codex.session.new_default_turn().await;
+
+    assert_eq!(
+        child_turn.multi_agent_mode,
+        Some(MultiAgentMode::ExplicitRequestOnly)
     );
 }
 
@@ -2254,7 +2275,7 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
 }
 
 #[tokio::test]
-async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_agent_mode() {
+async fn resumed_thread_subagent_uses_root_multi_agent_mode_for_its_next_turn() {
     let (home, mut config) = test_config().await;
     config
         .features
@@ -2277,11 +2298,11 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
         control,
     };
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let control = parent_thread.codex.session.services.agent_control.clone();
     let agent_path = AgentPath::from_string("/root/explorer".to_string())
         .expect("test agent path should be valid");
 
-    let child_thread_id = harness
-        .control
+    let child_thread_id = control
         .spawn_agent(
             harness.config.clone(),
             text_input("hello child"),
@@ -2333,8 +2354,7 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
         })
         .await
         .expect("change parent multi-agent mode before child resume");
-    let mut status_rx = harness
-        .control
+    let mut status_rx = control
         .subscribe_status(child_thread_id)
         .await
         .expect("status subscription should succeed");
@@ -2375,14 +2395,12 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
     .await
     .expect("child thread metadata should be persisted to sqlite before shutdown");
 
-    let _ = harness
-        .control
+    let _ = control
         .shutdown_live_agent(child_thread_id)
         .await
         .expect("child shutdown should submit");
 
-    let resumed_thread_id = harness
-        .control
+    let resumed_thread_id = control
         .resume_agent_from_rollout(
             harness.config.clone(),
             child_thread_id,
@@ -2425,9 +2443,18 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
         resumed_snapshot.multi_agent_mode,
         Some(MultiAgentMode::Proactive)
     );
+    let resumed_thread = harness
+        .manager
+        .get_thread(resumed_thread_id)
+        .await
+        .expect("resumed child thread should remain registered");
+    let resumed_turn = resumed_thread.codex.session.new_default_turn().await;
+    assert_eq!(
+        resumed_turn.multi_agent_mode,
+        Some(MultiAgentMode::ExplicitRequestOnly)
+    );
 
-    let _ = harness
-        .control
+    let _ = control
         .shutdown_live_agent(resumed_thread_id)
         .await
         .expect("resumed child shutdown should submit");

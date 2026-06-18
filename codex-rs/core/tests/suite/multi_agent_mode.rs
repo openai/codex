@@ -7,8 +7,10 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -17,6 +19,10 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
+use std::time::Duration;
+
+const SPAWN_CALL_ID: &str = "spawn-call-1";
 
 const NO_SPAWN_TEXT: &str = "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work.";
 const PROACTIVE_TEXT: &str = "Proactive multi-agent delegation is active.";
@@ -57,6 +63,10 @@ async fn submit_turn(
         .await?;
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
+}
+
+fn body_contains(req: &wiremock::Request, text: &str) -> bool {
+    String::from_utf8_lossy(&req.body).contains(text)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -125,6 +135,118 @@ async fn multi_agent_mode_is_sticky_and_emits_only_on_change() -> Result<()> {
             count_containing(&third, MULTI_AGENT_MODE_OPEN_TAG),
             count_containing(&third, NO_SPAWN_TEXT),
             count_containing(&third, PROACTIVE_TEXT),
+        ),
+        (2, 1, 1)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn existing_subagent_uses_root_multi_agent_mode_on_its_next_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let root_prompt = "spawn a child";
+    let child_prompt = "child initial task";
+    let child_followup = "child followup task";
+    let spawn_args = serde_json::to_string(&json!({
+        "message": child_prompt,
+        "task_name": "worker",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| body_contains(req, root_prompt),
+        sse(vec![
+            ev_response_created("root-spawn-response"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("root-spawn-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            body_contains(req, child_prompt) && !body_contains(req, SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("child-initial-response"),
+            ev_completed("child-initial-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("root-followup-response"),
+            ev_completed("root-followup-response"),
+        ]),
+    )
+    .await;
+    let child_followup_response = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| body_contains(req, child_followup),
+        sse(vec![
+            ev_response_created("child-followup-response"),
+            ev_completed("child-followup-response"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentMode)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
+
+    submit_turn(&test.codex, root_prompt, /*mode*/ None).await?;
+    let child_thread_id =
+        tokio::time::timeout(Duration::from_secs(10), created_threads.recv()).await??;
+    let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
+    wait_for_event(&child_thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.codex
+        .submit(Op::ThreadSettings {
+            thread_settings: ThreadSettingsOverrides {
+                multi_agent_mode: Some(MultiAgentMode::Proactive),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ThreadSettingsApplied(_))
+    })
+    .await;
+
+    submit_turn(&child_thread, child_followup, /*mode*/ None).await?;
+
+    let input = child_followup_response.single_request().input();
+    let texts = developer_texts(&input);
+    assert_eq!(
+        (
+            count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
+            count_containing(&texts, NO_SPAWN_TEXT),
+            count_containing(&texts, PROACTIVE_TEXT),
         ),
         (2, 1, 1)
     );

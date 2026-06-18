@@ -17,6 +17,7 @@ use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
@@ -119,6 +120,12 @@ impl AgentControl {
 
     pub(crate) fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    pub(crate) async fn root_multi_agent_mode(&self) -> CodexResult<Option<MultiAgentMode>> {
+        let state = self.upgrade()?;
+        let root_thread = state.get_thread(ThreadId::from(self.session_id)).await?;
+        Ok(root_thread.config_snapshot().await.multi_agent_mode)
     }
 
     /// Send rich user input items to an existing agent thread.

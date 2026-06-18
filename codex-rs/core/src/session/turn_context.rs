@@ -746,10 +746,20 @@ impl Session {
     async fn new_turn_context_from_configuration(
         &self,
         sub_id: String,
-        session_configuration: SessionConfiguration,
+        mut session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
+        // Thread-spawn subagents follow the root's current selection. If the root is unavailable,
+        // retain the subagent's persisted selection so standalone resume still has a fallback.
+        if matches!(
+            session_configuration.session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) && let Ok(root_multi_agent_mode) =
+            self.services.agent_control.root_multi_agent_mode().await
+        {
+            session_configuration.multi_agent_mode = root_multi_agent_mode;
+        }
         let turn_environments = self.services.turn_environments.snapshot().await;
         let primary_turn_environment = turn_environments.primary().cloned();
         // TODO(anp): Migrate per-turn config and legacy TurnContext cwd consumers to PathUri so
