@@ -4867,6 +4867,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_current_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await;
@@ -5032,6 +5033,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*state_db*/ None,
         )),
         attestation_provider: None,
+        current_time_provider: None,
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             thread_id,
@@ -5216,6 +5218,7 @@ async fn make_session_with_config_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_current_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -5328,6 +5331,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_current_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -7078,6 +7082,7 @@ where
             state_db,
         )),
         attestation_provider: None,
+        current_time_provider: None,
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             thread_id,

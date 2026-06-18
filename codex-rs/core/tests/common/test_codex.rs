@@ -15,6 +15,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::CloudConfigBundleLoader;
 use codex_core::CodexThread;
+use codex_core::CurrentTimeProvider;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -261,6 +262,7 @@ pub struct TestCodexBuilder {
     extensions: Arc<ExtensionRegistry<Config>>,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
     supports_openai_form_elicitation: bool,
+    current_time_provider: Option<Arc<dyn CurrentTimeProvider>>,
 }
 
 impl TestCodexBuilder {
@@ -359,6 +361,11 @@ impl TestCodexBuilder {
 
     pub fn with_openai_form_elicitation(mut self) -> Self {
         self.supports_openai_form_elicitation = true;
+        self
+    }
+
+    pub fn with_current_time_provider(mut self, provider: Arc<dyn CurrentTimeProvider>) -> Self {
+        self.current_time_provider = Some(provider);
         self
     }
 
@@ -568,6 +575,7 @@ impl TestCodexBuilder {
             state_db.clone(),
             installation_id,
             /*attestation_provider*/ None,
+            /*external_current_time_provider*/ self.current_time_provider.clone(),
         );
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
@@ -1172,6 +1180,7 @@ pub fn test_codex() -> TestCodexBuilder {
         extensions: empty_extension_registry(),
         user_instructions_provider: None,
         supports_openai_form_elicitation: false,
+        current_time_provider: None,
     }
 }
 
