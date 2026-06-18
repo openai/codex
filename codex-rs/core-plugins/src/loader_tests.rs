@@ -192,6 +192,19 @@ enabled = true
             .collect::<Vec<_>>()
     };
     assert_eq!(validation_state(&hooks_only), validation_state(&full));
+    assert_eq!(
+        full.iter()
+            .map(|plugin| plugin.config_name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "disabled@test",
+            "invalid",
+            "malformed@test",
+            "missing@test",
+            "valid@test",
+            "warning@test",
+        ]
+    );
 
     let full_valid = full
         .iter()
