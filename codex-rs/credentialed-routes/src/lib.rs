@@ -99,3 +99,7 @@ fn credentialed_route_proxy_headers(headers: HeaderMap) -> Vec<CredentialedRoute
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
