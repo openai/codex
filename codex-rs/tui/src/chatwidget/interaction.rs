@@ -403,10 +403,10 @@ impl ChatWidget {
 
         self.arm_quit_shortcut(key);
 
-        if self.is_cancellable_work_active() {
-            if self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output()) {
-                self.pause_active_goal_for_interrupt();
-            }
+        if self.is_cancellable_work_active()
+            && self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output())
+        {
+            self.pause_active_goal_for_interrupt();
         }
     }
 
