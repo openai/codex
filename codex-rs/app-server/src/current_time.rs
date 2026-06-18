@@ -14,13 +14,14 @@ use codex_core::CurrentTimeFuture;
 use codex_core::CurrentTimeProvider;
 use codex_protocol::ThreadId;
 use tokio::time::Duration;
-use tokio::time::timeout;
+use tokio::time::Instant;
+use tokio::time::timeout_at;
 
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadStateManager;
 
-const CURRENT_TIME_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const CURRENT_TIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn app_server_current_time_provider(
     outgoing: Arc<OutgoingMessageSender>,
@@ -55,9 +56,26 @@ async fn request_current_time(
     thread_state_manager: ThreadStateManager,
     thread_id: ThreadId,
 ) -> Result<DateTime<Utc>> {
-    let connection_ids = thread_state_manager
+    let deadline = Instant::now() + CURRENT_TIME_REQUEST_TIMEOUT;
+    let mut connection_ids = thread_state_manager
         .current_time_capable_connections_for_thread(thread_id)
         .await;
+    if connection_ids.is_empty() {
+        timeout_at(
+            deadline,
+            thread_state_manager.wait_for_thread_subscriber(thread_id),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "timed out waiting for a client to subscribe to the thread after {}s",
+                CURRENT_TIME_REQUEST_TIMEOUT.as_secs()
+            )
+        })?;
+        connection_ids = thread_state_manager
+            .current_time_capable_connections_for_thread(thread_id)
+            .await;
+    }
     let connection_id = require_single_current_time_connection(&connection_ids)?;
     let connection_ids = [connection_id];
     let (request_id, rx) = outgoing
@@ -70,7 +88,7 @@ async fn request_current_time(
         )
         .await;
 
-    let result = match timeout(CURRENT_TIME_READ_TIMEOUT, rx).await {
+    let result = match timeout_at(deadline, rx).await {
         Ok(Ok(Ok(result))) => result,
         Ok(Ok(Err(err))) => {
             bail!(
@@ -84,7 +102,7 @@ async fn request_current_time(
             let _canceled = outgoing.cancel_request(&request_id).await;
             bail!(
                 "current-time request timed out after {}s",
-                CURRENT_TIME_READ_TIMEOUT.as_secs()
+                CURRENT_TIME_REQUEST_TIMEOUT.as_secs()
             );
         }
     };
