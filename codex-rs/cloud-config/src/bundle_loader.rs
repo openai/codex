@@ -63,6 +63,7 @@ pub async fn cloud_config_bundle_loader_for_storage(
         codex_home.clone(),
         enable_codex_api_key_env,
         credentials_store_mode,
+        /*forced_chatgpt_workspace_id*/ None,
         Some(chatgpt_base_url.clone()),
         keyring_backend_kind,
     )

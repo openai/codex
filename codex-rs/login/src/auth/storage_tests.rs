@@ -81,7 +81,38 @@ async fn file_storage_round_trips_agent_identity_auth() -> anyhow::Result<()> {
         openai_api_key: None,
         tokens: None,
         last_refresh: None,
-        agent_identity: Some(agent_identity),
+        agent_identity: Some(AgentIdentityStorage::Jwt(agent_identity)),
+        personal_access_token: None,
+        bedrock_api_key: None,
+    };
+
+    storage.save(&auth_dot_json)?;
+
+    let loaded = storage.load()?;
+    assert_eq!(Some(auth_dot_json), loaded);
+    Ok(())
+}
+
+#[tokio::test]
+async fn file_storage_round_trips_registered_agent_identity_auth() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let record = AgentIdentityAuthRecord {
+        agent_runtime_id: "agent-runtime-id".to_string(),
+        agent_private_key: "private-key".to_string(),
+        account_id: "account-id".to_string(),
+        chatgpt_user_id: "user-id".to_string(),
+        email: "user@example.com".to_string(),
+        plan_type: AccountPlanType::Pro,
+        chatgpt_account_is_fedramp: false,
+        task_id: Some("task-id".to_string()),
+    };
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: None,
+        agent_identity: Some(AgentIdentityStorage::Record(record)),
         personal_access_token: None,
         bedrock_api_key: None,
     };
@@ -139,8 +170,8 @@ async fn file_storage_loads_agent_identity_as_jwt() -> anyhow::Result<()> {
     let loaded = storage.load()?;
 
     assert_eq!(
-        loaded.expect("auth should load").agent_identity.as_deref(),
-        Some(agent_identity_jwt.as_str())
+        loaded.expect("auth should load").agent_identity,
+        Some(AgentIdentityStorage::Jwt(agent_identity_jwt))
     );
     Ok(())
 }
