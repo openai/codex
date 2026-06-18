@@ -95,6 +95,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -479,16 +480,23 @@ async fn build_capability_injections(
         sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
     );
-    let loaded_plugins = sess
-        .services
-        .plugins_manager
-        .plugins_for_config(&turn_context.config.plugins_config_input())
-        .await;
+    let loaded_plugins = match turn_context
+        .extension_data
+        .get::<codex_core_plugins::PluginLoadOutcome>()
+    {
+        Some(loaded_plugins) => loaded_plugins,
+        None => Arc::new(
+            sess.services
+                .plugins_manager
+                .plugins_for_config(&turn_context.config.plugins_config_input())
+                .await,
+        ),
+    };
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
-    let mentioned_plugins =
+    let declared_mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
-    let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
+    let mcp_tools = if turn_context.apps_enabled() || !declared_mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
@@ -531,6 +539,12 @@ async fn build_capability_injections(
         cancellation_token,
     )
     .await?;
+    let loaded_plugins = turn_context
+        .extension_data
+        .get::<codex_core_plugins::PluginLoadOutcome>()
+        .unwrap_or(loaded_plugins);
+    let mentioned_plugins =
+        collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
     let mcp_dependencies = turn_context
         .extension_data
         .get::<codex_mcp::McpServerDependencies>()
@@ -603,6 +617,9 @@ async fn build_extension_turn_input_items(
         .filter_map(|(index, environment)| {
             // TODO(anp): Migrate extension turn-input environments to PathUri so foreign cwd
             // values are not omitted from extension context.
+            if environment.cwd().infer_path_convention() != Some(PathConvention::native()) {
+                return None;
+            }
             Some(TurnInputEnvironment {
                 environment_id: environment.environment_id.clone(),
                 cwd: environment.cwd().to_abs_path().ok()?.into_path_buf(),

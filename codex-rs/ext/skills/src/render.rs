@@ -5,6 +5,7 @@ use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
 use crate::fragments::AvailableSkillsInstructions;
 use codex_core_skills::HostSkillsSnapshot;
+use codex_core_skills::SkillMetadataBudget;
 use codex_core_skills::SkillRenderReport;
 use codex_core_skills::build_available_skills;
 use codex_core_skills::default_skill_metadata_budget;
@@ -19,6 +20,7 @@ use codex_utils_string::approx_token_count;
 
 const MAX_AVAILABLE_SKILLS_BYTES: usize = 8_000;
 const MAX_AVAILABLE_SKILLS_TOKENS: usize = 10_000;
+const MAX_HOST_SKILL_METADATA_TOKENS: usize = 8_000;
 const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
 pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
@@ -34,12 +36,14 @@ pub(crate) fn available_skills_fragment(
         .iter()
         .filter(|entry| entry.enabled && entry.prompt_visible)
         .collect::<Vec<_>>();
-    let host_available = host_snapshot.and_then(|host_snapshot| {
-        build_available_skills(
-            host_snapshot.outcome(),
-            default_skill_metadata_budget(model_context_window),
-        )
-    });
+    let host_budget = match default_skill_metadata_budget(model_context_window) {
+        SkillMetadataBudget::Tokens(limit) if limit > MAX_HOST_SKILL_METADATA_TOKENS => {
+            SkillMetadataBudget::CappedTokens(MAX_HOST_SKILL_METADATA_TOKENS)
+        }
+        budget => budget,
+    };
+    let host_available = host_snapshot
+        .and_then(|host_snapshot| build_available_skills(host_snapshot.outcome(), host_budget));
     if host_snapshot.is_some() {
         record_skill_render_metrics(
             session_telemetry,
@@ -122,7 +126,7 @@ fn bounded_skill_lines<'a>(
 }
 
 fn bounded_mixed_fragment(
-    available: codex_core_skills::AvailableSkills,
+    mut available: codex_core_skills::AvailableSkills,
     mut external: BoundedSkillLines,
 ) -> AvailableSkillsInstructions {
     loop {
@@ -137,13 +141,15 @@ fn bounded_mixed_fragment(
         if approx_token_count(&fragment.render()) <= MAX_AVAILABLE_SKILLS_TOKENS {
             return fragment;
         }
-        if external.lines.pop().is_none() {
-            return AvailableSkillsInstructions::from_available_skills_with_additional_lines(
-                available,
-                Vec::new(),
-            );
+        if external.lines.pop().is_some() {
+            external.omitted = external.omitted.saturating_add(1);
+            continue;
         }
-        external.omitted = external.omitted.saturating_add(1);
+        if available.skill_lines.pop().is_some() {
+            external.omitted = external.omitted.saturating_add(1);
+            continue;
+        }
+        available.skill_root_lines.clear();
     }
 }
 

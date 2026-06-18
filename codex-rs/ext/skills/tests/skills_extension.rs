@@ -303,7 +303,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &initial_turn_store,
-            model_context_window: Some(400_000),
+            model_context_window: Some(2_000_000),
         })
         .await;
     assert_eq!(1, prompt_fragments.len());
@@ -323,7 +323,8 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
     let EventMsg::Warning(warning) = event_rx.try_recv()?.1.msg else {
         panic!("expected host budget warning");
     };
-    assert!(warning.message.contains("2% skills context budget"));
+    assert!(warning.message.contains("skills context budget"));
+    assert!(!warning.message.contains("2% skills context budget"));
 
     let turn_store = ExtensionData::new("turn-1");
     let fragments = registry.turn_input_contributors()[0]

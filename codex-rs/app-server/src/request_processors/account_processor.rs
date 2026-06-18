@@ -439,11 +439,9 @@ impl AccountRequestProcessor {
                 thread_manager,
                 skills_service,
                 chatgpt_base_url,
-                AccountLoginCompletedNotification {
-                    login_id: Some(login_id.to_string()),
-                    success,
-                    error: error_msg,
-                },
+                login_id,
+                /*success*/ success,
+                /*error_msg*/ error_msg,
             )
             .await;
 
@@ -516,11 +514,9 @@ impl AccountRequestProcessor {
                 thread_manager,
                 skills_service,
                 chatgpt_base_url,
-                AccountLoginCompletedNotification {
-                    login_id: Some(login_id.to_string()),
-                    success,
-                    error: error_msg,
-                },
+                login_id,
+                /*success*/ success,
+                /*error_msg*/ error_msg,
             )
             .await;
 
@@ -668,11 +664,17 @@ impl AccountRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         skills_service: Arc<codex_core_skills::SkillsService>,
         chatgpt_base_url: String,
-        notification: AccountLoginCompletedNotification,
+        login_id: Uuid,
+        success: bool,
+        error_msg: Option<String>,
     ) {
-        let success = notification.success;
+        let payload_v2 = AccountLoginCompletedNotification {
+            login_id: Some(login_id.to_string()),
+            success,
+            error: error_msg,
+        };
         outgoing
-            .send_server_notification(ServerNotification::AccountLoginCompleted(notification))
+            .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
             .await;
 
         if success {

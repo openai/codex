@@ -145,10 +145,10 @@ where
                 return Vec::new();
             };
             let config = thread_state.config();
+            let host_snapshot = self.host_snapshot(turn_store, &thread_state).await;
             if !config.include_instructions {
                 return Vec::new();
             }
-            let host_snapshot = self.host_snapshot(turn_store, &thread_state).await;
             let catalog = self
                 .list_skills(
                     SkillListQuery {
@@ -404,6 +404,7 @@ impl<C> SkillsExtension<C> {
         thread_state: &SkillsThreadState,
     ) -> Option<Arc<HostSkillsSnapshot>> {
         if let Some(snapshot) = turn_store.get::<HostSkillsSnapshot>() {
+            refine_plugin_skill_availability(turn_store, &snapshot);
             return Some(snapshot);
         }
         let provider = self.host_provider.as_ref()?;
@@ -421,6 +422,7 @@ impl<C> SkillsExtension<C> {
                 fs,
             )
             .await;
+        refine_plugin_skill_availability(turn_store, &snapshot);
         turn_store.insert(snapshot);
         turn_store.get::<HostSkillsSnapshot>()
     }
@@ -480,6 +482,37 @@ impl<C> SkillsExtension<C> {
             },
         );
     }
+}
+
+fn refine_plugin_skill_availability(
+    turn_store: &ExtensionData,
+    host_snapshot: &HostSkillsSnapshot,
+) {
+    let Some(plugins) = turn_store.get::<PluginLoadOutcome>() else {
+        return;
+    };
+    let outcome = host_snapshot.outcome();
+    let mut available_plugin_ids = outcome
+        .skills_with_enabled()
+        .filter(|(_, enabled)| *enabled)
+        .filter_map(|(skill, _)| skill.plugin_id.clone())
+        .collect::<HashSet<_>>();
+    for plugin in plugins.plugins().iter().filter(|plugin| plugin.is_active()) {
+        if outcome.errors.iter().any(|error| {
+            plugin
+                .skill_roots
+                .iter()
+                .any(|root| error.path.as_path().starts_with(root.as_path()))
+        }) {
+            available_plugin_ids.insert(plugin.config_name.clone());
+        }
+    }
+    turn_store.insert(
+        plugins
+            .as_ref()
+            .clone()
+            .with_available_skill_plugins(&available_plugin_ids),
+    );
 }
 
 impl<C> ToolLifecycleContributor for SkillsExtension<C>

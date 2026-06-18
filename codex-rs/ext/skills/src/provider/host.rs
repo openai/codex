@@ -27,10 +27,7 @@ use crate::provider::SkillSearchRequest;
 
 const HOST_AUTHORITY_ID: &str = "host";
 
-/// Host-owned skill provider backed by an immutable service snapshot.
-///
-/// Discovery and caching belong to `SkillsService`; this provider only maps a
-/// snapshot into the authority-aware catalog/read contract.
+/// Host-owned skill provider backed by `SkillsService` snapshots.
 #[derive(Clone, Default)]
 pub struct HostSkillProvider {
     service: Option<Arc<SkillsService>>,

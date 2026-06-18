@@ -147,6 +147,7 @@ impl SkillsService {
                 scope: SkillScope::User,
                 file_system: Arc::clone(&codex_exec_server::LOCAL_FS),
                 plugin_id: Some(root.plugin_id),
+                plugin_namespace: Some(root.plugin_namespace),
                 plugin_root: Some(root.plugin_root),
             })
             .collect::<Vec<_>>();

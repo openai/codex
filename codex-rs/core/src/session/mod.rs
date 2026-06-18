@@ -2986,11 +2986,18 @@ impl Session {
             }
         }
         developer_sections.extend(extension_developer_capabilities);
-        let loaded_plugins = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config.plugins_config_input())
-            .await;
+        let loaded_plugins = match turn_context
+            .extension_data
+            .get::<codex_core_plugins::PluginLoadOutcome>()
+        {
+            Some(loaded_plugins) => loaded_plugins,
+            None => Arc::new(
+                self.services
+                    .plugins_manager
+                    .plugins_for_config(&turn_context.config.plugins_config_input())
+                    .await,
+            ),
+        };
         let recommended_plugin_candidates =
             if crate::tools::spec_plan::tool_suggest_enabled(turn_context) {
                 let auth = self.services.auth_manager.auth().await;

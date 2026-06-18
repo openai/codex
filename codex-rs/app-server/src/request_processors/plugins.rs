@@ -1079,7 +1079,8 @@ impl PluginRequestProcessor {
                     .plugin
                     .plugin_root
                     .as_ref()
-                    .map(|plugin_root| {
+                    .zip(outcome.plugin.plugin_namespace.as_ref())
+                    .map(|(plugin_root, plugin_namespace)| {
                         outcome
                             .plugin
                             .skill_roots
@@ -1088,6 +1089,7 @@ impl PluginRequestProcessor {
                             .map(|path| codex_utils_plugins::PluginSkillRoot {
                                 path,
                                 plugin_id: plugin_id.clone(),
+                                plugin_namespace: plugin_namespace.clone(),
                                 plugin_root: plugin_root.clone(),
                             })
                             .collect()

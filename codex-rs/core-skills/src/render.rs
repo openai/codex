@@ -121,26 +121,27 @@ pub fn render_available_skills_body_for_mode(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillMetadataBudget {
     Tokens(usize),
+    CappedTokens(usize),
     Characters(usize),
 }
 
 impl SkillMetadataBudget {
     fn limit(self) -> usize {
         match self {
-            Self::Tokens(limit) | Self::Characters(limit) => limit,
+            Self::Tokens(limit) | Self::CappedTokens(limit) | Self::Characters(limit) => limit,
         }
     }
 
     fn cost(self, text: &str) -> usize {
         match self {
-            Self::Tokens(_) => approx_token_count(text),
+            Self::Tokens(_) | Self::CappedTokens(_) => approx_token_count(text),
             Self::Characters(_) => text.chars().count(),
         }
     }
 
     fn cost_from_counts(self, chars: usize, bytes: usize) -> usize {
         match self {
-            Self::Tokens(_) => approx_token_count_from_bytes(bytes),
+            Self::Tokens(_) | Self::CappedTokens(_) => approx_token_count_from_bytes(bytes),
             Self::Characters(_) => chars,
         }
     }
@@ -253,7 +254,9 @@ fn build_available_skills_from_lines(
         Some(
             match budget {
                 SkillMetadataBudget::Tokens(_) => SKILL_DESCRIPTION_TRUNCATED_WARNING_WITH_PERCENT,
-                SkillMetadataBudget::Characters(_) => SKILL_DESCRIPTION_TRUNCATED_WARNING,
+                SkillMetadataBudget::CappedTokens(_) | SkillMetadataBudget::Characters(_) => {
+                    SKILL_DESCRIPTION_TRUNCATED_WARNING
+                }
             }
             .to_string(),
         )
@@ -291,7 +294,9 @@ fn budget_warning_prefix(budget: SkillMetadataBudget, prefix: &str) -> String {
             "Exceeded skills context budget of 2%.",
             1,
         ),
-        SkillMetadataBudget::Characters(_) => prefix.to_string(),
+        SkillMetadataBudget::CappedTokens(_) | SkillMetadataBudget::Characters(_) => {
+            prefix.to_string()
+        }
     }
 }
 
@@ -622,6 +627,7 @@ fn build_aliased_available_skills(
     let adjusted_limit = budget.limit().saturating_sub(plan.table_cost);
     let adjusted_budget = match budget {
         SkillMetadataBudget::Tokens(_) => SkillMetadataBudget::Tokens(adjusted_limit),
+        SkillMetadataBudget::CappedTokens(_) => SkillMetadataBudget::CappedTokens(adjusted_limit),
         SkillMetadataBudget::Characters(_) => SkillMetadataBudget::Characters(adjusted_limit),
     };
     let ordered_skills = ordered_skills_for_budget(skills);
