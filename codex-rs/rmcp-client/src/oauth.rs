@@ -66,7 +66,9 @@ use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
-const REFRESH_SKEW_MILLIS: u64 = 30_000;
+// Keep a 30-second guard band ahead of RMCP's 30-second automatic refresh
+// buffer so preflight normally refreshes before the request path can do so.
+const REFRESH_SKEW_MILLIS: u64 = 60_000;
 const REFRESH_LOCK_DIR: &str = "mcp-oauth-refresh-locks";
 const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(60);
 const CREDENTIAL_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(500);
@@ -1714,7 +1716,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_transaction_refreshes_when_only_derived_expires_in_drifted() -> Result<()> {
+    async fn refresh_transaction_refreshes_in_guard_band_despite_expires_in_drift() -> Result<()> {
         let _env = TempCodexHome::new();
         let server = MockServer::start().await;
         mount_oauth_metadata(&server).await;
@@ -1729,7 +1731,7 @@ mod tests {
         let store = MockKeyringStore::default();
         let mut initial_tokens = sample_tokens();
         initial_tokens.url = format!("{}/mcp", server.uri());
-        initial_tokens.expires_at = Some(now_millis().saturating_add(5_000));
+        initial_tokens.expires_at = Some(now_millis().saturating_add(45_000));
         initial_tokens
             .token_response
             .0

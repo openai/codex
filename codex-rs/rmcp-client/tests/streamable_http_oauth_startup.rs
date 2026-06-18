@@ -375,7 +375,7 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
         url: UNEXPIRED_SERVER_URL.to_string(),
         client_id: "test-client-id".to_string(),
         token_response: WrappedOAuthTokenResponse(response),
-        expires_at: Some(now.saturating_add(/*rhs*/ 60_000)),
+        expires_at: Some(now.saturating_add(/*rhs*/ 120_000)),
     };
     save_oauth_tokens(
         SERVER_NAME,
@@ -494,7 +494,7 @@ async fn operation_preflight_refresh_failure_child() -> anyhow::Result<()> {
 
     initialize_client(&client).await?;
 
-    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    tokio::time::sleep(Duration::from_millis(2_200)).await;
     let error = client
         .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
         .await
@@ -571,7 +571,7 @@ fn save_near_expiry_file_mode_tokens(server_url: &str) -> anyhow::Result<()> {
         VendorExtraTokenFields::default(),
     );
     response.set_refresh_token(Some(RefreshToken::new(REFRESH_TOKEN.to_string())));
-    response.set_expires_in(Some(&Duration::from_secs(31)));
+    response.set_expires_in(Some(&Duration::from_secs(62)));
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
@@ -581,7 +581,7 @@ fn save_near_expiry_file_mode_tokens(server_url: &str) -> anyhow::Result<()> {
         url: server_url.to_string(),
         client_id: "test-client-id".to_string(),
         token_response: WrappedOAuthTokenResponse(response),
-        expires_at: Some(now.saturating_add(/*rhs*/ 31_000)),
+        expires_at: Some(now.saturating_add(/*rhs*/ 62_000)),
     };
     save_oauth_tokens(
         SERVER_NAME,
