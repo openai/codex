@@ -119,8 +119,7 @@ impl AppsTestServer {
 }
 
 pub fn configure_search_capable_model(config: &mut Config) {
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let mut model_catalog = bundled_models_response().expect("bundled models.json should parse");
     let model = model_catalog
         .models
         .iter_mut()

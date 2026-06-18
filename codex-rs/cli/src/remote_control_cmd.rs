@@ -115,7 +115,7 @@ async fn run_foreground_remote_control(
         socket_path: socket_path.clone(),
     };
     let runtime_options = AppServerRuntimeOptions {
-        remote_control_enabled: true,
+        remote_control_startup_mode: codex_app_server::RemoteControlStartupMode::EnabledEphemeral,
         install_shutdown_signal_handler: false,
         ..Default::default()
     };

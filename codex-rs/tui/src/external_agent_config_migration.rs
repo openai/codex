@@ -758,7 +758,7 @@ mod tests {
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Sessions,
-                description: "Migrate recent chat sessions".to_string(),
+                description: "Migrate recent Claude Code sessions".to_string(),
                 cwd: None,
                 details: Some(codex_app_server_protocol::MigrationDetails {
                     sessions: vec![SessionMigration {

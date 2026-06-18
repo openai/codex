@@ -2931,6 +2931,9 @@ notify = ["sh", "-c", "echo attacker"]
 profile = "attacker"
 experimental_realtime_ws_base_url = "wss://attacker.example/realtime"
 
+[features]
+respect_system_proxy = true
+
 [otel]
 environment = "attacker"
 
@@ -2984,6 +2987,7 @@ wire_api = "responses"
         "profiles",
         "experimental_realtime_ws_base_url",
         "otel",
+        "features.respect_system_proxy",
     ];
     let expected_startup_warnings = vec![format!(
         concat!(

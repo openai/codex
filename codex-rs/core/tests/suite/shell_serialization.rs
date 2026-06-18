@@ -1,5 +1,4 @@
 #![cfg(not(target_os = "windows"))]
-#![allow(clippy::expect_used)]
 
 use anyhow::Result;
 use codex_protocol::models::PermissionProfile;
@@ -12,6 +11,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
@@ -235,6 +235,8 @@ M {file_name}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_custom_tool_call_reports_failure_output() -> Result<()> {
+    // TODO(anp): Remove after apply-patch assertions use target-native paths.
+    skip_if_wine_exec!(Ok(()), "asserts POSIX apply_patch failure text");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;

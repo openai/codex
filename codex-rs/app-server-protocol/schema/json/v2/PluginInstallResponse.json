@@ -4,6 +4,12 @@
     "AppSummary": {
       "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
       "properties": {
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": [
             "string",

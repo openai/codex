@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
@@ -14,6 +13,7 @@ use super::ThreadConfigContext;
 use super::ThreadConfigLoadError;
 use super::ThreadConfigLoadErrorCode;
 use super::ThreadConfigLoader;
+use super::ThreadConfigLoaderFuture;
 use super::ThreadConfigSource;
 use super::UserThreadConfig;
 use proto::thread_config_loader_client::ThreadConfigLoaderClient;
@@ -49,10 +49,7 @@ impl RemoteThreadConfigLoader {
                 )
             })
     }
-}
 
-#[async_trait]
-impl ThreadConfigLoader for RemoteThreadConfigLoader {
     async fn load(
         &self,
         context: ThreadConfigContext,
@@ -70,6 +67,15 @@ impl ThreadConfigLoader for RemoteThreadConfigLoader {
             .into_iter()
             .map(thread_config_source_from_proto)
             .collect()
+    }
+}
+
+impl ThreadConfigLoader for RemoteThreadConfigLoader {
+    fn load(
+        &self,
+        context: ThreadConfigContext,
+    ) -> ThreadConfigLoaderFuture<'_, Vec<ThreadConfigSource>> {
+        Box::pin(RemoteThreadConfigLoader::load(self, context))
     }
 }
 
@@ -321,8 +327,7 @@ mod tests {
         expected_cwd: String,
     }
 
-    #[tonic::async_trait]
-    impl thread_config_loader_server::ThreadConfigLoader for TestServer {
+    impl TestServer {
         async fn load(
             &self,
             request: Request<proto::LoadThreadConfigRequest>,
@@ -338,6 +343,26 @@ mod tests {
             Ok(Response::new(proto::LoadThreadConfigResponse {
                 sources: self.sources.clone(),
             }))
+        }
+    }
+
+    impl thread_config_loader_server::ThreadConfigLoader for TestServer {
+        fn load<'a, 'async_trait>(
+            &'a self,
+            request: Request<proto::LoadThreadConfigRequest>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<Response<proto::LoadThreadConfigResponse>, Status>,
+                    > + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'a: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(TestServer::load(self, request))
         }
     }
 

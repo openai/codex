@@ -7,12 +7,11 @@ use crate::tui;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 
 pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_FINISHED_MESSAGE: &str =
-    "Agent import finished. Run /import again to check for additional items.";
+    "Claude Code import finished. Run /import again to check for additional items.";
 pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_NO_ITEMS_MESSAGE: &str =
-    "No supported agent setup was found to import.";
-pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_REMOTE_UNAVAILABLE_MESSAGE: &str =
-    "Agent import is unavailable in remote sessions. Start Codex locally and run /import.";
-pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_DAEMON_UNAVAILABLE_MESSAGE: &str = "Agent import is unavailable while Codex is connected to the local app-server daemon. Stop the daemon, restart Codex, and run /import.";
+    "No Claude Code setup was found to import.";
+pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_REMOTE_UNAVAILABLE_MESSAGE: &str = "Import from Claude Code is unavailable in remote sessions. Start Codex locally and run /import.";
+pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_DAEMON_UNAVAILABLE_MESSAGE: &str = "Import from Claude Code is unavailable while Codex is connected to the local app-server daemon. Stop the daemon, restart Codex, and run /import.";
 
 pub(crate) enum ExternalAgentConfigMigrationFlowOutcome {
     Started(String),
@@ -21,7 +20,7 @@ pub(crate) enum ExternalAgentConfigMigrationFlowOutcome {
 }
 
 fn external_agent_config_migration_success_message(remaining_item_count: usize) -> String {
-    let message = "Agent import started. You can keep working while it finishes. Imported setup will apply to new chats.";
+    let message = "Claude Code import started. You can keep working while it finishes. Imported setup will apply to new chats.";
     match remaining_items_handoff(remaining_item_count) {
         Some(remaining_items_handoff) => format!("{message} {remaining_items_handoff}"),
         None => message.to_string(),
@@ -71,7 +70,7 @@ pub(crate) async fn handle_external_agent_config_migration_prompt(
                 cwd = %cwd.display(),
                 "failed to detect external agent config migrations"
             );
-            return Err(format!("Could not check for agent setup: {err}"));
+            return Err(format!("Could not check for Claude Code setup: {err}"));
         }
     };
 

@@ -503,8 +503,7 @@ def main() -> int:
     artifacts_temp_root: Path | None = None
     remove_artifacts_temp_root = False
     resolved_head_sha: str | None = None
-
-    final_messages = []
+    staging_jobs: list[tuple[Path, list[str], str]] = []
 
     try:
         if native_component_sets:
@@ -570,22 +569,33 @@ def main() -> int:
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
 
-            try:
-                run_command(cmd)
-            finally:
-                if not args.keep_staging_dirs:
-                    shutil.rmtree(staging_dir, ignore_errors=True)
+            staging_jobs.append(
+                (staging_dir, cmd, f"Staged {package} at {pack_output}")
+            )
 
-            final_messages.append(f"Staged {package} at {pack_output}")
+        max_workers = min(len(staging_jobs), os.cpu_count() or 1)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(run_command, cmd): staging_dir
+                for staging_dir, cmd, _message in staging_jobs
+            }
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                finally:
+                    if not args.keep_staging_dirs:
+                        shutil.rmtree(futures[future], ignore_errors=True)
     finally:
         if not args.keep_staging_dirs:
+            for staging_dir, _cmd, _message in staging_jobs:
+                shutil.rmtree(staging_dir, ignore_errors=True)
             for vendor_temp_root in vendor_temp_roots:
                 shutil.rmtree(vendor_temp_root, ignore_errors=True)
         if remove_artifacts_temp_root and artifacts_temp_root is not None:
             shutil.rmtree(artifacts_temp_root, ignore_errors=True)
 
-    for msg in final_messages:
-        print(msg, flush=True)
+    for _staging_dir, _cmd, message in staging_jobs:
+        print(message, flush=True)
 
     return 0
 

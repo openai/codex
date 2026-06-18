@@ -10,10 +10,9 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
-use async_trait::async_trait;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
-use codex_exec_server::ExecServerError;
+use codex_exec_server::ExecProcessFuture;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
@@ -21,6 +20,7 @@ use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::get_remote_test_env;
@@ -77,6 +77,7 @@ fn test_exec_request(
         cwd,
         env,
         network,
+        /*network_environment_id*/ None,
         ExecExpiration::DefaultTimeout,
         ExecCapturePolicy::ShellTool,
         SandboxType::None,
@@ -129,7 +130,7 @@ async fn exec_command_with_tty(
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
-            cwd: cwd.clone(),
+            cwd: cwd.clone().into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: cmd.to_string(),
             tty,
@@ -191,7 +192,7 @@ async fn exec_command_with_tty(
         chunk_id: generate_chunk_id(),
         wall_time,
         raw_output: collected,
-        truncation_policy: turn.truncation_policy,
+        truncation_policy: turn.model_info.truncation_policy.into(),
         max_output_tokens: None,
         process_id: response_process_id,
         exit_code,
@@ -218,7 +219,31 @@ struct BlockingTerminateExecProcess {
     wake_tx: watch::Sender<u64>,
 }
 
-#[async_trait]
+impl BlockingTerminateExecProcess {
+    async fn read(&self) -> Result<ReadResponse, codex_exec_server::ExecServerError> {
+        Ok(ReadResponse {
+            chunks: Vec::new(),
+            next_seq: 1,
+            exited: false,
+            exit_code: None,
+            closed: false,
+            failure: None,
+        })
+    }
+
+    async fn write(&self) -> Result<WriteResponse, codex_exec_server::ExecServerError> {
+        Ok(WriteResponse {
+            status: WriteStatus::Accepted,
+        })
+    }
+
+    async fn terminate(&self) -> Result<(), codex_exec_server::ExecServerError> {
+        let _ = self.terminate_started.send(true);
+        self.allow_terminate.notified().await;
+        Ok(())
+    }
+}
+
 impl ExecProcess for BlockingTerminateExecProcess {
     fn process_id(&self) -> &ProcessId {
         &self.process_id
@@ -232,36 +257,25 @@ impl ExecProcess for BlockingTerminateExecProcess {
         ExecProcessEventReceiver::empty()
     }
 
-    async fn read(
+    fn read(
         &self,
         _after_seq: Option<u64>,
         _max_bytes: Option<usize>,
         _wait_ms: Option<u64>,
-    ) -> Result<ReadResponse, ExecServerError> {
-        Ok(ReadResponse {
-            chunks: Vec::new(),
-            next_seq: 1,
-            exited: false,
-            exit_code: None,
-            closed: false,
-            failure: None,
-        })
+    ) -> ExecProcessFuture<'_, ReadResponse> {
+        Box::pin(BlockingTerminateExecProcess::read(self))
     }
 
-    async fn write(&self, _chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
-        Ok(WriteResponse {
-            status: WriteStatus::Accepted,
-        })
+    fn write(&self, _chunk: Vec<u8>) -> ExecProcessFuture<'_, WriteResponse> {
+        Box::pin(BlockingTerminateExecProcess::write(self))
     }
 
-    async fn signal(&self, _signal: ProcessSignal) -> Result<(), ExecServerError> {
-        Ok(())
+    fn signal(&self, _signal: ProcessSignal) -> ExecProcessFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
     }
 
-    async fn terminate(&self) -> Result<(), ExecServerError> {
-        let _ = self.terminate_started.send(true);
-        self.allow_terminate.notified().await;
-        Ok(())
+    fn terminate(&self) -> ExecProcessFuture<'_, ()> {
+        Box::pin(BlockingTerminateExecProcess::terminate(self))
     }
 }
 
@@ -358,7 +372,7 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
             item_id: "call".to_string(),
             process_id: process_id.to_string(),
             command: "bash -i".to_string(),
-            cwd,
+            cwd: cwd.into(),
         }]
     );
 
@@ -662,7 +676,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             process,
             call_id: "call".to_string(),
             process_id,
-            cwd,
+            cwd: cwd.into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: "sleep 60".to_string(),
             tty: true,
@@ -735,7 +749,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
             process: Arc::clone(&process),
             call_id: "call".to_string(),
             process_id,
-            cwd,
+            cwd: cwd.into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hook_command: "sleep 60".to_string(),
             tty: true,

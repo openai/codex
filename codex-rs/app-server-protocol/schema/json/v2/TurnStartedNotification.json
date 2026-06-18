@@ -431,6 +431,9 @@
       ],
       "type": "string"
     },
+    "LegacyAppPathString": {
+      "type": "string"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -831,7 +834,7 @@
             "cwd": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/AbsolutePathBuf"
+                  "$ref": "#/definitions/LegacyAppPathString"
                 }
               ],
               "description": "The command's working directory."
@@ -1229,6 +1232,32 @@
             "type"
           ],
           "title": "ImageViewThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "durationMs": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "sleep"
+              ],
+              "title": "SleepThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "durationMs",
+            "id",
+            "type"
+          ],
+          "title": "SleepThreadItem",
           "type": "object"
         },
         {

@@ -5,6 +5,7 @@ use app_test_support::to_response;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallResponse;
+use codex_app_server_protocol::DynamicToolFunctionSpec;
 use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -126,8 +127,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            dynamic_tools: Some(vec![DynamicToolSpec {
-                namespace: None,
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: tool_name.to_string(),
                 description: "Deterministic wait tool".to_string(),
                 input_schema: json!({
@@ -136,7 +136,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
                     "additionalProperties": false,
                 }),
                 defer_loading: false,
-            }]),
+            })]),
             ..Default::default()
         })
         .await?;

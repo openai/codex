@@ -977,6 +977,7 @@ mod tests {
                 item_id: "item-1".to_string(),
                 started_at_ms: 0,
                 approval_id: None,
+                environment_id: None,
                 reason: None,
                 network_approval_context: None,
                 command: Some("echo hi".to_string()),
@@ -1259,6 +1260,7 @@ mod tests {
                     turn_id: "turn-1".to_string(),
                     item_id: "call-1".to_string(),
                     questions: vec![],
+                    auto_resolution_ms: None,
                 },
             ))
             .await;
@@ -1321,6 +1323,7 @@ mod tests {
                     turn_id: "turn-1".to_string(),
                     item_id: "call-1".to_string(),
                     questions: vec![],
+                    auto_resolution_ms: None,
                 },
             ))
             .await;

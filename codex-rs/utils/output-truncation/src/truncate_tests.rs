@@ -14,7 +14,7 @@ fn truncate_bytes_less_than_placeholder_returns_placeholder() {
     let content = "example output";
 
     assert_eq!(
-        "Total output lines: 1\n\n…13 chars truncated…t",
+        "Warning: truncated output (original token count: 4)\nTotal output lines: 1\n\n…13 chars truncated…t",
         formatted_truncate_text(content, TruncationPolicy::Bytes(1)),
     );
 }
@@ -24,7 +24,7 @@ fn truncate_tokens_less_than_placeholder_returns_placeholder() {
     let content = "example output";
 
     assert_eq!(
-        "Total output lines: 1\n\nex…3 tokens truncated…ut",
+        "Warning: truncated output (original token count: 4)\nTotal output lines: 1\n\nex…3 tokens truncated…ut",
         formatted_truncate_text(content, TruncationPolicy::Tokens(1)),
     );
 }
@@ -54,7 +54,7 @@ fn truncate_tokens_over_limit_returns_truncated() {
     let content = "this is an example of a long output that should be truncated";
 
     assert_eq!(
-        "Total output lines: 1\n\nthis is an…10 tokens truncated… truncated",
+        "Warning: truncated output (original token count: 15)\nTotal output lines: 1\n\nthis is an…10 tokens truncated… truncated",
         formatted_truncate_text(content, TruncationPolicy::Tokens(5)),
     );
 }
@@ -64,7 +64,7 @@ fn truncate_bytes_over_limit_returns_truncated() {
     let content = "this is an example of a long output that should be truncated";
 
     assert_eq!(
-        "Total output lines: 1\n\nthis is an exam…30 chars truncated…ld be truncated",
+        "Warning: truncated output (original token count: 15)\nTotal output lines: 1\n\nthis is an exam…30 chars truncated…ld be truncated",
         formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
     );
 }
@@ -75,7 +75,7 @@ fn truncate_bytes_reports_original_line_count_when_truncated() {
         "this is an example of a long output that should be truncated\nalso some other line";
 
     assert_eq!(
-        "Total output lines: 2\n\nthis is an exam…51 chars truncated…some other line",
+        "Warning: truncated output (original token count: 21)\nTotal output lines: 2\n\nthis is an exam…51 chars truncated…some other line",
         formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
     );
 }
@@ -86,7 +86,7 @@ fn truncate_tokens_reports_original_line_count_when_truncated() {
         "this is an example of a long output that should be truncated\nalso some other line";
 
     assert_eq!(
-        "Total output lines: 2\n\nthis is an example o…11 tokens truncated…also some other line",
+        "Warning: truncated output (original token count: 21)\nTotal output lines: 2\n\nthis is an example o…11 tokens truncated…also some other line",
         formatted_truncate_text(content, TruncationPolicy::Tokens(10)),
     );
 }
@@ -201,7 +201,7 @@ fn formatted_truncate_text_content_items_with_policy_preserves_empty_leading_tex
     assert_eq!(
         output,
         vec![FunctionCallOutputContentItem::InputText {
-            text: "Total output lines: 1\n\n…3 chars truncated…".to_string(),
+            text: "Warning: truncated output (original token count: 1)\nTotal output lines: 1\n\n…3 chars truncated…".to_string(),
         }]
     );
     assert_eq!(original_token_count, Some(1));
@@ -236,7 +236,7 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_ima
         output,
         vec![
             FunctionCallOutputContentItem::InputText {
-                text: "Total output lines: 3\n\nabcd…6 chars truncated…ijkl".to_string(),
+                text: "Warning: truncated output (original token count: 4)\nTotal output lines: 3\n\nabcd…6 chars truncated…ijkl".to_string(),
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "img:one".to_string(),
@@ -269,7 +269,7 @@ fn formatted_truncate_text_content_items_with_policy_preserves_encrypted_content
         output,
         vec![
             FunctionCallOutputContentItem::InputText {
-                text: "Total output lines: 1\n\na…6 chars truncated…h".to_string(),
+                text: "Warning: truncated output (original token count: 2)\nTotal output lines: 1\n\na…6 chars truncated…h".to_string(),
             },
             FunctionCallOutputContentItem::EncryptedContent {
                 encrypted_content: "enc_opaque".to_string(),
@@ -322,7 +322,7 @@ fn formatted_truncate_text_content_items_with_policy_merges_all_text_for_token_b
     assert_eq!(
         output,
         vec![FunctionCallOutputContentItem::InputText {
-            text: "Total output lines: 2\n\nabcd…3 tokens truncated…mnop".to_string(),
+            text: "Warning: truncated output (original token count: 5)\nTotal output lines: 2\n\nabcd…3 tokens truncated…mnop".to_string(),
         }]
     );
     assert_eq!(original_token_count, Some(5));

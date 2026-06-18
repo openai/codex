@@ -7,11 +7,11 @@ exports_files(
 
 codex_rust_crate(
     name = "cargo-bin",
-    crate_name = "codex_utils_cargo_bin",
     compile_data = ["repo_root.marker"],
+    crate_name = "codex_utils_cargo_bin",
     lib_data_extra = ["repo_root.marker"],
-    test_data_extra = ["repo_root.marker"],
     rustc_env = {
         "CODEX_REPO_ROOT_MARKER": "$(rlocationpath :repo_root.marker)",
     },
+    test_data_extra = ["repo_root.marker"],
 )

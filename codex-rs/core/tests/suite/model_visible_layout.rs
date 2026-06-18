@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use core_test_support::test_codex::local_selections;
 use std::fs;
 use std::sync::Arc;
@@ -52,7 +50,7 @@ fn user_instructions_wrapper_count(request: &ResponsesRequest) -> usize {
     request
         .message_input_texts("user")
         .iter()
-        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .filter(|text| text.starts_with("# AGENTS.md instructions"))
         .count()
 }
 

@@ -19,12 +19,16 @@ pub(crate) mod exec_server;
 pub(crate) const DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG: &str =
     "--codex-test-delayed-output-after-exit-parent";
 
+const CODEX_WINDOWS_SANDBOX_ARG1: &str = "--run-as-windows-sandbox";
 const DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG: &str = "--codex-test-delayed-output-after-exit-child";
 
 #[ctor]
 pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
     let guard = configure_test_binary_dispatch("codex-exec-server-tests", |exe_name, argv1| {
         if argv1 == Some(CODEX_FS_HELPER_ARG1) {
+            return TestBinaryDispatchMode::DispatchArg0Only;
+        }
+        if argv1 == Some(CODEX_WINDOWS_SANDBOX_ARG1) {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
         if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
