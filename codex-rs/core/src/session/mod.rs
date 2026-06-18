@@ -585,8 +585,7 @@ impl Codex {
             .await;
         let multi_agent_version =
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
-        let multi_agent_mode =
-            initial_multi_agent_mode.or_else(|| conversation_history.get_multi_agent_mode());
+        let multi_agent_mode = initial_multi_agent_mode;
         config
             .validate_multi_agent_v2_config()
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
@@ -3252,7 +3251,10 @@ impl Session {
             &turn_context.config.multi_agent_v2,
             &session_source,
             turn_context.multi_agent_mode,
-            turn_context.features.enabled(Feature::MultiAgentMode),
+            turn_context
+                .config
+                .features
+                .enabled(Feature::MultiAgentMode),
         ) {
             items.push(ContextualUserFragment::into(
                 MultiAgentModeInstructions::new(multi_agent_mode),
