@@ -842,6 +842,13 @@
         },
         {
           "properties": {
+            "id": {
+              "description": "Existing provider ID retained on serialized history for compatibility.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {

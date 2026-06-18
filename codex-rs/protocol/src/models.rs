@@ -1108,9 +1108,9 @@ pub enum ResponseItem {
     //   "result":"..."
     // }
     ImageGenerationCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        #[schemars(skip)]
+        /// Existing provider ID retained on serialized history for compatibility.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         status: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
