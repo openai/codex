@@ -288,48 +288,46 @@ async fn expect_network_approval(
     expected_environment_id: &str,
 ) -> Result<ExecApprovalRequestEvent> {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let remaining = deadline
-            .checked_duration_since(std::time::Instant::now())
-            .context("timed out waiting for network approval request")?;
-        let event = wait_for_event_with_timeout(
-            &test.codex,
-            |event| {
-                matches!(
-                    event,
-                    EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-                )
-            },
-            remaining,
-        )
-        .await;
-        match event {
-            EventMsg::ExecApprovalRequest(approval) => {
-                assert_eq!(
-                    approval.command,
-                    vec![
-                        "network-access".to_string(),
-                        NETWORK_TEST_TARGET.to_string()
-                    ]
-                );
-                assert_eq!(
-                    approval.network_approval_context,
-                    Some(NetworkApprovalContext {
-                        host: NETWORK_TEST_HOST.to_string(),
-                        protocol: NetworkApprovalProtocol::Http,
-                    })
-                );
-                assert_eq!(
-                    approval.environment_id.as_deref(),
-                    Some(expected_environment_id)
-                );
-                return Ok(approval);
-            }
-            EventMsg::TurnComplete(_) => {
-                panic!("expected network approval request before completion");
-            }
-            other => panic!("unexpected event: {other:?}"),
+    let remaining = deadline
+        .checked_duration_since(std::time::Instant::now())
+        .context("timed out waiting for network approval request")?;
+    let event = wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        },
+        remaining,
+    )
+    .await;
+    match event {
+        EventMsg::ExecApprovalRequest(approval) => {
+            assert_eq!(
+                approval.command,
+                vec![
+                    "network-access".to_string(),
+                    NETWORK_TEST_TARGET.to_string()
+                ]
+            );
+            assert_eq!(
+                approval.network_approval_context,
+                Some(NetworkApprovalContext {
+                    host: NETWORK_TEST_HOST.to_string(),
+                    protocol: NetworkApprovalProtocol::Http,
+                })
+            );
+            assert_eq!(
+                approval.environment_id.as_deref(),
+                Some(expected_environment_id)
+            );
+            Ok(approval)
         }
+        EventMsg::TurnComplete(_) => {
+            panic!("expected network approval request before completion");
+        }
+        other => panic!("unexpected event: {other:?}"),
     }
 }
 
