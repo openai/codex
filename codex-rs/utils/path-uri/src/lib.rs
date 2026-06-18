@@ -209,13 +209,16 @@ impl PathUri {
         PathBuf::from(self.inferred_native_path_string())
     }
 
-    /// Returns the parent URI, or `None` for the URI root or an opaque fallback
-    /// URI created by [`Self::from_abs_path`].
+    /// Returns the lexical parent without crossing the inferred native path root.
+    ///
+    /// POSIX `/`, Windows drive roots, Windows UNC share roots, and opaque fallback
+    /// URIs created by [`Self::from_abs_path`] have no parent.
     pub fn parent(&self) -> Option<Self> {
         if self.encoded_path() == "/" || decode_bad_path_uri(&self.0).is_some() {
             return None;
         }
 
+        let convention = self.infer_path_convention()?;
         let mut url = self.0.clone();
         {
             let mut segments = match url.path_segments_mut() {
@@ -224,7 +227,14 @@ impl PathUri {
             };
             segments.pop_if_empty().pop();
         }
-        Some(Self(url))
+        let parent = Self(url);
+        LegacyAppPathString::from_path_uri(&parent, convention).ok()?;
+        Some(parent)
+    }
+
+    /// Returns this URI and each lexical parent up to its inferred native path root.
+    pub fn ancestors(&self) -> impl Iterator<Item = Self> {
+        std::iter::successors(Some(self.clone()), Self::parent)
     }
 
     /// Lexically resolves native absolute or relative path text against this URI.

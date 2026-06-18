@@ -334,8 +334,8 @@ async fn symlinked_cwd_uses_logical_parent_for_agents_discovery() -> Result<()> 
     assert_eq!(
         test.codex.instruction_sources().await,
         vec![
-            logical_root.join("AGENTS.md"),
-            test.config.cwd.join("AGENTS.md")
+            PathUri::from_abs_path(&logical_root.join("AGENTS.md")),
+            PathUri::from_abs_path(&test.config.cwd.join("AGENTS.md"))
         ]
     );
 
@@ -385,7 +385,10 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
 
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![global_agents, project_agents]
+        vec![
+            PathUri::from_abs_path(&global_agents),
+            PathUri::from_abs_path(&project_agents),
+        ]
     );
 
     test.submit_turn("hello").await?;
@@ -454,7 +457,7 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
     assert_eq!(provider.load_count(), 2);
     assert_eq!(
         no_environment_thread.thread.instruction_sources().await,
-        vec![global_source]
+        vec![PathUri::from_abs_path(&global_source)]
     );
 
     no_environment_thread
@@ -521,7 +524,10 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
         });
     let test = builder.build_with_remote_env(&server).await?;
     let project_source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
-    let creation_sources = vec![global_source.clone(), project_source.clone()];
+    let creation_sources = vec![
+        PathUri::from_abs_path(&global_source),
+        PathUri::from_abs_path(&project_source),
+    ];
 
     // Confirm the thread records both creation-time sources in composition order.
     assert_eq!(test.codex.instruction_sources().await, creation_sources);
@@ -672,9 +678,9 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
     assert_eq!(
         thread.thread.instruction_sources().await,
         vec![
-            global_source.clone(),
-            remote_source.clone(),
-            local_source.clone().try_into()?,
+            PathUri::from_abs_path(&global_source),
+            PathUri::from_abs_path(&remote_source),
+            PathUri::from_path(&local_source)?,
         ]
     );
 
@@ -712,7 +718,11 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
     assert_eq!(provider.load_count(), 2);
     assert_eq!(
         thread.thread.instruction_sources().await,
-        vec![global_source, remote_source, local_source.try_into()?]
+        vec![
+            PathUri::from_abs_path(&global_source),
+            PathUri::from_abs_path(&remote_source),
+            PathUri::from_path(&local_source)?,
+        ]
     );
 
     Ok(())
@@ -741,7 +751,10 @@ async fn invalid_utf8_global_instructions_are_lossy() -> Result<()> {
     test.submit_turn("inspect lossy global instructions")
         .await?;
 
-    assert_eq!(test.codex.instruction_sources().await, vec![source.clone()]);
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![PathUri::from_abs_path(&source)]
+    );
     let expected_fragment =
         expected_provider_only_instruction_fragment("global\u{FFFD}instructions");
     assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);
@@ -784,7 +797,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     // Assert the pre-resume thread reports the source used to create its snapshot.
     assert_eq!(
         initial.codex.instruction_sources().await,
-        vec![old_source.clone()],
+        vec![PathUri::from_abs_path(&old_source)],
         "initial thread reports the creation-time global source"
     );
     initial.submit_turn("persist instructions").await?;
@@ -814,7 +827,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     // Assert the API reports the new source while model history replays the old structured prefix.
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![new_source],
+        vec![PathUri::from_abs_path(&new_source)],
         "resume reports sources from the newly loaded config"
     );
 
@@ -868,7 +881,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     // Assert the parent reports the source used to create its snapshot.
     assert_eq!(
         parent.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![PathUri::from_abs_path(&source)],
         "parent reports the creation-time global source"
     );
     parent.submit_turn("persist instructions").await?;
@@ -903,7 +916,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     // Assert the fork reports the new source before issuing its first turn.
     assert_eq!(
         forked.thread.instruction_sources().await,
-        vec![new_source],
+        vec![PathUri::from_abs_path(&new_source)],
         "fork config should reflect the newly loaded global source"
     );
 
@@ -1033,7 +1046,7 @@ async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> 
     // Assert the parent reports the creation-time source before spawning.
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![PathUri::from_abs_path(&source)],
         "parent reports the creation-time global source before spawning"
     );
     test.submit_turn(SPAWN_SEED_PROMPT).await?;
@@ -1076,12 +1089,12 @@ async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> 
     assert_single_instruction_fragment(&child_request, &expected_fragment);
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![PathUri::from_abs_path(&source)],
         "running parent retains the creation-time global source after spawning"
     );
     assert_eq!(
         child_thread.instruction_sources().await,
-        vec![source],
+        vec![PathUri::from_abs_path(&source)],
         "subagent reports the parent's creation-time source"
     );
     if fork_context {
