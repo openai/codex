@@ -264,24 +264,13 @@ async fn effective_patch_permissions(
     environment_id: &str,
     action: &ApplyPatchAction,
     cwd: &PathUri,
-) -> (
+) -> std::io::Result<(
     Vec<PathUri>,
     crate::tools::handlers::EffectiveAdditionalPermissions,
     codex_protocol::permissions::FileSystemSandboxPolicy,
-) {
+)> {
     let file_paths = file_paths_for_action(action);
-    // TODO(anp): Make permission matching operate on PathUri.
-    let Ok(native_cwd) = cwd.to_abs_path() else {
-        return (
-            file_paths,
-            crate::tools::handlers::EffectiveAdditionalPermissions {
-                sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-                additional_permissions: None,
-                permissions_preapproved: false,
-            },
-            turn.file_system_sandbox_policy(),
-        );
-    };
+    let native_cwd = cwd.to_abs_path()?;
     let granted_permissions = merge_permission_profiles(
         session
             .granted_session_permissions(environment_id)
@@ -300,8 +289,7 @@ async fn effective_patch_permissions(
     let native_file_paths = file_paths
         .iter()
         .map(PathUri::to_abs_path)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_default();
+        .collect::<Result<Vec<_>, _>>()?;
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
         environment_id,
@@ -311,10 +299,30 @@ async fn effective_patch_permissions(
     )
     .await;
 
-    (
+    Ok((
         file_paths,
         effective_additional_permissions,
         file_system_sandbox_policy,
+    ))
+}
+
+fn patch_permissions_without_path_matching(
+    action: &ApplyPatchAction,
+) -> (
+    Vec<PathUri>,
+    crate::tools::handlers::EffectiveAdditionalPermissions,
+    codex_protocol::permissions::FileSystemSandboxPolicy,
+) {
+    // TODO(anp): Make permission matching operate on PathUri. Until then, foreign paths skip
+    // permission matching; a managed turn still fails closed at the platform sandbox boundary.
+    (
+        file_paths_for_action(action),
+        crate::tools::handlers::EffectiveAdditionalPermissions {
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            permissions_preapproved: false,
+        },
+        codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted(),
     )
 }
 
@@ -393,7 +401,8 @@ impl ApplyPatchHandler {
                         &changes,
                         turn_environment.cwd(),
                     )
-                    .await;
+                    .await
+                    .unwrap_or_else(|_| patch_permissions_without_path_matching(&changes));
                 match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                     .await
                 {
@@ -555,7 +564,8 @@ pub(crate) async fn intercept_apply_patch(
                     &changes,
                     cwd,
                 )
-                .await;
+                .await
+                .unwrap_or_else(|_| patch_permissions_without_path_matching(&changes));
             match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                 .await
             {
