@@ -339,20 +339,24 @@ impl ContextManager {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput {
+                id,
                 call_id,
                 output,
                 metadata,
             } => ResponseItem::FunctionCallOutput {
+                id: id.clone(),
                 call_id: call_id.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
                 metadata: metadata.clone(),
             },
             ResponseItem::CustomToolCallOutput {
+                id,
                 call_id,
                 name,
                 output,
                 metadata,
             } => ResponseItem::CustomToolCallOutput {
+                id: id.clone(),
                 call_id: call_id.clone(),
                 name: name.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),

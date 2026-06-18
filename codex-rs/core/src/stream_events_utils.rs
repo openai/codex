@@ -624,6 +624,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
     match input {
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
             Some(ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: call_id.clone(),
                 output: output.clone(),
                 metadata: None,
@@ -634,6 +635,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             name,
             output,
         } => Some(ResponseItem::CustomToolCallOutput {
+            id: None,
             call_id: call_id.clone(),
             name: name.clone(),
             output: output.clone(),
@@ -642,6 +644,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
         ResponseInputItem::McpToolCallOutput { call_id, output } => {
             let output = output.as_function_call_output_payload();
             Some(ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: call_id.clone(),
                 output,
                 metadata: None,
@@ -653,6 +656,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             execution,
             tools,
         } => Some(ResponseItem::ToolSearchOutput {
+            id: None,
             call_id: Some(call_id.clone()),
             status: status.clone(),
             execution: execution.clone(),

@@ -611,6 +611,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.000Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: "legacy-js-call".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("legacy js_repl stdout".to_string()),
@@ -751,6 +752,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.500Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: function_call_id.to_string(),
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
@@ -775,6 +777,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.500Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: custom_call_id.to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
@@ -2518,7 +2521,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
-        id: "reasoning-id".into(),
+        id: Some("reasoning-id".into()),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "summary".into(),
         }],
@@ -2555,6 +2558,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         metadata: None,
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {
+        id: None,
         call_id: "function-call-id".into(),
         output: FunctionCallOutputPayload::from_text("ok".into()),
         metadata: None,
@@ -2581,6 +2585,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         metadata: None,
     });
     prompt.input.push(ResponseItem::CustomToolCallOutput {
+        id: None,
         call_id: "custom-tool-call-id".into(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".into()),
