@@ -21,6 +21,7 @@ use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -95,7 +96,7 @@ fn tracker_update_for_known_delta<'a>(
 pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
-    cwd: &AbsolutePathBuf,
+    cwd: &PathUri,
     parsed_cmd: &[ParsedCommand],
     source: ExecCommandSource,
     interaction_input: Option<String>,
@@ -122,7 +123,7 @@ pub(crate) async fn emit_exec_command_begin(
 pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
     },
@@ -133,7 +134,7 @@ pub(crate) enum ToolEmitter {
     },
     UnifiedExec {
         command: Vec<String>,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
@@ -145,7 +146,7 @@ impl ToolEmitter {
         let parsed_cmd = parse_command(&command);
         Self::Shell {
             command,
-            cwd,
+            cwd: PathUri::from_abs_path(&cwd),
             source,
             parsed_cmd,
         }
@@ -165,7 +166,7 @@ impl ToolEmitter {
 
     pub fn unified_exec(
         command: &[String],
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         source: ExecCommandSource,
         process_id: Option<String>,
     ) -> Self {
@@ -346,7 +347,7 @@ impl ToolEmitter {
         output: &ExecToolCallOutput,
         ctx: ToolEventCtx<'_>,
     ) -> String {
-        super::format_exec_output_for_model(output, ctx.turn.truncation_policy)
+        super::format_exec_output_for_model(output, ctx.turn.model_info.truncation_policy.into())
     }
 
     pub async fn finish(
@@ -432,7 +433,7 @@ impl ToolEmitter {
 
 struct ExecCommandInput<'a> {
     command: &'a [String],
-    cwd: &'a AbsolutePathBuf,
+    cwd: &'a PathUri,
     parsed_cmd: &'a [ParsedCommand],
     source: ExecCommandSource,
     interaction_input: Option<&'a str>,
@@ -442,7 +443,7 @@ struct ExecCommandInput<'a> {
 impl<'a> ExecCommandInput<'a> {
     fn new(
         command: &'a [String],
-        cwd: &'a AbsolutePathBuf,
+        cwd: &'a PathUri,
         parsed_cmd: &'a [ParsedCommand],
         source: ExecCommandSource,
         interaction_input: Option<&'a str>,
@@ -495,7 +496,10 @@ async fn emit_exec_stage(
                 aggregated_output: output.aggregated_output.text.clone(),
                 exit_code: output.exit_code,
                 duration: output.duration,
-                formatted_output: format_exec_output_str(&output, ctx.turn.truncation_policy),
+                formatted_output: format_exec_output_str(
+                    &output,
+                    ctx.turn.model_info.truncation_policy.into(),
+                ),
                 status: if output.exit_code == 0 {
                     ExecCommandStatus::Completed
                 } else {

@@ -129,10 +129,10 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         )
         .expect("prepare exec request");
 
-    assert_eq!(exec_request.cwd, command_cwd);
+    assert_eq!(exec_request.cwd, PathUri::from_abs_path(&command_cwd));
     assert_eq!(
         exec_request.windows_sandbox_policy_cwd,
-        native_sandbox_policy_cwd
+        PathUri::from_abs_path(&native_sandbox_policy_cwd)
     );
     assert_eq!(exec_request.network, None);
     for key in PROXY_ENV_KEYS {

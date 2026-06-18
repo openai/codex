@@ -107,7 +107,7 @@ impl codex_extension_api::ThreadLifecycleContributor<Config> for GuardianMemoryC
 }
 
 impl codex_extension_api::ContextContributor for GuardianMemoryContextProbe {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
         thread_store: &'a codex_extension_api::ExtensionData,
@@ -309,6 +309,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                     metadata: None,
                 },
                 ResponseItem::FunctionCallOutput {
+                    id: None,
                     call_id: "call-1".to_string(),
                     output: codex_protocol::models::FunctionCallOutputPayload::from_text(
                         "repo visibility: public".to_string(),
@@ -827,6 +828,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             metadata: None,
         },
         ResponseItem::FunctionCallOutput {
+            id: None,
             call_id: "call-1".to_string(),
             output: codex_protocol::models::FunctionCallOutputPayload::from_text(
                 "repo is public".to_string(),
@@ -1678,7 +1680,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             "---\nname: {GUARDIAN_SKILL_NAME}\ndescription: Guardian skill injection probe.\n---\n\n{GUARDIAN_SKILL_BODY_PROBE}\n"
         ),
     )?;
-    session.services.skills_manager.clear_cache();
+    session.services.skills_service.clear_cache();
     turn.config = Arc::clone(&config);
     turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
     let session = Arc::new(session);

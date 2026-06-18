@@ -76,7 +76,7 @@ fn truncates_before_requested_user_message() {
         user_msg("u2"),
         assistant_msg("a3"),
         ResponseItem::Reasoning {
-            id: "r1".to_string(),
+            id: Some("r1".to_string()),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "s".to_string(),
             }],
@@ -606,11 +606,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
 
     let forked = manager
@@ -633,11 +633,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(forked_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
 }
 

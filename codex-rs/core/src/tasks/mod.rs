@@ -722,7 +722,7 @@ impl Session {
         }
         emit_turn_memory_metric(
             &self.services.session_telemetry,
-            turn_context.features.enabled(Feature::MemoryTool),
+            turn_context.config.features.enabled(Feature::MemoryTool),
             turn_context.config.memories.use_memories,
             turn_had_memory_citation,
         );

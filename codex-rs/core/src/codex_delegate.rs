@@ -94,7 +94,7 @@ pub(crate) async fn run_codex_thread_interactive(
             .services
             .turn_environments
             .environment_manager(),
-        skills_manager: Arc::clone(&parent_session.services.skills_manager),
+        skills_service: Arc::clone(&parent_session.services.skills_service),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         extensions: Arc::clone(&parent_session.services.extensions),
@@ -460,6 +460,7 @@ async fn handle_exec_approval(
     let ExecApprovalRequestEvent {
         call_id,
         approval_id,
+        environment_id,
         command,
         cwd,
         reason,
@@ -505,6 +506,7 @@ async fn handle_exec_approval(
                 parent_ctx,
                 call_id,
                 approval_id,
+                environment_id,
                 command,
                 cwd,
                 reason,

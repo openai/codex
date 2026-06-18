@@ -1,3 +1,4 @@
+mod cell_actor;
 mod runtime;
 mod service;
 

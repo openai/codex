@@ -81,6 +81,7 @@ impl SkillProvider for ExecutorSkillProvider {
                         scope: SkillScope::User,
                         file_system: Arc::clone(&file_system),
                         plugin_id: None,
+                        plugin_namespace: None,
                         plugin_root: None,
                     }])
                     .await,

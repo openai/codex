@@ -1127,6 +1127,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
     manager.server_metadata.insert(
         server_name.to_string(),
         McpServerMetadata {
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             pollutes_memory: true,
             origin: Some(McpServerOrigin::StreamableHttp(
                 "https://docs.example".to_string(),
@@ -1162,6 +1163,7 @@ fn server_metadata_preserves_tool_approval_policy() {
         "https://docs.example",
         /*apps_mcp_product_sku*/ None,
     );
+    config.environment_id = "remote".to_string();
     config.default_tools_approval_mode = Some(AppToolApproval::Prompt);
     config.tools.insert(
         "search".to_string(),
@@ -1171,6 +1173,7 @@ fn server_metadata_preserves_tool_approval_policy() {
     );
     let metadata = McpServerMetadata::from(&EffectiveMcpServer::configured(config));
 
+    assert_eq!(metadata.environment_id, "remote");
     assert_eq!(metadata.tool_approval_mode("read"), AppToolApproval::Prompt);
     assert_eq!(
         metadata.tool_approval_mode("search"),

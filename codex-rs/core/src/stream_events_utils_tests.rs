@@ -64,6 +64,7 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
             metadata: None,
         },
         ResponseItem::ToolSearchOutput {
+            id: None,
             call_id: Some("search-1".to_string()),
             status: "completed".to_string(),
             execution: "client".to_string(),
@@ -104,6 +105,7 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
             metadata: None,
         },
         ResponseItem::FunctionCallOutput {
+            id: None,
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
             metadata: None,
@@ -117,6 +119,7 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
             metadata: None,
         },
         ResponseItem::CustomToolCallOutput {
+            id: None,
             call_id: "custom-1".to_string(),
             name: Some("apply_patch".to_string()),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
@@ -279,9 +282,9 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     let router = Arc::new(ToolRouter::from_turn_context(
         &turn_context,
         crate::tools::router::ToolRouterParams {
+            tool_suggest_candidates: None,
             mcp_tools: None,
             deferred_mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
@@ -418,7 +421,7 @@ fn completed_item_keeps_mailbox_delivery_open_for_commentary_messages() {
 #[test]
 fn completed_item_defers_mailbox_delivery_for_image_generation_calls() {
     let item = ResponseItem::ImageGenerationCall {
-        id: "ig-1".to_string(),
+        id: Some("ig-1".to_string()),
         status: "completed".to_string(),
         revised_prompt: None,
         result: "Zm9v".to_string(),

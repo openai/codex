@@ -231,13 +231,15 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await?;
     let mut input = prompt_input.clone();
-    input.push(ResponseItem::CompactionTrigger { metadata: None });
+    input.push(ResponseItem::CompactionTrigger {
+        id: None,
+        metadata: None,
+    });
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
-        personality: turn_context.personality,
         output_schema: None,
         output_schema_strict: true,
     };
@@ -610,11 +612,13 @@ mod tests {
                 metadata: None,
             },
             ResponseItem::Compaction {
+                id: None,
                 encrypted_content: "old".to_string(),
                 metadata: None,
             },
         ];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
             metadata: None,
         };
@@ -643,6 +647,7 @@ mod tests {
             new.clone(),
         ];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
             metadata: None,
         };
@@ -674,6 +679,7 @@ mod tests {
             metadata: None,
         }];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
             metadata: None,
         };
@@ -801,6 +807,7 @@ mod tests {
     #[tokio::test]
     async fn collect_compaction_output_accepts_additional_output_items() {
         let compaction = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "encrypted".to_string(),
             metadata: None,
         };
