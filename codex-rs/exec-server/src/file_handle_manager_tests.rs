@@ -233,7 +233,12 @@ async fn close_during_read_open_prevents_handle_from_becoming_live() {
         let file_system = Arc::clone(&file_system);
         tokio::spawn(async move {
             manager
-                .open_read(file_system, "read-1".to_string(), &path, None)
+                .open_read(
+                    file_system,
+                    "read-1".to_string(),
+                    &path,
+                    /*sandbox*/ None,
+                )
                 .await
         })
     };
@@ -256,7 +261,7 @@ async fn close_during_read_open_prevents_handle_from_becoming_live() {
     assert!(file_system.read_handle_dropped.load(Ordering::SeqCst));
     assert_eq!(
         manager
-            .read("read-1", 0, None)
+            .read("read-1", /*offset*/ 0, /*max_bytes*/ None)
             .await
             .expect_err("closed read handle should not exist")
             .kind(),
@@ -274,7 +279,12 @@ async fn close_during_write_open_prevents_handle_from_becoming_live() {
         let file_system = Arc::clone(&file_system);
         tokio::spawn(async move {
             manager
-                .open_write(file_system, "write-1".to_string(), &path, None)
+                .open_write(
+                    file_system,
+                    "write-1".to_string(),
+                    &path,
+                    /*sandbox*/ None,
+                )
                 .await
         })
     };
@@ -316,7 +326,12 @@ async fn closing_open_reserves_handle_id_until_cleanup_finishes() {
         let path = path.clone();
         tokio::spawn(async move {
             manager
-                .open_read(file_system, "read-1".to_string(), &path, None)
+                .open_read(
+                    file_system,
+                    "read-1".to_string(),
+                    &path,
+                    /*sandbox*/ None,
+                )
                 .await
         })
     };
@@ -335,7 +350,7 @@ async fn closing_open_reserves_handle_id_until_cleanup_finishes() {
                 second_file_system.clone(),
                 "read-1".to_string(),
                 &path,
-                None,
+                /*sandbox*/ None,
             )
             .await
             .expect_err("closing handle id should remain reserved")
@@ -357,7 +372,12 @@ async fn closing_open_reserves_handle_id_until_cleanup_finishes() {
         let file_system = Arc::clone(&second_file_system);
         tokio::spawn(async move {
             manager
-                .open_read(file_system, "read-1".to_string(), &path, None)
+                .open_read(
+                    file_system,
+                    "read-1".to_string(),
+                    &path,
+                    /*sandbox*/ None,
+                )
                 .await
         })
     };
@@ -389,7 +409,12 @@ async fn read_uses_handle_authoritative_eof() {
         let file_system = Arc::clone(&file_system);
         tokio::spawn(async move {
             manager
-                .open_read(file_system, "read-1".to_string(), &path, None)
+                .open_read(
+                    file_system,
+                    "read-1".to_string(),
+                    &path,
+                    /*sandbox*/ None,
+                )
                 .await
         })
     };
@@ -401,7 +426,10 @@ async fn read_uses_handle_authoritative_eof() {
         .expect("open read handle");
 
     assert_eq!(
-        manager.read("read-1", 0, Some(16)).await.expect("read"),
+        manager
+            .read("read-1", /*offset*/ 0, Some(16))
+            .await
+            .expect("read"),
         FileReadChunk {
             data: vec![b'x'; 16],
             eof: true,
@@ -411,7 +439,7 @@ async fn read_uses_handle_authoritative_eof() {
 
 #[tokio::test]
 async fn open_handle_count_is_bounded() {
-    let manager = FileHandleManager::with_max_handles(1);
+    let manager = FileHandleManager::with_max_handles(/*max_handles*/ 1);
     let file_system = Arc::new(BlockingFileSystem::default());
     let path = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).expect("absolute path");
     let open = {
@@ -420,7 +448,12 @@ async fn open_handle_count_is_bounded() {
         let path = path.clone();
         tokio::spawn(async move {
             manager
-                .open_read(file_system, "read-1".to_string(), &path, None)
+                .open_read(
+                    file_system,
+                    "read-1".to_string(),
+                    &path,
+                    /*sandbox*/ None,
+                )
                 .await
         })
     };
@@ -428,7 +461,12 @@ async fn open_handle_count_is_bounded() {
     file_system.read_started.notified().await;
     assert_eq!(
         manager
-            .open_read(file_system.clone(), "read-2".to_string(), &path, None)
+            .open_read(
+                file_system.clone(),
+                "read-2".to_string(),
+                &path,
+                /*sandbox*/ None,
+            )
             .await
             .expect_err("second handle should exceed limit")
             .kind(),
