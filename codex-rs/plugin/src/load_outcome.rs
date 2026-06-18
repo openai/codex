@@ -17,6 +17,7 @@ const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 pub struct LoadedPlugin<M> {
     pub config_name: String,
     pub manifest_name: Option<String>,
+    pub plugin_namespace: Option<String>,
     pub manifest_description: Option<String>,
     pub root: AbsolutePathBuf,
     pub enabled: bool,
@@ -126,11 +127,15 @@ impl<M: Clone> PluginLoadOutcome<M> {
         let mut skill_roots = Vec::new();
         let mut seen_paths = HashSet::new();
         for plugin in self.plugins.iter().filter(|plugin| plugin.is_active()) {
+            let Some(plugin_namespace) = &plugin.plugin_namespace else {
+                continue;
+            };
             for path in &plugin.skill_roots {
                 if seen_paths.insert(path.clone()) {
                     skill_roots.push(PluginSkillRoot {
                         path: path.clone(),
                         plugin_id: plugin.config_name.clone(),
+                        plugin_namespace: plugin_namespace.clone(),
                         plugin_root: plugin.root.clone(),
                     });
                 }
@@ -218,6 +223,12 @@ mod tests {
         LoadedPlugin {
             config_name: config_name.to_string(),
             manifest_name: None,
+            plugin_namespace: Some(
+                config_name
+                    .split_once('@')
+                    .map_or(config_name, |(name, _)| name)
+                    .to_string(),
+            ),
             manifest_description: None,
             root: test_path(config_name),
             enabled: true,
@@ -245,6 +256,7 @@ mod tests {
             vec![PluginSkillRoot {
                 path: shared_root,
                 plugin_id: "zeta@test".to_string(),
+                plugin_namespace: "zeta".to_string(),
                 plugin_root: test_path("zeta@test"),
             }]
         );

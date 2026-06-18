@@ -55,7 +55,11 @@ fn write_plugin_skill(
     skill_path
 }
 
-fn plugin_skill_root_for_skill_path(skill_path: &Path, plugin_id: &str) -> PluginSkillRoot {
+fn plugin_skill_root_for_skill_path(
+    skill_path: &Path,
+    plugin_id: &str,
+    plugin_namespace: &str,
+) -> PluginSkillRoot {
     let skills_root = skill_path
         .parent()
         .and_then(Path::parent)
@@ -66,6 +70,7 @@ fn plugin_skill_root_for_skill_path(skill_path: &Path, plugin_id: &str) -> Plugi
     PluginSkillRoot {
         path: skills_root.abs(),
         plugin_id: plugin_id.to_string(),
+        plugin_namespace: plugin_namespace.to_string(),
         plugin_root: plugin_root.abs(),
     }
 }
@@ -364,7 +369,8 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         &codex_home,
         &name_toggle_config("sample:sample-search", /*enabled*/ false),
     );
-    let plugin_skill_root = plugin_skill_root_for_skill_path(&skill_path, "test-plugin@test");
+    let plugin_skill_root =
+        plugin_skill_root_for_skill_path(&skill_path, "test-plugin@test", "sample");
     let skills_service = SkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,

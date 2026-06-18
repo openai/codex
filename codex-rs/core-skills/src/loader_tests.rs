@@ -850,6 +850,7 @@ interface:
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("twilio-developer-kit@test".to_string()),
+        plugin_namespace: None,
         plugin_root: Some(plugin_root_abs.clone()),
     }])
     .await;
@@ -907,6 +908,7 @@ interface:
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("twilio-developer-kit@test".to_string()),
+        plugin_namespace: None,
         plugin_root: Some(plugin_root.abs()),
     }])
     .await;
@@ -1053,6 +1055,7 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
         scope: SkillScope::Admin,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_namespace: None,
         plugin_root: None,
     }])
     .await;
@@ -1135,6 +1138,7 @@ async fn system_scope_ignores_symlinked_subdir() {
         scope: SkillScope::System,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_namespace: None,
         plugin_root: None,
     }])
     .await;
@@ -1169,6 +1173,7 @@ async fn respects_max_scan_depth_for_user_scope() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_namespace: None,
         plugin_root: None,
     }])
     .await;
@@ -1256,7 +1261,7 @@ async fn falls_back_to_directory_name_when_skill_name_is_missing() {
 }
 
 #[tokio::test]
-async fn namespaces_plugin_skills_using_plugin_name() {
+async fn namespaces_plugin_skills_using_provided_namespace() {
     let root = tempfile::tempdir().expect("tempdir");
     let plugin_root = root.path().join("plugins/sample");
     let skill_path = write_raw_skill_at(
@@ -1267,7 +1272,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
     fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
     fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"sample"}"#,
+        r#"{"name":"should-not-be-read"}"#,
     )
     .unwrap();
 
@@ -1276,6 +1281,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
+        plugin_namespace: Some("sample".to_string()),
         plugin_root: Some(plugin_root.abs()),
     }])
     .await;
@@ -1321,6 +1327,7 @@ async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
+        plugin_namespace: Some(plugin_name.clone()),
         plugin_root: Some(plugin_root.abs()),
     }])
     .await;
@@ -1366,6 +1373,7 @@ async fn plugin_skill_name_length_limit_rejects_overlong_qualified_name() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
+        plugin_namespace: Some(plugin_name.clone()),
         plugin_root: Some(plugin_root.abs()),
     }])
     .await;
@@ -1805,6 +1813,7 @@ async fn deduplicates_by_path_preferring_first_root() {
             scope: SkillScope::Repo,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
+            plugin_namespace: None,
             plugin_root: None,
         },
         SkillRoot {
@@ -1812,6 +1821,7 @@ async fn deduplicates_by_path_preferring_first_root() {
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
+            plugin_namespace: None,
             plugin_root: None,
         },
     ])
