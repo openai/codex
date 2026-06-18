@@ -22,6 +22,47 @@ REMOTE_EXECUTION_CONFIGS = {
     "--config=ci-v8",
     "--config=ci-windows-cross",
 }
+# Honor either explicit setting so the wrapper never overrides the caller's
+# choice when it supplies the CI default below.
+REMOTE_REPO_CONTENTS_CACHE_STARTUP_OPTIONS = {
+    "--experimental_remote_repo_contents_cache",
+    "--noexperimental_remote_repo_contents_cache",
+}
+
+
+def startup_args(args: Sequence[str], env: Mapping[str, str]) -> list[str]:
+    """Return shared startup options that are missing from a Bazel invocation.
+
+    Bazel startup options must precede the command, and changing them restarts
+    the server and discards its analysis cache. GitHub Actions invokes Bazel
+    through several helpers, so normalize their startup options here while
+    preserving any explicit choice made by the caller.
+    """
+    command_idx = next(
+        (idx for idx, arg in enumerate(args) if not arg.startswith("-")),
+        len(args),
+    )
+    configured_startup_args = args[:command_idx]
+    injected_args = []
+
+    output_user_root = env.get("BAZEL_OUTPUT_USER_ROOT")
+    if output_user_root and not any(
+        arg.startswith("--output_user_root=") for arg in configured_startup_args
+    ):
+        injected_args.append(f"--output_user_root={output_user_root}")
+
+    if env.get("GITHUB_ACTIONS") == "true" and not any(
+        arg in REMOTE_REPO_CONTENTS_CACHE_STARTUP_OPTIONS
+        for arg in configured_startup_args
+    ):
+        # Work around Bazel 9 overlay materialization failures seen in CI. This
+        # disables only the startup-level repo contents cache; keyed runs still
+        # use BuildBuddy.
+        injected_args.append("--noexperimental_remote_repo_contents_cache")
+
+    return injected_args
+
+
 # Only authenticated workflow runs executing trusted upstream code may use the
 # OpenAI BuildBuddy host. A pull request event without proof that its head is
 # in the upstream repository fails closed to the generic host.
@@ -114,7 +155,7 @@ def bazel_args_with_remote_config(
 def bazel_command(*args: str, env: Mapping[str, str] | None = None) -> list[str]:
     env = os.environ if env is None else env
     bazel = env.get("CODEX_BAZEL_BIN", "bazel")
-    return [bazel, *bazel_args_with_remote_config(args, env)]
+    return [bazel, *startup_args(args, env), *bazel_args_with_remote_config(args, env)]
 
 
 def main() -> None:

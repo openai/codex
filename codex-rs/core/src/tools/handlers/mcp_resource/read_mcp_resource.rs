@@ -26,7 +26,6 @@ use super::serialize_function_output;
 
 pub struct ReadMcpResourceHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("read_mcp_resource")
@@ -40,7 +39,13 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ReadMcpResourceHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -91,9 +96,10 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
             })
         }
         .await;
+        let truncation_policy = turn.model_info.truncation_policy.into();
 
         match payload_result {
-            Ok(payload) => match serialize_function_output(payload) {
+            Ok(payload) => match serialize_function_output(payload, truncation_policy) {
                 Ok(output) => {
                     let content = function_call_output_content_items_to_text(&output.body)
                         .unwrap_or_default();

@@ -3,6 +3,7 @@ use serde::Serialize;
 
 use crate::payload::RawPayloadId;
 
+use super::AgentPath;
 use super::AgentThreadId;
 use super::CodeCellId;
 use super::CodexTurnId;
@@ -32,11 +33,23 @@ pub struct ConversationItem {
     /// Codex channel for assistant/tool content, when the item is channel-specific.
     pub channel: Option<ConversationChannel>,
     pub kind: ConversationItemKind,
+    /// Routing metadata carried by a Responses `agent_message` item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_message: Option<AgentMessageMetadata>,
     pub body: ConversationBody,
     /// Protocol/model `call_id` for function/custom tool call and output items.
     pub call_id: Option<ModelVisibleCallId>,
     /// Runtime or control-plane objects that caused this conversation item to exist.
     pub produced_by: Vec<ProducerRef>,
+}
+
+/// Sender and destination identities attached to a model-visible agent message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentMessageMetadata {
+    /// Agent path that authored the message.
+    pub author: AgentPath,
+    /// Agent path that received the message.
+    pub recipient: AgentPath,
 }
 
 /// Model-visible role assigned to a conversation item.

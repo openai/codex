@@ -6,6 +6,7 @@
 //! suppress duplicate rows for pending steers.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -59,6 +60,7 @@ pub(super) enum ShellEscapePolicy {
 pub(super) struct QueuedUserMessage {
     pub(super) user_message: UserMessage,
     pub(super) action: QueuedInputAction,
+    pub(super) pending_pastes: Vec<(String, String)>,
 }
 
 impl QueuedUserMessage {
@@ -66,6 +68,7 @@ impl QueuedUserMessage {
         Self {
             user_message,
             action,
+            pending_pastes: Vec::new(),
         }
     }
 
@@ -274,6 +277,34 @@ fn remap_placeholders_in_text(
     }
 
     (rebuilt, rebuilt_elements)
+}
+
+pub(super) fn remap_colliding_paste_placeholders(
+    mut message: UserMessage,
+    mut pending_pastes: Vec<(String, String)>,
+    used: &mut HashSet<String>,
+) -> (UserMessage, Vec<(String, String)>) {
+    let mut mapping = HashMap::new();
+    for (placeholder, text) in &mut pending_pastes {
+        if used.insert(placeholder.clone()) {
+            continue;
+        }
+
+        let base = format!("[Pasted Content {} chars]", text.chars().count());
+        let mut suffix = 2;
+        let replacement = loop {
+            let candidate = format!("{base} #{suffix}");
+            if used.insert(candidate.clone()) {
+                break candidate;
+            }
+            suffix += 1;
+        };
+        mapping.insert(placeholder.clone(), replacement.clone());
+        *placeholder = replacement;
+    }
+    (message.text, message.text_elements) =
+        remap_placeholders_in_text(message.text, message.text_elements, &mapping);
+    (message, pending_pastes)
 }
 
 // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering

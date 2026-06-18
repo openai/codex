@@ -189,6 +189,17 @@ where
 
     fn on_event(&self, event: &Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
         let metadata = event.metadata();
+        // The SDK emits DEBUG timer meta-events every second per process; these
+        // were over 30% of retained logs in measured high-fanout Codex environments.
+        if metadata.target() == "opentelemetry_sdk"
+            && matches!(
+                *metadata.level(),
+                tracing::Level::TRACE | tracing::Level::DEBUG
+            )
+        {
+            return;
+        }
+
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
         let thread_id = visitor
@@ -450,6 +461,10 @@ impl Visit for MessageVisitor {
         self.record_field(field, format!("{value:?}"));
     }
 }
+
+#[cfg(test)]
+#[path = "log_db_filter_tests.rs"]
+mod filter_tests;
 
 #[cfg(test)]
 mod tests {

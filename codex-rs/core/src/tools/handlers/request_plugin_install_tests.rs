@@ -69,6 +69,24 @@ fn remote_plugin_install_suggestions_skip_core_installed_verification() {
 }
 
 #[test]
+fn recommended_plugin_install_args_accept_legacy_tool_id() {
+    let current: RecommendedPluginInstallArgs = serde_json::from_value(json!({
+        "plugin_id": "google-drive@openai-curated-remote",
+        "suggest_reason": "Use Google Drive for this request"
+    }))
+    .expect("current arguments should deserialize");
+    let legacy: RecommendedPluginInstallArgs = serde_json::from_value(json!({
+        "tool_type": "plugin",
+        "action_type": "install",
+        "tool_id": "google-drive@openai-curated-remote",
+        "suggest_reason": "Use Google Drive for this request"
+    }))
+    .expect("legacy arguments should deserialize");
+
+    assert_eq!(current, legacy);
+}
+
+#[test]
 fn request_plugin_install_response_persists_only_decline_always_mode() {
     assert!(request_plugin_install_response_requests_persistent_disable(
         &ElicitationResponse {
@@ -130,6 +148,7 @@ async fn persist_disabled_install_request_writes_plugin_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let tool = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
         id: "slack@openai-curated".to_string(),
+        remote_plugin_id: None,
         name: "Slack".to_string(),
         description: None,
         has_skills: true,

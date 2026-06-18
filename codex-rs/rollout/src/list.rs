@@ -1,6 +1,5 @@
 #![allow(warnings, clippy::all)]
 
-use async_trait::async_trait;
 use codex_utils_path as path_utils;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
@@ -78,6 +77,8 @@ pub struct ThreadItem {
     pub created_at: Option<String>,
     /// RFC3339 timestamp string for the most recent update (from file mtime).
     pub updated_at: Option<String>,
+    /// RFC3339 timestamp string used for product recency ordering.
+    pub recency_at: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -116,6 +117,7 @@ const USER_EVENT_SCAN_LIMIT: usize = 200;
 pub enum ThreadSortKey {
     CreatedAt,
     UpdatedAt,
+    RecencyAt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,19 +140,28 @@ pub struct ThreadListConfig<'a> {
     pub layout: ThreadListLayout,
 }
 
-/// Pagination cursor identifying the timestamp of the last item in a page.
+/// Pagination cursor identifying the last item in a page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
     ts: OffsetDateTime,
+    id: Option<ThreadId>,
 }
 
 impl Cursor {
-    fn new(ts: OffsetDateTime) -> Self {
-        Self { ts }
+    pub(crate) fn new(ts: OffsetDateTime) -> Self {
+        Self { ts, id: None }
+    }
+
+    pub(crate) fn with_thread_id(ts: OffsetDateTime, id: ThreadId) -> Self {
+        Self { ts, id: Some(id) }
     }
 
     pub(crate) fn timestamp(&self) -> OffsetDateTime {
         self.ts
+    }
+
+    pub(crate) fn thread_id(&self) -> Option<ThreadId> {
+        self.id
     }
 }
 
@@ -195,15 +206,14 @@ impl AnchorState {
 ///
 /// We need to apply different logic if we're ultimately going to be returning
 /// threads ordered by created_at or updated_at.
-#[async_trait]
 trait RolloutFileVisitor {
-    async fn visit(
+    fn visit(
         &mut self,
         ts: OffsetDateTime,
         id: Uuid,
         path: PathBuf,
         scanned: usize,
-    ) -> ControlFlow<()>;
+    ) -> impl std::future::Future<Output = ControlFlow<()>> + Send;
 }
 
 /// Collects thread items during directory traversal in created_at order,
@@ -218,7 +228,6 @@ struct FilesByCreatedAtVisitor<'a> {
     cwd_filters: Option<&'a [PathBuf]>,
 }
 
-#[async_trait]
 impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
     async fn visit(
         &mut self,
@@ -263,7 +272,6 @@ struct FilesByUpdatedAtVisitor<'a> {
     candidates: &'a mut Vec<ThreadCandidate>,
 }
 
-#[async_trait]
 impl<'a> RolloutFileVisitor for FilesByUpdatedAtVisitor<'a> {
     async fn visit(
         &mut self,
@@ -291,7 +299,10 @@ impl serde::Serialize for Cursor {
             .ts
             .format(&Rfc3339)
             .map_err(|e| serde::ser::Error::custom(format!("format error: {e}")))?;
-        serializer.serialize_str(&ts_str)
+        match self.id {
+            Some(id) => serializer.serialize_str(&format!("{ts_str}|{id}")),
+            None => serializer.serialize_str(&ts_str),
+        }
     }
 }
 
@@ -312,7 +323,7 @@ impl From<codex_state::Anchor> for Cursor {
             .timestamp_nanos_opt()
             .and_then(|nanos| OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).ok())
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        Self::new(ts)
+        Self { ts, id: anchor.id }
     }
 }
 
@@ -423,7 +434,7 @@ async fn traverse_directories_for_paths(
             )
             .await
         }
-        ThreadSortKey::UpdatedAt => {
+        ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => {
             traverse_directories_for_paths_updated(
                 root,
                 page_size,
@@ -458,7 +469,7 @@ async fn traverse_flat_paths(
             )
             .await
         }
-        ThreadSortKey::UpdatedAt => {
+        ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => {
             traverse_flat_paths_updated(
                 root,
                 page_size,
@@ -706,35 +717,48 @@ async fn traverse_flat_paths_updated(
     })
 }
 
-/// Pagination cursor token format: an RFC3339 timestamp.
+/// Pagination cursor token format: an RFC3339 timestamp with an optional thread ID tie-breaker.
 pub fn parse_cursor(token: &str) -> Option<Cursor> {
-    if token.contains('|') {
-        return None;
-    }
+    let (timestamp, id) = match token.rsplit_once('|') {
+        Some((timestamp, id)) => (timestamp, Some(ThreadId::from_string(id).ok()?)),
+        None => (token, None),
+    };
 
-    let ts = OffsetDateTime::parse(token, &Rfc3339).ok().or_else(|| {
-        let format: &[FormatItem] =
-            format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-        PrimitiveDateTime::parse(token, format)
-            .ok()
-            .map(PrimitiveDateTime::assume_utc)
-    })?;
+    let ts = OffsetDateTime::parse(timestamp, &Rfc3339)
+        .ok()
+        .or_else(|| {
+            let format: &[FormatItem] =
+                format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+            PrimitiveDateTime::parse(timestamp, format)
+                .ok()
+                .map(PrimitiveDateTime::assume_utc)
+        })?;
 
-    Some(Cursor::new(ts))
+    Some(Cursor { ts, id })
 }
 
 fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cursor> {
     let last = items.last()?;
     let file_name = last.path.file_name()?.to_string_lossy();
-    let (created_ts, _id) = parse_timestamp_uuid_from_filename(&file_name)?;
+    let (created_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
     let ts = match sort_key {
         ThreadSortKey::CreatedAt => created_ts,
         ThreadSortKey::UpdatedAt => {
             let updated_at = last.updated_at.as_deref()?;
             OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
         }
+        ThreadSortKey::RecencyAt => {
+            let recency_at = last.recency_at.as_deref().or(last.updated_at.as_deref())?;
+            OffsetDateTime::parse(recency_at, &Rfc3339).ok()?
+        }
     };
-    Some(Cursor::new(ts))
+    match sort_key {
+        ThreadSortKey::RecencyAt => Some(Cursor::with_thread_id(
+            ts,
+            ThreadId::from_string(&id.to_string()).ok()?,
+        )),
+        ThreadSortKey::CreatedAt | ThreadSortKey::UpdatedAt => Some(Cursor::new(ts)),
+    }
 }
 
 async fn build_thread_item(
@@ -810,6 +834,7 @@ async fn build_thread_item(
             model_provider,
             cli_version,
             created_at,
+            recency_at: summary_updated_at.clone(),
             updated_at: summary_updated_at,
         });
     }
@@ -1121,11 +1146,10 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.saw_session_meta = true;
                 }
             }
-            RolloutItem::ResponseItem(_) => {
-                summary.created_at = summary
+            RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
+                summary
                     .created_at
-                    .clone()
-                    .or_else(|| Some(rollout_line.timestamp.clone()));
+                    .get_or_insert_with(|| rollout_line.timestamp.clone());
             }
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
@@ -1181,6 +1205,11 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                 }
                 RolloutItem::ResponseItem(item) => {
                     if let Ok(value) = serde_json::to_value(item) {
+                        head.push(value);
+                    }
+                }
+                RolloutItem::InterAgentCommunication(communication) => {
+                    if let Ok(value) = serde_json::to_value(communication.to_model_input_item()) {
                         head.push(value);
                     }
                 }
@@ -1348,32 +1377,56 @@ async fn find_thread_path_by_id_str_in_subdir(
     if !root.exists() {
         return Ok(unverified_db_path);
     }
-    // This is safe because we know the values are valid.
-    #[allow(clippy::unwrap_used)]
-    let limit = NonZero::new(1).unwrap();
-    let options = file_search::FileSearchOptions {
-        limit,
-        compute_indices: false,
-        respect_gitignore: false,
-        ..Default::default()
+    let (filename_match, filename_scan_error) = match find_rollout_path_by_id_from_filenames(
+        root.as_path(),
+        id_str,
+    )
+    .await
+    {
+        Ok(path) => (path, None),
+        Err(err) => {
+            tracing::warn!(
+                "rollout filename lookup failed during find_thread_path_by_id_str_in_subdir: {err}"
+            );
+            (None, Some(err))
+        }
     };
 
-    let results = file_search::run(
-        id_str,
-        vec![root.clone()],
-        options,
-        /*cancel_flag*/ None,
-    )
-    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+    let found = match filename_match {
+        Some(path) => Some(path),
+        None => {
+            // This is safe because we know the values are valid.
+            #[allow(clippy::unwrap_used)]
+            let limit = NonZero::new(1).unwrap();
+            let options = file_search::FileSearchOptions {
+                limit,
+                compute_indices: false,
+                respect_gitignore: false,
+                ..Default::default()
+            };
 
-    let found = match results
-        .matches
-        .into_iter()
-        .map(|m| m.full_path())
-        .find_map(compression::RolloutFile::from_path)
-    {
-        Some(rollout_file) => Some(rollout_file.into_path()),
-        None => find_rollout_path_by_id_from_filenames(root.as_path(), id_str).await?,
+            let results = file_search::run(
+                id_str,
+                vec![root.clone()],
+                options,
+                /*cancel_flag*/ None,
+            )
+            .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+
+            let found = results
+                .matches
+                .into_iter()
+                .map(|m| m.full_path())
+                .find_map(compression::RolloutFile::from_path)
+                .map(compression::RolloutFile::into_path);
+
+            if found.is_none()
+                && let Some(err) = filename_scan_error
+            {
+                return Err(err);
+            }
+            found
+        }
     };
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");

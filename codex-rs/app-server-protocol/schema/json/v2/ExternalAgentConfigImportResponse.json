@@ -1,5 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "importId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "importId"
+  ],
   "title": "ExternalAgentConfigImportResponse",
   "type": "object"
 }

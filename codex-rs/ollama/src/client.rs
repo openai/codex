@@ -1,4 +1,3 @@
-use bytes::BytesMut;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use semver::Version;
@@ -6,6 +5,7 @@ use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 use std::io;
 
+use crate::line_buffer::LineBuffer;
 use crate::parser::pull_events_from_value;
 use crate::pull::PullEvent;
 use crate::pull::PullProgressReporter;
@@ -174,7 +174,7 @@ impl OllamaClient {
         }
 
         let mut stream = resp.bytes_stream();
-        let mut buf = BytesMut::new();
+        let mut buf = LineBuffer::default();
         let _pending: VecDeque<PullEvent> = VecDeque::new();
 
         // Using an async stream adaptor backed by unfold-like manual loop.
@@ -183,8 +183,7 @@ impl OllamaClient {
                 match chunk {
                     Ok(bytes) => {
                         buf.extend_from_slice(&bytes);
-                        while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
-                            let line = buf.split_to(pos + 1);
+                        while let Some(line) = buf.take_line() {
                             if let Ok(text) = std::str::from_utf8(&line) {
                                 let text = text.trim();
                                 if text.is_empty() { continue; }
@@ -263,6 +262,7 @@ impl OllamaClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
 
     // Happy-path tests using a mock HTTP server; skip if sandbox network is disabled.
@@ -331,6 +331,50 @@ mod tests {
 
         let version = client.fetch_version().await.expect("version fetch");
         assert_eq!(version, Some(Version::new(0, 14, 1)));
+    }
+
+    #[tokio::test]
+    async fn test_pull_model_stream_parses_large_json_lines() {
+        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            tracing::info!(
+                "{} set; skipping test_pull_model_stream_parses_large_json_lines",
+                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+            );
+            return;
+        }
+
+        let server = wiremock::MockServer::start().await;
+        let body = format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "status": "pulling layers",
+                "padding": "x".repeat(128 * 1024),
+            }),
+            serde_json::json!({"status": "complete"}),
+        );
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/pull"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_raw(body, "application/x-ndjson"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OllamaClient::from_host_root(server.uri());
+        let events = client
+            .pull_model_stream("test-model")
+            .await
+            .expect("start pull stream")
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_matches!(
+            events.as_slice(),
+            [
+                PullEvent::Status(pulling),
+                PullEvent::Status(complete),
+            ] if pulling == "pulling layers" && complete == "complete"
+        );
     }
 
     #[tokio::test]

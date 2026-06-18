@@ -1,3 +1,4 @@
+use super::REMOTE_CREATED_BY_ME_MARKETPLACE_NAME;
 use super::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
@@ -144,12 +145,24 @@ pub async fn sync_remote_installed_plugin_bundles_once(
         .await?;
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
     };
+    let user = async {
+        let scope = RemotePluginScope::User;
+        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
+            config, auth, scope, /*include_download_urls*/ true,
+        )
+        .await?;
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
 
-    let (global, workspace) = tokio::try_join!(global, workspace)?;
+    let (global, workspace, user) = tokio::try_join!(global, workspace, user)?;
     let store = PluginStore::try_new(codex_home.clone())?;
     let mut installed_plugin_names_by_marketplace =
         BTreeMap::<String, BTreeSet<String>>::from_iter([
             (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
+            (
+                REMOTE_CREATED_BY_ME_MARKETPLACE_NAME.to_string(),
+                BTreeSet::new(),
+            ),
             (
                 REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
                 BTreeSet::new(),
@@ -170,7 +183,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     let mut installed_plugin_ids = BTreeSet::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
-    for (_scope, installed_plugins) in [global, workspace] {
+    for (_scope, installed_plugins) in [global, workspace, user] {
         for installed_plugin in installed_plugins {
             let plugin = installed_plugin.plugin;
             let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
@@ -308,6 +321,7 @@ fn remove_stale_remote_plugin_caches(
     let mut removed_cache_plugin_ids = Vec::new();
     for marketplace_name in [
         REMOTE_GLOBAL_MARKETPLACE_NAME,
+        REMOTE_CREATED_BY_ME_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
@@ -517,8 +531,27 @@ mod tests {
     }
 
     #[test]
-    fn stale_remote_plugin_cleanup_removes_old_shared_with_me_cache_and_keeps_canonical_cache() {
+    fn stale_remote_plugin_cleanup_removes_stale_marketplace_caches_and_keeps_canonical_cache() {
         let codex_home = tempfile::tempdir().expect("create codex home");
+        let created_by_me_cached_manifest = codex_home
+            .path()
+            .join(PLUGINS_CACHE_DIR)
+            .join(REMOTE_CREATED_BY_ME_MARKETPLACE_NAME)
+            .join("created-by-me-plugin")
+            .join("1.2.3")
+            .join(".codex-plugin")
+            .join("plugin.json");
+        std::fs::create_dir_all(
+            created_by_me_cached_manifest
+                .parent()
+                .expect("manifest parent"),
+        )
+        .expect("create cached plugin manifest parent");
+        std::fs::write(
+            &created_by_me_cached_manifest,
+            r#"{"name":"created-by-me-plugin"}"#,
+        )
+        .expect("write cached plugin manifest");
         let cached_manifest = codex_home
             .path()
             .join(PLUGINS_CACHE_DIR)
@@ -547,6 +580,10 @@ mod tests {
             BTreeMap::<String, BTreeSet<String>>::from_iter([
                 (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
                 (
+                    REMOTE_CREATED_BY_ME_MARKETPLACE_NAME.to_string(),
+                    BTreeSet::new(),
+                ),
+                (
                     REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
                     BTreeSet::new(),
                 ),
@@ -572,8 +609,12 @@ mod tests {
 
         assert_eq!(
             removed,
-            vec!["private-plugin@workspace-shared-with-me-private".to_string()]
+            vec![
+                "created-by-me-plugin@created-by-me-remote".to_string(),
+                "private-plugin@workspace-shared-with-me-private".to_string(),
+            ]
         );
+        assert!(!created_by_me_cached_manifest.exists());
         assert!(!cached_manifest.exists());
         assert!(canonical_cached_manifest.is_file());
     }

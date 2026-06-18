@@ -110,6 +110,7 @@ mod tests {
                 cwd_filters: None,
                 archived: true,
                 search_term: None,
+                parent_thread_id: None,
                 use_state_db_only: false,
             })
             .await
@@ -173,5 +174,6 @@ mod tests {
             .expect("thread metadata should exist");
         assert_eq!(updated.rollout_path, archived_path);
         assert!(updated.archived_at.is_some());
+        assert_eq!(updated.recency_at, metadata.recency_at);
     }
 }

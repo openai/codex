@@ -53,7 +53,7 @@ impl AppsRequestProcessor {
             None
         };
         let fallback_cwd = match thread.as_ref() {
-            Some(thread) => Some(thread.config_snapshot().await.cwd.to_path_buf()),
+            Some(thread) => Some(thread.config_snapshot().await.cwd().to_path_buf()),
             None => None,
         };
         let mut config = self.load_latest_config(fallback_cwd).await?;
@@ -88,11 +88,21 @@ impl AppsRequestProcessor {
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
+        let mcp_manager = self.thread_manager.mcp_manager();
+        let plugins_manager = self.thread_manager.plugins_manager();
         let shutdown_token = self.shutdown_token.child_token();
         tokio::spawn(async move {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {}
-                _ = Self::apps_list_task(outgoing, request, params, config, environment_manager) => {}
+                _ = Self::apps_list_task(
+                    outgoing,
+                    request,
+                    params,
+                    config,
+                    environment_manager,
+                    mcp_manager,
+                    plugins_manager,
+                ) => {}
             }
         });
         Ok(None)
@@ -108,11 +118,23 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        mcp_manager: Arc<McpManager>,
+        plugins_manager: Arc<PluginsManager>,
     ) {
         let retry_params = params.clone();
         let retry_config = config.clone();
         let retry_environment_manager = Arc::clone(&environment_manager);
-        let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
+        let retry_mcp_manager = Arc::clone(&mcp_manager);
+        let retry_plugins_manager = Arc::clone(&plugins_manager);
+        let result = Self::apps_list_response(
+            &outgoing,
+            params,
+            config,
+            environment_manager,
+            mcp_manager,
+            plugins_manager,
+        )
+        .await;
         let should_retry = result
             .as_ref()
             .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
@@ -128,6 +150,8 @@ impl AppsRequestProcessor {
                 retry_params,
                 retry_config,
                 retry_environment_manager,
+                retry_mcp_manager,
+                retry_plugins_manager,
             )
             .await
             {
@@ -141,6 +165,8 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        mcp_manager: Arc<McpManager>,
+        plugins_manager: Arc<PluginsManager>,
     ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
         let AppsListParams {
             cursor,
@@ -156,9 +182,13 @@ impl AppsRequestProcessor {
             None => 0,
         };
 
+        let plugin_apps = plugins_manager
+            .plugins_for_config(&config.plugins_config_input())
+            .await
+            .effective_apps();
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
             connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
-            connectors::list_cached_all_connectors(&config)
+            connectors::list_cached_all_connectors(&config, &plugin_apps)
         );
         let cached_all_connectors = all_connectors.clone();
 
@@ -167,22 +197,27 @@ impl AppsRequestProcessor {
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result =
-                connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
-                    &accessible_config,
-                    force_refetch,
-                    Arc::clone(&environment_manager),
-                )
-                .await
-                .map_err(|err| format!("failed to load accessible apps: {err}"));
+            let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+                &accessible_config,
+                force_refetch,
+                Arc::clone(&environment_manager),
+                mcp_manager,
+            )
+            .await
+            .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
 
         let all_config = config.clone();
+        let all_plugin_apps = plugin_apps.clone();
         tokio::spawn(async move {
-            let result = connectors::list_all_connectors_with_options(&all_config, force_refetch)
-                .await
-                .map_err(|err| format!("failed to list apps: {err}"));
+            let result = connectors::list_all_connectors_with_options(
+                &all_config,
+                force_refetch,
+                &all_plugin_apps,
+            )
+            .await
+            .map_err(|err| format!("failed to list apps: {err}"));
             let _ = tx.send(AppListLoadResult::Directory(result));
         });
 

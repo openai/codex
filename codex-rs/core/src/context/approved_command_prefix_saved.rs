@@ -14,7 +14,7 @@ impl ApprovedCommandPrefixSaved {
 }
 
 impl ContextualUserFragment for ApprovedCommandPrefixSaved {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

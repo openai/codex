@@ -23,6 +23,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use serde_json::Value as JsonValue;
+use std::fmt::Display;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -41,6 +42,10 @@ pub(crate) fn clear_config_value(key_path: impl Into<String>) -> ConfigEdit {
 pub(crate) fn app_scoped_key_path(app_id: &str, key_path: &str) -> String {
     let app_id = serde_json::Value::String(app_id.to_string()).to_string();
     format!("apps.{app_id}.{key_path}")
+}
+
+pub(crate) fn format_config_error(err: &impl Display) -> String {
+    format!("{err:#}")
 }
 
 fn trusted_project_edit(project_path: &Path) -> ConfigEdit {
@@ -203,27 +208,5 @@ pub(crate) async fn write_skill_enabled(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn app_scoped_key_path_quotes_dotted_app_ids() {
-        assert_eq!(
-            app_scoped_key_path("plugin.linear", "enabled"),
-            "apps.\"plugin.linear\".enabled"
-        );
-    }
-
-    #[test]
-    fn trusted_project_edit_targets_project_trust_level() {
-        assert_eq!(
-            trusted_project_edit(Path::new("/workspace/team.project")),
-            ConfigEdit {
-                key_path: "projects.\"/workspace/team.project\".trust_level".to_string(),
-                value: serde_json::json!("trusted"),
-                merge_strategy: MergeStrategy::Replace,
-            }
-        );
-    }
-}
+#[path = "config_update_tests.rs"]
+mod tests;

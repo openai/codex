@@ -30,7 +30,7 @@ pub enum StdioPolicy {
     Inherit,
 }
 
-/// Spawns the appropriate child process for the ExecParams and SandboxPolicy,
+/// Spawns the appropriate child process for the exec params and sandbox settings,
 /// ensuring the args and environment variables used to create the `Command`
 /// (and `Child`) honor the configuration.
 ///

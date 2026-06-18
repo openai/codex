@@ -3,11 +3,14 @@ use super::pairing_unavailable_error;
 use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RefreshRemoteServerRequest;
+use super::protocol::RemoteControlPairingStatusRequest;
+use super::protocol::RemoteControlPairingStatusResponse as BackendRemoteControlPairingStatusResponse;
 use super::protocol::RemoteControlTarget;
 use super::protocol::StartRemoteControlPairingRequest;
 use super::protocol::StartRemoteControlPairingResponse;
 use axum::http::HeaderMap;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
+use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
@@ -136,6 +139,69 @@ impl RemoteControlEnrollment {
         })
     }
 
+    pub(super) async fn pairing_status(
+        &self,
+        request: RemoteControlPairingStatusRequest,
+    ) -> io::Result<RemoteControlPairingStatusResponse> {
+        if self.should_refresh_server_token() {
+            return Err(pairing_unavailable_error());
+        }
+        let remote_control_token = self
+            .remote_control_token
+            .as_deref()
+            .ok_or_else(pairing_unavailable_error)?;
+
+        let response = build_reqwest_client()
+            .post(&self.remote_control_target.pair_status_url)
+            .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
+            .bearer_auth(remote_control_token)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to check remote control pairing status at `{}`: {err}",
+                    self.remote_control_target.pair_status_url
+                ))
+            })?;
+        let headers = response.headers().clone();
+        let status = response.status();
+        let body = response.bytes().await.map_err(|err| {
+            io::Error::other(format!(
+                "failed to read remote control pairing status response from `{}`: {err}",
+                self.remote_control_target.pair_status_url
+            ))
+        })?;
+        let body_preview = preview_remote_control_response_body(&body);
+        if !status.is_success() {
+            let error_kind = match status.as_u16() {
+                401 | 403 => ErrorKind::PermissionDenied,
+                404 | 410 => ErrorKind::InvalidInput,
+                _ => ErrorKind::Other,
+            };
+            return Err(io::Error::new(
+                error_kind,
+                format!(
+                    "remote control pairing status failed at `{}`: HTTP {status}, {}, body: {body_preview}",
+                    self.remote_control_target.pair_status_url,
+                    format_headers(&headers)
+                ),
+            ));
+        }
+
+        let response = serde_json::from_slice::<BackendRemoteControlPairingStatusResponse>(&body)
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse remote control pairing status response from `{}`: HTTP {status}, {}, body: {body_preview}, decode error: {err}",
+                    self.remote_control_target.pair_status_url,
+                    format_headers(&headers)
+                ))
+            })?;
+        Ok(RemoteControlPairingStatusResponse {
+            claimed: response.claimed,
+        })
+    }
+
     pub(super) fn should_refresh_server_token(&self) -> bool {
         self.remote_control_token.is_none()
             || self.expires_at.is_none_or(|expires_at| {
@@ -220,6 +286,7 @@ pub(super) async fn update_persisted_remote_control_enrollment(
     account_id: &str,
     app_server_client_name: Option<&str>,
     enrollment: Option<&RemoteControlEnrollment>,
+    remote_control_enabled: Option<bool>,
 ) -> io::Result<()> {
     let Some(state_db) = state_db else {
         return Err(io::Error::new(
@@ -250,6 +317,7 @@ pub(super) async fn update_persisted_remote_control_enrollment(
                 server_id: enrollment.server_id.clone(),
                 environment_id: enrollment.environment_id.clone(),
                 server_name: enrollment.server_name.clone(),
+                remote_control_enabled,
             })
             .await
             .map_err(io::Error::other)?;
@@ -582,6 +650,7 @@ mod tests {
             "account-a",
             Some("desktop-client"),
             Some(&first_enrollment),
+            /*remote_control_enabled*/ None,
         )
         .await
         .expect("first enrollment should persist");
@@ -591,6 +660,7 @@ mod tests {
             "account-a",
             Some("desktop-client"),
             Some(&second_enrollment),
+            /*remote_control_enabled*/ None,
         )
         .await
         .expect("second enrollment should persist");
@@ -664,6 +734,7 @@ mod tests {
             "account-a",
             /*app_server_client_name*/ None,
             Some(&first_enrollment),
+            /*remote_control_enabled*/ None,
         )
         .await
         .expect("first enrollment should persist");
@@ -673,6 +744,7 @@ mod tests {
             "account-a",
             /*app_server_client_name*/ None,
             Some(&second_enrollment),
+            /*remote_control_enabled*/ None,
         )
         .await
         .expect("second enrollment should persist");
@@ -683,6 +755,7 @@ mod tests {
             "account-a",
             /*app_server_client_name*/ None,
             /*enrollment*/ None,
+            /*remote_control_enabled*/ None,
         )
         .await
         .expect("matching enrollment should clear");
