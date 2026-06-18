@@ -695,8 +695,8 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
-            "varlatency": {
-              "$ref": "#/definitions/FeatureToml_for_VarlatencyConfigToml"
+            "current_time_reminder": {
+              "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
             },
             "web_search": {
               "type": "boolean"
@@ -915,14 +915,14 @@
       ]
     },
     "FeatureToml_for_RolloutBudgetConfigToml": {
-    "FeatureToml_for_VarlatencyConfigToml": {
+    "FeatureToml_for_CurrentTimeReminderConfigToml": {
       "anyOf": [
         {
           "type": "boolean"
         },
         {
           "$ref": "#/definitions/RolloutBudgetConfigToml"
-          "$ref": "#/definitions/VarlatencyConfigToml"
+          "$ref": "#/definitions/CurrentTimeReminderConfigToml"
         }
       ]
     },
@@ -4349,18 +4349,18 @@
         }
       ]
     },
-    "VarlatencyClockSource": {
+    "CurrentTimeSource": {
       "enum": [
         "system",
         "app_server_client"
       ],
       "type": "string"
     },
-    "VarlatencyConfigToml": {
+    "CurrentTimeReminderConfigToml": {
       "additionalProperties": false,
       "properties": {
         "clock_source": {
-          "$ref": "#/definitions/VarlatencyClockSource"
+          "$ref": "#/definitions/CurrentTimeSource"
         },
         "enabled": {
           "type": "boolean"
@@ -4927,8 +4927,8 @@
         "use_linux_sandbox_bwrap": {
           "type": "boolean"
         },
-        "varlatency": {
-          "$ref": "#/definitions/FeatureToml_for_VarlatencyConfigToml"
+        "current_time_reminder": {
+          "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
         },
         "web_search": {
           "type": "boolean"
