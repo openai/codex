@@ -3,6 +3,7 @@ use std::sync::RwLock;
 
 use codex_app_server_protocol::AuthMode;
 use codex_core_skills::config_rules::SkillConfigRules;
+use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
@@ -13,6 +14,7 @@ use codex_protocol::protocol::Product;
 use tokio::sync::Semaphore;
 
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
+use crate::loader::ResolvedPluginSkills;
 use crate::loader::load_plugin_apps;
 use crate::loader::load_plugin_mcp_servers;
 use crate::loader::load_plugin_skills;
@@ -51,14 +53,25 @@ struct PluginArtifactIdentity {
 struct CachedToolSuggestMetadata {
     summary: PluginCapabilitySummary,
     app_declarations: Vec<AppDeclaration>,
+    resolved_skills: Option<ResolvedPluginSkills>,
 }
 
 impl CachedToolSuggestMetadata {
-    fn into_summary(self, auth_mode: Option<AuthMode>) -> PluginCapabilitySummary {
+    fn into_summary(
+        self,
+        skill_config_rules: &SkillConfigRules,
+        auth_mode: Option<AuthMode>,
+    ) -> PluginCapabilitySummary {
         let Self {
             mut summary,
             mut app_declarations,
+            resolved_skills,
         } = self;
+        if let Some(mut resolved_skills) = resolved_skills {
+            resolved_skills.disabled_skill_paths =
+                resolve_disabled_skill_paths(&resolved_skills.skills, skill_config_rules);
+            summary.has_skills = resolved_skills.has_enabled_skills();
+        }
         let Some(auth_mode) = auth_mode else {
             return summary;
         };
@@ -102,6 +115,7 @@ impl ToolSuggestMetadataCache {
         marketplace_name: &str,
         plugin: &ConfiguredMarketplacePlugin,
         restriction_product: Option<Product>,
+        skill_config_rules: &SkillConfigRules,
         auth_mode: Option<AuthMode>,
     ) -> Result<PluginCapabilitySummary, MarketplaceError> {
         let artifact = PluginArtifactIdentity {
@@ -111,7 +125,7 @@ impl ToolSuggestMetadataCache {
         loop {
             if let Some(entry) = self.cached_entry(&artifact) {
                 return entry
-                    .map(|metadata| metadata.into_summary(auth_mode))
+                    .map(|metadata| metadata.into_summary(skill_config_rules, auth_mode))
                     .map_err(MarketplaceError::InvalidPlugin);
             }
 
@@ -122,7 +136,7 @@ impl ToolSuggestMetadataCache {
             })?;
             if let Some(entry) = self.cached_entry(&artifact) {
                 return entry
-                    .map(|metadata| metadata.into_summary(auth_mode))
+                    .map(|metadata| metadata.into_summary(skill_config_rules, auth_mode))
                     .map_err(MarketplaceError::InvalidPlugin);
             }
 
@@ -130,7 +144,7 @@ impl ToolSuggestMetadataCache {
             let entry = load_plugin_metadata(marketplace_name, plugin, restriction_product).await;
             if self.cache_entry_if_current(generation, artifact.clone(), entry.clone()) {
                 return entry
-                    .map(|metadata| metadata.into_summary(auth_mode))
+                    .map(|metadata| metadata.into_summary(skill_config_rules, auth_mode))
                     .map_err(MarketplaceError::InvalidPlugin);
             }
         }
@@ -195,6 +209,7 @@ async fn load_plugin_metadata(
                 ..PluginCapabilitySummary::default()
             },
             app_declarations: Vec::new(),
+            resolved_skills: None,
         });
     };
     if !plugin_root.as_path().is_dir() {
@@ -230,5 +245,6 @@ async fn load_plugin_metadata(
             app_connector_ids,
         },
         app_declarations,
+        resolved_skills: Some(resolved_skills),
     })
 }

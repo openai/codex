@@ -1452,12 +1452,14 @@ impl PluginsManager {
         &self,
         marketplace_name: &str,
         plugin: &ConfiguredMarketplacePlugin,
+        skill_config_rules: &SkillConfigRules,
     ) -> Result<PluginCapabilitySummary, MarketplaceError> {
         self.tool_suggest_metadata_cache
             .metadata_for_plugin(
                 marketplace_name,
                 plugin,
                 self.restriction_product,
+                skill_config_rules,
                 self.auth_mode(),
             )
             .await

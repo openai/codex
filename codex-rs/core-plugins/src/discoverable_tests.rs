@@ -287,6 +287,56 @@ source = "/tmp/{marketplace_name}"
 }
 
 #[tokio::test]
+async fn reprojects_cached_skill_availability_for_current_config() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+
+    let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let expected = ToolSuggestDiscoverablePlugin {
+        id: "slack@openai-curated".to_string(),
+        remote_plugin_id: None,
+        name: "slack".to_string(),
+        description: Some(
+            "Plugin that includes skills, MCP servers, and app connectors".to_string(),
+        ),
+        has_skills: true,
+        mcp_server_names: vec!["sample-docs".to_string()],
+        app_connector_ids: vec!["connector_calendar".to_string()],
+    };
+    let initial = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(plugins, &[], &[], &[]),
+        /*auth*/ None,
+    )
+    .await;
+    assert_eq!(initial, vec![expected.clone()]);
+
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[[skills.config]]
+name = "slack:sample"
+enabled = false
+"#,
+    );
+    let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
+    let after_skill_disabled = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(plugins, &[], &[], &[]),
+        /*auth*/ None,
+    )
+    .await;
+    assert_eq!(
+        after_skill_disabled,
+        vec![ToolSuggestDiscoverablePlugin {
+            has_skills: false,
+            ..expected
+        }]
+    );
+}
+
+#[tokio::test]
 async fn clear_cache_invalidates_cached_tool_suggest_metadata() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());

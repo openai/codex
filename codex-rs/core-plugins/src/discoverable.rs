@@ -1,6 +1,7 @@
 use anyhow::Context;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_login::CodexAuth;
 use codex_plugin::PluginId;
 use std::collections::HashSet;
@@ -92,6 +93,7 @@ impl PluginsManager {
         } else {
             None
         };
+        let skill_config_rules = skill_config_rules_from_stack(&input.plugins.config_layer_stack);
 
         let mut discoverable_plugins = Vec::<ToolSuggestDiscoverablePlugin>::new();
         for marketplace in marketplaces {
@@ -110,7 +112,11 @@ impl PluginsManager {
 
                 let plugin_id = plugin.id.clone();
                 match self
-                    .tool_suggest_metadata_for_marketplace_plugin(&marketplace_name, &plugin)
+                    .tool_suggest_metadata_for_marketplace_plugin(
+                        &marketplace_name,
+                        &plugin,
+                        &skill_config_rules,
+                    )
                     .await
                 {
                     Ok(plugin) => {
