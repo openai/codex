@@ -228,6 +228,8 @@ pub enum Feature {
     PreventIdleSleep,
     /// Enable remote compaction v2 over the normal Responses API.
     RemoteCompactionV2,
+    /// Use Agent Identity for ChatGPT-authenticated sessions.
+    UseAgentIdentity,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 
@@ -1313,6 +1315,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_compaction_v2",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::UseAgentIdentity,
+        key: "use_agent_identity",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WorkspaceDependencies,
