@@ -93,7 +93,7 @@ async fn queue_refresh(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use crate::extensions::ThreadExtensionDependencies;
     use crate::extensions::guardian_agent_spawner;
@@ -177,7 +177,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    pub(crate) async fn refresh_test_state() -> anyhow::Result<(
+    async fn refresh_test_state() -> anyhow::Result<(
         TempDir,
         Arc<ThreadManager>,
         ConfigManager,
@@ -275,11 +275,11 @@ pub(crate) mod tests {
         Ok((temp_dir, thread_manager, config_manager, loader))
     }
 
-    pub(crate) struct CountingThreadConfigLoader {
+    struct CountingThreadConfigLoader {
         good_cwd: AbsolutePathBuf,
         bad_cwd: AbsolutePathBuf,
-        pub(crate) good_loads: AtomicUsize,
-        pub(crate) bad_loads: AtomicUsize,
+        good_loads: AtomicUsize,
+        bad_loads: AtomicUsize,
     }
 
     impl CountingThreadConfigLoader {
