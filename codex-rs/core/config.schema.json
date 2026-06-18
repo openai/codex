@@ -446,9 +446,6 @@
             "browser_use_external": {
               "type": "boolean"
             },
-            "child_agents_md": {
-              "type": "boolean"
-            },
             "chronicle": {
               "type": "boolean"
             },
@@ -4687,9 +4684,6 @@
           "type": "boolean"
         },
         "browser_use_external": {
-          "type": "boolean"
-        },
-        "child_agents_md": {
           "type": "boolean"
         },
         "chronicle": {
