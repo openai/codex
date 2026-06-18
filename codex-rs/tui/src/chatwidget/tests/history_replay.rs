@@ -973,6 +973,7 @@ async fn replayed_in_progress_mcp_tool_call_stays_active() {
             tool: "copilot".to_string(),
             status: codex_app_server_protocol::McpToolCallStatus::InProgress,
             arguments: json!({"action": "wait"}),
+            app_context: None,
             mcp_app_resource_uri: None,
             plugin_id: None,
             result: None,

@@ -52,6 +52,7 @@ fn redacted_mcp_tool_call_result() -> McpToolCallResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::McpToolCallAppContext;
     use codex_app_server_protocol::McpToolCallError;
     use codex_app_server_protocol::McpToolCallStatus;
     use codex_app_server_protocol::SessionSource;
@@ -78,6 +79,11 @@ mod tests {
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"secret":"argument"}),
+                app_context: Some(McpToolCallAppContext {
+                    connector_id: "calendar".to_string(),
+                    link_id: Some("link_calendar".to_string()),
+                    resource_uri: Some("ui://widget/lookup.html".to_string()),
+                }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 plugin_id: Some("sample@test".to_string()),
                 result: Some(Box::new(McpToolCallResult {
@@ -120,6 +126,11 @@ mod tests {
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Completed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
+                app_context: Some(McpToolCallAppContext {
+                    connector_id: "calendar".to_string(),
+                    link_id: Some("link_calendar".to_string()),
+                    resource_uri: Some("ui://widget/lookup.html".to_string()),
+                }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 plugin_id: Some("sample@test".to_string()),
                 result: Some(Box::new(redacted_mcp_tool_call_result())),
@@ -137,6 +148,7 @@ mod tests {
             tool: "lookup".to_string(),
             status: McpToolCallStatus::Failed,
             arguments: serde_json::json!({"secret":"argument"}),
+            app_context: None,
             mcp_app_resource_uri: None,
             plugin_id: None,
             result: None,
@@ -156,6 +168,7 @@ mod tests {
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Failed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
+                app_context: None,
                 mcp_app_resource_uri: None,
                 plugin_id: None,
                 result: None,

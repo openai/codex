@@ -4121,6 +4121,7 @@ async fn turn_event_counts_completed_tool_items() {
         tool: "search".to_string(),
         status,
         arguments: json!({}),
+        app_context: None,
         mcp_app_resource_uri: None,
         plugin_id: Some("sample@test".to_string()),
         result: None,
