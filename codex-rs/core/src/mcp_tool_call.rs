@@ -81,6 +81,7 @@ use codex_rollout::state_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
@@ -713,10 +714,8 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     server: &str,
     mut meta: Option<serde_json::Value>,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let supports_sandbox_state_meta = sess
-        .services
-        .mcp_connection_manager
-        .load_full()
+    let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
+    let supports_sandbox_state_meta = mcp_connection_manager
         .server_supports_sandbox_state_meta_capability(server)
         .await
         .unwrap_or(false);
@@ -724,12 +723,17 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         return Ok(meta);
     }
 
+    let server_environment_id = mcp_connection_manager
+        .server_environment_id(server)
+        .unwrap_or(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID);
+    let Some(sandbox_cwd) = sandbox_cwd_for_mcp_server(turn_context, server_environment_id) else {
+        return Ok(meta);
+    };
+    let permission_profile = turn_context.permission_profile();
     let sandbox_state = serde_json::to_value(SandboxState {
-        permission_profile: Some(turn_context.permission_profile()),
-        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: Some(permission_profile),
         codex_linux_sandbox_exe: turn_context.config.codex_linux_sandbox_exe.clone(),
-        #[allow(deprecated)]
-        sandbox_cwd: turn_context.cwd.to_path_buf(),
+        sandbox_cwd,
         use_legacy_landlock: turn_context.config.features.use_legacy_landlock(),
     })?;
 
@@ -752,6 +756,24 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     }
 
     Ok(meta)
+}
+
+fn sandbox_cwd_for_mcp_server(turn_context: &TurnContext, environment_id: &str) -> Option<PathUri> {
+    if let Some(environment) = turn_context
+        .environments
+        .turn_environments
+        .iter()
+        .find(|environment| environment.environment_id == environment_id)
+    {
+        return Some(environment.cwd().clone());
+    }
+
+    if environment_id == codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
+        #[allow(deprecated)]
+        return Some(PathUri::from_abs_path(&turn_context.cwd));
+    }
+
+    None
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(
