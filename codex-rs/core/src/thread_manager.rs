@@ -961,6 +961,7 @@ impl ThreadManager {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn fork_thread_from_history_with_initial_rollout_copy<S>(
         &self,
         snapshot: S,
@@ -986,6 +987,7 @@ impl ThreadManager {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn fork_thread_with_initial_history(
         &self,
         snapshot: ForkSnapshot,

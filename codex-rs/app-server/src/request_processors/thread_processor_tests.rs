@@ -361,6 +361,29 @@ mod thread_processor_behavior_tests {
         ))
     }
 
+    fn compacted_resume_test_turn_context() -> RolloutItem {
+        RolloutItem::TurnContext(codex_protocol::protocol::TurnContextItem {
+            turn_id: Some("turn-1".to_string()),
+            cwd: test_path_buf("/tmp/codex-compacted-resume").abs(),
+            workspace_roots: None,
+            current_date: None,
+            timezone: None,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
+            network: None,
+            file_system_sandbox_policy: None,
+            model: "test-model".to_string(),
+            comp_hash: None,
+            personality: None,
+            collaboration_mode: None,
+            multi_agent_version: None,
+            realtime_active: None,
+            effort: None,
+            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+        })
+    }
+
     fn compacted_resume_test_message(
         role: &str,
         text: &str,
@@ -379,6 +402,7 @@ mod thread_processor_behavior_tests {
             role: role.to_string(),
             content,
             phase: None,
+            metadata: None,
         }
     }
 
@@ -426,6 +450,7 @@ mod thread_processor_behavior_tests {
             RolloutItem::ResponseItem(compacted_resume_test_message("user", "first user response")),
             compacted_resume_test_compaction("older checkpoint", /*window_id*/ 1),
             compacted_resume_test_user_event("middle user event"),
+            compacted_resume_test_turn_context(),
             compacted_resume_test_compaction("latest checkpoint", /*window_id*/ 2),
             compacted_resume_test_agent_event(&large_tail_message),
         ])?;
@@ -435,19 +460,20 @@ mod thread_processor_behavior_tests {
         let items = read_compacted_resume_rollout_items(path.as_path(), thread_id, byte_len)?
             .expect("compacted resume items");
 
-        assert_eq!(items.len(), 5);
+        assert_eq!(items.len(), 6);
         assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
         assert!(matches!(
             items[1],
             RolloutItem::EventMsg(EventMsg::UserMessage(_))
         ));
         assert!(matches!(items[2], RolloutItem::ResponseItem(_)));
+        assert!(matches!(items[3], RolloutItem::TurnContext(_)));
         assert_eq!(
-            compacted_resume_test_replacement_text(&items[3]),
+            compacted_resume_test_replacement_text(&items[4]),
             Some("latest checkpoint")
         );
         assert!(matches!(
-            &items[4],
+            &items[5],
             RolloutItem::EventMsg(EventMsg::AgentMessage(event))
                 if event.message == large_tail_message
         ));
