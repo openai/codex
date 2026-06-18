@@ -291,6 +291,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         host_owned_codex_apps_enabled,
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
+        /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,

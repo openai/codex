@@ -136,6 +136,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         state_db,
         installation_id,
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let NewThread {
@@ -278,6 +279,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
         rollout_budget: None,
+        current_time_reminder: None,
         features: Default::default(),
         suppress_unstable_features_warning: false,
         active_project: ProjectConfig { trust_level: None },
