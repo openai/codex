@@ -226,10 +226,7 @@ async fn exhaustion_aborts_the_triggering_thread_and_interrupts_subagents() -> R
     .await;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            wire_request_contains(request, CHILD_PROMPT)
-                && !wire_request_contains(request, SPAWN_CALL_ID)
-        },
+        |request: &wiremock::Request| wire_request_contains(request, "\"type\":\"agent_message\""),
         sse(vec![
             ev_response_created("interrupt-child-1"),
             ev_function_call("child-sleep", "shell_command", &shell_args),
@@ -239,7 +236,10 @@ async fn exhaustion_aborts_the_triggering_thread_and_interrupts_subagents() -> R
     .await;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| wire_request_contains(request, SPAWN_CALL_ID),
+        |request: &wiremock::Request| {
+            wire_request_contains(request, SPAWN_CALL_ID)
+                && !wire_request_contains(request, "\"type\":\"agent_message\"")
+        },
         sse(vec![
             ev_response_created("interrupt-root-2"),
             ev_completed("interrupt-root-2"),

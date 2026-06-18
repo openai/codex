@@ -434,8 +434,11 @@ impl Session {
                         Err(CodexErr::TurnAborted) => {}
                         Err(err) => {
                             warn!(%err, "session task returned an unexpected error");
-                            sess.on_task_finished(Arc::clone(&ctx_for_finish), None)
-                                .await;
+                            sess.on_task_finished(
+                                Arc::clone(&ctx_for_finish),
+                                /*last_agent_message*/ None,
+                            )
+                            .await;
                         }
                     }
                 }
