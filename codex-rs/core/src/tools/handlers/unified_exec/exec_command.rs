@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
@@ -31,6 +32,7 @@ use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_shell_command::shell_detect::detect_shell_type;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
@@ -215,9 +217,7 @@ impl ExecCommandHandler {
                     turn_environment.environment_id
                 )));
             };
-            if requested_shell != remote_shell.name()
-                && requested_shell.as_str() != remote_shell.shell_path.to_string_lossy().as_ref()
-            {
+            if detect_shell_type(Path::new(&requested_shell)) != Some(remote_shell.shell_type) {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "environment `{}` only supports `{}`",
                     turn_environment.environment_id,
