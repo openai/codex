@@ -314,27 +314,6 @@ impl ThreadStateManager {
         &self,
         thread_id: ThreadId,
     ) -> Option<ConnectionId> {
-        self.first_capable_connection_for_thread(thread_id, |capabilities| {
-            capabilities.request_attestation
-        })
-        .await
-    }
-
-    pub(crate) async fn first_current_time_capable_connection_for_thread(
-        &self,
-        thread_id: ThreadId,
-    ) -> Option<ConnectionId> {
-        self.first_capable_connection_for_thread(thread_id, |capabilities| {
-            capabilities.request_current_time
-        })
-        .await
-    }
-
-    async fn first_capable_connection_for_thread(
-        &self,
-        thread_id: ThreadId,
-        is_capable: impl Fn(&ConnectionCapabilities) -> bool,
-    ) -> Option<ConnectionId> {
         let state = self.state.lock().await;
         state
             .threads
@@ -342,10 +321,34 @@ impl ThreadStateManager {
             .connection_ids
             .iter()
             .filter_map(|connection_id| {
-                let capabilities = state.live_connections.get(connection_id)?;
-                is_capable(capabilities).then_some(*connection_id)
+                state
+                    .live_connections
+                    .get(connection_id)?
+                    .request_attestation
+                    .then_some(*connection_id)
             })
             .min_by_key(|connection_id| connection_id.0)
+    }
+
+    pub(crate) async fn current_time_capable_connections_for_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Vec<ConnectionId> {
+        let state = self.state.lock().await;
+        let Some(thread_entry) = state.threads.get(&thread_id) else {
+            return Vec::new();
+        };
+        thread_entry
+            .connection_ids
+            .iter()
+            .filter_map(|connection_id| {
+                state
+                    .live_connections
+                    .get(connection_id)?
+                    .request_current_time
+                    .then_some(*connection_id)
+            })
+            .collect()
     }
 
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {

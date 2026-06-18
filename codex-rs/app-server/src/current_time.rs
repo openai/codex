@@ -16,6 +16,7 @@ use codex_protocol::ThreadId;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
+use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadStateManager;
 
@@ -54,10 +55,10 @@ async fn request_current_time(
     thread_state_manager: ThreadStateManager,
     thread_id: ThreadId,
 ) -> Result<DateTime<Utc>> {
-    let connection_id = thread_state_manager
-        .first_current_time_capable_connection_for_thread(thread_id)
-        .await
-        .ok_or_else(|| anyhow!("no current-time capable client is subscribed to the thread"))?;
+    let connection_ids = thread_state_manager
+        .current_time_capable_connections_for_thread(thread_id)
+        .await;
+    let connection_id = require_single_current_time_connection(&connection_ids)?;
     let connection_ids = [connection_id];
     let (request_id, rx) = outgoing
         .send_request_to_connections(
@@ -92,4 +93,41 @@ async fn request_current_time(
 
     DateTime::from_timestamp(response.current_time_at, 0)
         .ok_or_else(|| anyhow!("current-time response is outside the supported range"))
+}
+
+fn require_single_current_time_connection(connection_ids: &[ConnectionId]) -> Result<ConnectionId> {
+    // External clocks are not interchangeable, so do not choose one silently.
+    match connection_ids {
+        [connection_id] => Ok(*connection_id),
+        _ => bail!(
+            "expected exactly one current-time capable client subscribed to the thread, found {}",
+            connection_ids.len()
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_single_current_time_connection;
+    use crate::outgoing_message::ConnectionId;
+
+    #[test]
+    fn current_time_connection_must_be_unambiguous() {
+        assert_eq!(
+            require_single_current_time_connection(&[ConnectionId(7)]).unwrap(),
+            ConnectionId(7)
+        );
+        assert_eq!(
+            require_single_current_time_connection(&[])
+                .unwrap_err()
+                .to_string(),
+            "expected exactly one current-time capable client subscribed to the thread, found 0"
+        );
+        assert_eq!(
+            require_single_current_time_connection(&[ConnectionId(7), ConnectionId(8)])
+                .unwrap_err()
+                .to_string(),
+            "expected exactly one current-time capable client subscribed to the thread, found 2"
+        );
+    }
 }
