@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use anyhow::Result;
-use anyhow::bail;
+use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
+use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CurrentTimeReadResponse;
@@ -37,22 +38,18 @@ async fn current_time_read_round_trip_adds_reminder_to_model_input() -> Result<(
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_once(
         &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-1"),
-            responses::ev_assistant_message("msg-1", "Done"),
-            responses::ev_completed("resp-1"),
-        ]),
+        create_final_assistant_message_sse_response("Done")?,
     )
     .await;
     let codex_home = TempDir::new()?;
-    write_config(codex_home.path(), &server.uri())?;
+    create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut app_server = TestAppServer::new(codex_home.path()).await?;
-    timeout(
+    let initialized = timeout(
         DEFAULT_READ_TIMEOUT,
         app_server.initialize_with_capabilities(
             ClientInfo {
-                name: "codex-app-server-tests".to_string(),
+                name: DEFAULT_CLIENT_NAME.to_string(),
                 title: None,
                 version: "0.1.0".to_string(),
             },
@@ -64,6 +61,9 @@ async fn current_time_read_round_trip_adds_reminder_to_model_input() -> Result<(
         ),
     )
     .await??;
+    let JSONRPCMessage::Response(_) = initialized else {
+        panic!("expected initialize response, got: {initialized:?}");
+    };
 
     let thread_request_id = app_server
         .send_thread_start_request(ThreadStartParams::default())
@@ -92,45 +92,40 @@ async fn current_time_read_round_trip_adds_reminder_to_model_input() -> Result<(
     .await??;
     let _: TurnStartResponse = to_response(turn_response)?;
 
-    timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            match app_server.read_next_message().await? {
-                JSONRPCMessage::Request(request) => {
-                    let request = ServerRequest::try_from(request)?;
-                    let ServerRequest::CurrentTimeRead { request_id, params } = request else {
-                        bail!("expected currentTime/read request, got {request:?}");
-                    };
-                    assert_eq!(params.thread_id, thread.id);
-                    app_server
-                        .send_response(
-                            request_id,
-                            serde_json::to_value(CurrentTimeReadResponse {
-                                current_time_at: CURRENT_TIME_AT,
-                            })?,
-                        )
-                        .await?;
-                }
-                JSONRPCMessage::Notification(notification)
-                    if notification.method == "turn/completed" =>
-                {
-                    break Ok(());
-                }
-                _ => {}
-            }
-        }
-    })
+    let server_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CurrentTimeRead { request_id, params } = server_request else {
+        panic!("expected CurrentTimeRead request, got: {server_request:?}");
+    };
+    assert_eq!(params.thread_id, thread.id);
+    app_server
+        .send_response(
+            request_id,
+            serde_json::to_value(CurrentTimeReadResponse {
+                current_time_at: CURRENT_TIME_AT,
+            })?,
+        )
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("turn/completed"),
+    )
     .await??;
 
     assert!(
         response_mock
             .single_request()
             .message_input_texts("developer")
-            .contains(&CURRENT_TIME_REMINDER.to_string())
+            .iter()
+            .any(|text| text == CURRENT_TIME_REMINDER)
     );
     Ok(())
 }
 
-fn write_config(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
     std::fs::write(
         codex_home.join("config.toml"),
         format!(
