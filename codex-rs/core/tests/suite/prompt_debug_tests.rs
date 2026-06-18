@@ -49,7 +49,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
             text: "hello from debug prompt".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     assert_eq!(input.last(), Some(&expected_user_message));
     assert!(input.iter().any(|item| {
