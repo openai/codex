@@ -287,20 +287,18 @@ impl ExecCommandHandler {
             }
         };
 
-        // TODO(anp) intercept apply_patch properly when cwd is a foreign path
-        if let Some(native_cwd) = native_cwd.as_ref()
-            && let Some(output) = intercept_apply_patch(
-                &command,
-                native_cwd,
-                fs.as_ref(),
-                turn_environment.clone(),
-                context.session.clone(),
-                context.turn.clone(),
-                Some(&tracker),
-                &context.call_id,
-                "exec_command",
-            )
-            .await?
+        if let Some(output) = intercept_apply_patch(
+            &command,
+            &cwd,
+            fs.as_ref(),
+            turn_environment.clone(),
+            context.session.clone(),
+            context.turn.clone(),
+            Some(&tracker),
+            &context.call_id,
+            "exec_command",
+        )
+        .await?
         {
             manager.release_process_id(process_id).await;
             return Ok(boxed_tool_output(ExecCommandToolOutput {

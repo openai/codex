@@ -7,6 +7,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -35,24 +36,12 @@ pub(crate) async fn apply_patch(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
-    // TODO(anp): Migrate patch safety checks to PathUri.
-    let cwd = match action.cwd.to_abs_path() {
-        Ok(cwd) => cwd,
-        Err(err) => {
-            return InternalApplyPatchInvocation::Output(Err(FunctionCallError::RespondToModel(
-                format!(
-                    "patch cwd `{}` is not native to the Codex host: {err}",
-                    action.cwd
-                ),
-            )));
-        }
-    };
     match assess_patch_safety(
         &action,
         turn_context.approval_policy.value(),
         &turn_context.permission_profile(),
         file_system_sandbox_policy,
-        &cwd,
+        &action.cwd,
         turn_context.windows_sandbox_level,
     ) {
         SafetyCheck::AutoApprove {
@@ -103,9 +92,11 @@ pub(crate) fn convert_apply_patch_to_protocol(
                 new_content: _new_content,
             } => FileChange::Update {
                 unified_diff: unified_diff.clone(),
-                move_path: move_path.clone(),
+                move_path: move_path.as_ref().map(PathUri::to_path_buf),
             },
         };
+        // TODO(anp): Carry PathUri through patch protocol events once app-server and rollout
+        // compatibility no longer require path-flavored strings.
         result.insert(path.to_path_buf(), protocol_change);
     }
     result

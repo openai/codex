@@ -225,6 +225,8 @@ async fn approval_keys_include_move_destination() {
 +new content
 *** End Patch"#;
     let argv = vec!["apply_patch".to_string(), patch.to_string()];
+    // TODO(anp): Keep apply_patch handler test cwd values as PathUri.
+    let cwd = PathUri::from_abs_path(&cwd);
     let action = match codex_apply_patch::maybe_parse_apply_patch_verified(
         &argv,
         &cwd,
