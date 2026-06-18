@@ -15,6 +15,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_rollout::ForkParentRolloutRef;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -81,10 +82,9 @@ pub struct CreateThreadParams {
     pub dynamic_tools: Vec<DynamicToolSpec>,
     /// Multi-agent runtime selected when the thread was created.
     pub multi_agent_version: Option<MultiAgentVersion>,
-    /// Optional existing rollout JSONL to seed into the new rollout. Local
-    /// stores may persist this as a copy-on-write parent reference when safe.
+    /// Optional immutable parent rollout snapshot for copy-on-write history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_rollout_copy: Option<PathBuf>,
+    pub initial_rollout_copy: Option<ForkParentRolloutRef>,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
 }

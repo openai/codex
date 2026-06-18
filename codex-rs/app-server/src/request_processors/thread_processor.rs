@@ -3311,10 +3311,10 @@ impl ThreadRequestProcessor {
                     )
                     .await?
                     {
-                        Some(items) => {
+                        Some(compacted_history) => {
                             stored_thread.history = Some(codex_thread_store::StoredThreadHistory {
                                 thread_id: stored_thread.thread_id,
-                                items,
+                                items: compacted_history.items,
                             });
                             ResumeHistoryExtent::CompactedCheckpoint
                         }
@@ -3391,14 +3391,15 @@ impl ThreadRequestProcessor {
         &self,
         thread_id: &str,
         path: Option<&PathBuf>,
-    ) -> Result<Option<StoredThread>, JSONRPCErrorError> {
+    ) -> Result<Option<(StoredThread, codex_rollout::ForkParentRolloutRef)>, JSONRPCErrorError>
+    {
         let mut stored_thread = self
             .read_stored_thread_for_resume(thread_id, path, /*include_history*/ false)
             .await?;
         let Some(rollout_path) = stored_thread.rollout_path.clone() else {
             return Ok(None);
         };
-        let Some(items) = try_read_compacted_resume_rollout_items_from_rollout_path(
+        let Some(compacted_history) = try_read_compacted_resume_rollout_items_from_rollout_path(
             rollout_path.as_path(),
             stored_thread.thread_id,
         )
@@ -3408,9 +3409,9 @@ impl ThreadRequestProcessor {
         };
         stored_thread.history = Some(codex_thread_store::StoredThreadHistory {
             thread_id: stored_thread.thread_id,
-            items,
+            items: compacted_history.items,
         });
-        Ok(Some(stored_thread))
+        Ok(Some((stored_thread, compacted_history.parent_ref)))
     }
 
     async fn load_full_resume_history_items(
@@ -3623,21 +3624,13 @@ impl ThreadRequestProcessor {
             ));
         }
         let optimized_source = if !include_turns && !ephemeral {
-            match self
-                .read_stored_thread_for_resume_with_compacted_history(&thread_id, path.as_ref())
+            self.read_stored_thread_for_resume_with_compacted_history(&thread_id, path.as_ref())
                 .await?
-            {
-                Some(stored_thread) => stored_thread
-                    .rollout_path
-                    .clone()
-                    .map(|rollout_path| (stored_thread, rollout_path)),
-                None => None,
-            }
         } else {
             None
         };
         let (mut source_thread, initial_rollout_copy) = match optimized_source {
-            Some((source_thread, rollout_path)) => (source_thread, Some(rollout_path)),
+            Some((source_thread, parent_ref)) => (source_thread, Some(parent_ref)),
             None => (
                 self.read_stored_thread_for_resume(
                     &thread_id,
@@ -4140,6 +4133,11 @@ struct RecentRolloutItems {
     items: Vec<RolloutItem>,
 }
 
+struct CompactedResumeRollout {
+    items: Vec<RolloutItem>,
+    parent_ref: codex_rollout::ForkParentRolloutRef,
+}
+
 fn thread_resume_initial_page_is_recent_not_loaded(
     params: &ThreadResumeInitialTurnsPageParams,
 ) -> bool {
@@ -4206,20 +4204,32 @@ fn rollout_line_has_fork_parent_rollout_ref(line: &str) -> bool {
 async fn try_read_compacted_resume_rollout_items_from_rollout_path(
     rollout_path: &Path,
     expected_thread_id: ThreadId,
-) -> Result<Option<Vec<RolloutItem>>, JSONRPCErrorError> {
+) -> Result<Option<CompactedResumeRollout>, JSONRPCErrorError> {
     let Some(existing_path) = codex_rollout::existing_rollout_path(rollout_path).await else {
         return Ok(None);
     };
     if !is_plain_jsonl_rollout_path(existing_path.as_path()) {
         return Ok(None);
     }
+    let Ok(metadata) = tokio::fs::metadata(existing_path.as_path()).await else {
+        return Ok(None);
+    };
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Ok(None);
+    }
+    let byte_len = metadata.len();
+    let parent_ref = codex_rollout::ForkParentRolloutRef {
+        path: existing_path.clone(),
+        byte_len,
+    };
     let items = tokio::task::spawn_blocking(move || {
-        read_compacted_resume_rollout_items(existing_path.as_path(), expected_thread_id)
+        read_compacted_resume_rollout_items(existing_path.as_path(), expected_thread_id, byte_len)
     })
     .await
     .map_err(|err| internal_error(format!("failed to join compacted rollout read: {err}")))?;
     match items {
-        Ok(items) => Ok(items),
+        Ok(Some(items)) => Ok(Some(CompactedResumeRollout { items, parent_ref })),
+        Ok(None) => Ok(None),
         Err(_) => Ok(None),
     }
 }
@@ -4227,12 +4237,14 @@ async fn try_read_compacted_resume_rollout_items_from_rollout_path(
 fn read_compacted_resume_rollout_items(
     path: &Path,
     expected_thread_id: ThreadId,
+    byte_len: u64,
 ) -> std::io::Result<Option<Vec<RolloutItem>>> {
-    let Some(mut prefix_items) = read_compacted_resume_prefix_items(path, expected_thread_id)?
+    let Some(mut prefix_items) =
+        read_compacted_resume_prefix_items(path, expected_thread_id, byte_len)?
     else {
         return Ok(None);
     };
-    let Some(mut suffix_items) = read_compacted_resume_suffix_items(path)? else {
+    let Some(mut suffix_items) = read_compacted_resume_suffix_items(path, byte_len)? else {
         return Ok(None);
     };
 
@@ -4245,11 +4257,13 @@ fn read_compacted_resume_rollout_items(
 fn read_compacted_resume_prefix_items(
     path: &Path,
     expected_thread_id: ThreadId,
+    byte_len: u64,
 ) -> std::io::Result<Option<Vec<RolloutItem>>> {
     use std::io::BufRead;
+    use std::io::Read;
 
     let file = std::fs::File::open(path)?;
-    let reader = std::io::BufReader::new(file);
+    let reader = std::io::BufReader::new(file.take(byte_len));
     let mut prefix_items = Vec::with_capacity(3);
     let mut saw_session_meta = false;
     let mut saw_user_event = false;
@@ -4301,12 +4315,15 @@ fn read_compacted_resume_prefix_items(
     Ok(saw_session_meta.then_some(prefix_items))
 }
 
-fn read_compacted_resume_suffix_items(path: &Path) -> std::io::Result<Option<Vec<RolloutItem>>> {
+fn read_compacted_resume_suffix_items(
+    path: &Path,
+    byte_len: u64,
+) -> std::io::Result<Option<Vec<RolloutItem>>> {
     let mut suffix_items = Vec::new();
     let mut found_checkpoint = false;
     let mut should_fallback = false;
 
-    read_rollout_lines_from_end(path, |line| {
+    read_rollout_lines_from_end(path, byte_len, |line| {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             return Ok(true);
@@ -4339,7 +4356,7 @@ fn read_compacted_resume_suffix_items(path: &Path) -> std::io::Result<Option<Vec
     Ok(Some(suffix_items))
 }
 
-fn read_rollout_lines_from_end<F>(path: &Path, mut visit: F) -> std::io::Result<()>
+fn read_rollout_lines_from_end<F>(path: &Path, byte_len: u64, mut visit: F) -> std::io::Result<()>
 where
     F: FnMut(&str) -> std::io::Result<bool>,
 {
@@ -4350,7 +4367,12 @@ where
     const CHUNK_SIZE: u64 = 64 * 1024;
 
     let mut file = std::fs::File::open(path)?;
-    let mut position = file.metadata()?.len();
+    if file.metadata()?.len() < byte_len {
+        return Err(IoError::other(format!(
+            "rollout ended before snapshot boundary {byte_len}"
+        )));
+    }
+    let mut position = byte_len;
     let mut pending = Vec::new();
 
     while position > 0 {

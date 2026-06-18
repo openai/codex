@@ -51,7 +51,10 @@ pub(crate) struct PendingThreadMetadataPatch {
 }
 
 impl ThreadMetadataSync {
-    pub(crate) async fn for_create(params: &CreateThreadParams) -> Self {
+    pub(crate) async fn for_create(
+        params: &CreateThreadParams,
+        observed_history: Option<&[RolloutItem]>,
+    ) -> Self {
         let created_at = Utc::now();
         let cwd = params.metadata.cwd.clone().unwrap_or_default();
         let git_info = if get_git_repo_root(cwd.as_path()).is_some() {
@@ -78,7 +81,7 @@ impl ThreadMetadataSync {
             memory_mode: Some(params.metadata.memory_mode),
             ..Default::default()
         };
-        Self {
+        let mut sync = Self {
             thread_id: params.thread_id,
             cwd_seen: !cwd.as_os_str().is_empty(),
             preview_seen: false,
@@ -89,7 +92,13 @@ impl ThreadMetadataSync {
             last_touch_persisted_at: None,
             defer_create_update_until_history_exists: true,
             defer_resume_update_until_append: false,
+        };
+        if let Some(observed_history) = observed_history {
+            sync.defer_create_update_until_history_exists = false;
+            let update = sync.observe_resume_history(observed_history);
+            sync.merge_pending_update(update);
         }
+        sync
     }
 
     #[cfg(test)]

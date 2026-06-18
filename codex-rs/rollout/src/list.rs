@@ -1391,62 +1391,8 @@ async fn find_thread_path_by_id_str_in_subdir(
         }
     }
 
-    let mut root = codex_home.to_path_buf();
-    root.push(subdir);
-    if !root.exists() {
-        return Ok(unverified_db_path);
-    }
-    let (filename_match, filename_scan_error) = match find_rollout_path_by_id_from_filenames(
-        root.as_path(),
-        id_str,
-    )
-    .await
-    {
-        Ok(path) => (path, None),
-        Err(err) => {
-            tracing::warn!(
-                "rollout filename lookup failed during find_thread_path_by_id_str_in_subdir: {err}"
-            );
-            (None, Some(err))
-        }
-    };
-
-    let found = match filename_match {
-        Some(path) => Some(path),
-        None => {
-            // This is safe because we know the values are valid.
-            #[allow(clippy::unwrap_used)]
-            let limit = NonZero::new(1).unwrap();
-            let options = file_search::FileSearchOptions {
-                limit,
-                compute_indices: false,
-                respect_gitignore: false,
-                ..Default::default()
-            };
-
-            let results = file_search::run(
-                id_str,
-                vec![root.clone()],
-                options,
-                /*cancel_flag*/ None,
-            )
-            .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
-
-            let found = results
-                .matches
-                .into_iter()
-                .map(|m| m.full_path())
-                .find_map(compression::RolloutFile::from_path)
-                .map(compression::RolloutFile::into_path);
-
-            if found.is_none()
-                && let Some(err) = filename_scan_error
-            {
-                return Err(err);
-            }
-            found
-        }
-    };
+    let found =
+        find_thread_path_by_id_str_in_subdir_from_filesystem(codex_home, subdir, id_str).await?;
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");
         tracing::warn!(
@@ -1469,6 +1415,61 @@ async fn find_thread_path_by_id_str_in_subdir(
     }
 
     Ok(found.or(unverified_db_path))
+}
+
+pub(crate) async fn find_thread_path_by_id_str_in_subdir_from_filesystem(
+    codex_home: &Path,
+    subdir: &str,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    if Uuid::parse_str(id_str).is_err() {
+        return Ok(None);
+    }
+    let root = codex_home.join(subdir);
+    if !root.exists() {
+        return Ok(None);
+    }
+    let (filename_match, filename_scan_error) = match find_rollout_path_by_id_from_filenames(
+        root.as_path(),
+        id_str,
+    )
+    .await
+    {
+        Ok(path) => (path, None),
+        Err(err) => {
+            tracing::warn!(
+                "rollout filename lookup failed during find_thread_path_by_id_str_in_subdir: {err}"
+            );
+            (None, Some(err))
+        }
+    };
+    if filename_match.is_some() {
+        return Ok(filename_match);
+    }
+
+    // This is safe because we know the values are valid.
+    #[allow(clippy::unwrap_used)]
+    let limit = NonZero::new(1).unwrap();
+    let options = file_search::FileSearchOptions {
+        limit,
+        compute_indices: false,
+        respect_gitignore: false,
+        ..Default::default()
+    };
+    let results = file_search::run(id_str, vec![root], options, /*cancel_flag*/ None)
+        .map_err(|err| io::Error::other(format!("file search failed: {err}")))?;
+    let found = results
+        .matches
+        .into_iter()
+        .map(|matched| matched.full_path())
+        .find_map(compression::RolloutFile::from_path)
+        .map(compression::RolloutFile::into_path);
+    if found.is_none()
+        && let Some(err) = filename_scan_error
+    {
+        return Err(err);
+    }
+    Ok(found)
 }
 
 async fn find_rollout_path_by_id_from_filenames(

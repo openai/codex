@@ -88,8 +88,24 @@ impl LiveThread {
         thread_store: Arc<dyn ThreadStore>,
         params: CreateThreadParams,
     ) -> ThreadStoreResult<Self> {
+        Self::create_inner(thread_store, params, /*observed_history*/ None).await
+    }
+
+    pub async fn create_with_observed_history(
+        thread_store: Arc<dyn ThreadStore>,
+        params: CreateThreadParams,
+        observed_history: &[RolloutItem],
+    ) -> ThreadStoreResult<Self> {
+        Self::create_inner(thread_store, params, Some(observed_history)).await
+    }
+
+    async fn create_inner(
+        thread_store: Arc<dyn ThreadStore>,
+        params: CreateThreadParams,
+        observed_history: Option<&[RolloutItem]>,
+    ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let metadata_sync = ThreadMetadataSync::for_create(&params).await;
+        let metadata_sync = ThreadMetadataSync::for_create(&params, observed_history).await;
         thread_store.create_thread(params).await?;
         Ok(Self {
             thread_id,

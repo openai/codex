@@ -13,6 +13,8 @@ use chrono::SecondsFormat;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -38,6 +40,7 @@ use super::list::ThreadListConfig;
 use super::list::ThreadListLayout;
 use super::list::ThreadSortKey;
 use super::list::ThreadsPage;
+use super::list::find_thread_path_by_id_str_in_subdir_from_filesystem;
 use super::list::get_threads;
 use super::list::get_threads_in_root;
 use super::list::parse_cursor;
@@ -67,7 +70,7 @@ use codex_utils_path as path_utils;
 const FORK_PARENT_ROLLOUT_PATH_FIELD: &str = "fork_parent_rollout_path";
 const FORK_PARENT_ROLLOUT_BYTE_LEN_FIELD: &str = "fork_parent_rollout_byte_len";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ForkParentRolloutRef {
     pub path: PathBuf,
     pub byte_len: u64,
@@ -100,7 +103,7 @@ pub enum RolloutRecorderParams {
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         multi_agent_version: Option<MultiAgentVersion>,
-        initial_rollout_copy: Option<PathBuf>,
+        initial_rollout_copy: Option<ForkParentRolloutRef>,
     },
     Resume {
         path: PathBuf,
@@ -205,7 +208,10 @@ impl RolloutRecorderParams {
         self
     }
 
-    pub fn with_initial_rollout_copy(mut self, initial_rollout_copy: Option<PathBuf>) -> Self {
+    pub fn with_initial_rollout_copy(
+        mut self,
+        initial_rollout_copy: Option<ForkParentRolloutRef>,
+    ) -> Self {
         if let Self::Create {
             initial_rollout_copy: copy,
             ..
@@ -902,42 +908,47 @@ impl RolloutRecorder {
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
-        let mut items: Vec<RolloutItem> = Vec::new();
-        let mut thread_id: Option<ThreadId> = None;
-        let mut parse_errors = 0usize;
-        let mut reader = compression::open_rollout_line_reader(path).await?;
-        let mut saw_non_empty_line = false;
-        while let Some(line) = reader.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
+        let (mut items, thread_id, mut parse_errors, mut parent_ref) =
+            Self::load_rollout_items_unexpanded(path, /*byte_len*/ None).await?;
+        let mut current_path = path.to_path_buf();
+        let mut child_segments = Vec::new();
+        let mut visited_paths = HashSet::from([current_path.clone()]);
+
+        while let Some(reference) = parent_ref {
+            let parent_thread_id = fork_parent_thread_id(items.as_slice(), current_path.as_path())?;
+            let parent_path = resolve_fork_parent_rollout_path(
+                current_path.as_path(),
+                &reference,
+                parent_thread_id,
+            )
+            .await?;
+            if !visited_paths.insert(parent_path.clone()) {
+                return Err(IoError::other(format!(
+                    "fork parent cycle detected at {}",
+                    parent_path.display()
+                )));
             }
-            saw_non_empty_line = true;
-            match serde_json::from_str::<RolloutLine>(&line) {
-                Ok(rollout_line) if rollout_item_may_need_legacy_cleanup(&rollout_line.item) => {
-                    if let Some(rollout_line) = parse_rollout_line_after_legacy_cleanup(
-                        &line,
-                        &mut parse_errors,
-                        /*rollout_error*/ None,
-                    ) {
-                        push_loaded_rollout_item(&mut items, &mut thread_id, rollout_line.item);
-                    }
-                }
-                Ok(rollout_line) => {
-                    push_loaded_rollout_item(&mut items, &mut thread_id, rollout_line.item);
-                }
-                Err(rollout_error) => {
-                    if let Some(rollout_line) = parse_rollout_line_after_legacy_cleanup(
-                        &line,
-                        &mut parse_errors,
-                        Some(&rollout_error),
-                    ) {
-                        push_loaded_rollout_item(&mut items, &mut thread_id, rollout_line.item);
-                    }
-                }
+            let (parent_items, loaded_parent_thread_id, parent_parse_errors, next_parent_ref) =
+                Self::load_rollout_items_unexpanded(
+                    parent_path.as_path(),
+                    Some(reference.byte_len),
+                )
+                .await?;
+            if loaded_parent_thread_id != Some(parent_thread_id) {
+                return Err(IoError::other(format!(
+                    "fork parent identity mismatch for {}",
+                    current_path.display()
+                )));
             }
+            parse_errors = parse_errors.saturating_add(parent_parse_errors);
+            child_segments.push(items);
+            items = parent_items;
+            current_path = parent_path;
+            parent_ref = next_parent_ref;
         }
-        if !saw_non_empty_line {
-            return Err(IoError::other("empty session file"));
+
+        for child_items in child_segments.into_iter().rev() {
+            items = prepend_parent_items(child_items, items)?;
         }
 
         tracing::debug!(
@@ -949,34 +960,50 @@ impl RolloutRecorder {
         Ok((items, thread_id, parse_errors))
     }
 
-    pub async fn load_rollout_items_prefix(
+    async fn load_rollout_items_unexpanded(
         path: &Path,
-        byte_len: u64,
-    ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
-        trace!("Resuming rollout prefix from {path:?}, byte_len={byte_len}");
+        byte_len: Option<u64>,
+    ) -> std::io::Result<(
+        Vec<RolloutItem>,
+        Option<ThreadId>,
+        usize,
+        Option<ForkParentRolloutRef>,
+    )> {
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
         let mut parse_errors = 0usize;
+        let mut parent_ref = None;
         let mut bytes_read = 0u64;
         let mut reader = compression::open_rollout_line_reader(path).await?;
         let mut saw_non_empty_line = false;
-        while bytes_read < byte_len {
-            let Some(line) = reader.next_line().await? else {
-                return Err(IoError::other(format!(
-                    "rollout prefix ended before {byte_len} bytes"
-                )));
-            };
-            let line_len = u64::try_from(line.len())
-                .unwrap_or(u64::MAX)
-                .saturating_add(1);
-            if bytes_read.saturating_add(line_len) > byte_len {
-                return Err(IoError::other(format!(
-                    "rollout prefix boundary {byte_len} splits a JSONL line"
-                )));
+        loop {
+            if byte_len.is_some_and(|byte_len| bytes_read >= byte_len) {
+                break;
             }
-            bytes_read = bytes_read.saturating_add(line_len);
+            let Some(line) = reader.next_line().await? else {
+                if let Some(byte_len) = byte_len {
+                    return Err(IoError::other(format!(
+                        "rollout prefix ended before {byte_len} bytes"
+                    )));
+                }
+                break;
+            };
+            if let Some(byte_len) = byte_len {
+                let line_len = u64::try_from(line.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1);
+                if bytes_read.saturating_add(line_len) > byte_len {
+                    return Err(IoError::other(format!(
+                        "rollout prefix boundary {byte_len} splits a JSONL line"
+                    )));
+                }
+                bytes_read = bytes_read.saturating_add(line_len);
+            }
             if line.trim().is_empty() {
                 continue;
+            }
+            if !saw_non_empty_line {
+                parent_ref = parse_fork_parent_rollout_ref_from_line(line.as_str());
             }
             saw_non_empty_line = true;
             match serde_json::from_str::<RolloutLine>(&line) {
@@ -1004,10 +1031,13 @@ impl RolloutRecorder {
             }
         }
         if !saw_non_empty_line {
-            return Err(IoError::other("empty session file prefix"));
+            return Err(IoError::other(if byte_len.is_some() {
+                "empty session file prefix"
+            } else {
+                "empty session file"
+            }));
         }
-
-        Ok((items, thread_id, parse_errors))
+        Ok((items, thread_id, parse_errors, parent_ref))
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
@@ -1055,18 +1085,85 @@ impl RolloutRecorder {
     }
 }
 
-pub async fn read_fork_parent_rollout_ref(
-    path: &Path,
-) -> std::io::Result<Option<ForkParentRolloutRef>> {
-    let mut reader = compression::open_rollout_line_reader(path).await?;
-    while let Some(line) = reader.next_line().await? {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        return Ok(parse_fork_parent_rollout_ref_from_line(trimmed));
+fn fork_parent_thread_id(items: &[RolloutItem], path: &Path) -> std::io::Result<ThreadId> {
+    items
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => meta_line.meta.forked_from_id,
+            _ => None,
+        })
+        .ok_or_else(|| {
+            IoError::other(format!(
+                "fork parent reference in {} is missing a parent thread id",
+                path.display()
+            ))
+        })
+}
+
+async fn resolve_fork_parent_rollout_path(
+    child_path: &Path,
+    parent_ref: &ForkParentRolloutRef,
+    parent_thread_id: ThreadId,
+) -> std::io::Result<PathBuf> {
+    if let Some(path) = compression::existing_rollout_path(parent_ref.path.as_path()).await {
+        return Ok(path);
     }
-    Ok(None)
+
+    let codex_home = child_path
+        .ancestors()
+        .find(|ancestor| {
+            ancestor
+                .file_name()
+                .is_some_and(|name| name == SESSIONS_SUBDIR || name == ARCHIVED_SESSIONS_SUBDIR)
+        })
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            IoError::other(format!(
+                "fork parent rollout {} does not exist",
+                parent_ref.path.display()
+            ))
+        })?;
+    let parent_thread_id = parent_thread_id.to_string();
+    if let Some(path) = find_thread_path_by_id_str_in_subdir_from_filesystem(
+        codex_home,
+        SESSIONS_SUBDIR,
+        parent_thread_id.as_str(),
+    )
+    .await?
+    {
+        return Ok(path);
+    }
+    if let Some(path) = find_thread_path_by_id_str_in_subdir_from_filesystem(
+        codex_home,
+        ARCHIVED_SESSIONS_SUBDIR,
+        parent_thread_id.as_str(),
+    )
+    .await?
+    {
+        return Ok(path);
+    }
+    Err(IoError::other(format!(
+        "fork parent rollout {} does not exist and thread {parent_thread_id} was not found under {}",
+        parent_ref.path.display(),
+        codex_home.display()
+    )))
+}
+
+fn prepend_parent_items(
+    child_items: Vec<RolloutItem>,
+    parent_items: Vec<RolloutItem>,
+) -> std::io::Result<Vec<RolloutItem>> {
+    let mut child_items = child_items.into_iter();
+    let Some(RolloutItem::SessionMeta(child_meta)) = child_items.next() else {
+        return Err(IoError::other(
+            "fork child rollout does not start with session metadata",
+        ));
+    };
+    let mut items = Vec::with_capacity(1 + parent_items.len() + child_items.size_hint().0);
+    items.push(RolloutItem::SessionMeta(child_meta));
+    items.extend(parent_items);
+    items.extend(child_items);
+    Ok(items)
 }
 
 pub fn parse_fork_parent_rollout_ref_from_line(line: &str) -> Option<ForkParentRolloutRef> {
@@ -1643,7 +1740,7 @@ struct RolloutWriterState {
     deferred_log_file_info: Option<LogFileInfo>,
     pending_items: Vec<RolloutItem>,
     meta: Option<SessionMeta>,
-    initial_rollout_copy: Option<PathBuf>,
+    initial_rollout_copy: Option<ForkParentRolloutRef>,
     cwd: PathBuf,
     rollout_path: PathBuf,
     last_logged_error: Option<String>,
@@ -1654,7 +1751,7 @@ impl RolloutWriterState {
         file: Option<tokio::fs::File>,
         deferred_log_file_info: Option<LogFileInfo>,
         meta: Option<SessionMeta>,
-        initial_rollout_copy: Option<PathBuf>,
+        initial_rollout_copy: Option<ForkParentRolloutRef>,
         cwd: PathBuf,
         rollout_path: PathBuf,
     ) -> Self {
@@ -1769,10 +1866,7 @@ impl RolloutWriterState {
         let Some(session_meta) = self.meta.as_ref().cloned() else {
             return Ok(());
         };
-        let fork_parent_rollout_ref = match self.initial_rollout_copy.as_deref() {
-            Some(source_path) => fork_parent_rollout_ref_for_initial_copy(source_path).await?,
-            None => None,
-        };
+        let fork_parent_rollout_ref = self.initial_rollout_copy.clone();
         write_session_meta(
             self.writer.as_mut(),
             session_meta,
@@ -1780,30 +1874,14 @@ impl RolloutWriterState {
             fork_parent_rollout_ref.as_ref(),
         )
         .await?;
-        if fork_parent_rollout_ref.is_some() {
-            self.initial_rollout_copy = None;
-        }
-        self.meta = None;
-        Ok(())
-    }
-
-    async fn copy_initial_rollout_if_needed(&mut self) -> std::io::Result<()> {
-        let Some(source_path) = self.initial_rollout_copy.as_ref().cloned() else {
-            return Ok(());
-        };
-        let Some(writer) = self.writer.as_mut() else {
-            return Err(IoError::other("rollout writer is not open"));
-        };
-        let mut source = tokio::fs::File::open(source_path.as_path()).await?;
-        tokio::io::copy(&mut source, &mut writer.file).await?;
         self.initial_rollout_copy = None;
+        self.meta = None;
         Ok(())
     }
 
     async fn write_pending_once(&mut self) -> std::io::Result<()> {
         self.ensure_writer_open().await?;
         self.write_session_meta_if_needed().await?;
-        self.copy_initial_rollout_if_needed().await?;
 
         self.write_pending_items_once().await?;
 
@@ -1841,7 +1919,7 @@ async fn rollout_writer(
     deferred_log_file_info: Option<LogFileInfo>,
     mut rx: mpsc::Receiver<RolloutCmd>,
     meta: Option<SessionMeta>,
-    initial_rollout_copy: Option<PathBuf>,
+    initial_rollout_copy: Option<ForkParentRolloutRef>,
     cwd: PathBuf,
     rollout_path: PathBuf,
 ) -> std::io::Result<()> {
@@ -1880,31 +1958,6 @@ async fn rollout_writer(
     }
 
     Ok(())
-}
-
-async fn fork_parent_rollout_ref_for_initial_copy(
-    source_path: &Path,
-) -> std::io::Result<Option<ForkParentRolloutRef>> {
-    let Some(existing_path) = compression::existing_rollout_path(source_path).await else {
-        return Ok(None);
-    };
-    if !is_plain_jsonl_rollout_path(existing_path.as_path()) {
-        return Ok(None);
-    }
-    let metadata = tokio::fs::metadata(existing_path.as_path()).await?;
-    if !metadata.is_file() || metadata.len() == 0 {
-        return Ok(None);
-    }
-    Ok(Some(ForkParentRolloutRef {
-        path: existing_path,
-        byte_len: metadata.len(),
-    }))
-}
-
-fn is_plain_jsonl_rollout_path(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(".jsonl"))
 }
 
 async fn write_session_meta(
