@@ -293,13 +293,37 @@ async fn download_remote_plugin_bundle_with_limit(
     let url = final_url.to_string();
     let status = response.status();
     if !status.is_success() {
-        let body = read_response_body_with_limit(
-            response,
-            &url,
-            /*max_bytes*/ REMOTE_PLUGIN_BUNDLE_ERROR_BODY_MAX_BYTES,
-        )
-        .await?;
-        let body = String::from_utf8_lossy(&body).to_string();
+        let mut response = response;
+        let mut body = Vec::new();
+        let mut body_truncated = false;
+        let mut body_read_error = None;
+        loop {
+            let chunk = match response.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(source) => {
+                    body_read_error = Some(source);
+                    break;
+                }
+            };
+            let remaining = REMOTE_PLUGIN_BUNDLE_ERROR_BODY_MAX_BYTES as usize - body.len();
+            if chunk.len() > remaining {
+                body.extend_from_slice(&chunk[..remaining]);
+                body_truncated = true;
+                break;
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        let mut body = String::from_utf8_lossy(&body).into_owned();
+        if body_truncated {
+            body.push_str(&format!(
+                "\n[response body truncated after {REMOTE_PLUGIN_BUNDLE_ERROR_BODY_MAX_BYTES} bytes]"
+            ));
+        }
+        if let Some(source) = body_read_error {
+            body.push_str(&format!("\n[failed to read response body: {source}]"));
+        }
         return Err(RemotePluginBundleInstallError::DownloadStatus { url, status, body });
     }
 
