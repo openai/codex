@@ -959,6 +959,7 @@ impl Session {
             ));
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
+            session_extension_data.insert(analytics_events_client.clone());
             session_extension_data.insert(McpResourceClient::new(Arc::clone(
                 &mcp_connection_manager,
             )));

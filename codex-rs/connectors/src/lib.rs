@@ -14,6 +14,7 @@ use serde::Serialize;
 pub mod accessible;
 mod app_tool_policy;
 mod directory_cache;
+mod explicit;
 pub mod filter;
 pub mod merge;
 pub mod metadata;
@@ -24,6 +25,7 @@ pub use app_tool_policy::AppToolPolicyInput;
 pub use app_tool_policy::app_is_enabled;
 pub use app_tool_policy::apps_config_from_layer_stack;
 pub use directory_cache::ConnectorDirectoryCacheContext;
+pub use explicit::ExplicitConnectorMentions;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
 

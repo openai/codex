@@ -2793,7 +2793,6 @@ name = "codex-core-skills"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "codex-analytics",
  "codex-app-server-protocol",
  "codex-config",
  "codex-context-fragments",
@@ -3885,6 +3884,8 @@ dependencies = [
 name = "codex-skills-extension"
 version = "0.0.0"
 dependencies = [
+ "codex-analytics",
+ "codex-connectors",
  "codex-core-skills",
  "codex-exec-server",
  "codex-extension-api",

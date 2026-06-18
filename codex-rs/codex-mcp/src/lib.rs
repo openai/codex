@@ -1,5 +1,8 @@
 pub use connection_manager::McpConnectionManager;
 pub use connection_manager::tool_is_model_visible;
+pub use dependencies::McpServerDependencies;
+pub use dependencies::McpServerDependency;
+pub use dependencies::canonical_server_key;
 pub use elicitation::ElicitationReviewRequest;
 pub use elicitation::ElicitationReviewer;
 pub use elicitation::ElicitationReviewerHandle;
@@ -74,6 +77,7 @@ pub(crate) mod auth_elicitation;
 mod catalog;
 pub(crate) mod codex_apps;
 pub(crate) mod connection_manager;
+mod dependencies;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;
 mod plugin_config;
