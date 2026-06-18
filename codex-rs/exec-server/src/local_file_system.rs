@@ -161,6 +161,15 @@ impl LocalFileSystem {
         file_system.get_metadata(path, sandbox).await
     }
 
+    async fn get_symlink_metadata(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileMetadata> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.get_symlink_metadata(path, sandbox).await
+    }
+
     async fn read_directory(
         &self,
         path: &PathUri,
@@ -245,6 +254,14 @@ impl ExecutorFileSystem for LocalFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(LocalFileSystem::get_metadata(self, path, sandbox))
+    }
+
+    fn get_symlink_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(LocalFileSystem::get_symlink_metadata(self, path, sandbox))
     }
 
     fn read_directory<'a>(
@@ -355,6 +372,17 @@ impl UnsandboxedFileSystem {
         self.file_system.get_metadata(path, /*sandbox*/ None).await
     }
 
+    async fn get_symlink_metadata(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileMetadata> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .get_symlink_metadata(path, /*sandbox*/ None)
+            .await
+    }
+
     async fn read_directory(
         &self,
         path: &PathUri,
@@ -450,6 +478,16 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(UnsandboxedFileSystem::get_metadata(self, path, sandbox))
+    }
+
+    fn get_symlink_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(UnsandboxedFileSystem::get_symlink_metadata(
+            self, path, sandbox,
+        ))
     }
 
     fn read_directory<'a>(
@@ -573,10 +611,31 @@ impl DirectFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
+        self.get_metadata_impl(path, sandbox, true).await
+    }
+
+    async fn get_symlink_metadata(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileMetadata> {
+        self.get_metadata_impl(path, sandbox, false).await
+    }
+
+    async fn get_metadata_impl(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+        follow_symlinks: bool,
+    ) -> FileSystemResult<FileMetadata> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
-        let metadata = tokio::fs::metadata(path.as_path()).await?;
         let symlink_metadata = tokio::fs::symlink_metadata(path.as_path()).await?;
+        let metadata = if follow_symlinks {
+            tokio::fs::metadata(path.as_path()).await?
+        } else {
+            symlink_metadata.clone()
+        };
         Ok(FileMetadata {
             is_directory: metadata.is_dir(),
             is_file: metadata.is_file(),
@@ -597,13 +656,20 @@ impl DirectFileSystem {
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {
-            let Ok(metadata) = tokio::fs::metadata(entry.path()).await else {
-                continue;
+            let symlink_metadata = entry.metadata().await?;
+            let is_symlink = symlink_metadata.file_type().is_symlink();
+            let metadata = if is_symlink {
+                tokio::fs::metadata(entry.path())
+                    .await
+                    .unwrap_or_else(|_| symlink_metadata.clone())
+            } else {
+                symlink_metadata
             };
             entries.push(ReadDirectoryEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 is_directory: metadata.is_dir(),
                 is_file: metadata.is_file(),
+                is_symlink,
             });
         }
         Ok(entries)
@@ -741,6 +807,14 @@ impl ExecutorFileSystem for DirectFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(DirectFileSystem::get_metadata(self, path, sandbox))
+    }
+
+    fn get_symlink_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(DirectFileSystem::get_symlink_metadata(self, path, sandbox))
     }
 
     fn read_directory<'a>(

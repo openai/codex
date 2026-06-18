@@ -2923,6 +2923,7 @@ mod tests {
             request_id: RequestId::Integer(10),
             params: v2::FsGetMetadataParams {
                 path: absolute_path("tmp/example"),
+                follow_symlinks: None,
             },
         };
         assert_eq!(
@@ -2930,6 +2931,7 @@ mod tests {
                 "method": "fs/getMetadata",
                 "id": 10,
                 "params": {
+                    "followSymlinks": null,
                     "path": absolute_path_string("tmp/example")
                 }
             }),

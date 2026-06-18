@@ -139,11 +139,31 @@ impl RemoteFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
+        self.get_metadata_with_follow_symlinks(path, sandbox, true)
+            .await
+    }
+
+    async fn get_symlink_metadata(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileMetadata> {
+        self.get_metadata_with_follow_symlinks(path, sandbox, false)
+            .await
+    }
+
+    async fn get_metadata_with_follow_symlinks(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+        follow_symlinks: bool,
+    ) -> FileSystemResult<FileMetadata> {
         trace!("remote fs get_metadata");
         let client = self.client.get().await.map_err(map_remote_error)?;
         let response = client
             .fs_get_metadata(FsGetMetadataParams {
                 path: path.clone(),
+                follow_symlinks,
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await
@@ -179,6 +199,7 @@ impl RemoteFileSystem {
                 file_name: entry.file_name,
                 is_directory: entry.is_directory,
                 is_file: entry.is_file,
+                is_symlink: entry.is_symlink,
             })
             .collect())
     }
@@ -276,6 +297,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(RemoteFileSystem::get_metadata(self, path, sandbox))
+    }
+
+    fn get_symlink_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(RemoteFileSystem::get_symlink_metadata(self, path, sandbox))
     }
 
     fn read_directory<'a>(

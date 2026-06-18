@@ -152,11 +152,16 @@ impl FileSystemHandler {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
-        let metadata = self
-            .file_system
-            .get_metadata(&params.path, params.sandbox.as_ref())
-            .await
-            .map_err(map_fs_error)?;
+        let metadata = if params.follow_symlinks {
+            self.file_system
+                .get_metadata(&params.path, params.sandbox.as_ref())
+                .await
+        } else {
+            self.file_system
+                .get_symlink_metadata(&params.path, params.sandbox.as_ref())
+                .await
+        }
+        .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
             is_directory: metadata.is_directory,
             is_file: metadata.is_file,
@@ -193,6 +198,7 @@ impl FileSystemHandler {
                 file_name: entry.file_name,
                 is_directory: entry.is_directory,
                 is_file: entry.is_file,
+                is_symlink: entry.is_symlink,
             })
             .collect();
         Ok(FsReadDirectoryResponse { entries })

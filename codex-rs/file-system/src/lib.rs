@@ -54,6 +54,7 @@ pub struct ReadDirectoryEntry {
     pub file_name: String,
     pub is_directory: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -242,6 +243,14 @@ pub trait ExecutorFileSystem: Send + Sync {
         path: &'a PathUri,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata>;
+
+    fn get_symlink_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        self.get_metadata(path, sandbox)
+    }
 
     fn read_directory<'a>(
         &'a self,
