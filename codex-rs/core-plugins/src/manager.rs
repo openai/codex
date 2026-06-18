@@ -316,6 +316,7 @@ pub struct ConfiguredMarketplacePlugin {
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
     pub keywords: Vec<String>,
+    pub manifest_fallback: Option<MarketplacePluginManifestFallback>,
     pub installed: bool,
     pub enabled: bool,
 }
@@ -1412,6 +1413,7 @@ impl PluginsManager {
                         let enabled = enabled_plugins.contains(&plugin_key);
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
+                        let manifest_fallback = plugin.manifest_fallback.clone();
                         if installed
                             && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
                             && let Some(plugin_id) = plugin_id.as_ref()
@@ -1442,6 +1444,7 @@ impl PluginsManager {
                             policy: plugin.policy,
                             keywords: plugin.keywords,
                             interface,
+                            manifest_fallback,
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1521,7 +1524,7 @@ impl PluginsManager {
             None
         };
         let plugin = self
-            .read_plugin_detail_for_marketplace_plugin_with_fallback(
+            .read_plugin_detail_for_marketplace_plugin(
                 config,
                 &marketplace_name,
                 ConfiguredMarketplacePlugin {
@@ -1540,10 +1543,10 @@ impl PluginsManager {
                         .as_ref()
                         .map(|manifest| manifest.keywords.clone())
                         .unwrap_or_default(),
+                    manifest_fallback,
                     installed,
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
-                manifest_fallback,
             )
             .await?;
 
@@ -1560,22 +1563,6 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         marketplace_name: &str,
         plugin: ConfiguredMarketplacePlugin,
-    ) -> Result<PluginDetail, MarketplaceError> {
-        self.read_plugin_detail_for_marketplace_plugin_with_fallback(
-            config,
-            marketplace_name,
-            plugin,
-            /*manifest_fallback*/ None,
-        )
-        .await
-    }
-
-    async fn read_plugin_detail_for_marketplace_plugin_with_fallback(
-        &self,
-        config: &PluginsConfigInput,
-        marketplace_name: &str,
-        plugin: ConfiguredMarketplacePlugin,
-        manifest_fallback: Option<MarketplacePluginManifestFallback>,
     ) -> Result<PluginDetail, MarketplaceError> {
         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
             return Err(MarketplaceError::PluginNotFound {
@@ -1643,12 +1630,15 @@ impl PluginsManager {
                 "path does not exist or is not a directory".to_string(),
             ));
         }
-        let manifest = load_plugin_manifest(source_path.as_path())
-            .or_else(|| {
-                manifest_fallback
+        let manifest =
+            if codex_utils_plugins::find_plugin_manifest_path(source_path.as_path()).is_some() {
+                load_plugin_manifest(source_path.as_path())
+            } else {
+                plugin
+                    .manifest_fallback
                     .as_ref()
                     .and_then(|fallback| fallback.parse_for_plugin_root(source_path.as_path()))
-            })
+            }
             .ok_or_else(|| {
                 MarketplaceError::InvalidPlugin("missing or invalid plugin.json".to_string())
             })?;

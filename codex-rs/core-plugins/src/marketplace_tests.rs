@@ -637,6 +637,7 @@ fn list_marketplaces_supports_alternate_manifest_layout() {
                     screenshots: Vec::new(),
                 }),
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
@@ -722,6 +723,7 @@ fn list_marketplaces_supports_repo_root_local_plugin_sources() {
                         screenshots: Vec::new(),
                     }),
                     keywords: Vec::new(),
+                    manifest_fallback: None,
                 }],
             }]
         );
@@ -774,6 +776,7 @@ fn list_marketplaces_includes_plugins_without_discoverable_manifest() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
@@ -881,6 +884,7 @@ fn list_marketplaces_supports_explicit_api_marketplace_manifest_path() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
@@ -972,6 +976,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                         },
                         interface: None,
                         keywords: Vec::new(),
+                        manifest_fallback: None,
                     },
                     MarketplacePlugin {
                         name: "home-only".to_string(),
@@ -986,6 +991,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                         },
                         interface: None,
                         keywords: Vec::new(),
+                        manifest_fallback: None,
                     },
                 ],
             },
@@ -1009,6 +1015,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                         },
                         interface: None,
                         keywords: Vec::new(),
+                        manifest_fallback: None,
                     },
                     MarketplacePlugin {
                         name: "repo-only".to_string(),
@@ -1023,6 +1030,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                         },
                         interface: None,
                         keywords: Vec::new(),
+                        manifest_fallback: None,
                     },
                 ],
             },
@@ -1102,6 +1110,7 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
                     },
                     interface: None,
                     keywords: Vec::new(),
+                    manifest_fallback: None,
                 }],
             },
             Marketplace {
@@ -1121,6 +1130,7 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
                     },
                     interface: None,
                     keywords: Vec::new(),
+                    manifest_fallback: None,
                 }],
             },
         ]
@@ -1196,6 +1206,7 @@ fn list_marketplaces_dedupes_multiple_roots_in_same_repo() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
@@ -1360,6 +1371,7 @@ fn list_marketplaces_skips_plugins_with_invalid_names_but_keeps_marketplace() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
@@ -1442,6 +1454,9 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
     },
     {
       "name": "git-subdir-plugin",
+      "version": "1.2.3",
+      "displayName": "Git Subdir Plugin",
+      "keywords": ["git", "remote"],
       "source": {
         "source": "git-subdir",
         "url": "owner/repo",
@@ -1462,8 +1477,11 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
     .marketplaces;
 
     assert_eq!(marketplaces.len(), 1);
+    let mut plugins = marketplaces[0].plugins.clone();
+    assert!(plugins[2].manifest_fallback.is_some());
+    plugins[2].manifest_fallback = None;
     assert_eq!(
-        marketplaces[0].plugins,
+        plugins,
         vec![
             MarketplacePlugin {
                 name: "local-plugin".to_string(),
@@ -1479,6 +1497,7 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             },
             MarketplacePlugin {
                 name: "url-plugin".to_string(),
@@ -1496,10 +1515,11 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             },
             MarketplacePlugin {
                 name: "git-subdir-plugin".to_string(),
-                local_version: None,
+                local_version: Some("1.2.3".to_string()),
                 source: MarketplacePluginSource::Git {
                     url: "https://github.com/owner/repo.git".to_string(),
                     path: Some("plugins/example".to_string()),
@@ -1511,8 +1531,12 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
                     authentication: MarketplacePluginAuthPolicy::OnInstall,
                     products: None,
                 },
-                interface: None,
-                keywords: Vec::new(),
+                interface: Some(PluginManifestInterface {
+                    display_name: Some("Git Subdir Plugin".to_string()),
+                    ..Default::default()
+                }),
+                keywords: vec!["git".to_string(), "remote".to_string()],
+                manifest_fallback: None,
             },
         ]
     );

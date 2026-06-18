@@ -84,6 +84,29 @@ impl MarketplacePluginManifestFallback {
         )
         .ok()
     }
+
+    pub(crate) fn parse_for_listing(&self) -> Option<crate::manifest::PluginManifest> {
+        // Git sources have no plugin root before install. Parse against a synthetic absolute root,
+        // then discard path-bearing fields so listings expose metadata only.
+        let mut manifest = crate::manifest::parse_plugin_manifest(
+            Path::new("/"),
+            Path::new("/.codex-plugin/plugin.json"),
+            &self.contents,
+        )
+        .ok()?;
+        manifest.paths = crate::manifest::PluginManifestPaths {
+            skills: Vec::new(),
+            mcp_servers: None,
+            apps: None,
+            hooks: None,
+        };
+        if let Some(interface) = manifest.interface.as_mut() {
+            interface.composer_icon = None;
+            interface.logo = None;
+            interface.screenshots.clear();
+        }
+        Some(manifest)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +117,7 @@ pub struct MarketplacePlugin {
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
     pub keywords: Vec<String>,
+    pub manifest_fallback: Option<MarketplacePluginManifestFallback>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -343,6 +367,10 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
             Err(err) => return Err(err),
         };
 
+        let manifest_fallback = plugin
+            .manifest_fallback
+            .contents_if_has_metadata()
+            .map(|_| plugin.manifest_fallback.clone());
         let local_version = plugin
             .manifest
             .as_ref()
@@ -359,6 +387,7 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
             policy: plugin.policy,
             interface: plugin.interface,
             keywords,
+            manifest_fallback,
         });
     }
 
@@ -481,6 +510,9 @@ fn resolve_marketplace_plugin_entry(
             } else {
                 None
             }
+        }
+        MarketplacePluginSource::Git { .. } if manifest_fallback.has_metadata => {
+            manifest_fallback.parse_for_listing()
         }
         MarketplacePluginSource::Git { .. } => None,
     };

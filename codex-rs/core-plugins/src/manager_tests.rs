@@ -2576,6 +2576,7 @@ enabled = false
                     },
                     interface: None,
                     keywords: Vec::new(),
+                    manifest_fallback: None,
                     installed: true,
                     enabled: true,
                 },
@@ -2595,6 +2596,7 @@ enabled = false
                     },
                     interface: None,
                     keywords: Vec::new(),
+                    manifest_fallback: None,
                     installed: true,
                     enabled: false,
                 },
@@ -2724,6 +2726,7 @@ plugins = true
             },
             interface: None,
             keywords: Vec::new(),
+            manifest_fallback: None,
             installed: false,
             enabled: false,
         }]
@@ -2897,7 +2900,8 @@ plugins = true
     );
 
     let config = load_config(tmp.path(), &repo_root).await;
-    let outcome = PluginsManager::new(tmp.path().to_path_buf())
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let outcome = manager
         .read_plugin_for_config(
             &config,
             &PluginReadRequest {
@@ -2919,6 +2923,80 @@ plugins = true
         outcome.plugin.mcp_server_names,
         vec!["sample-mcp".to_string()]
     );
+
+    let listed_plugin = manager
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root.clone()).unwrap()],
+            /*include_openai_curated*/ false,
+        )
+        .unwrap()
+        .marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == "debug")
+        .unwrap()
+        .plugins
+        .into_iter()
+        .find(|plugin| plugin.name == "sample-plugin")
+        .unwrap();
+    let listed_detail = manager
+        .read_plugin_detail_for_marketplace_plugin(&config, "debug", listed_plugin)
+        .await
+        .unwrap();
+    assert_eq!(
+        listed_detail.apps,
+        vec![AppConnectorId("connector_sample".to_string())]
+    );
+    assert_eq!(
+        listed_detail.mcp_server_names,
+        vec!["sample-mcp".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn read_plugin_for_config_does_not_fallback_from_invalid_plugin_manifest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("sample-plugin");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_file(
+        &repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": "./sample-plugin",
+      "description": "Fallback metadata"
+    }
+  ]
+}"#,
+    );
+    write_file(&plugin_root.join(".codex-plugin/plugin.json"), "{");
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), &repo_root).await;
+    let err = PluginsManager::new(tmp.path().to_path_buf())
+        .read_plugin_for_config(
+            &config,
+            &PluginReadRequest {
+                plugin_name: "sample-plugin".to_string(),
+                marketplace_path: AbsolutePathBuf::try_from(
+                    repo_root.join(".agents/plugins/marketplace.json"),
+                )
+                .unwrap(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.to_string(), "missing or invalid plugin.json");
 }
 
 #[tokio::test]
@@ -3303,8 +3381,11 @@ enabled = true
         .find(|marketplace| marketplace.name == "debug")
         .expect("debug marketplace should be listed");
 
+    let mut plugins = marketplace.plugins;
+    assert!(plugins[0].manifest_fallback.is_some());
+    plugins[0].manifest_fallback = None;
     assert_eq!(
-        marketplace.plugins,
+        plugins,
         vec![ConfiguredMarketplacePlugin {
             id: "toolkit@debug".to_string(),
             name: "toolkit".to_string(),
@@ -3339,6 +3420,7 @@ enabled = true
                 ..Default::default()
             }),
             keywords: Vec::new(),
+            manifest_fallback: None,
             installed: true,
             enabled: true,
         }]
@@ -3419,6 +3501,7 @@ plugins = true
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
                 installed: false,
                 enabled: false,
             }],
@@ -3541,6 +3624,7 @@ plugins = true
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
                 installed: false,
                 enabled: false,
             }],
@@ -3968,6 +4052,7 @@ enabled = false
             },
             interface: None,
             keywords: Vec::new(),
+            manifest_fallback: None,
             installed: false,
             enabled: true,
         }]
@@ -4000,6 +4085,7 @@ enabled = false
             },
             interface: None,
             keywords: Vec::new(),
+            manifest_fallback: None,
             installed: false,
             enabled: false,
         }]
@@ -4090,6 +4176,7 @@ enabled = true
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
                 installed: false,
                 enabled: true,
             }],
