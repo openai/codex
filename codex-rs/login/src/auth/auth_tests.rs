@@ -182,6 +182,7 @@ async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result
         Some(&chatgpt_base_url),
         AuthKeyringBackendKind::Direct,
         Some(&authapi_base_url),
+        /*auth_route_config*/ None,
     )
     .await?
     .expect("auth should load");
@@ -369,6 +370,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
         /*agent_identity_authapi_base_url*/ None,
+        /*auth_route_config*/ None,
     )
     .await?
     .expect("auth should load");
@@ -378,6 +380,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
             AgentIdentityAuthPolicy::JwtOnly,
             /*agent_identity_authapi_base_url*/ None,
             /*forced_chatgpt_workspace_id*/ None,
+            /*auth_route_config*/ None,
             SessionSource::Cli,
         )
         .await?
@@ -408,6 +411,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
             AgentIdentityAuthPolicy::ChatGptAuth,
             Some(&server.uri()),
             /*forced_chatgpt_workspace_id*/ None,
+            /*auth_route_config*/ None,
             SessionSource::Cli,
         )
         .await?
@@ -417,6 +421,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
             AgentIdentityAuthPolicy::ChatGptAuth,
             Some(&server.uri()),
             /*forced_chatgpt_workspace_id*/ None,
+            /*auth_route_config*/ None,
             SessionSource::Cli,
         )
         .await?
@@ -447,6 +452,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
         /*agent_identity_authapi_base_url*/ None,
+        /*auth_route_config*/ None,
     )
     .await?
     .expect("auth should reload");
@@ -455,6 +461,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
             AgentIdentityAuthPolicy::ChatGptAuth,
             Some(&server.uri()),
             /*forced_chatgpt_workspace_id*/ None,
+            /*auth_route_config*/ None,
             SessionSource::Cli,
         )
         .await?
@@ -487,6 +494,7 @@ async fn chatgpt_auth_retries_transient_agent_identity_registration() -> anyhow:
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
         /*agent_identity_authapi_base_url*/ None,
+        /*auth_route_config*/ None,
     )
     .await?
     .expect("auth should load");
@@ -515,6 +523,7 @@ async fn chatgpt_auth_retries_transient_agent_identity_registration() -> anyhow:
             AgentIdentityAuthPolicy::ChatGptAuth,
             Some(&server.uri()),
             /*forced_chatgpt_workspace_id*/ None,
+            /*auth_route_config*/ None,
             SessionSource::Cli,
         )
         .await?
@@ -551,6 +560,7 @@ async fn chatgpt_auth_registration_retry_exhaustion_is_fallback_eligible() -> an
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
         /*agent_identity_authapi_base_url*/ None,
+        /*auth_route_config*/ None,
     )
     .await?
     .expect("auth should load");
@@ -568,6 +578,7 @@ async fn chatgpt_auth_registration_retry_exhaustion_is_fallback_eligible() -> an
             AgentIdentityAuthPolicy::ChatGptAuth,
             Some(&server.uri()),
             /*forced_chatgpt_workspace_id*/ None,
+            /*auth_route_config*/ None,
             SessionSource::Cli,
         )
         .await
@@ -610,6 +621,7 @@ async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() 
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
         /*agent_identity_authapi_base_url*/ None,
+        /*auth_route_config*/ None,
     )
     .await?
     .expect("auth should load");
@@ -630,6 +642,7 @@ async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() 
             AgentIdentityAuthPolicy::ChatGptAuth,
             Some(&server.uri()),
             /*forced_chatgpt_workspace_id*/ None,
+            /*auth_route_config*/ None,
             SessionSource::Cli,
         )
         .await
@@ -664,6 +677,7 @@ async fn chatgpt_auth_non_retryable_registration_error_is_hard_failure() -> anyh
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
         /*agent_identity_authapi_base_url*/ None,
+        /*auth_route_config*/ None,
     )
     .await?
     .expect("auth should load");
@@ -681,6 +695,7 @@ async fn chatgpt_auth_non_retryable_registration_error_is_hard_failure() -> anyh
             AgentIdentityAuthPolicy::ChatGptAuth,
             Some(&server.uri()),
             /*forced_chatgpt_workspace_id*/ None,
+            /*auth_route_config*/ None,
             SessionSource::Cli,
         )
         .await
@@ -722,6 +737,7 @@ async fn agent_identity_jwt_task_registration_retry_exhaustion_is_strict() -> an
         &agent_identity,
         Some(&chatgpt_base_url),
         &authapi_base_url,
+        /*auth_route_config*/ None,
     )
     .await
     .expect_err("agent identity jwt task retry exhaustion should fail");
@@ -2079,6 +2095,7 @@ async fn assert_agent_identity_plan_alias(
         &jwt,
         Some(&chatgpt_base_url),
         &authapi_base_url,
+        /*auth_route_config*/ None,
     )
     .await
     .expect("agent identity auth");

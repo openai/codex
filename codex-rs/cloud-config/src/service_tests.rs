@@ -110,6 +110,7 @@ async fn auth_manager_with_agent_identity_business_plan() -> Arc<AuthManager> {
                 task_id: Some("task-123".to_string()),
             },
             "https://auth.openai.com/api/accounts",
+            /*auth_route_config*/ None,
         )
         .await
         .expect("agent identity record should be complete"),

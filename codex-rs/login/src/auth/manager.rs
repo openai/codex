@@ -266,14 +266,18 @@ impl CodexAuth {
                         &jwt,
                         &base_url,
                         agent_identity_authapi_base_url,
+                        auth_route_config,
                     )
                     .await?;
                     return Ok(Self::AgentIdentity(auth));
                 }
                 AgentIdentityStorage::Record(record) => {
-                    let auth =
-                        AgentIdentityAuth::from_record(record, agent_identity_authapi_base_url)
-                            .await?;
+                    let auth = AgentIdentityAuth::from_record(
+                        record,
+                        agent_identity_authapi_base_url,
+                        auth_route_config,
+                    )
+                    .await?;
                     return Ok(Self::AgentIdentity(auth));
                 }
             }
@@ -349,12 +353,14 @@ impl CodexAuth {
     pub async fn from_agent_identity_jwt(
         jwt: &str,
         chatgpt_base_url: Option<&str>,
+        auth_route_config: Option<&AuthRouteConfig>,
     ) -> std::io::Result<Self> {
         let agent_identity_authapi_base_url = agent_identity_authapi_base_url(chatgpt_base_url)?;
         Self::from_agent_identity_jwt_with_authapi_base_url(
             jwt,
             chatgpt_base_url,
             &agent_identity_authapi_base_url,
+            auth_route_config,
         )
         .await
     }
@@ -363,13 +369,20 @@ impl CodexAuth {
         jwt: &str,
         chatgpt_base_url: Option<&str>,
         agent_identity_authapi_base_url: &str,
+        auth_route_config: Option<&AuthRouteConfig>,
     ) -> std::io::Result<Self> {
         let base_url = chatgpt_base_url
             .unwrap_or(ChatGptEnvironment::default().chatgpt_base_url())
             .trim_end_matches('/')
             .to_string();
         Ok(Self::AgentIdentity(
-            AgentIdentityAuth::from_jwt(jwt, &base_url, agent_identity_authapi_base_url).await?,
+            AgentIdentityAuth::from_jwt(
+                jwt,
+                &base_url,
+                agent_identity_authapi_base_url,
+                auth_route_config,
+            )
+            .await?,
         ))
     }
 
@@ -578,6 +591,7 @@ impl CodexAuth {
         policy: AgentIdentityAuthPolicy,
         agent_identity_authapi_base_url: Option<&str>,
         forced_chatgpt_workspace_id: Option<Vec<String>>,
+        auth_route_config: Option<&AuthRouteConfig>,
         session_source: SessionSource,
     ) -> std::io::Result<Option<AgentIdentityAuth>> {
         match self {
@@ -593,6 +607,7 @@ impl CodexAuth {
                 self.ensure_managed_chatgpt_agent_identity(
                     require_agent_identity_authapi_base_url(agent_identity_authapi_base_url)?,
                     forced_chatgpt_workspace_id,
+                    auth_route_config,
                     session_source,
                 )
                 .await
@@ -605,6 +620,7 @@ impl CodexAuth {
         &self,
         agent_identity_authapi_base_url: &str,
         forced_chatgpt_workspace_id: Option<Vec<String>>,
+        auth_route_config: Option<&AuthRouteConfig>,
         session_source: SessionSource,
     ) -> std::io::Result<AgentIdentityAuth> {
         let binding =
@@ -617,9 +633,13 @@ impl CodexAuth {
             && record_matches_managed_chatgpt_binding(&record, &binding)
         {
             let should_persist = record_needs_task_registration(&record);
-            let auth = AgentIdentityAuth::from_record(record, agent_identity_authapi_base_url)
-                .await
-                .map_err(|err| classify_bootstrap_error("agent task registration", err))?;
+            let auth = AgentIdentityAuth::from_record(
+                record,
+                agent_identity_authapi_base_url,
+                auth_route_config,
+            )
+            .await
+            .map_err(|err| classify_bootstrap_error("agent task registration", err))?;
             if should_persist {
                 self.persist_managed_chatgpt_agent_identity_record(auth.record().clone())?;
             }
@@ -630,6 +650,7 @@ impl CodexAuth {
             binding,
             agent_identity_authapi_base_url,
             session_source,
+            auth_route_config,
         )
         .await?;
         self.persist_managed_chatgpt_agent_identity_record(auth.record().clone())?;
@@ -877,7 +898,7 @@ pub async fn login_with_access_token(
                 .unwrap_or(ChatGptEnvironment::default().chatgpt_base_url())
                 .trim_end_matches('/')
                 .to_string();
-            verified_record_from_jwt(jwt, &base_url).await?;
+            verified_record_from_jwt(jwt, &base_url, auth_route_config).await?;
             AuthDotJson {
                 auth_mode: Some(ApiAuthMode::AgentIdentity),
                 openai_api_key: None,
@@ -1180,6 +1201,7 @@ async fn load_auth(
                     jwt,
                     chatgpt_base_url,
                     require_agent_identity_authapi_base_url(agent_identity_authapi_base_url)?,
+                    auth_route_config,
                 )
             }
             .await
@@ -1870,6 +1892,7 @@ impl AuthManager {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            auth_route_config: None,
         })
     }
 
@@ -1987,6 +2010,7 @@ impl AuthManager {
                     policy,
                     self.agent_identity_authapi_base_url.as_deref(),
                     self.forced_chatgpt_workspace_id(),
+                    self.auth_route_config.as_ref(),
                     session_source,
                 )
                 .await;
@@ -1995,6 +2019,7 @@ impl AuthManager {
             policy,
             self.agent_identity_authapi_base_url.as_deref(),
             self.forced_chatgpt_workspace_id(),
+            self.auth_route_config.as_ref(),
             session_source,
         )
         .await
