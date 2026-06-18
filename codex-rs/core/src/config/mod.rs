@@ -690,6 +690,12 @@ pub struct Config {
     /// Whether to inject the `<skills_instructions>` developer block.
     pub include_skill_instructions: bool,
 
+    /// Whether orchestrator-owned skills are exposed to the model.
+    pub orchestrator_skills_enabled: bool,
+
+    /// Whether orchestrator-owned MCP tools are exposed to the model.
+    pub orchestrator_mcp_enabled: bool,
+
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
 
@@ -2408,6 +2414,24 @@ fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> 
         .is_none_or(|config| config.enabled)
 }
 
+fn resolve_orchestrator_skills_enabled(config_toml: &ConfigToml) -> bool {
+    config_toml
+        .orchestrator
+        .as_ref()
+        .and_then(|orchestrator| orchestrator.skills.as_ref())
+        .and_then(|skills| skills.enabled)
+        .unwrap_or(true)
+}
+
+fn resolve_orchestrator_mcp_enabled(config_toml: &ConfigToml) -> bool {
+    config_toml
+        .orchestrator
+        .as_ref()
+        .and_then(|orchestrator| orchestrator.mcp.as_ref())
+        .and_then(|mcp| mcp.enabled)
+        .unwrap_or(true)
+}
+
 fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
     let base = code_mode_toml_config(config_toml.features.as_ref());
 
@@ -2758,6 +2782,8 @@ impl Config {
 
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        let orchestrator_skills_enabled = resolve_orchestrator_skills_enabled(&cfg);
+        let orchestrator_mcp_enabled = resolve_orchestrator_mcp_enabled(&cfg);
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {
@@ -3633,6 +3659,8 @@ impl Config {
             include_apps_instructions,
             include_collaboration_mode_instructions,
             include_skill_instructions,
+            orchestrator_skills_enabled,
+            orchestrator_mcp_enabled,
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
