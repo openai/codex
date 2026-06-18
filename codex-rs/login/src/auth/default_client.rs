@@ -195,7 +195,8 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
 
 /// Create an HTTP client with default `originator` and `User-Agent` headers set.
 ///
-/// This legacy path does not opt into platform system/PAC resolution.
+/// This supported default path preserves reqwest's existing proxy behavior and does not opt into
+/// Codex's route-aware system/PAC resolution.
 pub fn create_client() -> CodexHttpClient {
     let inner = build_reqwest_client();
     CodexHttpClient::new(inner)
@@ -208,8 +209,9 @@ pub fn create_client() -> CodexHttpClient {
 /// `SSL_CERT_FILE`. The function remains infallible for compatibility with existing call sites, so
 /// a custom-CA or builder failure is logged and falls back to `reqwest::Client::new()`.
 ///
-/// This legacy path does not opt into platform system/PAC resolution. Auth callers with route
-/// settings must use `build_default_auth_reqwest_client` or `create_default_auth_client`.
+/// This supported default path preserves reqwest's existing proxy behavior and does not opt into
+/// Codex's route-aware system/PAC resolution. Auth callers with route settings must use
+/// `build_default_auth_reqwest_client` or `create_default_auth_client`.
 pub fn build_reqwest_client() -> reqwest::Client {
     try_build_reqwest_client().unwrap_or_else(|error| {
         tracing::warn!(error = %error, "failed to build default reqwest client");
