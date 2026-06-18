@@ -1640,6 +1640,10 @@ async fn skills_append_to_developer_message() {
         developer_text.contains("demo: build charts"),
         "expected skill summary: {developer_messages:?}"
     );
+    assert!(
+        developer_text.contains("### How to use skills"),
+        "expected legacy skills guidance for models without model-owned instructions: {developer_messages:?}"
+    );
     let expected_path = normalize_path(skill_dir.join("SKILL.md")).unwrap();
     let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
     assert!(

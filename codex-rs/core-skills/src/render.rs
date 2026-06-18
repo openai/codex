@@ -60,6 +60,26 @@ pub const SKILLS_HOW_TO_USE_WITH_ALIASES: &str = r###"- Discovery: The list abov
 - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."###;
 
 pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[String]) -> String {
+    render_skills_body(skill_root_lines, skill_lines, None)
+}
+
+pub fn render_legacy_available_skills_body(
+    skill_root_lines: &[String],
+    skill_lines: &[String],
+) -> String {
+    let how_to_use = if skill_root_lines.is_empty() {
+        SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS
+    } else {
+        SKILLS_HOW_TO_USE_WITH_ALIASES
+    };
+    render_skills_body(skill_root_lines, skill_lines, Some(how_to_use))
+}
+
+fn render_skills_body(
+    skill_root_lines: &[String],
+    skill_lines: &[String],
+    how_to_use: Option<&str>,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push("## Skills".to_string());
     if skill_root_lines.is_empty() {
@@ -72,13 +92,10 @@ pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[
     lines.push("### Available skills".to_string());
     lines.extend(skill_lines.iter().cloned());
 
-    lines.push("### How to use skills".to_string());
-    let how_to_use = if skill_root_lines.is_empty() {
-        SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS
-    } else {
-        SKILLS_HOW_TO_USE_WITH_ALIASES
-    };
-    lines.push(how_to_use.to_string());
+    if let Some(how_to_use) = how_to_use {
+        lines.push("### How to use skills".to_string());
+        lines.push(how_to_use.to_string());
+    }
 
     format!("\n{}\n", lines.join("\n"))
 }
@@ -904,10 +921,10 @@ fn prompt_scope_rank(scope: SkillScope) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use super::*;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -1201,6 +1218,19 @@ mod tests {
         let rendered_text = rendered.skill_lines.join("\n");
         assert!(!rendered_text.contains("- oversized-system-skill:"));
         assert!(rendered_text.contains("- repo-skill:"));
+    }
+
+    #[test]
+    fn alias_overhead_uses_catalog_only_prompt() {
+        let roots = vec![format!("- `r0` = `/very/long/{}`", "x".repeat(600))];
+        let budget = SkillMetadataBudget::Tokens(usize::MAX);
+        let empty: &[String] = &[];
+        let expected = budget
+            .cost(&render_available_skills_body(&roots, empty))
+            .saturating_sub(budget.cost(&render_available_skills_body(&[], empty)));
+
+        assert!(expected > 0);
+        assert_eq!(aliased_metadata_overhead_cost(budget, &roots), expected);
     }
 
     #[test]
