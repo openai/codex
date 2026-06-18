@@ -233,9 +233,12 @@ pub(crate) async fn run_turn(
         )
         .await
         {
+            info!("Turn error: {err:#}");
             sess.emit_turn_error_lifecycle(turn_context.as_ref(), err.to_codex_protocol_error())
                 .await;
-            error!("Failed to record current-time reminder");
+            sess.track_turn_codex_error(turn_context.as_ref(), &err);
+            let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
+            sess.send_event(&turn_context, event).await;
             return None;
         }
 

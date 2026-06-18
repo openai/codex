@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
+use anyhow::anyhow;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_core::CurrentTimeFuture;
@@ -12,12 +13,15 @@ use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -45,6 +49,14 @@ impl CurrentTimeProvider for TestCurrentTimeProvider {
             Ok(DateTime::<Utc>::from_timestamp(timestamp, 0)
                 .expect("test timestamp should be valid"))
         })
+    }
+}
+
+struct FailingCurrentTimeProvider;
+
+impl CurrentTimeProvider for FailingCurrentTimeProvider {
+    fn current_time(&self, _thread_id: ThreadId) -> CurrentTimeFuture<'_> {
+        Box::pin(async { Err(anyhow!("test clock unavailable")) })
     }
 }
 
@@ -148,6 +160,58 @@ async fn current_time_reminder_is_refreshed_after_compaction() -> Result<()> {
         vec![SECOND_REMINDER],
         "a new context window should force a fresh reminder before the next model request"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn current_time_provider_failure_stops_before_inference() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("unused-response"),
+            ev_completed("unused-response"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| enable_current_time_reminder(config, /*interval*/ 1))
+        .with_current_time_provider(Arc::new(FailingCurrentTimeProvider))
+        .build(&server)
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "fail before inference".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let EventMsg::Error(error) =
+        wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        error.message,
+        "Fatal error: failed to read current time: test clock unavailable"
+    );
+    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::Other));
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert!(responses.requests().is_empty());
 
     Ok(())
 }
