@@ -655,27 +655,8 @@ impl NetworkProxy {
     }
 
     pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
-        let current_cfg = self.state.current_cfg().await?;
-        anyhow::ensure!(
-            new_state.config.network.enabled == current_cfg.network.enabled,
-            "cannot update network.enabled on a running proxy"
-        );
-        anyhow::ensure!(
-            new_state.config.network.proxy_url == current_cfg.network.proxy_url,
-            "cannot update network.proxy_url on a running proxy"
-        );
-        anyhow::ensure!(
-            new_state.config.network.socks_url == current_cfg.network.socks_url,
-            "cannot update network.socks_url on a running proxy"
-        );
-        anyhow::ensure!(
-            new_state.config.network.enable_socks5 == current_cfg.network.enable_socks5,
-            "cannot update network.enable_socks5 on a running proxy"
-        );
-        anyhow::ensure!(
-            new_state.config.network.enable_socks5_udp == current_cfg.network.enable_socks5_udp,
-            "cannot update network.enable_socks5_udp on a running proxy"
-        );
+        self.ensure_runtime_config_compatible(&new_state.config)
+            .await?;
 
         let settings = NetworkProxyRuntimeSettings::from_config(&new_state.config)?;
         self.state.replace_config_state(new_state).await?;
@@ -684,6 +665,41 @@ impl NetworkProxy {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = settings;
+        Ok(())
+    }
+
+    pub async fn replace_base_config_state(&self, base_state: ConfigState) -> Result<()> {
+        self.ensure_runtime_config_compatible(&base_state.config)
+            .await?;
+        let new_state = self.state.replace_base_state(base_state).await?;
+        self.replace_config_state(new_state).await
+    }
+
+    async fn ensure_runtime_config_compatible(
+        &self,
+        new_cfg: &config::NetworkProxyConfig,
+    ) -> Result<()> {
+        let current_cfg = self.state.current_cfg().await?;
+        anyhow::ensure!(
+            new_cfg.network.enabled == current_cfg.network.enabled,
+            "cannot update network.enabled on a running proxy"
+        );
+        anyhow::ensure!(
+            new_cfg.network.proxy_url == current_cfg.network.proxy_url,
+            "cannot update network.proxy_url on a running proxy"
+        );
+        anyhow::ensure!(
+            new_cfg.network.socks_url == current_cfg.network.socks_url,
+            "cannot update network.socks_url on a running proxy"
+        );
+        anyhow::ensure!(
+            new_cfg.network.enable_socks5 == current_cfg.network.enable_socks5,
+            "cannot update network.enable_socks5 on a running proxy"
+        );
+        anyhow::ensure!(
+            new_cfg.network.enable_socks5_udp == current_cfg.network.enable_socks5_udp,
+            "cannot update network.enable_socks5_udp on a running proxy"
+        );
         Ok(())
     }
 

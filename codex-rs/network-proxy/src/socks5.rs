@@ -729,11 +729,6 @@ mod tests {
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::sync::Arc;
-    use std::sync::Mutex;
-
-    // Managed MITM CA files live under the shared test CODEX_HOME, so MITM-enabled config state
-    // must be materialized one test at a time.
-    static MITM_CONFIG_STATE_LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Clone)]
     struct StaticReloader {
@@ -756,10 +751,6 @@ mod tests {
 
     fn state_for_settings(network: NetworkProxySettings) -> Arc<NetworkProxyState> {
         let config = NetworkProxyConfig { network };
-        let _mitm_config_state_guard = config
-            .network
-            .mitm
-            .then(|| MITM_CONFIG_STATE_LOCK.lock().unwrap());
         let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
         let reloader = Arc::new(StaticReloader {
             state: state.clone(),

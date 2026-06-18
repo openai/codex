@@ -139,11 +139,6 @@ impl CredentialedRoutesReloader {
         }
     }
 
-    pub async fn replace_base_state(&self, base_state: ConfigState) -> Result<ConfigState> {
-        *self.base_state.write().await = base_state;
-        self.reload_now().await
-    }
-
     pub async fn current_routes(&self) -> CredentialedRoutesConfig {
         self.credentialed_routes.read().await.clone()
     }
@@ -198,6 +193,19 @@ impl ConfigReloader for CredentialedRoutesReloader {
         Box::pin(async move {
             let credentialed_routes = self.credentialed_routes.read().await.clone();
             self.build_state(&credentialed_routes).await
+        })
+    }
+
+    fn replace_base_state(&self, base_state: ConfigState) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async move {
+            let credentialed_routes = self.credentialed_routes.read().await.clone();
+            let state = build_config_state_with_credentialed_routes(
+                base_state.config.clone(),
+                base_state.constraints.clone(),
+                &credentialed_routes,
+            )?;
+            *self.base_state.write().await = base_state;
+            Ok(state)
         })
     }
 }
