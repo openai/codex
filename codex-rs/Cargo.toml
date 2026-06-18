@@ -33,6 +33,7 @@ members = [
     "connectors",
     "config",
     "context-fragments",
+    "credentialed-routes",
     "shell-command",
     "shell-escalation",
     "skills",
