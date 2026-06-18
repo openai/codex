@@ -348,36 +348,20 @@ impl UnexpectedResponseError {
     }
 
     fn friendly_message(&self) -> Option<String> {
-        if self.is_bedrock_expired_signature() {
-            let mut message = BEDROCK_EXPIRED_SIGNATURE_MESSAGE.to_string();
-            if let Some(url) = &self.url {
-                message.push_str(&format!(", url: {url}"));
+        let mut message = if self.is_bedrock_expired_signature() {
+            BEDROCK_EXPIRED_SIGNATURE_MESSAGE.to_string()
+        } else {
+            if self.status != StatusCode::FORBIDDEN {
+                return None;
             }
-            if let Some(cf_ray) = &self.cf_ray {
-                message.push_str(&format!(", cf-ray: {cf_ray}"));
-            }
-            if let Some(id) = &self.request_id {
-                message.push_str(&format!(", request id: {id}"));
-            }
-            if let Some(auth_error) = &self.identity_authorization_error {
-                message.push_str(&format!(", auth error: {auth_error}"));
-            }
-            if let Some(error_code) = &self.identity_error_code {
-                message.push_str(&format!(", auth error code: {error_code}"));
-            }
-            return Some(message);
-        }
 
-        if self.status != StatusCode::FORBIDDEN {
-            return None;
-        }
+            if !self.body.contains("Cloudflare") || !self.body.contains("blocked") {
+                return None;
+            }
 
-        if !self.body.contains("Cloudflare") || !self.body.contains("blocked") {
-            return None;
-        }
-
-        let status = self.status;
-        let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status})");
+            let status = self.status;
+            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status})")
+        };
         if let Some(url) = &self.url {
             message.push_str(&format!(", url: {url}"));
         }
