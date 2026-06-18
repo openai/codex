@@ -1469,6 +1469,10 @@ When the client responds to `item/tool/requestUserInput`, the server emits `serv
 
 Desktop hosts that provide upstream attestation should set `capabilities.requestAttestation` during `initialize` and handle the server-initiated `attestation/generate` request. App-server issues it just in time before ChatGPT Codex requests that forward `x-oai-attestation`; the client responds with `{ "token": "v1.<opaque>" }`, where `token` is an opaque client-owned value. When app-server receives a client response, it forwards a consistent outer envelope such as `{ "v": 1, "s": 0, "t": "v1.<opaque>" }`, where `t` contains the client token unchanged. If app-server attempts attestation but fails within its own boundary, it sends the same envelope shape with an app-server status code and without `t` (`1 = timeout`, `2 = request failed`, `3 = request canceled`, `4 = malformed response`). If no initialized client opted into attestation, app-server omits `x-oai-attestation` for that upstream request.
 
+### Current time
+
+Hosts that provide an external clock should set `capabilities.requestCurrentTime` during `initialize` and handle the server-initiated `currentTime/read` request. When `[features.current_time_reminder]` is enabled with `clock_source = "app_server_client"`, app-server sends `{ "threadId": "thr_123" }` when a time reminder is due. The client responds with `{ "currentTimeAt": 1781717655 }`, where `currentTimeAt` is an integer Unix timestamp in seconds. A failed, canceled, timed-out, or malformed response stops the turn before the model request is sent.
+
 ### MCP server elicitations
 
 MCP servers can interrupt a turn and ask the client for structured input via `mcpServer/elicitation/request`.
