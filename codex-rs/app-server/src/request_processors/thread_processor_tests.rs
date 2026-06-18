@@ -1382,6 +1382,31 @@ mod thread_processor_behavior_tests {
     }
 
     #[tokio::test]
+    async fn wait_for_thread_subscriber_unblocks_after_connection_attaches() -> Result<()> {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("ba62fd70-2ec2-4b1b-9d94-355694332dd2")?;
+        let connection = ConnectionId(1);
+        manager
+            .connection_initialized(connection, ConnectionCapabilities::default())
+            .await;
+
+        let wait_for_subscriber = manager.wait_for_thread_subscriber(thread_id);
+        let attach_connection = async {
+            tokio::task::yield_now().await;
+            manager
+                .try_add_connection_to_thread(thread_id, connection)
+                .await
+        };
+        let ((), attached) = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(wait_for_subscriber, attach_connection)
+        })
+        .await?;
+
+        assert!(attached);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn closed_connection_cannot_be_reintroduced_by_auto_subscribe() -> Result<()> {
         let manager = ThreadStateManager::new();
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
