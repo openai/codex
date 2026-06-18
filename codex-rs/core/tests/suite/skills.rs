@@ -6,7 +6,10 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -21,6 +24,8 @@ use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::wait_for_event_match;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 async fn write_repo_skill(
@@ -54,9 +59,44 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
 
     let server = start_mock_server().await;
     let skill_body = "skill body";
-    let mut builder = test_codex().with_workspace_setup(move |cwd, fs| async move {
-        write_repo_skill(cwd, fs, "demo", "demo skill", skill_body).await
-    });
+    let mut builder = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(codex_features::Feature::SkillMcpDependencyInstall)
+                .expect("test config should allow skill MCP dependency install");
+        })
+        .with_workspace_setup(move |cwd, fs| async move {
+            write_repo_skill(
+                cwd.clone(),
+                Arc::clone(&fs),
+                "demo",
+                "demo skill",
+                skill_body,
+            )
+            .await?;
+            let metadata_dir = cwd.join(".agents/skills/demo/agents");
+            fs.create_directory(
+                &PathUri::from_path(&metadata_dir)?,
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
+            .await?;
+            fs.write_file(
+                &PathUri::from_path(&metadata_dir.join("openai.yaml"))?,
+                br#"dependencies:
+  tools:
+    - type: "mcp"
+      value: "docs"
+      transport: "streamable_http"
+      url: "https://example.com/mcp"
+"#
+                .to_vec(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        });
     let test = builder.build_with_remote_env(&server).await?;
 
     let skill_path = test
@@ -97,7 +137,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
-                approval_policy: Some(AskForApproval::Never),
+                approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
@@ -109,6 +149,28 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
                     },
                 }),
                 ..Default::default()
+            },
+        })
+        .await?;
+
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.questions.len(), 1);
+    assert_eq!(request.questions[0].id, "skill_mcp_dependency_install");
+    assert!(request.questions[0].question.contains("docs"));
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    "skill_mcp_dependency_install".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Continue anyway".to_string()],
+                    },
+                )]),
             },
         })
         .await?;

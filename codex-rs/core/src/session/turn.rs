@@ -577,8 +577,8 @@ async fn build_skills_and_plugins(
             .track_plugin_used(tracking.clone(), plugin);
     }
 
-    let mut injection_items = plugin_items;
-    injection_items.extend(extension_injection_items);
+    let mut injection_items = extension_injection_items;
+    injection_items.extend(plugin_items);
     Some((injection_items, explicitly_enabled_connectors))
 }
 

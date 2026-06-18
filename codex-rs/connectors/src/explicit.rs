@@ -21,11 +21,6 @@ impl ExplicitConnectorMentions {
         self.plain_names.insert(name.into().to_ascii_lowercase());
     }
 
-    pub fn extend(&mut self, other: Self) {
-        self.connector_ids.extend(other.connector_ids);
-        self.plain_names.extend(other.plain_names);
-    }
-
     pub fn is_empty(&self) -> bool {
         self.connector_ids.is_empty() && self.plain_names.is_empty()
     }
