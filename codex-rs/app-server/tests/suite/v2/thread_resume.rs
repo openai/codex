@@ -466,7 +466,7 @@ async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
 }
 
 #[tokio::test]
-async fn goal_first_live_thread_appears_in_thread_list() -> Result<()> {
+async fn goal_first_live_thread_appears_in_state_db_thread_list() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let codex_home_path = normalized_existing_path(codex_home.path())?;
@@ -533,7 +533,7 @@ async fn goal_first_live_thread_appears_in_thread_list() -> Result<()> {
                 "sourceKinds": ["vscode"],
                 "archived": false,
                 "cwd": cwd.as_path().to_string_lossy().to_string(),
-                "useStateDbOnly": false,
+                "useStateDbOnly": true,
             })),
         )
         .await?;
