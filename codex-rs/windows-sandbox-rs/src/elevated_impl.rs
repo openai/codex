@@ -44,7 +44,7 @@ mod windows_impl {
     use crate::logging::log_start;
     use crate::logging::log_success;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
-    use crate::runner_client::is_stale_sandbox_creds_error;
+    use crate::runner_client::is_refreshable_sandbox_creds_error;
     use crate::runner_client::spawn_runner_transport;
     use crate::sandbox_utils::ensure_codex_home_exists;
     use crate::sandbox_utils::inject_git_safe_directory;
@@ -202,7 +202,7 @@ mod windows_impl {
                 spawn_request.clone(),
             ) {
                 Ok(transport) => transport,
-                Err(err) if is_stale_sandbox_creds_error(&err) => {
+                Err(err) if is_refreshable_sandbox_creds_error(&err) => {
                     sandbox_creds = refresh_logon_sandbox_creds(
                         &permissions,
                         cwd,

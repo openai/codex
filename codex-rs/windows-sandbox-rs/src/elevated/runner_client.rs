@@ -29,6 +29,7 @@ use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
 use windows_sys::Win32::Foundation::DuplicateHandle;
 use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
+use windows_sys::Win32::Foundation::ERROR_NO_LOGON_SESSION;
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -71,6 +72,27 @@ pub(crate) struct RunnerTransport {
 pub(crate) fn is_stale_sandbox_creds_error(err: &anyhow::Error) -> bool {
     err.downcast_ref::<RunnerLogonError>()
         .is_some_and(|err| err.code == ERROR_LOGON_FAILURE)
+}
+
+fn extract_create_process_as_user_error_code(message: &str) -> Option<u32> {
+    let marker = "CreateProcessAsUserW failed: ";
+    let start = message.find(marker)? + marker.len();
+    let digits: String = message[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
+pub(crate) fn is_refreshable_sandbox_creds_error(err: &anyhow::Error) -> bool {
+    if is_stale_sandbox_creds_error(err) {
+        return true;
+    }
+
+    err.chain().any(|cause| {
+        extract_create_process_as_user_error_code(&cause.to_string())
+            .is_some_and(|code| code == ERROR_NO_LOGON_SESSION)
+    })
 }
 
 impl RunnerTransport {
@@ -416,9 +438,11 @@ fn wait_for_complete_frame(pipe_read: &File, timeout: Duration) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::RunnerLogonError;
+    use super::is_refreshable_sandbox_creds_error;
     use super::is_stale_sandbox_creds_error;
     use pretty_assertions::assert_eq;
     use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
+    use windows_sys::Win32::Foundation::ERROR_NO_LOGON_SESSION;
     use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 
     #[test]
@@ -429,6 +453,21 @@ mod tests {
                     anyhow::Error::new(RunnerLogonError { code }).context("runner launch failed");
                 is_stale_sandbox_creds_error(&err)
             }),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn refreshable_sandbox_creds_error_recognizes_no_logon_session_runner_failures() {
+        let errors = [
+            anyhow::anyhow!("runner error: CreateProcessAsUserW failed: {ERROR_NO_LOGON_SESSION}")
+                .context("runner launch failed"),
+            anyhow::anyhow!("runner error: CreateProcessAsUserW failed: 5")
+                .context("runner launch failed"),
+        ];
+
+        assert_eq!(
+            errors.map(|err| is_refreshable_sandbox_creds_error(&err)),
             [true, false]
         );
     }

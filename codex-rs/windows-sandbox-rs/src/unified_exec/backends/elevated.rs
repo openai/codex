@@ -11,8 +11,8 @@ use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+use crate::runner_client::is_refreshable_sandbox_creds_error;
 use crate::runner_client::RunnerTransport;
-use crate::runner_client::is_stale_sandbox_creds_error;
 use crate::runner_client::spawn_runner_transport;
 use crate::spawn_prep::prepare_elevated_spawn_context_for_permissions;
 use anyhow::Result;
@@ -121,7 +121,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     .await
     {
         Ok(transport) => transport,
-        Err(err) if is_stale_sandbox_creds_error(&err) => {
+        Err(err) if is_refreshable_sandbox_creds_error(&err) => {
             let sandbox_creds = refresh_logon_sandbox_creds(
                 &permissions,
                 &cwd,
