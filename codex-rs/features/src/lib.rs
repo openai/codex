@@ -23,6 +23,7 @@ pub use feature_configs::NetworkProxyDomainPermissionToml;
 pub use feature_configs::NetworkProxyModeToml;
 pub use feature_configs::NetworkProxyUnixSocketPermissionToml;
 use feature_configs::RemovedAppsMcpPathOverrideConfigToml;
+pub use feature_configs::RolloutBudgetConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -99,7 +100,7 @@ pub enum Feature {
     /// on either `unified_exec` or `shell_zsh_fork` because those features have
     /// separate rollout and enterprise controls.
     UnifiedExecZshFork,
-    /// Reflow transcript scrollback when the terminal is resized.
+    /// Removed compatibility flag. Transcript scrollback reflow on terminal resize is always on.
     TerminalResizeReflow,
     /// Add terminal-specific visualization guidance to TUI developer instructions.
     TerminalVisualizationInstructions,
@@ -135,6 +136,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Start the managed network proxy for sandboxed sessions.
     NetworkProxy,
+    /// Respect host system proxy settings for Codex-owned network clients.
+    RespectSystemProxy,
     /// Enable collab tools.
     Collab,
     /// Enable task-path-based multi-agent routing.
@@ -201,6 +204,10 @@ pub enum Feature {
     Goals,
     /// Add current context-window metadata to model-visible context.
     TokenBudget,
+    /// Track and report a shared token budget across a session's agent threads.
+    RolloutBudget,
+    /// Expose an input-interruptible sleep tool.
+    SleepTool,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -461,6 +468,9 @@ impl Features {
                 "skill_env_var_dependency_prompt" => {
                     continue;
                 }
+                "terminal_resize_reflow" => {
+                    continue;
+                }
                 "use_legacy_landlock" => {
                     self.record_legacy_usage_force(
                         "features.use_legacy_landlock",
@@ -611,6 +621,8 @@ pub struct FeaturesToml {
     pub code_mode: Option<FeatureToml<CodeModeConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_budget: Option<FeatureToml<RolloutBudgetConfigToml>>,
     #[serde(default, rename = "apps_mcp_path_override", skip_serializing)]
     #[schemars(skip)]
     removed_apps_mcp_path_override: Option<FeatureToml<RemovedAppsMcpPathOverrideConfigToml>>,
@@ -643,6 +655,9 @@ impl FeaturesToml {
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
+        if let Some(enabled) = self.rollout_budget.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::RolloutBudget.key().to_string(), enabled);
+        }
         if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
         }
@@ -654,6 +669,7 @@ impl FeaturesToml {
         let Self {
             code_mode,
             multi_agent_v2,
+            rollout_budget,
             removed_apps_mcp_path_override: _,
             network_proxy,
             entries,
@@ -667,6 +683,8 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(code_mode, enabled);
             } else if spec.id == Feature::MultiAgentV2 {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
+            } else if spec.id == Feature::RolloutBudget {
+                materialize_resolved_feature_enabled(rollout_budget, enabled);
             } else if spec.id == Feature::NetworkProxy {
                 materialize_resolved_feature_enabled(network_proxy, enabled);
             } else {
@@ -807,11 +825,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TerminalResizeReflow,
         key: "terminal_resize_reflow",
-        stage: Stage::Experimental {
-            name: "Terminal resize reflow",
-            menu_description: "Rebuild Codex-owned transcript scrollback when the terminal width changes.",
-            announcement: "",
-        },
+        stage: Stage::Removed,
         default_enabled: true,
     },
     FeatureSpec {
@@ -964,6 +978,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Apply network proxy restrictions to sandboxed sessions that already have network access.",
             announcement: "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RespectSystemProxy,
+        key: "respect_system_proxy",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -1155,6 +1175,18 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TokenBudget,
         key: "token_budget",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RolloutBudget,
+        key: "rollout_budget",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SleepTool,
+        key: "sleep_tool",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

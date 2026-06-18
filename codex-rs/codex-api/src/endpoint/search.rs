@@ -161,6 +161,7 @@ mod tests {
                             },
                         ],
                         phase: None,
+                        metadata: None,
                     }])),
                     commands: Some(SearchCommands {
                         search_query: Some(vec![SearchQuery {

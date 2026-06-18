@@ -6,6 +6,10 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
     ],
+    extra_binaries_non_windows = [
+        "//codex-rs/cli:codex",
+        "//codex-rs/rmcp-client:test_stdio_server",
+    ],
     integration_test_timeout = "long",
     test_shard_counts = {
         # Note app-server-all-test has a large number of integration tests, so

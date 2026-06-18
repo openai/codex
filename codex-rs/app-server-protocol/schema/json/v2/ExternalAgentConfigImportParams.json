@@ -184,6 +184,13 @@
         "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
       },
       "type": "array"
+    },
+    "source": {
+      "description": "Source product that produced the migration items. Missing means unspecified.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

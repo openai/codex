@@ -56,7 +56,6 @@ async fn expect_error_message(
     Ok(())
 }
 
-#[allow(clippy::expect_used)]
 fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
     assert!(
         path.is_absolute(),

@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use codex_tools::ToolName;
 use codex_tools::mcp_tool_to_responses_api_tool;
 use pretty_assertions::assert_eq;
@@ -183,12 +184,9 @@ fn json_schema_policy_oversized_golden_schema_triggers_compaction() {
 }
 
 fn load_fixture<T: DeserializeOwned>(path: &str) -> T {
-    let path = codex_utils_cargo_bin::find_resource!(path)
-        .unwrap_or_else(|err| panic!("resolve fixture {path}: {err}"));
-    let fixture = fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("read fixture {}: {err}", path.display()));
-    serde_json::from_str(&fixture)
-        .unwrap_or_else(|err| panic!("parse fixture {}: {err}", path.display()))
+    let path = codex_utils_cargo_bin::find_resource!(path).expect("fixture should resolve");
+    let fixture = fs::read_to_string(&path).expect("fixture should be readable");
+    serde_json::from_str(&fixture).expect("fixture should contain valid JSON")
 }
 
 fn convert_fixture_tool(
@@ -199,7 +197,7 @@ fn convert_fixture_tool(
     let input_schema = fixture_tool
         .input_schema
         .as_object()
-        .unwrap_or_else(|| panic!("{name} input_schema should be an object"))
+        .expect("tool input_schema should be an object")
         .clone();
     let tool = rmcp::model::Tool::new(
         name.to_string(),
@@ -208,11 +206,11 @@ fn convert_fixture_tool(
     );
 
     mcp_tool_to_responses_api_tool(&ToolName::namespaced(&fixture.source, name), &tool)
-        .unwrap_or_else(|err| panic!("convert {name} from {}: {err}", fixture.source))
+        .expect("fixture tool should convert to a responses API tool")
 }
 
 fn compact_json_len(value: &Value) -> usize {
     serde_json::to_vec(value)
-        .unwrap_or_else(|err| panic!("serialize compact JSON: {err}"))
+        .expect("value should serialize to compact JSON")
         .len()
 }

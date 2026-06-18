@@ -42,7 +42,13 @@ fn non_native_uri_io_conversion_is_invalid_input() {
         .to_abs_path()
         .expect_err("URI should not be host-native");
 
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        (error.kind(), error.to_string()),
+        (
+            io::ErrorKind::InvalidInput,
+            format!("'{uri}' is invalid on '{}'", std::env::consts::OS),
+        )
+    );
 }
 
 #[test]
@@ -92,6 +98,33 @@ fn drive_shaped_posix_uri_is_intentionally_inferred_as_windows() {
     // Windows drive lets callers render the overwhelmingly more common foreign
     // Windows URI without separately carrying its source convention.
     assert_eq!(path.infer_path_convention(), Some(PathConvention::Windows));
+}
+
+#[test]
+fn inferred_native_path_string_uses_the_inferred_convention() {
+    for (uri, expected) in [
+        ("file:///home/alice/a%20file.rs", "/home/alice/a file.rs"),
+        (
+            "file:///C:/Users/Alice%20Smith/main.rs",
+            r"C:\Users\Alice Smith\main.rs",
+        ),
+        ("file://server/share/main.rs", r"\\server\share\main.rs"),
+        ("file://server/", "file://server/"),
+        ("file:///%00/bad/path/YQ", "file:///%00/bad/path/YQ"),
+    ] {
+        let path = PathUri::parse(uri).expect("valid path URI");
+
+        assert_eq!(
+            path.inferred_native_path_string(),
+            expected,
+            "rendering {uri}"
+        );
+        assert_eq!(
+            LegacyAppPathString::from(path).as_str(),
+            expected,
+            "rendering typed API path {uri}"
+        );
+    }
 }
 
 #[cfg(windows)]
@@ -193,7 +226,9 @@ fn malformed_bad_path_uris_are_rejected() {
     ] {
         assert_eq!(
             PathUri::parse(uri),
-            Err(PathUriParseError::InvalidFileUriPath),
+            Err(PathUriParseError::InvalidFileUriPath {
+                path: uri.to_string(),
+            }),
             "parsing {uri}"
         );
     }
@@ -222,7 +257,9 @@ fn bad_path_uris_are_opaque_to_lexical_operations() {
     assert_eq!(uri.join(""), Ok(uri.clone()));
     assert_eq!(
         uri.join("child"),
-        Err(PathUriParseError::InvalidFileUriPath)
+        Err(PathUriParseError::InvalidFileUriPath {
+            path: uri.to_string(),
+        })
     );
 }
 
@@ -490,17 +527,98 @@ fn join_normalizes_relative_uri_segments() {
 }
 
 #[test]
-fn join_rejects_absolute_and_null_paths() {
+fn join_replaces_posix_absolute_path() {
     let base = PathUri::parse("file:///workspace").expect("valid base URI");
 
-    assert!(matches!(
+    assert_eq!(
         base.join("/src"),
-        Err(PathUriParseError::JoinPathMustBeRelative(path)) if path == "/src"
-    ));
-    assert!(matches!(
+        Ok(PathUri::parse("file:///src").expect("valid absolute URI"))
+    );
+}
+
+#[test]
+fn join_replaces_windows_absolute_path() {
+    let base = PathUri::parse("file:///C:/workspace/src").expect("valid base URI");
+
+    assert_eq!(
+        base.join(r"D:\tmp\test.rs"),
+        Ok(PathUri::parse("file:///D:/tmp/test.rs").expect("valid absolute URI"))
+    );
+}
+
+#[test]
+fn join_windows_root_relative_path_preserves_drive_or_share() {
+    for (base, path, expected) in [
+        ("file:///C:/base/dir", r"\Windows", "file:///C:/Windows"),
+        (
+            "file://server/share/base/dir",
+            r"\Windows",
+            "file://server/share/Windows",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn join_rejects_windows_drive_relative_path() {
+    let base = PathUri::parse("file:///C:/base").expect("valid base URI");
+
+    assert_eq!(
+        base.join(r"D:tmp"),
+        Err(PathUriParseError::InvalidFileUriPath {
+            path: r"D:tmp".to_string(),
+        })
+    );
+}
+
+#[test]
+fn join_parent_segments_preserve_windows_drive_or_share_anchor() {
+    for (base, expected) in [
+        ("file:///C:/base/dir", "file:///C:/Windows"),
+        (
+            "file://server/share/base/dir",
+            "file://server/share/Windows",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(r"..\..\..\Windows"), Ok(expected));
+    }
+}
+
+#[test]
+fn join_rejects_null_paths() {
+    let base = PathUri::parse("file:///workspace").expect("valid base URI");
+
+    assert_eq!(
         base.join("src\0file"),
-        Err(PathUriParseError::InvalidFileUriPath)
-    ));
+        Err(PathUriParseError::InvalidFileUriPath {
+            path: "src\0file".to_string(),
+        })
+    );
+}
+
+#[test]
+fn join_uses_the_base_uri_path_convention() {
+    for (base, path, expected) in [
+        (
+            "file:///workspace/src",
+            "../tests/test.rs",
+            "file:///workspace/tests/test.rs",
+        ),
+        (
+            "file:///C:/workspace/src",
+            r"..\tests\test.rs",
+            "file:///C:/workspace/tests/test.rs",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
 }
 
 #[test]

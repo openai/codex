@@ -64,8 +64,8 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     assert_eq!(count, 1);
 
     let histogram_attrs = attributes_to_map(
-        match find_metric(&resource_metrics, "codex.tool_latency").and_then(|metric| {
-            match metric.data() {
+        find_metric(&resource_metrics, "codex.tool_latency")
+            .and_then(|metric| match metric.data() {
                 opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(
                     opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram),
                 ) => histogram
@@ -73,11 +73,8 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
                     .next()
                     .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::attributes),
                 _ => None,
-            }
-        }) {
-            Some(attrs) => attrs,
-            None => panic!("histogram attributes missing"),
-        },
+            })
+            .expect("codex.tool_latency histogram attributes should exist"),
     );
     let expected_histogram_attributes = BTreeMap::from([
         ("service".to_string(), "codex-cli".to_string()),

@@ -1,4 +1,4 @@
-load("//bazel/rules/testing:wine.bzl", "wine_rust_test")
+load("//bazel/rules/testing/wine:wine.bzl", "wine_rust_test")
 
 wine_rust_test(
     name = "smoke-test",
@@ -22,6 +22,7 @@ wine_rust_test(
         "//codex-rs/protocol",
         "//codex-rs/utils/path-uri",
         "@crates//:anyhow",
+        "@crates//:base64",
         "@crates//:pretty_assertions",
         "@crates//:serde_json",
         "@crates//:tempfile",

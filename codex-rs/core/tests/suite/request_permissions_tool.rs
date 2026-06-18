@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 #![cfg(target_os = "macos")]
 
 use anyhow::Result;
@@ -315,7 +315,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
     let exec_output = responses
         .function_call_output_text("exec-call")
         .map(|output| json!({ "output": output }))
-        .unwrap_or_else(|| panic!("expected exec-call output"));
+        .expect("expected exec-call output");
     let (exit_code, stdout) = parse_result(&exec_output);
     assert!(exit_code.is_none() || exit_code == Some(0));
     assert!(stdout.contains("folder-grant-ok"));
@@ -498,7 +498,7 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
                 })
         })
         .map(|output| json!({ "output": output }))
-        .unwrap_or_else(|| panic!("expected apply-patch-call output"));
+        .expect("expected apply-patch-call output");
     let (exit_code, stdout) = parse_result(&patch_output);
     assert!(exit_code.is_none() || exit_code == Some(0));
     assert!(

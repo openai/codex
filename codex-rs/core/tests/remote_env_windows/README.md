@@ -17,7 +17,7 @@ wineserver.
 
 ## Current limitations
 
-- PowerShell and ConPTY/TTY behavior are not yet covered.
+- ConPTY/TTY behavior is not yet covered.
 - Wine loads shared objects and PE DLLs at runtime, so the host must still
   provide the declared compatible glibc version.
 - The target is intentionally limited to x86-64 for simplicity. It can expand

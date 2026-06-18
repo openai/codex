@@ -81,8 +81,10 @@ struct RunningProcess {
     closed: bool,
 }
 
+struct ProcessStart;
+
 enum ProcessEntry {
-    Starting,
+    Starting(Arc<ProcessStart>),
     Running(Box<RunningProcess>),
 }
 
@@ -128,7 +130,7 @@ impl LocalProcess {
             processes
                 .drain()
                 .filter_map(|(_, process)| match process {
-                    ProcessEntry::Starting => None,
+                    ProcessEntry::Starting(_) => None,
                     ProcessEntry::Running(process) => Some(process),
                 })
                 .collect::<Vec<_>>()
@@ -163,6 +165,7 @@ impl LocalProcess {
             ))
         })?;
 
+        let start = Arc::new(ProcessStart);
         {
             let mut process_map = self.inner.processes.lock().await;
             if process_map.contains_key(&process_id) {
@@ -170,7 +173,10 @@ impl LocalProcess {
                     "process {process_id} already exists"
                 )));
             }
-            process_map.insert(process_id.clone(), ProcessEntry::Starting);
+            process_map.insert(
+                process_id.clone(),
+                ProcessEntry::Starting(Arc::clone(&start)),
+            );
         }
 
         let env = child_env(&params);
@@ -207,7 +213,10 @@ impl LocalProcess {
             Ok(spawned) => spawned,
             Err(err) => {
                 let mut process_map = self.inner.processes.lock().await;
-                if matches!(process_map.get(&process_id), Some(ProcessEntry::Starting)) {
+                if matches!(
+                    process_map.get(&process_id),
+                    Some(ProcessEntry::Starting(current)) if Arc::ptr_eq(current, &start)
+                ) {
                     process_map.remove(&process_id);
                 }
                 return Err(internal_error(err.to_string()));
@@ -222,6 +231,16 @@ impl LocalProcess {
         );
         {
             let mut process_map = self.inner.processes.lock().await;
+            if !matches!(
+                process_map.get(&process_id),
+                Some(ProcessEntry::Starting(current)) if Arc::ptr_eq(current, &start)
+            ) {
+                drop(process_map);
+                spawned.session.terminate();
+                return Err(invalid_request(format!(
+                    "process {process_id} start was cancelled"
+                )));
+            }
             process_map.insert(
                 process_id.clone(),
                 ProcessEntry::Running(Box::new(RunningProcess {
@@ -320,7 +339,9 @@ impl LocalProcess {
                         break;
                     }
                 }
-
+                if params.max_bytes.is_none() {
+                    next_seq = process.next_seq;
+                }
                 (
                     ReadResponse {
                         chunks,
@@ -408,7 +429,7 @@ impl LocalProcess {
                         .signal(pty_process_signal(params.signal))
                         .map_err(|err| internal_error(format!("failed to signal process: {err}")))?
                 }
-                Some(ProcessEntry::Starting) | None => {}
+                Some(ProcessEntry::Starting(_)) | None => {}
             }
         }
 
@@ -420,7 +441,7 @@ impl LocalProcess {
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         let running = {
-            let process_map = self.inner.processes.lock().await;
+            let mut process_map = self.inner.processes.lock().await;
             match process_map.get(&params.process_id) {
                 Some(ProcessEntry::Running(process)) => {
                     if process.exit_code.is_some() {
@@ -429,7 +450,11 @@ impl LocalProcess {
                     process.session.terminate();
                     true
                 }
-                Some(ProcessEntry::Starting) | None => false,
+                Some(ProcessEntry::Starting(_)) => {
+                    process_map.remove(&params.process_id);
+                    true
+                }
+                None => false,
             }
         };
 
@@ -915,6 +940,16 @@ mod tests {
         )
         .await
         .expect("process should close");
+        let replay_after_exit = backend
+            .exec_read(ReadParams {
+                process_id: process.process_id.clone(),
+                after_seq: Some(1),
+                max_bytes: None,
+                wait_ms: Some(0),
+            })
+            .await
+            .expect("closed process should remain readable");
+        assert_eq!(replay_after_exit.next_seq, 4);
         backend.shutdown().await;
     }
 

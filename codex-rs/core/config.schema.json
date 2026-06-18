@@ -218,6 +218,14 @@
           ],
           "description": "Reviewer for approval prompts unless overridden by per-app settings."
         },
+        "default_tools_approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for tools unless overridden by per-app or per-tool settings."
+        },
         "destructive_enabled": {
           "description": "Whether tools with `destructive_hint = true` are allowed by default.",
           "type": "boolean"
@@ -354,6 +362,13 @@
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "direct_only_tool_namespaces": {
+          "description": "Exact tool namespaces to expose only as direct model tools. These tools bypass deferral, remain top-level in code-mode-only sessions, and are omitted from the nested code-mode tool surface.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "enabled": {
           "type": "boolean"
         },
@@ -587,11 +602,17 @@
             "resize_all_images": {
               "type": "boolean"
             },
+            "respect_system_proxy": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
             "responses_websockets_v2": {
               "type": "boolean"
+            },
+            "rollout_budget": {
+              "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
             },
             "runtime_metrics": {
               "type": "boolean"
@@ -615,6 +636,9 @@
               "type": "boolean"
             },
             "skill_mcp_dependency_install": {
+              "type": "boolean"
+            },
+            "sleep_tool": {
               "type": "boolean"
             },
             "sqlite": {
@@ -884,6 +908,16 @@
         },
         {
           "$ref": "#/definitions/NetworkProxyConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_RolloutBudgetConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/RolloutBudgetConfigToml"
         }
       ]
     },
@@ -2550,6 +2584,35 @@
           "type": "string"
         }
       ]
+    },
+    "RolloutBudgetConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "limit_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "prefill_token_weight": {
+          "format": "double",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "reminder_interval_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "sampling_token_weight": {
+          "format": "double",
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "type": "object"
     },
     "SandboxMode": {
       "enum": [
@@ -4742,11 +4805,17 @@
         "resize_all_images": {
           "type": "boolean"
         },
+        "respect_system_proxy": {
+          "type": "boolean"
+        },
         "responses_websockets": {
           "type": "boolean"
         },
         "responses_websockets_v2": {
           "type": "boolean"
+        },
+        "rollout_budget": {
+          "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
         },
         "runtime_metrics": {
           "type": "boolean"
@@ -4770,6 +4839,9 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "sleep_tool": {
           "type": "boolean"
         },
         "sqlite": {

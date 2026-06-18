@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Weak;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -35,6 +36,18 @@ pub struct McpResourceClient {
     manager: Arc<ArcSwap<McpConnectionManager>>,
 }
 
+/// Opaque identity for the manager currently used by an MCP resource client.
+#[derive(Clone)]
+pub struct McpResourceClientCacheKey(Weak<McpConnectionManager>);
+
+impl PartialEq for McpResourceClientCacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+
+impl Eq for McpResourceClientCacheKey {}
+
 impl std::fmt::Debug for McpResourceClient {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -47,6 +60,11 @@ impl McpResourceClient {
     /// Creates a resource client backed by the session's replaceable MCP manager.
     pub fn new(manager: Arc<ArcSwap<McpConnectionManager>>) -> Self {
         Self { manager }
+    }
+
+    /// Returns an identity that changes whenever the published manager changes.
+    pub fn cache_key(&self) -> McpResourceClientCacheKey {
+        McpResourceClientCacheKey(Arc::downgrade(&self.manager.load_full()))
     }
 
     /// Returns whether the current manager contains the named server.

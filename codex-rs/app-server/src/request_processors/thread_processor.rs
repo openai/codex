@@ -4,7 +4,6 @@ use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
-use codex_utils_path_uri::PathUri;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -195,9 +194,10 @@ fn has_model_resume_override(
             .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
 }
 
-fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
+fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
     const DYNAMIC_TOOL_NAME_MAX_LEN: usize = 128;
     const DYNAMIC_TOOL_NAMESPACE_MAX_LEN: usize = 64;
+    const DYNAMIC_TOOL_NAMESPACE_DESCRIPTION_MAX_LEN: usize = 1024;
     const DYNAMIC_TOOL_IDENTIFIER_PATTERN: &str = "^[a-zA-Z0-9_-]+$";
     const RESERVED_RESPONSES_NAMESPACES: &[&str] = &[
         "api_tool",
@@ -243,8 +243,11 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
         Ok(())
     }
 
-    let mut seen = HashSet::new();
-    for tool in tools {
+    fn validate_dynamic_tool<'a>(
+        tool: &'a DynamicToolFunctionSpec,
+        namespace: Option<&str>,
+        seen: &mut HashSet<&'a str>,
+    ) -> Result<(), String> {
         let name = tool.name.trim();
         if name.is_empty() {
             return Err("dynamic tool name must not be empty".to_string());
@@ -259,37 +262,7 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
         if name == "mcp" || name.starts_with("mcp__") {
             return Err(format!("dynamic tool name is reserved: {name}"));
         }
-        let namespace = tool.namespace.as_deref().map(str::trim);
-        if let Some(namespace) = namespace {
-            if namespace.is_empty() {
-                return Err(format!(
-                    "dynamic tool namespace must not be empty for {name}"
-                ));
-            }
-            if Some(namespace) != tool.namespace.as_deref() {
-                return Err(format!(
-                    "dynamic tool namespace has leading/trailing whitespace for {name}: {namespace}",
-                    name = escape_identifier_for_error(name),
-                    namespace = escape_identifier_for_error(namespace),
-                ));
-            }
-            validate_dynamic_tool_identifier(
-                namespace,
-                "dynamic tool namespace",
-                DYNAMIC_TOOL_NAMESPACE_MAX_LEN,
-            )?;
-            if namespace == "mcp" || namespace.starts_with("mcp__") {
-                return Err(format!(
-                    "dynamic tool namespace is reserved for {name}: {namespace}"
-                ));
-            }
-            if RESERVED_RESPONSES_NAMESPACES.contains(&namespace) {
-                return Err(format!(
-                    "dynamic tool namespace collides with a reserved Responses API namespace for {name}: {namespace}",
-                ));
-            }
-        }
-        if !seen.insert((namespace, name)) {
+        if !seen.insert(name) {
             if let Some(namespace) = namespace {
                 return Err(format!(
                     "duplicate dynamic tool name in namespace {namespace}: {name}"
@@ -307,6 +280,62 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
             return Err(format!(
                 "dynamic tool input schema is not supported for {name}: {err}"
             ));
+        }
+        Ok(())
+    }
+
+    let mut seen_tools = HashSet::new();
+    let mut seen_namespaces = HashSet::new();
+    for spec in tools {
+        match spec {
+            DynamicToolSpec::Function(tool) => {
+                validate_dynamic_tool(tool, /*namespace*/ None, &mut seen_tools)?;
+            }
+            DynamicToolSpec::Namespace(namespace) => {
+                let name = namespace.name.trim();
+                if name.is_empty() {
+                    return Err("dynamic tool namespace must not be empty".to_string());
+                }
+                if name != namespace.name {
+                    return Err(format!(
+                        "dynamic tool namespace has leading/trailing whitespace: {}",
+                        escape_identifier_for_error(&namespace.name),
+                    ));
+                }
+                validate_dynamic_tool_identifier(
+                    name,
+                    "dynamic tool namespace",
+                    DYNAMIC_TOOL_NAMESPACE_MAX_LEN,
+                )?;
+                if namespace.description.chars().count()
+                    > DYNAMIC_TOOL_NAMESPACE_DESCRIPTION_MAX_LEN
+                {
+                    return Err(format!(
+                        "dynamic tool namespace description must be at most {DYNAMIC_TOOL_NAMESPACE_DESCRIPTION_MAX_LEN} characters"
+                    ));
+                }
+                if name == "mcp" || name.starts_with("mcp__") {
+                    return Err(format!("dynamic tool namespace is reserved: {name}"));
+                }
+                if RESERVED_RESPONSES_NAMESPACES.contains(&name) {
+                    return Err(format!(
+                        "dynamic tool namespace collides with a reserved Responses API namespace: {name}",
+                    ));
+                }
+                if !seen_namespaces.insert(name) {
+                    return Err(format!("duplicate dynamic tool namespace: {name}"));
+                }
+                if namespace.tools.is_empty() {
+                    return Err(format!(
+                        "dynamic tool namespace must contain at least one tool: {name}"
+                    ));
+                }
+                let mut seen_namespace_tools = HashSet::new();
+                for tool in &namespace.tools {
+                    let DynamicToolNamespaceTool::Function(tool) = tool;
+                    validate_dynamic_tool(tool, Some(name), &mut seen_namespace_tools)?;
+                }
+            }
         }
     }
     Ok(())
@@ -876,7 +905,8 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
-        let environment_selections = self.parse_environment_selections(environments)?;
+        let environment_selections =
+            resolve_turn_environment_selections(self.thread_manager.as_ref(), environments)?;
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -990,7 +1020,7 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
-        dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
+        dynamic_tools: Option<Vec<DynamicToolSpec>>,
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
@@ -1077,25 +1107,21 @@ impl ThreadRequestProcessor {
                 .default_environment_selections(&config.cwd)
         });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
-        let core_dynamic_tools = if dynamic_tools.is_empty() {
-            Vec::new()
-        } else {
+        if !dynamic_tools.is_empty() {
             validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
-            dynamic_tools
-                .into_iter()
-                .map(|tool| CoreDynamicToolSpec {
-                    namespace: tool.namespace,
-                    name: tool.name,
-                    description: tool.description,
-                    input_schema: tool.input_schema,
-                    defer_loading: tool.defer_loading,
-                })
-                .collect()
-        };
-        let core_dynamic_tool_count = core_dynamic_tools.len();
+        }
+        // Count callable functions rather than top-level namespace containers.
+        let dynamic_tool_count: usize = dynamic_tools
+            .iter()
+            .map(|tool| match tool {
+                DynamicToolSpec::Function(_) => 1,
+                DynamicToolSpec::Namespace(namespace) => namespace.tools.len(),
+            })
+            .sum();
         let mut thread_extension_init = ExtensionDataInit::new();
         if !selected_capability_roots.is_empty() {
             thread_extension_init.insert(selected_capability_roots);
+            codex_mcp_extension::initialize_executor_plugin_thread_data(&mut thread_extension_init);
         }
         let create_thread_started_at = std::time::Instant::now();
         let NewThread {
@@ -1115,7 +1141,7 @@ impl ThreadRequestProcessor {
                 },
                 session_source: None,
                 thread_source,
-                dynamic_tools: core_dynamic_tools,
+                dynamic_tools,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments,
@@ -1124,7 +1150,7 @@ impl ThreadRequestProcessor {
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
                 otel.name = "app_server.thread_start.create_thread",
-                thread_start.dynamic_tool_count = core_dynamic_tool_count,
+                thread_start.dynamic_tool_count = dynamic_tool_count,
             ))
             .await
             .map_err(|err| match err {
@@ -1283,27 +1309,6 @@ impl ThreadRequestProcessor {
             personality,
             ..Default::default()
         }
-    }
-
-    fn parse_environment_selections(
-        &self,
-        environments: Option<Vec<TurnEnvironmentParams>>,
-    ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
-        let environment_selections = environments.map(|environments| {
-            environments
-                .into_iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id,
-                    cwd: PathUri::from_abs_path(&environment.cwd),
-                })
-                .collect::<Vec<_>>()
-        });
-        if let Some(environment_selections) = environment_selections.as_ref() {
-            self.thread_manager
-                .validate_environment_selections(environment_selections)
-                .map_err(environment_selection_error)?;
-        }
-        Ok(environment_selections)
     }
 
     async fn thread_archive_inner(
@@ -1776,16 +1781,22 @@ impl ThreadRequestProcessor {
             .list_background_terminals()
             .await
             .into_iter()
-            .map(|terminal| ThreadBackgroundTerminal {
-                item_id: terminal.item_id,
-                process_id: terminal.process_id,
-                command: terminal.command,
-                cwd: terminal.cwd,
-                os_pid: None,
-                cpu_percent: None,
-                rss_kb: None,
+            .map(|terminal| {
+                // TODO(anp): Migrate ThreadBackgroundTerminal to PathUri.
+                let cwd = terminal.cwd.to_abs_path().map_err(|err| {
+                    internal_error(format!("background terminal has invalid cwd: {err}"))
+                })?;
+                Ok(ThreadBackgroundTerminal {
+                    item_id: terminal.item_id,
+                    process_id: terminal.process_id,
+                    command: terminal.command,
+                    cwd,
+                    os_pid: None,
+                    cpu_percent: None,
+                    rss_kb: None,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, JSONRPCErrorError>>()?;
 
         let (data, next_cursor) = paginate_background_terminals(&terminals, cursor, limit)?;
 
@@ -1892,6 +1903,7 @@ impl ThreadRequestProcessor {
         let store_sort_key = match sort_key.unwrap_or(ThreadSortKey::CreatedAt) {
             ThreadSortKey::CreatedAt => StoreThreadSortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
+            ThreadSortKey::RecencyAt => StoreThreadSortKey::RecencyAt,
         };
         let sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
         let (stored_threads, next_cursor) = self
@@ -1973,6 +1985,7 @@ impl ThreadRequestProcessor {
         let store_sort_key = match sort_key.unwrap_or(ThreadSortKey::CreatedAt) {
             ThreadSortKey::CreatedAt => StoreThreadSortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
+            ThreadSortKey::RecencyAt => StoreThreadSortKey::RecencyAt,
         };
         let store_sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
         let (allowed_sources, source_kind_filter) = compute_source_filters(source_kinds);
@@ -3690,6 +3703,7 @@ fn thread_backwards_cursor_for_sort_key(
     let timestamp = match sort_key {
         StoreThreadSortKey::CreatedAt => thread.created_at,
         StoreThreadSortKey::UpdatedAt => thread.updated_at,
+        StoreThreadSortKey::RecencyAt => thread.recency_at,
     };
     // The state DB stores unique millisecond timestamps. Offset the reverse cursor by one
     // millisecond so the opposite-direction query includes the page anchor.
@@ -4134,6 +4148,7 @@ pub(crate) fn thread_from_stored_thread(
         },
         created_at: thread.created_at.timestamp(),
         updated_at: thread.updated_at.timestamp(),
+        recency_at: Some(thread.recency_at.timestamp()),
         status: ThreadStatus::NotLoaded,
         path,
         cwd,
@@ -4339,6 +4354,7 @@ fn build_thread_from_snapshot(
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,
         updated_at: now,
+        recency_at: Some(now),
         status: ThreadStatus::NotLoaded,
         path,
         cwd: config_snapshot.cwd().clone(),

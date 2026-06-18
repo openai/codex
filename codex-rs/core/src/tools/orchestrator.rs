@@ -237,10 +237,12 @@ impl ToolOrchestrator {
         };
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
-        let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
+        let use_legacy_landlock = turn_ctx.config.features.use_legacy_landlock();
         #[allow(deprecated)]
-        let sandbox_cwd = tool.sandbox_cwd(req).unwrap_or(&turn_ctx.cwd);
-        let sandbox_policy_cwd = PathUri::from_abs_path(sandbox_cwd);
+        let sandbox_policy_cwd = tool
+            .sandbox_cwd(req)
+            .cloned()
+            .unwrap_or_else(|| PathUri::from_abs_path(&turn_ctx.cwd));
         let workspace_roots = turn_ctx.config.effective_workspace_roots();
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
@@ -249,7 +251,7 @@ impl ToolOrchestrator {
             manager: &self.sandbox,
             sandbox_cwd: &sandbox_policy_cwd,
             workspace_roots: workspace_roots.as_slice(),
-            codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
+            codex_linux_sandbox_exe: turn_ctx.config.codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
             windows_sandbox_level: turn_ctx.windows_sandbox_level,
             windows_sandbox_private_desktop: turn_ctx
@@ -413,7 +415,7 @@ impl ToolOrchestrator {
                 let retry_codex_linux_sandbox_exe = if unsandboxed_allowed {
                     None
                 } else {
-                    turn_ctx.codex_linux_sandbox_exe.as_ref()
+                    turn_ctx.config.codex_linux_sandbox_exe.as_ref()
                 };
                 let retry_attempt = SandboxAttempt {
                     sandbox: retry_sandbox,

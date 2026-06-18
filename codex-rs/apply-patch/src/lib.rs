@@ -142,7 +142,7 @@ pub struct ApplyPatchAction {
     pub patch: String,
 
     /// The working directory that was used to resolve relative paths in the patch.
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
 }
 
 impl ApplyPatchAction {
@@ -174,7 +174,7 @@ impl ApplyPatchAction {
         #[expect(clippy::expect_used)]
         Self {
             changes,
-            cwd: path.parent().expect("path should have parent"),
+            cwd: path.parent().expect("path should have parent").into(),
             patch,
         }
     }

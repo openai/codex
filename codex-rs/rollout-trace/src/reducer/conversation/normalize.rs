@@ -194,6 +194,7 @@ fn normalize_agent_message_item(
         author,
         recipient,
         content,
+        ..
     } = response_item
     else {
         bail!("item in payload {raw_payload_id} was not an agent_message");

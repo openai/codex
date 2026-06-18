@@ -17,6 +17,7 @@ const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 pub struct LoadedPlugin<M> {
     pub config_name: String,
     pub manifest_name: Option<String>,
+    pub plugin_namespace: Option<String>,
     pub manifest_description: Option<String>,
     pub root: AbsolutePathBuf,
     pub enabled: bool,
@@ -34,6 +35,10 @@ impl<M> LoadedPlugin<M> {
     pub fn is_active(&self) -> bool {
         self.enabled && self.error.is_none()
     }
+
+    pub fn display_name(&self) -> &str {
+        self.manifest_name.as_deref().unwrap_or(&self.config_name)
+    }
 }
 
 fn plugin_capability_summary_from_loaded<M>(
@@ -48,10 +53,7 @@ fn plugin_capability_summary_from_loaded<M>(
 
     let summary = PluginCapabilitySummary {
         config_name: plugin.config_name.clone(),
-        display_name: plugin
-            .manifest_name
-            .clone()
-            .unwrap_or_else(|| plugin.config_name.clone()),
+        display_name: plugin.display_name().to_string(),
         description: prompt_safe_plugin_description(plugin.manifest_description.as_deref()),
         has_skills: plugin.has_enabled_skills,
         mcp_server_names,
@@ -82,7 +84,9 @@ pub fn prompt_safe_plugin_description(description: Option<&str>) -> Option<Strin
     )
 }
 
-/// Outcome of loading configured plugins (skills roots, MCP, apps, errors).
+/// Runtime view of loaded plugins and their derived capability summaries.
+///
+/// Callers must apply any runtime capability policies before constructing this outcome.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginLoadOutcome<M> {
     plugins: Vec<LoadedPlugin<M>>,
@@ -123,11 +127,15 @@ impl<M: Clone> PluginLoadOutcome<M> {
         let mut skill_roots = Vec::new();
         let mut seen_paths = HashSet::new();
         for plugin in self.plugins.iter().filter(|plugin| plugin.is_active()) {
+            let Some(plugin_namespace) = &plugin.plugin_namespace else {
+                continue;
+            };
             for path in &plugin.skill_roots {
                 if seen_paths.insert(path.clone()) {
                     skill_roots.push(PluginSkillRoot {
                         path: path.clone(),
                         plugin_id: plugin.config_name.clone(),
+                        plugin_namespace: plugin_namespace.clone(),
                         plugin_root: plugin.root.clone(),
                     });
                 }
@@ -215,6 +223,12 @@ mod tests {
         LoadedPlugin {
             config_name: config_name.to_string(),
             manifest_name: None,
+            plugin_namespace: Some(
+                config_name
+                    .split_once('@')
+                    .map_or(config_name, |(name, _)| name)
+                    .to_string(),
+            ),
             manifest_description: None,
             root: test_path(config_name),
             enabled: true,
@@ -242,6 +256,7 @@ mod tests {
             vec![PluginSkillRoot {
                 path: shared_root,
                 plugin_id: "zeta@test".to_string(),
+                plugin_namespace: "zeta".to_string(),
                 plugin_root: test_path("zeta@test"),
             }]
         );

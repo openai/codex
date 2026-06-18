@@ -100,8 +100,12 @@ impl ShellCommandHandler {
             cwd,
             expiration: params.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
-            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+            env: create_env(
+                &turn_context.config.permissions.shell_environment_policy,
+                Some(thread_id),
+            ),
             network: turn_context.network.clone(),
+            network_environment_id: None,
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             windows_sandbox_private_desktop: turn_context

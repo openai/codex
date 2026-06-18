@@ -26,9 +26,7 @@ pub use write_stdin::WriteStdinHandler;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
-    cmd: String,
-    #[serde(default)]
-    pub(crate) workdir: Option<String>,
+    pub(crate) cmd: String,
     #[serde(default)]
     shell: Option<String>,
     #[serde(default)]
@@ -114,11 +112,10 @@ pub(crate) fn get_command(
 
     match shell_mode {
         UnifiedExecShellMode::Direct => {
-            let model_shell = args.shell.as_ref().map(|shell_str| {
-                let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
-                shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
-                shell
-            });
+            let model_shell = args
+                .shell
+                .as_ref()
+                .map(|shell_str| get_shell_by_model_provided_path(&PathBuf::from(shell_str)));
             let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
             Ok(ResolvedCommand {
                 command: shell.derive_exec_args(&args.cmd, use_login_shell),

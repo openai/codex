@@ -771,12 +771,13 @@ fn inter_agent_message_fields(item: &ConversationItem) -> Option<(String, String
         return None;
     }
     if let Some(agent_message) = &item.agent_message {
-        let [content] = item.body.parts.as_slice() else {
-            return None;
-        };
-        let message_content = match content {
-            ConversationPart::Text { text } => text,
-            ConversationPart::Encoded { label, value } if label == "encrypted_content" => value,
+        let message_content = match item.body.parts.as_slice() {
+            [ConversationPart::Text { text }] => text,
+            [ConversationPart::Encoded { label, value }] if label == "encrypted_content" => value,
+            [
+                ConversationPart::Text { .. },
+                ConversationPart::Encoded { label, value },
+            ] if label == "encrypted_content" => value,
             _ => return None,
         };
         return Some((

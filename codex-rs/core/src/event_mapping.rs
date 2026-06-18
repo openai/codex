@@ -178,7 +178,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 })
                 .collect();
             Some(TurnItem::Reasoning(ReasoningItem {
-                id: id.clone(),
+                id: id.clone().unwrap_or_default(),
                 summary_text,
                 raw_content,
             }))
@@ -199,9 +199,10 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             status,
             revised_prompt,
             result,
+            ..
         } => Some(TurnItem::ImageGeneration(
             codex_protocol::items::ImageGenerationItem {
-                id: id.clone(),
+                id: id.clone()?,
                 status: status.clone(),
                 revised_prompt: revised_prompt.clone(),
                 result: result.clone(),

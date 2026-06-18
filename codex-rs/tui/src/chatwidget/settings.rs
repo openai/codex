@@ -222,6 +222,7 @@ impl ChatWidget {
             || self.has_codex_backend_auth != has_codex_backend_auth;
         if account_state_changed {
             self.clear_pending_token_activity_refreshes();
+            self.clear_pending_rate_limit_reset_requests();
         }
         self.status_account_display = status_account_display;
         self.plan_type = plan_type;

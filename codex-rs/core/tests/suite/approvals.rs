@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 
 use anyhow::Context;
 use anyhow::Result;
@@ -1380,7 +1380,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
         ScenarioSpec {
             name: "apply_patch_shell_command_requires_patch_approval",
             approval_policy: UnlessTrusted,
-            sandbox_policy: workspace_write(false),
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::ApplyPatchShell {
                 target: TargetPath::Workspace("apply_patch_shell.txt"),
                 content: "shell-apply-patch",
@@ -1494,7 +1494,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
         ScenarioSpec {
             name: "apply_patch_freeform_unless_trusted_requires_patch_approval",
             approval_policy: UnlessTrusted,
-            sandbox_policy: workspace_write(false),
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::ApplyPatchFreeform {
                 target: TargetPath::Workspace("apply_patch_freeform_unless_trusted.txt"),
                 content: "freeform-patch-unless-trusted",
@@ -2060,13 +2060,8 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let approval_policy = AskForApproval::OnRequest;
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let sandbox_policy_for_config = sandbox_policy.clone();
 
     let mut builder = test_codex()

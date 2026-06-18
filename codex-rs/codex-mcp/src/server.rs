@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use codex_config::AppToolApproval;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 
@@ -75,6 +78,18 @@ pub(crate) struct McpServerMetadata {
     pub pollutes_memory: bool,
     pub origin: Option<McpServerOrigin>,
     pub supports_parallel_tool_calls: bool,
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+    pub tool_approval_modes: HashMap<String, AppToolApproval>,
+}
+
+impl McpServerMetadata {
+    pub fn tool_approval_mode(&self, tool_name: &str) -> AppToolApproval {
+        self.tool_approval_modes
+            .get(tool_name)
+            .copied()
+            .or(self.default_tools_approval_mode)
+            .unwrap_or_default()
+    }
 }
 
 impl From<&EffectiveMcpServer> for McpServerMetadata {
@@ -84,6 +99,16 @@ impl From<&EffectiveMcpServer> for McpServerMetadata {
                 pollutes_memory: true,
                 origin: McpServerOrigin::from_transport(&config.transport),
                 supports_parallel_tool_calls: config.supports_parallel_tool_calls,
+                default_tools_approval_mode: config.default_tools_approval_mode,
+                tool_approval_modes: config
+                    .tools
+                    .iter()
+                    .filter_map(|(name, config)| {
+                        config
+                            .approval_mode
+                            .map(|approval_mode| (name.clone(), approval_mode))
+                    })
+                    .collect(),
             },
         }
     }
