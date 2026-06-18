@@ -291,9 +291,9 @@ pub enum ThreadItem {
         status: McpToolCallStatus,
         arguments: JsonValue,
         app_context: Option<McpToolCallAppContext>,
-        /// Deprecated: use `appContext.mcpAppResourceUri` instead.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
+        /// TODO: to be removed/deprecated in later PR. use `appContext.mcpAppResourceUri` instead.
         mcp_app_resource_uri: Option<String>,
         plugin_id: Option<String>,
         result: Option<Box<McpToolCallResult>>,
