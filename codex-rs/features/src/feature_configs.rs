@@ -107,7 +107,7 @@ impl FeatureConfig for RolloutBudgetConfigToml {
 pub enum CurrentTimeSource {
     #[default]
     System,
-    AppServerClient,
+    External,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

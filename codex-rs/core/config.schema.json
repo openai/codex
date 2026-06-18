@@ -822,7 +822,7 @@
     "CurrentTimeSource": {
       "enum": [
         "system",
-        "app_server_client"
+        "external"
       ],
       "type": "string"
     },

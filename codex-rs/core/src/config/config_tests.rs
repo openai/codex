@@ -537,11 +537,11 @@ current_time_reminder = true
 [features.current_time_reminder]
 enabled = true
 reminder_interval_model_requests = 4
-clock_source = "app_server_client"
+clock_source = "external"
 "#,
             CurrentTimeReminderConfig {
                 reminder_interval_model_requests: 4,
-                clock_source: CurrentTimeSource::AppServerClient,
+                clock_source: CurrentTimeSource::External,
             },
         ),
     ] {
