@@ -26,8 +26,6 @@ use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
 use codex_extension_api::UserInstructions;
-use codex_features::Feature;
-use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::io;
@@ -70,13 +68,6 @@ pub(crate) async fn load_project_instructions(
                 );
             }
         }
-    }
-
-    if config.features.enabled(Feature::ChildAgentsMd) {
-        loaded.entries.push(InstructionEntry {
-            contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-            provenance: InstructionProvenance::Internal,
-        });
     }
 
     (!loaded.is_empty()).then_some(loaded)

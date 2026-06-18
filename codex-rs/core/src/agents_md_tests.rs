@@ -909,32 +909,6 @@ async fn secondary_environment_invalid_utf8_does_not_suppress_other_docs() {
     assert!(loaded.text().contains("secondary\u{FFFD}doc"));
 }
 
-#[tokio::test]
-async fn child_agents_guidance_is_appended_once_after_environment_groups() {
-    let primary = tempfile::tempdir().expect("primary tempdir");
-    let secondary = tempfile::tempdir().expect("secondary tempdir");
-    fs::write(primary.path().join("AGENTS.md"), "primary doc").unwrap();
-    fs::write(secondary.path().join("AGENTS.md"), "secondary doc").unwrap();
-    let mut config = make_config(&primary, /*limit*/ 4096, /*instructions*/ None).await;
-    config.features.enable(Feature::ChildAgentsMd).unwrap();
-    let environments = resolved_local_environments([
-        ("primary", config.cwd.clone()),
-        ("secondary", secondary.abs()),
-    ]);
-
-    let loaded = load_project_instructions(
-        &config.config,
-        /*user_instructions*/ None,
-        &environments,
-    )
-    .await
-    .expect("instructions expected");
-    let text = loaded.text();
-
-    assert_eq!(text.matches(HIERARCHICAL_AGENTS_MESSAGE).count(), 1);
-    assert!(text.ends_with(HIERARCHICAL_AGENTS_MESSAGE));
-}
-
 /// If there are existing system instructions but AGENTS.md docs are
 /// missing we expect the original instructions to be returned unchanged.
 #[tokio::test]
@@ -1099,32 +1073,6 @@ async fn agents_md_paths_preserve_symlinked_cwd() {
 }
 
 #[tokio::test]
-async fn child_agents_message_after_global_instructions_uses_plain_separator() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let mut cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
-    cfg.features.enable(Feature::ChildAgentsMd).unwrap();
-
-    let loaded = load_agents_md(&cfg).await.expect("instructions expected");
-    let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
-    let expected = LoadedAgentsMd {
-        user_instructions: Some(UserInstructions {
-            text: "global doc".to_string(),
-            source: global_agents,
-        }),
-        entries: vec![InstructionEntry {
-            contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-            provenance: InstructionProvenance::Internal,
-        }],
-    };
-
-    assert_eq!(loaded, expected);
-    assert_eq!(
-        loaded.text(),
-        format!("global doc\n\n{HIERARCHICAL_AGENTS_MESSAGE}")
-    );
-}
-
-#[tokio::test]
 async fn instruction_sources_include_global_before_agents_md_docs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
@@ -1159,50 +1107,6 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     assert_eq!(
         loaded.text(),
         format!("global doc{AGENTS_MD_SEPARATOR}project doc")
-    );
-}
-
-#[tokio::test]
-async fn child_agents_message_after_project_docs_is_not_an_instruction_source() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
-
-    let mut cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
-    cfg.features.enable(Feature::ChildAgentsMd).unwrap();
-    let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
-    fs::create_dir_all(&cfg.codex_home).unwrap();
-    fs::write(&global_agents, "global doc").unwrap();
-
-    let loaded = load_agents_md(&cfg).await.expect("instructions expected");
-    let project_agents = cfg.cwd.join("AGENTS.md");
-
-    let expected = LoadedAgentsMd {
-        user_instructions: Some(UserInstructions {
-            text: "global doc".to_string(),
-            source: global_agents.clone(),
-        }),
-        entries: vec![
-            InstructionEntry {
-                contents: "project doc".to_string(),
-                provenance: project_provenance(project_agents.clone(), cfg.cwd.clone()),
-            },
-            InstructionEntry {
-                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-                provenance: InstructionProvenance::Internal,
-            },
-        ],
-    };
-    assert_eq!(loaded, expected);
-    assert_eq!(
-        loaded.sources().collect::<Vec<_>>(),
-        vec![
-            PathUri::from_abs_path(&global_agents),
-            PathUri::from_abs_path(&project_agents),
-        ]
-    );
-    assert_eq!(
-        loaded.text(),
-        format!("global doc{AGENTS_MD_SEPARATOR}project doc\n\n{HIERARCHICAL_AGENTS_MESSAGE}")
     );
 }
 
