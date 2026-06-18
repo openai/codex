@@ -19,7 +19,6 @@ use std::time::Instant;
 
 use crate::codex_apps::CachedCodexAppsToolsLoad;
 use crate::codex_apps::CodexAppsToolsCacheContext;
-use crate::codex_apps::filter_disallowed_codex_apps_tools;
 use crate::codex_apps::load_cached_codex_apps_tools;
 use crate::codex_apps::load_startup_cached_codex_apps_server_info;
 use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
@@ -406,9 +405,6 @@ pub(crate) async fn list_tools_for_client_uncached(
             }
         })
         .collect();
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        return Ok(filter_disallowed_codex_apps_tools(tools));
-    }
     Ok(tools)
 }
 
