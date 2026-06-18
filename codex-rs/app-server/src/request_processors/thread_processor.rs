@@ -2574,7 +2574,6 @@ impl ThreadRequestProcessor {
                 &params,
                 app_server_client_name.clone(),
                 app_server_client_version.clone(),
-                supports_openai_form_elicitation,
             )
             .await
         {
@@ -2864,7 +2863,6 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        supports_openai_form_elicitation: bool,
     ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
@@ -2995,14 +2993,6 @@ impl ThreadRequestProcessor {
                 app_server_client_version,
             )
             .await?;
-            existing_thread
-                .set_openai_form_elicitation_support(supports_openai_form_elicitation)
-                .await
-                .map_err(|err| {
-                    internal_error(format!(
-                        "failed to update OpenAI form elicitation support: {err}"
-                    ))
-                })?;
 
             let mut summary_source_thread = source_thread;
             summary_source_thread.history = None;

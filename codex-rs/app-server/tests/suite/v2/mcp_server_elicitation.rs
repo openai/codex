@@ -16,6 +16,7 @@ use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
+use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpElicitationSchema;
@@ -26,6 +27,7 @@ use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -69,6 +71,15 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+
+use super::connection_handling_websocket::WsClient;
+use super::connection_handling_websocket::connect_websocket;
+use super::connection_handling_websocket::read_jsonrpc_message;
+use super::connection_handling_websocket::read_notification_for_method;
+use super::connection_handling_websocket::read_response_for_id;
+use super::connection_handling_websocket::send_jsonrpc;
+use super::connection_handling_websocket::send_request;
+use super::connection_handling_websocket::spawn_websocket_server;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CONNECTOR_ID: &str = "calendar";
@@ -156,6 +167,237 @@ async fn mcp_server_openai_form_elicitation_round_trip() -> Result<()> {
     fixture.finish(request_id, "accepted monthly-review").await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn openai_form_capability_follows_the_turn_starting_connection() -> Result<()> {
+    let (responses_server, response_mock, apps_server_url, apps_server_handle) =
+        start_elicitation_services(ElicitationScenario::OpenAiForm).await?;
+    let codex_home = TempDir::new()?;
+    write_config_toml(codex_home.path(), &responses_server.uri(), &apps_server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+    let mut supported_client = connect_websocket(bind_addr).await?;
+    initialize_websocket_client(
+        &mut supported_client,
+        /*id*/ 1,
+        "supported-client",
+        /*supports_openai_form_elicitation*/ true,
+    )
+    .await?;
+
+    send_request(
+        &mut supported_client,
+        "thread/start",
+        /*id*/ 2,
+        Some(serde_json::to_value(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let ThreadStartResponse { thread, .. } =
+        to_response(read_response_for_id(&mut supported_client, /*id*/ 2).await?)?;
+
+    send_request(
+        &mut supported_client,
+        "turn/start",
+        /*id*/ 3,
+        Some(serde_json::to_value(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Warm up connectors.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let _: TurnStartResponse =
+        to_response(read_response_for_id(&mut supported_client, /*id*/ 3).await?)?;
+    let _: TurnCompletedNotification = serde_json::from_value(
+        read_notification_for_method(&mut supported_client, "turn/completed")
+            .await?
+            .params
+            .expect("turn/completed params"),
+    )?;
+
+    let mut unsupported_client = connect_websocket(bind_addr).await?;
+    initialize_websocket_client(
+        &mut unsupported_client,
+        /*id*/ 4,
+        "unsupported-client",
+        /*supports_openai_form_elicitation*/ false,
+    )
+    .await?;
+    send_request(
+        &mut unsupported_client,
+        "thread/resume",
+        /*id*/ 5,
+        Some(serde_json::to_value(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let _ = read_response_for_id(&mut unsupported_client, /*id*/ 5).await?;
+
+    send_request(
+        &mut supported_client,
+        "turn/start",
+        /*id*/ 6,
+        Some(serde_json::to_value(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Use [$calendar](app://calendar) to run the calendar tool.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let TurnStartResponse { turn } =
+        to_response(read_response_for_id(&mut supported_client, /*id*/ 6).await?)?;
+
+    let (request_id, params) = loop {
+        let JSONRPCMessage::Request(request) = read_jsonrpc_message(&mut supported_client).await?
+        else {
+            continue;
+        };
+        let request: ServerRequest = serde_json::from_value(serde_json::to_value(request)?)?;
+        let ServerRequest::McpServerElicitationRequest { request_id, params } = request else {
+            continue;
+        };
+        break (request_id, params);
+    };
+    assert_eq!(
+        params.request,
+        McpServerElicitationRequest::OpenAiForm {
+            meta: None,
+            message: OPENAI_FORM_MESSAGE.to_string(),
+            requested_schema: json!({
+                "type": "object",
+                "properties": {
+                    "template": {
+                        "type": "openai/imagePicker",
+                        "title": "Template",
+                        "items": [{
+                            "id": "monthly-review",
+                            "title": "Monthly review",
+                            "image": IMAGE_DATA_URL,
+                        }],
+                    },
+                },
+                "required": ["template"],
+            }),
+        }
+    );
+    send_jsonrpc(
+        &mut supported_client,
+        JSONRPCMessage::Response(JSONRPCResponse {
+            id: request_id,
+            result: serde_json::to_value(McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Accept,
+                content: Some(json!({ "template": "monthly-review" })),
+                meta: None,
+            })?,
+        }),
+    )
+    .await?;
+
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        read_notification_for_method(&mut supported_client, "turn/completed")
+            .await?
+            .params
+            .expect("turn/completed params"),
+    )?;
+    assert_eq!(completed.thread_id, thread.id);
+    assert_eq!(completed.turn.id, turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    assert_eq!(response_mock.requests().len(), 3);
+
+    process.kill().await?;
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
+async fn initialize_websocket_client(
+    client: &mut WsClient,
+    id: i64,
+    name: &str,
+    supports_openai_form_elicitation: bool,
+) -> Result<()> {
+    send_request(
+        client,
+        "initialize",
+        id,
+        Some(serde_json::to_value(InitializeParams {
+            client_info: ClientInfo {
+                name: name.to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                mcp_server_openai_form_elicitation: supports_openai_form_elicitation,
+                ..Default::default()
+            }),
+        })?),
+    )
+    .await?;
+    let _ = read_response_for_id(client, id).await?;
+    Ok(())
+}
+
+async fn start_elicitation_services(
+    scenario: ElicitationScenario,
+) -> Result<(wiremock::MockServer, ResponseMock, String, JoinHandle<()>)> {
+    let responses_server = responses::start_mock_server().await;
+    let tool_call_arguments = serde_json::to_string(&json!({}))?;
+    let response_mock = responses::mount_sse_sequence(
+        &responses_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-0"),
+                responses::ev_assistant_message("msg-0", "Warmup"),
+                responses::ev_completed("resp-0"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    TOOL_CALL_ID,
+                    TOOL_NAMESPACE,
+                    CALLABLE_TOOL_NAME,
+                    &tool_call_arguments,
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let (apps_server_url, apps_server_handle) = start_apps_server(scenario).await?;
+    Ok((
+        responses_server,
+        response_mock,
+        apps_server_url,
+        apps_server_handle,
+    ))
+}
+
 struct ElicitationRoundTripFixture {
     mcp: TestAppServer,
     response_mock: ResponseMock,
@@ -167,35 +409,8 @@ struct ElicitationRoundTripFixture {
 
 impl ElicitationRoundTripFixture {
     async fn start(scenario: ElicitationScenario) -> Result<Self> {
-        let responses_server = responses::start_mock_server().await;
-        let tool_call_arguments = serde_json::to_string(&json!({}))?;
-        let response_mock = responses::mount_sse_sequence(
-            &responses_server,
-            vec![
-                responses::sse(vec![
-                    responses::ev_response_created("resp-0"),
-                    responses::ev_assistant_message("msg-0", "Warmup"),
-                    responses::ev_completed("resp-0"),
-                ]),
-                responses::sse(vec![
-                    responses::ev_response_created("resp-1"),
-                    responses::ev_function_call_with_namespace(
-                        TOOL_CALL_ID,
-                        TOOL_NAMESPACE,
-                        CALLABLE_TOOL_NAME,
-                        &tool_call_arguments,
-                    ),
-                    responses::ev_completed("resp-1"),
-                ]),
-                responses::sse(vec![
-                    responses::ev_response_created("resp-2"),
-                    responses::ev_assistant_message("msg-1", "Done"),
-                    responses::ev_completed("resp-2"),
-                ]),
-            ],
-        )
-        .await;
-        let (apps_server_url, apps_server_handle) = start_apps_server(scenario).await?;
+        let (responses_server, response_mock, apps_server_url, apps_server_handle) =
+            start_elicitation_services(scenario).await?;
         let codex_home = TempDir::new()?;
         write_config_toml(codex_home.path(), &responses_server.uri(), &apps_server_url)?;
         write_chatgpt_auth(

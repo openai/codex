@@ -1098,6 +1098,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        /*supports_openai_form_elicitation*/
                         supports_openai_form_elicitation,
                     )
                     .await
@@ -1109,6 +1110,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        /*supports_openai_form_elicitation*/
                         supports_openai_form_elicitation,
                     )
                     .await
@@ -1309,6 +1311,8 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        /*supports_openai_form_elicitation*/
+                        supports_openai_form_elicitation,
                     )
                     .await
             }
