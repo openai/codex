@@ -14,11 +14,12 @@ use codex_install_context::InstallContext;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
+use codex_network_proxy::MITM_CA_ENV_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
-use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
+use codex_network_proxy::SSL_CERT_DIR_ENV_KEY;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxCommand;
@@ -68,25 +69,7 @@ pub(crate) fn exec_env_for_sandbox_permissions(
 }
 
 pub(crate) fn strip_managed_proxy_env(env: &mut HashMap<String, String>) {
-    for key in PROXY_ENV_KEYS {
-        env.remove(*key);
-    }
-    for key in CUSTOM_CA_ENV_KEYS {
-        if env
-            .get(key)
-            .is_some_and(|value| is_managed_mitm_ca_trust_bundle_path(value))
-        {
-            env.remove(key);
-        }
-    }
-    // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
-    #[cfg(target_os = "macos")]
-    if env
-        .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
-        .is_some_and(|command| command.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER))
-    {
-        env.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
-    }
+    codex_network_proxy::strip_managed_proxy_env(env);
 }
 
 /// Prepends `path_entry` to `PATH`, removing duplicate and empty existing
@@ -336,10 +319,17 @@ fn build_proxy_env_exports() -> (String, String) {
     let (captures, restores) =
         build_override_exports_for_keys("__CODEX_SNAPSHOT_PROXY_OVERRIDE", &keys);
     let key = PROXY_ACTIVE_ENV_KEY;
+    let (ssl_cert_dir_captures, ssl_cert_dir_restores) = build_override_exports_for_keys(
+        "__CODEX_SNAPSHOT_MITM_CA_OVERRIDE",
+        &[SSL_CERT_DIR_ENV_KEY],
+    );
+    let mitm_ca_key = MITM_CA_ENV_ACTIVE_ENV_KEY;
     let proxy_blocks = (
-        format!("{captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\""),
         format!(
-            "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\nfi"
+            "{captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\"\n{ssl_cert_dir_captures}\n__CODEX_SNAPSHOT_MITM_CA_ENV_SET=\"${{{mitm_ca_key}+x}}\""
+        ),
+        format!(
+            "__CODEX_SNAPSHOT_MITM_CA_ENV_AFTER_SET=\"${{{mitm_ca_key}+x}}\"\nif [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\nfi\nif [ -n \"$__CODEX_SNAPSHOT_MITM_CA_ENV_SET\" ] || [ -n \"$__CODEX_SNAPSHOT_MITM_CA_ENV_AFTER_SET\" ]; then\n{ssl_cert_dir_restores}\nfi"
         ),
     );
     let git_blocks = build_codex_proxy_git_ssh_command_exports();

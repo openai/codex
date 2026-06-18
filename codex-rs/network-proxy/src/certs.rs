@@ -177,7 +177,13 @@ fn managed_ca_trust_bundle_for_cert_path(
                 .map(|value| (key, value.clone()))
         })
         .collect();
-    let trust_bundle = build_managed_ca_trust_bundle(cert_path, &startup_env_values)?;
+    // Unix sandboxes can policy-check and isolate a derived bundle for each
+    // child. The Windows restricted sandbox uses a persistent identity, so it
+    // cannot safely receive command-specific bundle grants; keep process-start
+    // CA compatibility there by placing only startup overrides in the stable
+    // baseline that all Windows children already share.
+    let baseline_startup_env_values = cfg!(windows).then_some(&startup_env_values);
+    let trust_bundle = build_managed_ca_trust_bundle(cert_path, baseline_startup_env_values)?;
     let path = persist_managed_ca_trust_bundle(cert_path, &trust_bundle)?;
 
     Ok(ManagedMitmCaTrustBundle {
@@ -189,7 +195,7 @@ fn managed_ca_trust_bundle_for_cert_path(
 
 fn build_managed_ca_trust_bundle(
     managed_ca_cert_path: &Path,
-    startup_env_values: &HashMap<&'static str, String>,
+    startup_env_values: Option<&HashMap<&'static str, String>>,
 ) -> Result<String> {
     let mut trust_bundle = String::new();
     let rustls_native_certs::CertificateResult { certs, errors, .. } =
@@ -204,9 +210,13 @@ fn build_managed_ca_trust_bundle(
         push_certificate_pem(&mut trust_bundle, cert.as_ref());
     }
     let mut appended_startup_paths = HashSet::new();
-    for path in CUSTOM_CA_ENV_KEYS
+    for path in startup_env_values
         .into_iter()
-        .filter_map(|key| startup_env_values.get(key))
+        .flat_map(|values| {
+            CUSTOM_CA_ENV_KEYS
+                .into_iter()
+                .filter_map(|key| values.get(key))
+        })
         .map(Path::new)
     {
         if path != managed_ca_cert_path && appended_startup_paths.insert(path) {
@@ -903,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_ca_trust_bundle_appends_startup_ca_override_to_baseline() {
+    fn managed_ca_trust_bundle_scopes_startup_ca_override_by_platform() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
         let startup_ca_bundle_path = dir.path().join("startup-ca.pem");
@@ -918,7 +928,7 @@ mod tests {
             managed_ca_trust_bundle_for_cert_path(&managed_ca_cert_path, &env).unwrap();
         let baseline_bundle = fs::read_to_string(trust_bundle.path).unwrap();
 
-        assert!(baseline_bundle.contains("startup ca"));
+        assert_eq!(baseline_bundle.contains("startup ca"), cfg!(windows));
         assert!(baseline_bundle.contains("managed ca"));
     }
 

@@ -11,6 +11,7 @@ use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
+use codex_network_proxy::MITM_CA_ENV_ACTIVE_ENV_KEY;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
@@ -19,6 +20,7 @@ use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
+use codex_network_proxy::SSL_CERT_DIR_ENV_KEY;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxManager;
@@ -578,6 +580,61 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
          http://127.0.0.1:4321\n\
          ssh -o ProxyCommand=stale"
     );
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_ssl_cert_dir_for_mitm_state() {
+    let cases = [
+        (false, Some("1"), "unset"),
+        (false, None, "/tmp/snapshot-certs"),
+        (true, None, "unset"),
+    ];
+
+    for (index, (snapshot_mitm, live_mitm, expected)) in cases.into_iter().enumerate() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join(format!("snapshot-{index}.sh"));
+        let snapshot_mitm = if snapshot_mitm {
+            format!("export {MITM_CA_ENV_ACTIVE_ENV_KEY}=1\n")
+        } else {
+            Default::default()
+        };
+        std::fs::write(
+            &snapshot_path,
+            format!(
+                "# Snapshot file\n{snapshot_mitm}export {SSL_CERT_DIR_ENV_KEY}='/tmp/snapshot-certs'\n"
+            ),
+        )
+        .expect("write snapshot");
+        let (session_shell, shell_snapshot) =
+            shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path.abs());
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            format!("printf '%s' \"${{{SSL_CERT_DIR_ENV_KEY}-unset}}\""),
+        ];
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(
+            &command,
+            &session_shell,
+            Some(&shell_snapshot),
+            &HashMap::new(),
+            &HashMap::new(),
+            &RuntimePathPrepends::default(),
+        );
+        let mut command = Command::new(&rewritten[0]);
+        command
+            .args(&rewritten[1..])
+            .env(PROXY_ACTIVE_ENV_KEY, "1")
+            .env_remove(SSL_CERT_DIR_ENV_KEY);
+        if let Some(live_mitm) = live_mitm {
+            command.env(MITM_CA_ENV_ACTIVE_ENV_KEY, live_mitm);
+        } else {
+            command.env_remove(MITM_CA_ENV_ACTIVE_ENV_KEY);
+        }
+        let output = command.output().expect("run rewritten command");
+
+        assert!(output.status.success(), "command failed: {output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    }
 }
 
 #[cfg(target_os = "macos")]

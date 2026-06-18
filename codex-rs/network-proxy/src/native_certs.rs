@@ -7,8 +7,10 @@ use rustls_native_certs::Error;
 use rustls_native_certs::ErrorKind;
 
 // `rustls_native_certs::load_native_certs()` first consults SSL_CERT_FILE and
-// SSL_CERT_DIR. The managed baseline must contain platform roots only; child
-// CA overrides are copied later after the child filesystem policy can be checked.
+// SSL_CERT_DIR. Load platform roots directly so Unix child CA overrides can be
+// copied later after the child filesystem policy is checked. Windows preserves
+// process-start file overrides separately in its stable managed baseline because
+// its persistent sandbox identity cannot safely receive per-command grants.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(crate) fn load_platform_native_certs() -> CertificateResult {
     let mut result =
