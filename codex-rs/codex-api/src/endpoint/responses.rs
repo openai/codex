@@ -37,6 +37,7 @@ pub struct ResponsesOptions {
     pub extra_headers: HeaderMap,
     pub compression: Compression,
     pub turn_state: Option<Arc<OnceLock<String>>>,
+    pub include_item_ids: bool,
 }
 
 impl<T: HttpTransport> ResponsesClient<T> {
@@ -80,13 +81,27 @@ impl<T: HttpTransport> ResponsesClient<T> {
             extra_headers,
             compression,
             turn_state,
+            include_item_ids,
         } = options;
 
-        let body = if request.store && self.session.provider().is_azure_responses_endpoint() {
+        let attach_azure_item_ids =
+            request.store && self.session.provider().is_azure_responses_endpoint();
+        let body = if !include_item_ids || attach_azure_item_ids {
             let mut body = serde_json::to_value(&request).map_err(|e| {
                 ApiError::Stream(format!("failed to encode responses request: {e}"))
             })?;
-            attach_item_ids(&mut body, &request.input);
+            if !include_item_ids
+                && let Some(items) = body.get_mut("input").and_then(Value::as_array_mut)
+            {
+                for item in items {
+                    if let Some(item) = item.as_object_mut() {
+                        item.remove("id");
+                    }
+                }
+            }
+            if attach_azure_item_ids {
+                attach_item_ids(&mut body, &request.input);
+            }
             EncodedJsonBody::encode(&body)
         } else {
             EncodedJsonBody::encode(&request)

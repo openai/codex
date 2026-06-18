@@ -301,7 +301,7 @@ async fn responses_client_uses_responses_path() -> Result<()> {
 }
 
 #[tokio::test]
-async fn responses_client_stream_request_preserves_exact_json_body() -> Result<()> {
+async fn responses_client_stream_request_gates_item_ids() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
     let client = ResponsesClient::new(transport, provider("openai"), Arc::new(NoAuth));
@@ -330,12 +330,25 @@ async fn responses_client_stream_request_preserves_exact_json_body() -> Result<(
     let expected = serde_json::to_vec(&request)?;
 
     let _stream = client
-        .stream_request(request, ResponsesOptions::default())
+        .stream_request(request.clone(), ResponsesOptions::default())
+        .await?;
+    let _stream = client
+        .stream_request(
+            request,
+            ResponsesOptions {
+                include_item_ids: true,
+                ..Default::default()
+            },
+        )
         .await?;
 
     let requests = state.take_stream_requests();
-    assert_eq!(requests.len(), 1);
-    let prepared = requests[0]
+    assert_eq!(requests.len(), 2);
+    let body_without_ids: serde_json::Value =
+        serde_json::from_slice(request_body_bytes(&requests[0]))?;
+    assert_eq!(body_without_ids["input"][0].get("id"), None);
+
+    let prepared = requests[1]
         .prepare_body_for_send()
         .expect("body should prepare");
     assert_eq!(prepared.body.as_deref(), Some(expected.as_slice()));
@@ -542,6 +555,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
                 extra_headers,
                 compression: Compression::None,
                 turn_state: None,
+                include_item_ids: false,
             },
         )
         .await?;

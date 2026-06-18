@@ -19,6 +19,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -42,6 +43,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -150,6 +152,19 @@ fn response_message_item_id(request: &ResponsesRequest, role: &str, text: &str) 
         .unwrap_or_else(|| panic!("missing item ID for {role} message {text:?}"))
 }
 
+fn response_agent_message_item_id(request: &ResponsesRequest, text: &str) -> String {
+    request
+        .inputs_of_type("agent_message")
+        .into_iter()
+        .find(|item| message_input_texts(item).contains(&text))
+        .and_then(|item| {
+            item.get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| panic!("missing item ID for agent message {text:?}"))
+}
+
 fn assert_codex_client_metadata(
     request_body: &serde_json::Value,
     installation_id: &str,
@@ -240,6 +255,38 @@ async fn non_openai_responses_requests_omit_item_turn_metadata() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn response_item_ids_are_omitted_when_feature_is_disabled() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg_server", "first reply"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test = test_codex().build(&server).await?;
+
+    test.submit_turn("first turn").await?;
+    test.submit_turn("second turn").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    for item in requests[1].input() {
+        assert!(
+            item.get("id").is_none(),
+            "input item should omit IDs while the feature is disabled: {item}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let response_mock = mount_sse_sequence(
@@ -272,6 +319,9 @@ async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> an
     })
     .await;
 
+    builder = builder.with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
     let resumed = builder.resume(&server, home, rollout_path).await?;
     resumed.submit_turn("after resume").await?;
 
@@ -292,6 +342,77 @@ async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> an
     assert_eq!(
         response_message_item_id(&requests[1], "assistant", "first reply"),
         "msg_server"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inter_agent_response_item_ids_persist_across_resume() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-mail"),
+                ev_completed("resp-mail"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let initial = builder.build(&server).await?;
+    let home = Arc::clone(&initial.home);
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    initial
+        .codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from("/root/worker").expect("worker path should parse"),
+                AgentPath::root(),
+                Vec::new(),
+                "child update".to_string(),
+                /*trigger_turn*/ true,
+            ),
+        })
+        .await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    builder = builder.with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let resumed = builder.resume(&server, home, rollout_path).await?;
+    resumed.submit_turn("after resume").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let agent_message_id = response_agent_message_item_id(&requests[0], "child update");
+    let agent_message_uuid = agent_message_id
+        .strip_prefix("amsg_")
+        .expect("agent message ID should have the Responses API prefix");
+    assert_eq!(
+        Uuid::parse_str(agent_message_uuid)?.get_version(),
+        Some(uuid::Version::SortRand)
+    );
+    assert_eq!(
+        response_agent_message_item_id(&requests[1], "child update"),
+        agent_message_id
     );
 
     Ok(())

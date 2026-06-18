@@ -2717,7 +2717,7 @@ impl Session {
     pub(crate) async fn record_inter_agent_communication(
         &self,
         turn_context: &TurnContext,
-        communication: InterAgentCommunication,
+        mut communication: InterAgentCommunication,
     ) {
         let response_item = communication.to_model_input_item();
         let items = self.prepare_conversation_items_for_history(
@@ -2725,6 +2725,7 @@ impl Session {
             std::slice::from_ref(&response_item),
         );
         let items = items.as_ref();
+        communication.id = items.first().and_then(ResponseItem::id).map(str::to_owned);
         {
             let mut state = self.state.lock().await;
             state.record_items(

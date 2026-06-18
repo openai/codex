@@ -1514,6 +1514,35 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_gates_item_ids() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    let prompt_without_ids = prompt_with_input(vec![assistant_message_item("msg-1", "first")]);
+    let mut prompt_with_ids = prompt_with_input(vec![assistant_message_item("msg-2", "second")]);
+    prompt_with_ids.include_item_ids = true;
+
+    stream_until_complete(&mut client_session, &harness, &prompt_without_ids).await;
+    stream_until_complete(&mut client_session, &harness, &prompt_with_ids).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let first = connection.first().expect("missing request").body_json();
+    let second = connection.get(1).expect("missing request").body_json();
+    assert_eq!(first["input"][0].get("id"), None);
+    assert_eq!(second["input"][0]["id"].as_str(), Some("msg-2"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_uses_incremental_create_on_prefix() {
     skip_if_no_network!();
 

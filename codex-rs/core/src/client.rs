@@ -508,7 +508,7 @@ impl ModelClient {
             RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
             self.state.auth_env_telemetry.clone(),
         );
-        let request = self.build_responses_request(
+        let mut request = self.build_responses_request(
             &client_setup.api_provider,
             prompt,
             model_info,
@@ -517,6 +517,9 @@ impl ModelClient {
             settings.service_tier,
             responses_metadata,
         )?;
+        if !prompt.include_item_ids {
+            request.input.iter_mut().for_each(ResponseItem::clear_id);
+        }
         let ResponsesApiRequest {
             model,
             instructions,
@@ -1033,6 +1036,7 @@ impl ModelClientSession {
             },
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
+            include_item_ids: false,
         }
     }
 
@@ -1298,6 +1302,7 @@ impl ModelClientSession {
                     model_info.use_responses_lite,
                 )
                 .await;
+            options.include_item_ids = prompt.include_item_ids;
 
             let request = self.client.build_responses_request(
                 &client_setup.api_provider,
@@ -1467,6 +1472,10 @@ impl ModelClientSession {
 
             let (mut ws_request, previous_response_id_from_untraced_warmup) =
                 self.prepare_websocket_request(ws_payload, &request);
+            if !prompt.include_item_ids {
+                let ResponsesWsRequest::ResponseCreate(payload) = &mut ws_request;
+                payload.input.iter_mut().for_each(ResponseItem::clear_id);
+            }
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a
                 // model inference attempt that should appear in rollout traces.

@@ -1189,6 +1189,27 @@ impl ResponseItem {
         }
     }
 
+    /// Clears the Responses API item ID for variants that carry one.
+    pub fn clear_id(&mut self) {
+        match self {
+            Self::Message { id, .. }
+            | Self::AgentMessage { id, .. }
+            | Self::LocalShellCall { id, .. }
+            | Self::FunctionCall { id, .. }
+            | Self::ToolSearchCall { id, .. }
+            | Self::FunctionCallOutput { id, .. }
+            | Self::CustomToolCall { id, .. }
+            | Self::CustomToolCallOutput { id, .. }
+            | Self::ToolSearchOutput { id, .. }
+            | Self::WebSearchCall { id, .. }
+            | Self::Reasoning { id, .. }
+            | Self::ImageGenerationCall { id, .. }
+            | Self::Compaction { id, .. }
+            | Self::ContextCompaction { id, .. } => *id = None,
+            Self::CompactionTrigger { .. } | Self::Other => {}
+        }
+    }
+
     /// Returns the non-empty turn ID stamped onto this item, if present.
     pub fn turn_id(&self) -> Option<&str> {
         self.metadata()

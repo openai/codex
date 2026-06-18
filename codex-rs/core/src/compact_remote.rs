@@ -23,6 +23,7 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
 use codex_app_server_protocol::AuthMode;
+use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -225,6 +226,7 @@ async fn run_remote_compact_task_inner_impl(
     .await?;
     let prompt = Prompt {
         input: prompt_input,
+        include_item_ids: turn_context.config.features.enabled(Feature::ItemIds),
         tools: tool_router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
