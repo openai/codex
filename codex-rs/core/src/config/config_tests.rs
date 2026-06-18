@@ -66,7 +66,6 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
-use codex_features::VarlatencyClockSource;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
@@ -473,12 +472,6 @@ limit_tokens = 100000
 reminder_interval_tokens = 10000
 sampling_token_weight = 1.0
 prefill_token_weight = 0.1
-async fn load_config_resolves_varlatency_defaults() -> std::io::Result<()> {
-    let codex_home = tempdir()?;
-    let config_toml: ConfigToml = toml::from_str(
-        r#"
-[features]
-varlatency = true
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -498,36 +491,6 @@ varlatency = true
             reminder_interval_tokens: 10_000,
             sampling_token_weight: 1.0,
             prefill_token_weight: 0.1,
-    assert!(config.features.enabled(Feature::Varlatency));
-    assert_eq!(config.varlatency, Some(VarlatencyConfig::default()));
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_resolves_varlatency_overrides() -> std::io::Result<()> {
-    let codex_home = tempdir()?;
-    let config_toml: ConfigToml = toml::from_str(
-        r#"
-[features.varlatency]
-enabled = true
-reminder_interval_model_requests = 4
-clock_source = "app_server_client"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-    let config = Config::load_from_base_config_with_overrides(
-        config_toml,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert!(config.features.enabled(Feature::Varlatency));
-    assert_eq!(
-        config.varlatency,
-        Some(VarlatencyConfig {
-            reminder_interval_model_requests: 4,
-            clock_source: VarlatencyClockSource::AppServerClient,
         })
     );
     Ok(())
@@ -556,20 +519,47 @@ async fn load_config_rejects_enabled_rollout_budget_without_limit() -> std::io::
             "features.rollout_budget.limit_tokens is required when rollout_budget is enabled"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_varlatency() -> std::io::Result<()> {
+    for (config_toml, expected) in [
+        (
+            r#"
+[features]
+varlatency = true
+"#,
+            VarlatencyConfig::default(),
+        ),
+        (
+            r#"
+[features.varlatency]
+enabled = true
+reminder_interval_model_requests = 4
+clock_source = "app_server_client"
+"#,
+            VarlatencyConfig {
+                reminder_interval_model_requests: 4,
+                clock_source: VarlatencyClockSource::AppServerClient,
+            },
+        ),
+    ] {
+        let config = load_varlatency_config(config_toml).await?;
+        assert!(config.features.enabled(Feature::Varlatency));
+        assert_eq!(config.varlatency, Some(expected));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_rejects_zero_varlatency_interval() -> std::io::Result<()> {
-    let codex_home = tempdir()?;
-    let config_toml: ConfigToml = toml::from_str(
+    let error = load_varlatency_config(
         r#"
 [features.varlatency]
 enabled = true
 reminder_interval_model_requests = 0
 "#,
-    )
-    .expect("TOML deserialization should succeed");
-    let error = Config::load_from_base_config_with_overrides(
-        config_toml,
-        ConfigOverrides::default(),
-        codex_home.abs(),
     )
     .await
     .expect_err("zero reminder interval should be rejected");
@@ -580,6 +570,17 @@ reminder_interval_model_requests = 0
         "features.varlatency.reminder_interval_model_requests must be positive"
     );
     Ok(())
+}
+
+async fn load_varlatency_config(config_toml: &str) -> std::io::Result<Config> {
+    let codex_home = tempdir()?;
+    let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
+    Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
 }
 
 #[test]
