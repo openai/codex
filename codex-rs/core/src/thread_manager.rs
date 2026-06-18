@@ -73,6 +73,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -188,6 +189,34 @@ pub struct StartThreadOptions {
     pub environments: Vec<TurnEnvironmentSelection>,
     pub thread_extension_init: ExtensionDataInit,
     pub supports_openai_form_elicitation: bool,
+}
+
+/// Weak access to the host thread manager attached to thread-scoped extension data.
+#[derive(Clone)]
+pub struct ExtensionThreadManager {
+    threads: Weak<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+}
+
+impl ExtensionThreadManager {
+    fn new(threads: Weak<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>) -> Self {
+        Self { threads }
+    }
+
+    /// Fetches a loaded, non-internal thread by ID.
+    pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
+        let Some(threads) = self.threads.upgrade() else {
+            return Err(CodexErr::ThreadNotFound(thread_id));
+        };
+        get_thread(&threads, thread_id).await
+    }
+}
+
+impl std::fmt::Debug for ExtensionThreadManager {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExtensionThreadManager")
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
@@ -1059,11 +1088,7 @@ impl ThreadManagerState {
 
     /// Fetch a thread by ID or return ThreadNotFound.
     pub(crate) async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
-        let threads = self.threads.read().await;
-        match threads.get(&thread_id) {
-            Some(thread) if !thread.session_source.is_internal() => Ok(thread.clone()),
-            Some(_) | None => Err(CodexErr::ThreadNotFound(thread_id)),
-        }
+        get_thread(&self.threads, thread_id).await
     }
 
     pub(crate) async fn read_stored_thread(
@@ -1398,7 +1423,7 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
-        thread_extension_init: ExtensionDataInit,
+        mut thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
@@ -1439,6 +1464,7 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
+        thread_extension_init.insert(ExtensionThreadManager::new(Arc::downgrade(&self.threads)));
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
@@ -1559,6 +1585,17 @@ impl ThreadManagerState {
             .ok()
             .map(|thread| thread.codex.session.services.rollout_thread_trace.clone())
             .unwrap_or_else(codex_rollout_trace::ThreadTraceContext::disabled)
+    }
+}
+
+async fn get_thread(
+    threads: &RwLock<HashMap<ThreadId, Arc<CodexThread>>>,
+    thread_id: ThreadId,
+) -> CodexResult<Arc<CodexThread>> {
+    let threads = threads.read().await;
+    match threads.get(&thread_id) {
+        Some(thread) if !thread.session_source.is_internal() => Ok(thread.clone()),
+        Some(_) | None => Err(CodexErr::ThreadNotFound(thread_id)),
     }
 }
 

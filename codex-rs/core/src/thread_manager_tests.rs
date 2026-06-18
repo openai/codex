@@ -299,6 +299,47 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
+async fn start_thread_exposes_thread_manager_to_extensions() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let started = manager
+        .start_thread(config)
+        .await
+        .expect("thread should start");
+
+    let extension_manager = started
+        .thread
+        .codex
+        .session
+        .services
+        .thread_extension_data
+        .get::<crate::ExtensionThreadManager>()
+        .expect("extension thread manager should be attached");
+    let extension_thread = extension_manager
+        .get_thread(started.thread_id)
+        .await
+        .expect("extension thread manager should find the thread");
+
+    assert!(Arc::ptr_eq(&extension_thread, &started.thread));
+
+    started
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("thread should shut down");
+}
+
+#[tokio::test]
 async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
