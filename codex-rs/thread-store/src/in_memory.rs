@@ -79,7 +79,7 @@ mod tests {
         let items_err = store
             .list_items(ListItemsParams {
                 thread_id,
-                turn_id: "turn_1".to_string(),
+                turn_id: None,
                 include_archived: true,
                 cursor: None,
                 page_size: 10,
