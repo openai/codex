@@ -38,12 +38,14 @@ impl ConnectionRpcGate {
         drop(token);
     }
 
+    pub(crate) async fn close(&self) {
+        let mut accepting = self.accepting.lock().await;
+        *accepting = false;
+        self.tasks.close();
+    }
+
     pub(crate) async fn shutdown(&self) {
-        {
-            let mut accepting = self.accepting.lock().await;
-            *accepting = false;
-            self.tasks.close();
-        }
+        self.close().await;
         self.tasks.wait().await;
     }
 
@@ -90,9 +92,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_drops_future_without_polling_after_shutdown() {
+    async fn run_drops_future_without_polling_after_close() {
         let gate = ConnectionRpcGate::new();
-        gate.shutdown().await;
+        gate.close().await;
         let polled = Arc::new(AtomicBool::new(/*v*/ false));
         let polled_clone = Arc::clone(&polled);
 
@@ -103,6 +105,33 @@ mod tests {
 
         assert!(!polled.load(Ordering::Acquire));
         assert!(!gate.is_accepting().await);
+    }
+
+    #[tokio::test]
+    async fn close_returns_while_started_run_remains_active() {
+        let gate = Arc::new(ConnectionRpcGate::new());
+        let (started_tx, started_rx) = oneshot::channel();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let gate_for_run = Arc::clone(&gate);
+        let run_task = tokio::spawn(async move {
+            gate_for_run
+                .run(async move {
+                    started_tx.send(()).expect("receiver should be open");
+                    let _ = finish_rx.await;
+                })
+                .await;
+        });
+
+        started_rx.await.expect("run should start");
+        gate.close().await;
+        assert!(!gate.is_accepting().await);
+        assert_eq!(gate.inflight_count(), 1);
+
+        finish_tx
+            .send(())
+            .expect("running future should be waiting");
+        run_task.await.expect("run task should complete");
+        gate.shutdown().await;
     }
 
     #[tokio::test]

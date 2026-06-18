@@ -165,6 +165,9 @@ pub enum PluginListMarketplaceKind {
     #[serde(rename = "shared-with-me")]
     #[ts(rename = "shared-with-me")]
     SharedWithMe,
+    #[serde(rename = "created-by-me-remote")]
+    #[ts(rename = "created-by-me-remote")]
+    CreatedByMeRemote,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -638,11 +641,36 @@ pub struct PluginDetail {
     pub marketplace_name: String,
     pub marketplace_path: Option<AbsolutePathBuf>,
     pub summary: PluginSummary,
+    pub share_url: Option<String>,
     pub description: Option<String>,
     pub skills: Vec<SkillSummary>,
     pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppSummary>,
+    pub app_templates: Vec<AppTemplateSummary>,
     pub mcp_servers: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[ts(export_to = "v2/")]
+pub enum AppTemplateUnavailableReason {
+    NotConfiguredForWorkspace,
+    NoActiveWorkspace,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AppTemplateSummary {
+    pub template_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub canonical_connector_id: Option<String>,
+    pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub materialized_app_ids: Vec<String>,
+    pub reason: Option<AppTemplateUnavailableReason>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

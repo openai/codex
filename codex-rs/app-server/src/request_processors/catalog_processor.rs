@@ -511,7 +511,7 @@ impl CatalogRequestProcessor {
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await;
-        let skills_manager = self.thread_manager.skills_manager();
+        let skills_service = self.thread_manager.skills_service();
         let plugins_manager = self.thread_manager.plugins_manager();
         let fs = self
             .thread_manager
@@ -523,7 +523,7 @@ impl CatalogRequestProcessor {
                 let config = &config;
                 let fs = fs.clone();
                 let plugins_manager = &plugins_manager;
-                let skills_manager = &skills_manager;
+                let skills_service = &skills_service;
                 async move {
                     let (cwd_abs, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
                         Ok(resolved) => resolved,
@@ -559,9 +559,10 @@ impl CatalogRequestProcessor {
                         config_layer_stack,
                         config.bundled_skills_enabled(),
                     );
-                    let outcome = skills_manager
-                        .skills_for_cwd(&skills_input, force_reload, fs)
+                    let snapshot = skills_service
+                        .snapshot_for_cwd(&skills_input, force_reload, fs)
                         .await;
+                    let outcome = snapshot.outcome();
                     let errors = errors_to_info(&outcome.errors);
                     let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
                     (
@@ -590,7 +591,7 @@ impl CatalogRequestProcessor {
         self.skills_watcher
             .register_runtime_extra_roots(&extra_roots);
         self.thread_manager
-            .skills_manager()
+            .skills_service()
             .set_extra_roots(extra_roots);
         self.outgoing
             .send_server_notification(ServerNotification::SkillsChanged(
@@ -645,20 +646,22 @@ impl CatalogRequestProcessor {
                 .await;
             let plugins_enabled =
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
-            let plugin_outcome = if plugins_enabled {
+            let plugin_hooks = if plugins_enabled {
                 let plugins_input = config.plugins_config_input();
-                plugins_manager
-                    .plugins_for_layer_stack(&config.config_layer_stack, &plugins_input)
-                    .await
+                let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+                codex_core_plugins::PluginHookLoadOutcome {
+                    hook_sources: plugin_outcome.effective_plugin_hook_sources(),
+                    hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
+                }
             } else {
-                PluginLoadOutcome::default()
+                codex_core_plugins::PluginHookLoadOutcome::default()
             };
             let hooks = codex_hooks::list_hooks(codex_hooks::HooksConfig {
                 feature_enabled: config.features.enabled(Feature::CodexHooks),
                 bypass_hook_trust: config.bypass_hook_trust,
                 config_layer_stack: Some(config.config_layer_stack),
-                plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
-                plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
+                plugin_hook_sources: plugin_hooks.hook_sources,
+                plugin_hook_load_warnings: plugin_hooks.hook_load_warnings,
                 ..Default::default()
             });
             data.push(codex_app_server_protocol::HooksListEntry {
@@ -701,7 +704,7 @@ impl CatalogRequestProcessor {
             .await
             .map(|()| {
                 self.thread_manager.plugins_manager().clear_cache();
-                self.thread_manager.skills_manager().clear_cache();
+                self.thread_manager.skills_service().clear_cache();
                 SkillsConfigWriteResponse {
                     effective_enabled: enabled,
                 }

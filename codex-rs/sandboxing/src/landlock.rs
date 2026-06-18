@@ -47,7 +47,8 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
         "--permission-profile".to_string(),
         permission_profile_json,
     ];
-    if use_legacy_landlock {
+    // Proxy-only networking requires bubblewrap's isolated network namespace.
+    if use_legacy_landlock && !allow_network_for_proxy {
         linux_cmd.push("--use-legacy-landlock".to_string());
     }
     if allow_network_for_proxy {
@@ -83,7 +84,8 @@ fn create_linux_sandbox_command_args(
         "--command-cwd".to_string(),
         command_cwd,
     ];
-    if use_legacy_landlock {
+    // Proxy-only networking requires bubblewrap's isolated network namespace.
+    if use_legacy_landlock && !allow_network_for_proxy {
         linux_cmd.push("--use-legacy-landlock".to_string());
     }
     if allow_network_for_proxy {

@@ -7,7 +7,7 @@ use codex_protocol::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 pub(crate) struct RealtimeStartInstructions;
 
 impl ContextualUserFragment for RealtimeStartInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

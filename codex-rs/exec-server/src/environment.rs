@@ -2,10 +2,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use futures::FutureExt;
+use futures::future::BoxFuture;
+
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::HttpClient;
+use crate::NoiseChannelIdentity;
+use crate::NoiseRendezvousConnectProvider;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
@@ -18,10 +23,21 @@ use crate::environment_toml::environment_provider_from_codex_home;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
+use crate::protocol::EnvironmentInfo;
+use crate::protocol::ShellInfo;
+use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
+use codex_shell_command::shell_detect::DetectedShell;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
+pub const CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR: &str =
+    "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL";
+pub const CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR: &str =
+    "CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID";
+pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN";
+pub const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR: &str =
+    "CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID";
 
 /// Owns the execution/filesystem environments available to the Codex runtime.
 ///
@@ -90,6 +106,9 @@ impl EnvironmentManager {
         codex_home: impl AsRef<std::path::Path>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
+        if let Some(config) = noise_environment_config_from_env()? {
+            return Self::from_noise_environment_config(config, local_runtime_paths);
+        }
         let provider = environment_provider_from_codex_home(codex_home.as_ref())?;
         Self::from_snapshot(provider.snapshot().await?, local_runtime_paths)
     }
@@ -99,6 +118,9 @@ impl EnvironmentManager {
     pub async fn from_env(
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
+        if let Some(config) = noise_environment_config_from_env()? {
+            return Self::from_noise_environment_config(config, local_runtime_paths);
+        }
         let provider = DefaultEnvironmentProvider::from_env();
         Self::from_snapshot(provider.snapshot().await?, local_runtime_paths)
     }
@@ -112,6 +134,23 @@ impl EnvironmentManager {
             Ok(manager) => manager,
             Err(err) => panic!("default provider should create valid environments: {err}"),
         }
+    }
+
+    fn from_noise_environment_config(
+        config: NoiseRendezvousEnvironmentConfig,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Result<Self, ExecServerError> {
+        let manager = Self {
+            default_environment: Some(REMOTE_ENVIRONMENT_ID.to_string()),
+            environments: RwLock::new(HashMap::new()),
+            local_environment: None,
+            local_runtime_paths,
+        };
+        manager.upsert_noise_environment(
+            REMOTE_ENVIRONMENT_ID.to_string(),
+            config.connect_provider(),
+        )?;
+        Ok(manager)
     }
 
     /// Builds a test-only manager that keeps the provider default while also
@@ -276,6 +315,84 @@ impl EnvironmentManager {
             .insert(environment_id, Arc::new(environment));
         Ok(())
     }
+
+    /// Adds or replaces a named remote environment that connects through an
+    /// authenticated, end-to-end encrypted rendezvous stream.
+    ///
+    /// The provider is retained so every reconnect obtains fresh authorization.
+    /// This transport never falls back to the URL-only remote environment path.
+    pub fn upsert_noise_environment(
+        &self,
+        environment_id: String,
+        provider: Arc<dyn NoiseRendezvousConnectProvider>,
+    ) -> Result<(), ExecServerError> {
+        if environment_id.is_empty() {
+            return Err(ExecServerError::Protocol(
+                "environment id cannot be empty".to_string(),
+            ));
+        }
+        let identity = NoiseChannelIdentity::generate().map_err(|error| {
+            ExecServerError::Protocol(format!(
+                "failed to generate Noise harness identity: {error}"
+            ))
+        })?;
+        let environment = Environment::remote_with_transport(
+            ExecServerTransportParams::NoiseRendezvous { provider, identity },
+            self.local_runtime_paths.clone(),
+        );
+        self.environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(environment_id, Arc::new(environment));
+        Ok(())
+    }
+}
+
+fn noise_environment_config_from_env()
+-> Result<Option<NoiseRendezvousEnvironmentConfig>, ExecServerError> {
+    noise_environment_config_from_values(
+        optional_environment_value(CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR),
+        optional_environment_value(CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR),
+        optional_environment_value(CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR),
+        optional_environment_value(CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR),
+    )
+}
+
+fn noise_environment_config_from_values(
+    registry_url: Option<String>,
+    environment_id: Option<String>,
+    auth_token: Option<String>,
+    chatgpt_account_id: Option<String>,
+) -> Result<Option<NoiseRendezvousEnvironmentConfig>, ExecServerError> {
+    let (registry_url, environment_id, auth_token) =
+        match (registry_url, environment_id, auth_token) {
+            (None, None, None) => return Ok(None),
+            (Some(registry_url), Some(environment_id), Some(auth_token)) => {
+                (registry_url, environment_id, auth_token)
+            }
+            _ => {
+                return Err(ExecServerError::EnvironmentRegistryConfig(format!(
+                    "Noise environment requires {CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR}, \
+{CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR}, and \
+{CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR}"
+                )));
+            }
+        };
+
+    let config = NoiseRendezvousEnvironmentConfig::new(
+        registry_url,
+        environment_id,
+        auth_token,
+        chatgpt_account_id,
+    )?;
+    Ok(Some(config))
+}
+
+fn optional_environment_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// Concrete execution/filesystem environment selected for a session.
@@ -286,10 +403,40 @@ impl EnvironmentManager {
 pub struct Environment {
     exec_server_url: Option<String>,
     remote_transport: Option<ExecServerTransportParams>,
+    info_provider: Arc<dyn EnvironmentInfoProvider>,
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
     http_client: Arc<dyn HttpClient>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
+}
+
+/// Provides environment metadata from either a local environment or a remote exec-server.
+trait EnvironmentInfoProvider: Send + Sync {
+    fn info(&self) -> BoxFuture<'_, Result<EnvironmentInfo, ExecServerError>>;
+}
+
+struct LocalEnvironmentInfoProvider;
+
+impl EnvironmentInfoProvider for LocalEnvironmentInfoProvider {
+    fn info(&self) -> BoxFuture<'_, Result<EnvironmentInfo, ExecServerError>> {
+        std::future::ready(Ok(EnvironmentInfo::local())).boxed()
+    }
+}
+
+struct RemoteEnvironmentInfoProvider {
+    client: LazyRemoteExecServerClient,
+}
+
+impl RemoteEnvironmentInfoProvider {
+    fn new(client: LazyRemoteExecServerClient) -> Self {
+        Self { client }
+    }
+}
+
+impl EnvironmentInfoProvider for RemoteEnvironmentInfoProvider {
+    fn info(&self) -> BoxFuture<'_, Result<EnvironmentInfo, ExecServerError>> {
+        async move { self.client.environment_info().await }.boxed()
+    }
 }
 
 impl Environment {
@@ -298,6 +445,7 @@ impl Environment {
         Self {
             exec_server_url: None,
             remote_transport: None,
+            info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
             http_client: Arc::new(ReqwestHttpClient),
@@ -354,6 +502,7 @@ impl Environment {
         Self {
             exec_server_url: None,
             remote_transport: None,
+            info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
@@ -382,6 +531,7 @@ impl Environment {
                 websocket_url: exec_server_url,
                 ..
             } => Some(exec_server_url.clone()),
+            ExecServerTransportParams::NoiseRendezvous { .. } => None,
             ExecServerTransportParams::StdioCommand { .. } => None,
         };
         let client = LazyRemoteExecServerClient::new(remote_transport.clone());
@@ -392,6 +542,7 @@ impl Environment {
         Self {
             exec_server_url,
             remote_transport: Some(remote_transport),
+            info_provider: Arc::new(RemoteEnvironmentInfoProvider::new(client.clone())),
             exec_backend,
             filesystem,
             http_client: Arc::new(client),
@@ -412,6 +563,11 @@ impl Environment {
         self.local_runtime_paths.as_ref()
     }
 
+    /// Returns environment information from the selected execution/filesystem environment.
+    pub async fn info(&self) -> Result<EnvironmentInfo, ExecServerError> {
+        self.info_provider.info().await
+    }
+
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         Arc::clone(&self.exec_backend)
     }
@@ -425,6 +581,23 @@ impl Environment {
     }
 }
 
+impl EnvironmentInfo {
+    pub(crate) fn local() -> Self {
+        Self {
+            shell: codex_shell_command::shell_detect::default_user_shell().into(),
+        }
+    }
+}
+
+impl From<DetectedShell> for ShellInfo {
+    fn from(shell: DetectedShell) -> Self {
+        Self {
+            name: shell.name().to_string(),
+            path: shell.shell_path.to_string_lossy().into_owned(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -433,10 +606,12 @@ mod tests {
     use super::EnvironmentManager;
     use super::LOCAL_ENVIRONMENT_ID;
     use super::REMOTE_ENVIRONMENT_ID;
+    use super::noise_environment_config_from_values;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::environment_provider::EnvironmentDefault;
     use crate::environment_provider::EnvironmentProviderSnapshot;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
     fn test_runtime_paths() -> ExecServerRuntimePaths {
@@ -451,6 +626,35 @@ mod tests {
         assert!(manager.try_local_environment().is_none());
     }
 
+    #[test]
+    fn noise_environment_config_selects_remote_as_default() {
+        let config = noise_environment_config_from_values(
+            Some("http://registry.example/api".to_string()),
+            Some("environment-requested".to_string()),
+            Some("registry-token".to_string()),
+            Some("workspace-123".to_string()),
+        )
+        .expect("parse noise environment configuration")
+        .expect("noise environment configuration");
+
+        let manager = EnvironmentManager::from_noise_environment_config(
+            config, /*local_runtime_paths*/ None,
+        )
+        .expect("build environment manager");
+
+        assert_eq!(
+            manager.default_environment_id(),
+            Some(REMOTE_ENVIRONMENT_ID)
+        );
+        assert!(
+            manager
+                .default_environment()
+                .expect("remote environment")
+                .is_remote()
+        );
+        assert_local_environment_unavailable(&manager);
+    }
+
     #[tokio::test]
     async fn create_local_environment_does_not_connect() {
         let environment = Environment::create(/*exec_server_url*/ None, test_runtime_paths())
@@ -458,6 +662,7 @@ mod tests {
 
         assert_eq!(environment.exec_server_url(), None);
         assert!(!environment.is_remote());
+        assert!(environment.info().await.is_ok());
     }
 
     #[tokio::test]
@@ -800,7 +1005,8 @@ mod tests {
             .start(crate::ExecParams {
                 process_id: ProcessId::from("default-env-proc"),
                 argv: vec!["true".to_string()],
-                cwd: std::env::current_dir().expect("read current dir"),
+                cwd: PathUri::from_path(std::env::current_dir().expect("read current dir"))
+                    .expect("cwd URI"),
                 env_policy: None,
                 env: Default::default(),
                 tty: false,
@@ -820,6 +1026,7 @@ mod tests {
             std::env::current_exe().expect("current exe").as_path(),
         )
         .expect("absolute current exe");
+        let path = codex_utils_path_uri::PathUri::from_abs_path(&path);
         let sandbox = crate::FileSystemSandboxContext::from_permission_profile(
             codex_protocol::models::PermissionProfile::from_runtime_permissions(
                 &codex_protocol::permissions::FileSystemSandboxPolicy::restricted(Vec::new()),

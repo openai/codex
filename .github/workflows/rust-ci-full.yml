@@ -98,6 +98,9 @@ jobs:
     name: Argument comment lint - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
+    environment:
+      name: bazel
+      deployment: false
     strategy:
       fail-fast: false
       matrix:
@@ -109,8 +112,8 @@ jobs:
           - name: Windows
             runner: windows-x64
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -167,8 +170,6 @@ jobs:
       USE_SCCACHE: ${{ (startsWith(matrix.runner, 'windows') || (matrix.runner == 'macos-15-xlarge' && matrix.target == 'x86_64-apple-darwin')) && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
-      # In rust-ci, representative release-profile checks use thin LTO for faster feedback.
-      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.profile == 'release' && 'thin' || 'fat' }}
 
     strategy:
       fail-fast: false
@@ -184,38 +185,38 @@ jobs:
             target: x86_64-unknown-linux-musl
             profile: dev
             runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-x64
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
             runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: dev
             runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-arm64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
             runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-arm64
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
             runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-arm64
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
@@ -228,26 +229,26 @@ jobs:
             target: x86_64-unknown-linux-musl
             profile: release
             runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: release
             runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-arm64
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: release
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: release
             runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -478,8 +479,8 @@ jobs:
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
       runner: ubuntu-24.04
-      runner_group: codex-runners
-      runner_labels: codex-linux-x64
+      runner_group: ${{ github.event.repository.name }}-runners
+      runner_labels: ${{ github.event.repository.name }}-linux-x64
       target: x86_64-unknown-linux-gnu
       profile: ci-test
       artifact_id: linux-x64-remote
@@ -492,8 +493,8 @@ jobs:
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
       runner: ubuntu-24.04-arm
-      runner_group: codex-runners
-      runner_labels: codex-linux-arm64
+      runner_group: ${{ github.event.repository.name }}-runners
+      runner_labels: ${{ github.event.repository.name }}-linux-arm64
       target: aarch64-unknown-linux-gnu
       profile: ci-test
       artifact_id: linux-arm64
@@ -505,8 +506,8 @@ jobs:
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
       runner: windows-x64
-      runner_group: codex-runners
-      runner_labels: codex-windows-x64
+      runner_group: ${{ github.event.repository.name }}-runners
+      runner_labels: ${{ github.event.repository.name }}-windows-x64
       target: x86_64-pc-windows-msvc
       profile: ci-test
       artifact_id: windows-x64
@@ -518,11 +519,11 @@ jobs:
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
       runner: windows-arm64
-      runner_group: codex-runners
-      runner_labels: codex-windows-arm64
+      runner_group: ${{ github.event.repository.name }}-runners
+      runner_labels: ${{ github.event.repository.name }}-windows-arm64
       archive_runner: windows-x64
-      archive_runner_group: codex-runners
-      archive_runner_labels: codex-windows-x64
+      archive_runner_group: ${{ github.event.repository.name }}-runners
+      archive_runner_labels: ${{ github.event.repository.name }}-windows-x64
       target: aarch64-pc-windows-msvc
       profile: ci-test
       artifact_id: windows-arm64

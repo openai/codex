@@ -51,7 +51,9 @@ impl ChatWidget {
         self.turn_lifecycle.start(Instant::now());
         self.transcript.reset_turn_flags();
         self.adaptive_chunking.reset();
-        self.plan_stream_controller = None;
+        if self.plan_stream_controller.take().is_some() {
+            self.request_pending_usage_output_insertion_after_stream_shutdown();
+        }
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
         self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
@@ -59,9 +61,7 @@ impl ChatWidget {
         self.quit_shortcut_key = None;
         self.update_task_running_state();
         self.status_state.retry_status_header = None;
-        if self.active_hook_cell.take().is_some() {
-            self.bump_active_cell_revision();
-        }
+        self.clear_active_hook_cell();
         self.status_state.pending_status_indicator_restore = false;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
@@ -89,9 +89,9 @@ impl ChatWidget {
         // source only when no earlier item-level event (AgentMessageItem, plan
         // commit, review output) already recorded markdown for this turn. This
         // prevents the final summary from overwriting a more specific source.
-        let sanitized_last_agent_message = last_agent_message
-            .as_deref()
-            .map(|message| parse_assistant_markdown(message).visible_markdown);
+        let sanitized_last_agent_message = last_agent_message.as_deref().map(|message| {
+            parse_assistant_markdown(message, self.config.cwd.as_path()).visible_markdown
+        });
         if let Some(message) = sanitized_last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
@@ -124,9 +124,11 @@ impl ChatWidget {
                 self.add_boxed_history(cell);
             }
             if let Some(source) = source {
+                self.note_stream_consolidation_queued();
                 self.app_event_tx
                     .send(AppEvent::ConsolidateProposedPlan(source));
             }
+            self.request_pending_usage_output_insertion_after_stream_shutdown();
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
@@ -162,6 +164,7 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.status_state.pending_status_indicator_restore = false;
         self.input_queue.user_turn_pending_start = false;
+        self.clear_active_hook_cell();
         self.turn_lifecycle.finish();
         self.update_task_running_state();
         self.running_commands.clear();
@@ -302,9 +305,7 @@ impl ChatWidget {
         // Turn-scoped hook rows are transient live state; once the turn is over,
         // do not leave an orphaned running row behind if no matching completion
         // event arrived before cancellation.
-        if self.active_hook_cell.take().is_some() {
-            self.bump_active_cell_revision();
-        }
+        self.clear_active_hook_cell();
         // Reset running state and clear streaming buffers.
         self.input_queue.user_turn_pending_start = false;
         self.turn_lifecycle.finish();
@@ -316,6 +317,7 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
+        self.request_pending_usage_output_insertion_after_stream_shutdown();
         self.status_state.pending_status_indicator_restore = false;
         self.clear_cancel_edit();
         self.request_status_line_branch_refresh();
@@ -364,8 +366,9 @@ impl ChatWidget {
     }
 
     pub(super) fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
+        let usage_limit_error = matches!(error_kind, RateLimitErrorKind::UsageLimit);
         let rate_limit_reached_type = self.codex_rate_limit_reached_type.map(|kind| {
-            if matches!(error_kind, RateLimitErrorKind::UsageLimit) {
+            if usage_limit_error {
                 match kind {
                     RateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
                         RateLimitReachedType::WorkspaceOwnerUsageLimitReached
@@ -380,7 +383,6 @@ impl ChatWidget {
             }
         });
         self.codex_rate_limit_reached_type = rate_limit_reached_type;
-
         match rate_limit_reached_type {
             Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => {
                 self.on_error(

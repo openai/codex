@@ -57,7 +57,6 @@ fn barrier_map() -> &'static tokio::sync::Mutex<HashMap<String, BarrierState>> {
     BARRIERS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for TestSyncHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("test_sync_tool")
@@ -71,7 +70,13 @@ impl ToolExecutor<ToolInvocation> for TestSyncHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl TestSyncHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {

@@ -21,6 +21,7 @@ use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
 use crate::unified_diff_from_chunks;
+use codex_utils_path_uri::PathUri;
 use std::str::Utf8Error;
 use tree_sitter::LanguageError;
 
@@ -185,7 +186,8 @@ pub async fn verify_apply_patch_args(
                 );
             }
             Hunk::DeleteFile { .. } => {
-                let content = match fs.read_file_text(&path, sandbox).await {
+                let path_uri = PathUri::from_abs_path(&path);
+                let content = match fs.read_file_text(&path_uri, sandbox).await {
                     Ok(content) => content,
                     Err(e) => {
                         return MaybeApplyPatchVerified::CorrectnessError(
@@ -228,7 +230,7 @@ pub async fn verify_apply_patch_args(
     MaybeApplyPatchVerified::Body(ApplyPatchAction {
         changes,
         patch,
-        cwd: effective_cwd,
+        cwd: effective_cwd.into(),
     })
 }
 
@@ -809,7 +811,9 @@ PATCH"#,
                     },
                 )]),
                 patch: argv[1].clone(),
-                cwd: AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+                cwd: AbsolutePathBuf::from_absolute_path(session_dir.path())
+                    .unwrap()
+                    .into(),
             })
         );
     }
@@ -849,7 +853,10 @@ PATCH"#,
             other => panic!("expected verified body, got {other:?}"),
         };
 
-        assert_eq!(action.cwd.as_path(), worktree_dir.as_path());
+        assert_eq!(
+            action.cwd.to_abs_path().unwrap().as_path(),
+            worktree_dir.as_path()
+        );
 
         let source_path = worktree_dir.join(source_name);
         let change = action

@@ -79,7 +79,7 @@ impl ChatWidget {
         let default_model = session.model.clone();
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(default_model.clone()),
-            Some(session.reasoning_effort),
+            Some(session.reasoning_effort.clone()),
             /*developer_instructions*/ None,
         );
         match session.collaboration_mode.as_deref() {
@@ -93,7 +93,7 @@ impl ChatWidget {
                     Some(&default_model),
                 );
                 if let Some(mask) = self.active_collaboration_mask.as_mut() {
-                    mask.reasoning_effort = Some(session.reasoning_effort);
+                    mask.reasoning_effort = Some(session.reasoning_effort.clone());
                 }
                 self.update_collaboration_mode_indicator();
                 self.refresh_plan_mode_nudge();

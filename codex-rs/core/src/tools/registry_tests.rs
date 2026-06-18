@@ -5,7 +5,6 @@ struct TestHandler {
     tool_name: codex_tools::ToolName,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for TestHandler {
     fn tool_name(&self) -> codex_tools::ToolName {
         self.tool_name.clone()
@@ -15,13 +14,15 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
         test_spec(&self.tool_name)
     }
 
-    async fn handle(
-        &self,
-        _invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        Ok(Box::new(
-            crate::tools::context::FunctionToolOutput::from_text("ok".to_string(), Some(true)),
-        ))
+    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async {
+            Ok(
+                Box::new(crate::tools::context::FunctionToolOutput::from_text(
+                    "ok".to_string(),
+                    Some(true),
+                )) as Box<dyn crate::tools::context::ToolOutput>,
+            )
+        })
     }
 }
 
@@ -38,7 +39,6 @@ struct LifecycleTestHandler {
     result: LifecycleTestResult,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for LifecycleTestHandler {
     fn tool_name(&self) -> codex_tools::ToolName {
         self.tool_name.clone()
@@ -48,9 +48,14 @@ impl ToolExecutor<ToolInvocation> for LifecycleTestHandler {
         test_spec(&self.tool_name)
     }
 
-    async fn handle(
+    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call())
+    }
+}
+
+impl LifecycleTestHandler {
+    async fn handle_call(
         &self,
-        _invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         match self.result.clone() {
             LifecycleTestResult::Ok { success } => Ok(Box::new(
@@ -58,7 +63,8 @@ impl ToolExecutor<ToolInvocation> for LifecycleTestHandler {
                     "ok".to_string(),
                     Some(success),
                 ),
-            )),
+            )
+                as Box<dyn crate::tools::context::ToolOutput>),
             LifecycleTestResult::Err => Err(FunctionCallError::RespondToModel(
                 "handler failed".to_string(),
             )),

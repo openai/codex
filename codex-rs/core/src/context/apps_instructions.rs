@@ -18,7 +18,7 @@ impl AppsInstructions {
 }
 
 impl ContextualUserFragment for AppsInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

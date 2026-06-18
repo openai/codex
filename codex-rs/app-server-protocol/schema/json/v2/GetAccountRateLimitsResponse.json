@@ -49,6 +49,18 @@
       ],
       "type": "string"
     },
+    "RateLimitResetCreditsSummary": {
+      "properties": {
+        "availableCount": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "availableCount"
+      ],
+      "type": "object"
+    },
     "RateLimitSnapshot": {
       "properties": {
         "credits": {
@@ -179,6 +191,16 @@
     }
   },
   "properties": {
+    "rateLimitResetCredits": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RateLimitResetCreditsSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "rateLimits": {
       "allOf": [
         {

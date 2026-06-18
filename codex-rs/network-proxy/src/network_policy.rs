@@ -3,10 +3,10 @@ use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
 use crate::state::NetworkProxyState;
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 const AUDIT_TARGET: &str = "codex_otel.network_proxy";
@@ -79,6 +79,7 @@ pub struct NetworkPolicyRequest {
     pub protocol: NetworkProtocol,
     pub host: String,
     pub port: u16,
+    pub environment_id: Option<String>,
     pub client_addr: Option<String>,
     pub method: Option<String>,
     pub command: Option<String>,
@@ -89,6 +90,7 @@ pub struct NetworkPolicyRequestArgs {
     pub protocol: NetworkProtocol,
     pub host: String,
     pub port: u16,
+    pub environment_id: Option<String>,
     pub client_addr: Option<String>,
     pub method: Option<String>,
     pub command: Option<String>,
@@ -101,6 +103,7 @@ impl NetworkPolicyRequest {
             protocol,
             host,
             port,
+            environment_id,
             client_addr,
             method,
             command,
@@ -110,6 +113,7 @@ impl NetworkPolicyRequest {
             protocol,
             host,
             port,
+            environment_id,
             client_addr,
             method,
             command,
@@ -263,26 +267,26 @@ fn audit_timestamp() -> String {
 /// If `command` or `exec_policy_hint` is provided, callers can map exec-policy
 /// approvals to network access (e.g., allow all requests for commands matching
 /// approved prefixes like `curl *`).
-#[async_trait]
 pub trait NetworkPolicyDecider: Send + Sync + 'static {
-    async fn decide(&self, req: NetworkPolicyRequest) -> NetworkDecision;
+    fn decide(&self, req: NetworkPolicyRequest) -> NetworkPolicyDeciderFuture<'_>;
 }
 
-#[async_trait]
+pub type NetworkPolicyDeciderFuture<'a> =
+    Pin<Box<dyn Future<Output = NetworkDecision> + Send + 'a>>;
+
 impl<D: NetworkPolicyDecider + ?Sized> NetworkPolicyDecider for Arc<D> {
-    async fn decide(&self, req: NetworkPolicyRequest) -> NetworkDecision {
-        (**self).decide(req).await
+    fn decide(&self, req: NetworkPolicyRequest) -> NetworkPolicyDeciderFuture<'_> {
+        Box::pin(async move { (**self).decide(req).await })
     }
 }
 
-#[async_trait]
 impl<F, Fut> NetworkPolicyDecider for F
 where
     F: Fn(NetworkPolicyRequest) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = NetworkDecision> + Send,
+    Fut: Future<Output = NetworkDecision> + Send + 'static,
 {
-    async fn decide(&self, req: NetworkPolicyRequest) -> NetworkDecision {
-        (self)(req).await
+    fn decide(&self, req: NetworkPolicyRequest) -> NetworkPolicyDeciderFuture<'_> {
+        Box::pin((self)(req))
     }
 }
 
@@ -541,6 +545,7 @@ mod tests {
     use crate::reasons::REASON_NOT_ALLOWED;
     use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
     use crate::runtime::ConfigReloader;
+    use crate::runtime::ConfigReloaderFuture;
     use crate::runtime::ConfigState;
     use crate::runtime::NetworkProxyAuditMetadata;
     use crate::state::NetworkProxyConstraints;
@@ -560,14 +565,13 @@ mod tests {
         state: ConfigState,
     }
 
-    #[async_trait]
     impl ConfigReloader for StaticReloader {
-        async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
-            Ok(None)
+        fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+            Box::pin(async { Ok(None) })
         }
 
-        async fn reload_now(&self) -> anyhow::Result<ConfigState> {
-            Ok(self.state.clone())
+        fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+            Box::pin(async { Ok(self.state.clone()) })
         }
 
         fn source_label(&self) -> String {
@@ -625,6 +629,7 @@ mod tests {
             protocol: NetworkProtocol::Http,
             host: "example.com".to_string(),
             port: 80,
+            environment_id: None,
             client_addr: None,
             method: None,
             command: None,
@@ -686,6 +691,7 @@ mod tests {
             protocol: NetworkProtocol::Http,
             host: "blocked.com".to_string(),
             port: 80,
+            environment_id: None,
             client_addr: Some("127.0.0.1:1234".to_string()),
             method: Some("GET".to_string()),
             command: None,
@@ -729,6 +735,7 @@ mod tests {
             protocol: NetworkProtocol::Http,
             host: "example.com".to_string(),
             port: 80,
+            environment_id: None,
             client_addr: None,
             method: Some("GET".to_string()),
             command: None,
@@ -779,6 +786,7 @@ mod tests {
             protocol: NetworkProtocol::Http,
             host: "example.com".to_string(),
             port: 80,
+            environment_id: None,
             client_addr: None,
             method: Some("GET".to_string()),
             command: None,
@@ -865,6 +873,7 @@ mod tests {
             protocol: NetworkProtocol::Http,
             host: "127.0.0.1".to_string(),
             port: 80,
+            environment_id: None,
             client_addr: None,
             method: Some("GET".to_string()),
             command: None,

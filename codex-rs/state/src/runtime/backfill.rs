@@ -110,9 +110,11 @@ WHERE id = 1
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
+    use super::base_sqlite_options;
     use super::test_support::unique_temp_dir;
     use chrono::Utc;
     use pretty_assertions::assert_eq;
+    use sqlx::Connection;
 
     #[tokio::test]
     async fn backfill_state_persists_progress_and_completion() {
@@ -163,6 +165,61 @@ mod tests {
             Some("sessions/2026/01/28/rollout-b.jsonl".to_string())
         );
         assert!(completed.last_success_at.is_some());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn get_backfill_state_succeeds_while_another_connection_holds_writer_slot() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+        let mut write_connection = sqlx::SqliteConnection::connect_with(&base_sqlite_options(
+            &crate::state_db_path(codex_home.as_path()),
+        ))
+        .await
+        .expect("open write connection");
+        let write_transaction = write_connection
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .expect("acquire write lock");
+
+        let state = runtime
+            .get_backfill_state()
+            .await
+            .expect("get backfill state");
+        assert_eq!(state, crate::BackfillState::default());
+
+        write_transaction
+            .rollback()
+            .await
+            .expect("release write lock");
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn get_backfill_state_repairs_a_missing_singleton_row() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+        sqlx::query("DELETE FROM backfill_state WHERE id = 1")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("delete backfill state row");
+
+        let state = runtime
+            .get_backfill_state()
+            .await
+            .expect("get repaired backfill state");
+        assert_eq!(state, crate::BackfillState::default());
+        let row_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM backfill_state WHERE id = 1")
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count repaired backfill state rows");
+        assert_eq!(row_count, 1);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

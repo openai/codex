@@ -30,7 +30,6 @@ struct TestHandler {
     tool_name: codex_tools::ToolName,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for TestHandler {
     fn tool_name(&self) -> codex_tools::ToolName {
         self.tool_name.clone()
@@ -47,14 +46,13 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
         })
     }
 
-    async fn handle(
-        &self,
-        _invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        Ok(Box::new(FunctionToolOutput::from_text(
-            "ok".to_string(),
-            Some(true),
-        )))
+    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async {
+            Ok(
+                Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+                    as Box<dyn crate::tools::context::ToolOutput>,
+            )
+        })
     }
 }
 
@@ -284,7 +282,7 @@ fn test_invocation_with_payload(
 }
 
 fn attach_test_trace(session: &mut Session, turn: &TurnContext, root: &Path) -> anyhow::Result<()> {
-    let thread_id = session.conversation_id;
+    let thread_id = session.thread_id;
     let rollout_thread_trace =
         codex_rollout_trace::ThreadTraceContext::start_root_in_root_for_test(
             root,

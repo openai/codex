@@ -7,6 +7,8 @@ use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::ThreadSource as CoreThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::Schema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -61,13 +63,39 @@ impl From<SessionSource> for CoreSessionSource {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case", export_to = "v2/")]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS)]
+#[serde(try_from = "String", into = "String")]
+#[ts(type = "string")]
+#[ts(export_to = "v2/")]
 pub enum ThreadSource {
     User,
     Subagent,
+    Feature(String),
     MemoryConsolidation,
+}
+
+impl JsonSchema for ThreadSource {
+    fn schema_name() -> String {
+        "ThreadSource".to_string()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        String::json_schema(generator)
+    }
+}
+
+impl TryFrom<String> for ThreadSource {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse::<CoreThreadSource>().map(Into::into)
+    }
+}
+
+impl From<ThreadSource> for String {
+    fn from(value: ThreadSource) -> Self {
+        CoreThreadSource::from(value).into()
+    }
 }
 
 impl From<CoreThreadSource> for ThreadSource {
@@ -75,6 +103,7 @@ impl From<CoreThreadSource> for ThreadSource {
         match value {
             CoreThreadSource::User => ThreadSource::User,
             CoreThreadSource::Subagent => ThreadSource::Subagent,
+            CoreThreadSource::Feature(feature) => ThreadSource::Feature(feature),
             CoreThreadSource::MemoryConsolidation => ThreadSource::MemoryConsolidation,
         }
     }
@@ -85,6 +114,7 @@ impl From<ThreadSource> for CoreThreadSource {
         match value {
             ThreadSource::User => CoreThreadSource::User,
             ThreadSource::Subagent => CoreThreadSource::Subagent,
+            ThreadSource::Feature(feature) => CoreThreadSource::Feature(feature),
             ThreadSource::MemoryConsolidation => CoreThreadSource::MemoryConsolidation,
         }
     }
@@ -122,6 +152,9 @@ pub struct Thread {
     /// Unix timestamp (in seconds) when the thread was last updated.
     #[ts(type = "number")]
     pub updated_at: i64,
+    /// Unix timestamp (in seconds) used for thread recency ordering.
+    #[ts(type = "number | null")]
+    pub recency_at: Option<i64>,
     /// Current runtime status for the thread.
     pub status: ThreadStatus,
     /// [UNSTABLE] Path to the thread on disk.

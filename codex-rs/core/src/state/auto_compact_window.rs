@@ -2,7 +2,6 @@ use codex_protocol::protocol::TokenUsage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AutoCompactWindowSnapshot {
-    pub(crate) ordinal: u64,
     pub(crate) prefill_input_tokens: Option<i64>,
 }
 
@@ -14,7 +13,8 @@ enum AutoCompactWindowPrefill {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct AutoCompactWindow {
-    ordinal: u64,
+    window_id: u64,
+    new_context_window_requested: bool,
     /// Absolute input-token baseline for the current compaction window.
     ///
     /// `body_after_prefix` subtracts this from later active-context usage. It is
@@ -26,7 +26,8 @@ pub(super) struct AutoCompactWindow {
 impl AutoCompactWindow {
     pub(super) fn new() -> Self {
         Self {
-            ordinal: 1,
+            window_id: 0,
+            new_context_window_requested: false,
             prefill_input_tokens: None,
         }
     }
@@ -35,9 +36,28 @@ impl AutoCompactWindow {
         self.prefill_input_tokens = None;
     }
 
-    pub(super) fn start_next(&mut self) {
-        self.ordinal = self.ordinal.saturating_add(1);
-        self.clear_prefill();
+    pub(super) fn window_id(&self) -> u64 {
+        self.window_id
+    }
+
+    pub(super) fn set_window_id(&mut self, window_id: u64) {
+        self.window_id = window_id;
+    }
+
+    pub(super) fn advance_window_id(&mut self) -> u64 {
+        self.window_id = self.window_id.saturating_add(1);
+        self.new_context_window_requested = false;
+        self.window_id
+    }
+
+    pub(super) fn request_new_context_window(&mut self) {
+        self.new_context_window_requested = true;
+    }
+
+    pub(super) fn take_new_context_window_request(&mut self) -> bool {
+        let requested = self.new_context_window_requested;
+        self.new_context_window_requested = false;
+        requested
     }
 
     /// Records the request-input side of the first server usage sample. The
@@ -74,7 +94,6 @@ impl AutoCompactWindow {
             None => None,
         };
         AutoCompactWindowSnapshot {
-            ordinal: self.ordinal,
             prefill_input_tokens,
         }
     }
@@ -89,10 +108,20 @@ mod tests {
     fn tracks_prefill_and_window_boundaries() {
         let mut window = AutoCompactWindow::new();
 
+        assert_eq!(window.window_id(), 0);
+        window.set_window_id(/*window_id*/ 3);
+        assert_eq!(window.window_id(), 3);
+        window.request_new_context_window();
+        assert!(window.take_new_context_window_request());
+        assert!(!window.take_new_context_window_request());
+        window.request_new_context_window();
+        assert_eq!(window.advance_window_id(), 4);
+        assert_eq!(window.window_id(), 4);
+        assert!(!window.take_new_context_window_request());
+
         assert_eq!(
             window.snapshot(),
             AutoCompactWindowSnapshot {
-                ordinal: 1,
                 prefill_input_tokens: None,
             }
         );
@@ -101,7 +130,6 @@ mod tests {
         assert_eq!(
             window.snapshot(),
             AutoCompactWindowSnapshot {
-                ordinal: 1,
                 prefill_input_tokens: Some(150),
             }
         );
@@ -114,7 +142,6 @@ mod tests {
         assert_eq!(
             window.snapshot(),
             AutoCompactWindowSnapshot {
-                ordinal: 1,
                 prefill_input_tokens: Some(120),
             }
         );
@@ -128,17 +155,7 @@ mod tests {
         assert_eq!(
             window.snapshot(),
             AutoCompactWindowSnapshot {
-                ordinal: 1,
                 prefill_input_tokens: Some(120),
-            }
-        );
-
-        window.start_next();
-        assert_eq!(
-            window.snapshot(),
-            AutoCompactWindowSnapshot {
-                ordinal: 2,
-                prefill_input_tokens: None,
             }
         );
     }

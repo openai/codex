@@ -5,7 +5,7 @@ use super::ContextualUserFragment;
 pub(crate) struct LegacyModelMismatchWarning;
 
 impl ContextualUserFragment for LegacyModelMismatchWarning {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 

@@ -68,7 +68,7 @@ Each response yields:
 - `data` - ordered list of models. A model includes:
   - `id`, `model`, `displayName`, `description`
   - `supportedReasoningEfforts` - array of objects with:
-    - `reasoningEffort` - one of `none|minimal|low|medium|high|xhigh`
+    - `reasoningEffort` - a string value advertised by the model; common values are `none|minimal|low|medium|high|xhigh`
     - `description` - human-friendly label for the effort
   - `defaultReasoningEffort` - suggested effort for the UI
   - `inputModalities` - accepted input types for the model

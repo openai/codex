@@ -20,6 +20,7 @@ codex-execpolicy = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-image = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-string = { workspace = true }
 encoding_rs = { workspace = true }
 globset = { workspace = true }
@@ -59,4 +60,5 @@ tempfile = { workspace = true }
 [package.metadata.cargo-shear]
 # Required because:
 # `icu_provider`: contains a required `sync` feature for `icu_decimal`
-ignored = ["icu_provider"]
+# `strum`: is referenced by generated `EnumIter` derive implementations
+ignored = ["icu_provider", "strum"]

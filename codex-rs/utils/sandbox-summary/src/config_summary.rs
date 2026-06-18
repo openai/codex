@@ -25,7 +25,8 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
     if config.model_provider.wire_api == WireApi::Responses {
         let reasoning_effort = config
             .model_reasoning_effort
-            .map(|effort| effort.to_string());
+            .as_ref()
+            .map(std::string::ToString::to_string);
         entries.push((
             "reasoning effort",
             reasoning_effort.unwrap_or_else(|| "none".to_string()),

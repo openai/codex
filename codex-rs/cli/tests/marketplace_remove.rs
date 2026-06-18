@@ -2,7 +2,10 @@ use anyhow::Result;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
 use codex_core_plugins::installed_marketplaces::marketplace_install_root;
+use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use predicates::str::contains;
+use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -51,6 +54,32 @@ async fn marketplace_remove_deletes_config_and_installed_root() -> Result<()> {
             .join("debug")
             .exists()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_remove_json_prints_remove_outcome() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    record_user_marketplace(codex_home.path(), "debug", &configured_marketplace_update())?;
+    write_installed_marketplace(codex_home.path(), "debug")?;
+    let installed_root = marketplace_install_root(codex_home.path()).join("debug");
+    let normalized_installed_root = canonicalize_existing_preserving_symlinks(&installed_root)?;
+
+    let assert = codex_command(codex_home.path())?
+        .args(["plugin", "marketplace", "remove", "debug", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "marketplaceName": "debug",
+            "installedRoot": normalized_installed_root.display().to_string(),
+        })
+    );
+
     Ok(())
 }
 

@@ -36,6 +36,37 @@ pub enum AuthMode {
     #[ts(rename = "agentIdentity")]
     #[strum(serialize = "agentIdentity")]
     AgentIdentity,
+    /// Programmatic Codex auth backed by a personal access token.
+    #[serde(rename = "personalAccessToken")]
+    #[ts(rename = "personalAccessToken")]
+    #[strum(serialize = "personalAccessToken")]
+    PersonalAccessToken,
+    /// Amazon Bedrock bearer token managed by Codex.
+    #[serde(rename = "bedrockApiKey")]
+    #[ts(rename = "bedrockApiKey")]
+    #[strum(serialize = "bedrockApiKey")]
+    BedrockApiKey,
+}
+
+impl AuthMode {
+    /// Returns whether this mode represents an authenticated human ChatGPT account.
+    pub fn has_chatgpt_account(self) -> bool {
+        match self {
+            Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
+            Self::ApiKey | Self::AgentIdentity | Self::BedrockApiKey => false,
+        }
+    }
+
+    /// Returns whether this mode is backed by Codex services rather than a direct model API.
+    pub fn uses_codex_backend(self) -> bool {
+        match self {
+            Self::Chatgpt
+            | Self::ChatgptAuthTokens
+            | Self::AgentIdentity
+            | Self::PersonalAccessToken => true,
+            Self::ApiKey | Self::BedrockApiKey => false,
+        }
+    }
 }
 
 macro_rules! experimental_reason_expr {
@@ -465,6 +496,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadArchiveResponse,
     },
+    ThreadDelete => "thread/delete" {
+        params: v2::ThreadDeleteParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadDeleteResponse,
+    },
     ThreadUnsubscribe => "thread/unsubscribe" {
         params: v2::ThreadUnsubscribeParams,
         serialization: thread_id(params.thread_id),
@@ -559,6 +595,18 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadBackgroundTerminalsCleanResponse,
     },
+    #[experimental("thread/backgroundTerminals/list")]
+    ThreadBackgroundTerminalsList => "thread/backgroundTerminals/list" {
+        params: v2::ThreadBackgroundTerminalsListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadBackgroundTerminalsListResponse,
+    },
+    #[experimental("thread/backgroundTerminals/terminate")]
+    ThreadBackgroundTerminalsTerminate => "thread/backgroundTerminals/terminate" {
+        params: v2::ThreadBackgroundTerminalsTerminateParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadBackgroundTerminalsTerminateResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         serialization: thread_id(params.thread_id),
@@ -566,6 +614,7 @@ client_request_definitions! {
     },
     ThreadList => "thread/list" {
         params: v2::ThreadListParams,
+        inspect_params: true,
         serialization: None,
         response: v2::ThreadListResponse,
     },
@@ -782,6 +831,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadRealtimeAppendTextResponse,
     },
+    #[experimental("thread/realtime/appendSpeech")]
+    ThreadRealtimeAppendSpeech => "thread/realtime/appendSpeech" {
+        params: v2::ThreadRealtimeAppendSpeechParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadRealtimeAppendSpeechResponse,
+    },
     #[experimental("thread/realtime/stop")]
     ThreadRealtimeStop => "thread/realtime/stop" {
         params: v2::ThreadRealtimeStopParams,
@@ -827,13 +882,13 @@ client_request_definitions! {
     },
     #[experimental("remoteControl/enable")]
     RemoteControlEnable => "remoteControl/enable" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[serde(skip_serializing_if = "Option::is_none")] v2::NullableRemoteControlEnableParams,
         serialization: global("remote-control"),
         response: v2::RemoteControlEnableResponse,
     },
     #[experimental("remoteControl/disable")]
     RemoteControlDisable => "remoteControl/disable" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[serde(skip_serializing_if = "Option::is_none")] v2::NullableRemoteControlDisableParams,
         serialization: global("remote-control"),
         response: v2::RemoteControlDisableResponse,
     },
@@ -848,6 +903,12 @@ client_request_definitions! {
         params: v2::RemoteControlPairingStartParams,
         serialization: global("remote-control-pairing"),
         response: v2::RemoteControlPairingStartResponse,
+    },
+    #[experimental("remoteControl/pairing/status")]
+    RemoteControlPairingStatus => "remoteControl/pairing/status" {
+        params: v2::RemoteControlPairingStatusParams,
+        serialization: global_shared_read("remote-control-pairing"),
+        response: v2::RemoteControlPairingStatusResponse,
     },
     #[experimental("remoteControl/client/list")]
     RemoteControlClientsList => "remoteControl/client/list" {
@@ -949,6 +1010,18 @@ client_request_definitions! {
         response: v2::GetAccountRateLimitsResponse,
     },
 
+    ConsumeAccountRateLimitResetCredit => "account/rateLimitResetCredit/consume" {
+        params: v2::ConsumeAccountRateLimitResetCreditParams,
+        serialization: global("account-auth"),
+        response: v2::ConsumeAccountRateLimitResetCreditResponse,
+    },
+
+    GetAccountTokenUsage => "account/usage/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
+        response: v2::GetAccountTokenUsageResponse,
+    },
+
     SendAddCreditsNudgeEmail => "account/sendAddCreditsNudgeEmail" {
         params: v2::SendAddCreditsNudgeEmailParams,
         serialization: global("account-auth"),
@@ -1029,6 +1102,11 @@ client_request_definitions! {
         params: v2::ExternalAgentConfigImportParams,
         serialization: global("config"),
         response: v2::ExternalAgentConfigImportResponse,
+    },
+    ExternalAgentConfigImportHistoriesRead => "externalAgentConfig/import/readHistories" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global_shared_read("config"),
+        response: v2::ExternalAgentConfigImportHistoriesReadResponse,
     },
     ConfigValueWrite => "config/value/write" {
         params: v2::ConfigValueWriteParams,
@@ -1495,6 +1573,7 @@ server_notification_definitions! {
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
+    ThreadDeleted => "thread/deleted" (v2::ThreadDeletedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
@@ -1540,6 +1619,7 @@ server_notification_definitions! {
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
     RemoteControlStatusChanged => "remoteControl/status/changed" (v2::RemoteControlStatusChangedNotification),
+    ExternalAgentConfigImportProgress => "externalAgentConfig/import/progress" (v2::ExternalAgentConfigImportProgressNotification),
     ExternalAgentConfigImportCompleted => "externalAgentConfig/import/completed" (v2::ExternalAgentConfigImportCompletedNotification),
     FsChanged => "fs/changed" (v2::FsChangedNotification),
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
@@ -1549,6 +1629,8 @@ server_notification_definitions! {
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
     ModelVerification => "model/verification" (v2::ModelVerificationNotification),
+    #[experimental("turn/moderationMetadata")]
+    TurnModerationMetadata => "turn/moderationMetadata" (v2::TurnModerationMetadataNotification),
     Warning => "warning" (v2::WarningNotification),
     GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
@@ -1592,9 +1674,11 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use codex_protocol::ThreadId;
+    use codex_protocol::account::AmazonBedrockCredentialSource;
     use codex_protocol::account::PlanType;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::RealtimeConversationArchitecture;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
     use codex_protocol::protocol::RealtimeVoice;
@@ -2006,6 +2090,19 @@ mod tests {
                 "remote-control-pairing"
             ))
         );
+        let remote_control_pairing_status = ClientRequest::RemoteControlPairingStatus {
+            request_id: request_id(),
+            params: v2::RemoteControlPairingStatusParams {
+                pairing_code: Some("pairing-code".to_string()),
+                manual_pairing_code: None,
+            },
+        };
+        assert_eq!(
+            remote_control_pairing_status.serialization_scope(),
+            Some(ClientRequestSerializationScope::GlobalSharedRead(
+                "remote-control-pairing"
+            ))
+        );
         let remote_control_clients_list = ClientRequest::RemoteControlClientsList {
             request_id: request_id(),
             params: v2::RemoteControlClientsListParams::default(),
@@ -2053,7 +2150,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_initialize_with_opt_out_notification_methods() -> Result<()> {
+    fn serialize_initialize_capabilities() -> Result<()> {
         let request = ClientRequest::Initialize {
             request_id: RequestId::Integer(42),
             params: v1::InitializeParams {
@@ -2065,6 +2162,7 @@ mod tests {
                 capabilities: Some(v1::InitializeCapabilities {
                     experimental_api: true,
                     request_attestation: true,
+                    mcp_server_openai_form_elicitation: true,
                     opt_out_notification_methods: Some(vec![
                         "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
@@ -2086,6 +2184,7 @@ mod tests {
                     "capabilities": {
                         "experimentalApi": true,
                         "requestAttestation": true,
+                        "mcpServerOpenaiFormElicitation": true,
                         "optOutNotificationMethods": [
                             "thread/started",
                             "item/agentMessage/delta"
@@ -2099,7 +2198,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_initialize_with_opt_out_notification_methods() -> Result<()> {
+    fn deserialize_initialize_capabilities() -> Result<()> {
         let request: ClientRequest = serde_json::from_value(json!({
             "method": "initialize",
             "id": 42,
@@ -2112,6 +2211,7 @@ mod tests {
                 "capabilities": {
                     "experimentalApi": true,
                     "requestAttestation": true,
+                    "mcpServerOpenaiFormElicitation": true,
                     "optOutNotificationMethods": [
                         "thread/started",
                         "item/agentMessage/delta"
@@ -2133,6 +2233,7 @@ mod tests {
                     capabilities: Some(v1::InitializeCapabilities {
                         experimental_api: true,
                         request_attestation: true,
+                        mcp_server_openai_form_elicitation: true,
                         opt_out_notification_methods: Some(vec![
                             "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
@@ -2371,6 +2472,24 @@ mod tests {
     }
 
     #[test]
+    fn serialize_get_account_token_usage() -> Result<()> {
+        let request = ClientRequest::GetAccountTokenUsage {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        assert_eq!(request.id(), &RequestId::Integer(1));
+        assert_eq!(request.method(), "account/usage/read");
+        assert_eq!(
+            json!({
+                "method": "account/usage/read",
+                "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_client_response() -> Result<()> {
         let cwd = absolute_path("/tmp");
         let response = ClientResponse::ThreadStart {
@@ -2386,6 +2505,7 @@ mod tests {
                     model_provider: "openai".to_string(),
                     created_at: 1,
                     updated_at: 2,
+                    recency_at: Some(3),
                     status: v2::ThreadStatus::Idle,
                     path: None,
                     cwd: cwd.clone(),
@@ -2429,6 +2549,7 @@ mod tests {
                         "modelProvider": "openai",
                         "createdAt": 1,
                         "updatedAt": 2,
+                        "recencyAt": 3,
                         "status": {
                             "type": "idle"
                         },
@@ -2663,6 +2784,41 @@ mod tests {
             serde_json::to_value(&chatgpt)?,
         );
 
+        let codex_managed_bedrock = v2::Account::AmazonBedrock {
+            credential_source: AmazonBedrockCredentialSource::CodexManaged,
+        };
+        assert_eq!(
+            json!({
+                "type": "amazonBedrock",
+                "credentialSource": "codexManaged",
+            }),
+            serde_json::to_value(&codex_managed_bedrock)?,
+        );
+
+        let aws_managed_bedrock = v2::Account::AmazonBedrock {
+            credential_source: AmazonBedrockCredentialSource::AwsManaged,
+        };
+        assert_eq!(
+            json!({
+                "type": "amazonBedrock",
+                "credentialSource": "awsManaged",
+            }),
+            serde_json::to_value(&aws_managed_bedrock)?,
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn account_defaults_legacy_bedrock_credential_source() -> Result<()> {
+        assert_eq!(
+            v2::Account::AmazonBedrock {
+                credential_source: AmazonBedrockCredentialSource::AwsManaged,
+            },
+            serde_json::from_value(json!({
+                "type": "amazonBedrock",
+            }))?,
+        );
         Ok(())
     }
 
@@ -2877,15 +3033,71 @@ mod tests {
     }
 
     #[test]
+    fn serialize_thread_background_terminals_list() -> Result<()> {
+        let request = ClientRequest::ThreadBackgroundTerminalsList {
+            request_id: RequestId::Integer(8),
+            params: v2::ThreadBackgroundTerminalsListParams {
+                thread_id: "thr_123".to_string(),
+                cursor: None,
+                limit: None,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/backgroundTerminals/list",
+                "id": 8,
+                "params": {
+                    "threadId": "thr_123",
+                    "cursor": null,
+                    "limit": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_background_terminals_terminate() -> Result<()> {
+        let request = ClientRequest::ThreadBackgroundTerminalsTerminate {
+            request_id: RequestId::Integer(8),
+            params: v2::ThreadBackgroundTerminalsTerminateParams {
+                thread_id: "thr_123".to_string(),
+                process_id: "42".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/backgroundTerminals/terminate",
+                "id": 8,
+                "params": {
+                    "threadId": "thr_123",
+                    "processId": "42"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_thread_realtime_start() -> Result<()> {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: Some(RealtimeConversationArchitecture::Avas),
+                client_managed_handoffs: Some(true),
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
+                codex_response_handoff_prefix: Some("silent context".to_string()),
                 thread_id: "thr_123".to_string(),
+                model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: Some(false),
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: Some("sess_456".to_string()),
                 transport: None,
+                version: Some(RealtimeConversationVersion::V1),
                 voice: Some(RealtimeVoice::Marin),
             },
         };
@@ -2894,11 +3106,19 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": "avas",
                     "threadId": "thr_123",
+                    "clientManagedHandoffs": true,
+                    "codexResponsesAsItems": null,
+                    "codexResponseItemPrefix": null,
+                    "codexResponseHandoffPrefix": "silent context",
+                    "model": "realtime-treatment-model",
                     "outputModality": "audio",
+                    "includeStartupContext": false,
                     "prompt": "You are on a call",
                     "realtimeSessionId": "sess_456",
                     "transport": null,
+                    "version": "v1",
                     "voice": "marin"
                 }
             }),
@@ -2912,11 +3132,19 @@ mod tests {
         let default_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
+                client_managed_handoffs: None,
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
+                codex_response_handoff_prefix: None,
                 thread_id: "thr_123".to_string(),
+                model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: None,
                 prompt: None,
                 realtime_session_id: None,
                 transport: None,
+                version: None,
                 voice: None,
             },
         };
@@ -2925,10 +3153,18 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": null,
                     "threadId": "thr_123",
+                    "clientManagedHandoffs": null,
+                    "codexResponsesAsItems": null,
+                    "codexResponseItemPrefix": null,
+                    "codexResponseHandoffPrefix": null,
+                    "model": null,
                     "outputModality": "audio",
+                    "includeStartupContext": null,
                     "realtimeSessionId": null,
                     "transport": null,
+                    "version": null,
                     "voice": null
                 }
             }),
@@ -2938,11 +3174,19 @@ mod tests {
         let null_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
+                client_managed_handoffs: None,
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
+                codex_response_handoff_prefix: None,
                 thread_id: "thr_123".to_string(),
+                model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: None,
                 prompt: Some(None),
                 realtime_session_id: None,
                 transport: None,
+                version: None,
                 voice: None,
             },
         };
@@ -2951,11 +3195,19 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": null,
                     "threadId": "thr_123",
+                    "clientManagedHandoffs": null,
+                    "codexResponsesAsItems": null,
+                    "codexResponseItemPrefix": null,
+                    "codexResponseHandoffPrefix": null,
+                    "model": null,
                     "outputModality": "audio",
+                    "includeStartupContext": null,
                     "prompt": null,
                     "realtimeSessionId": null,
                     "transport": null,
+                    "version": null,
                     "voice": null
                 }
             }),
@@ -2995,6 +3247,29 @@ mod tests {
             null_prompt_request,
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_realtime_append_speech() -> Result<()> {
+        let request = ClientRequest::ThreadRealtimeAppendSpeech {
+            request_id: RequestId::Integer(10),
+            params: v2::ThreadRealtimeAppendSpeechParams {
+                thread_id: "thr_123".to_string(),
+                text: "Short voice update".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/appendSpeech",
+                "id": 10,
+                "params": {
+                    "threadId": "thr_123",
+                    "text": "Short voice update"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
         Ok(())
     }
 
@@ -3107,11 +3382,19 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
+                client_managed_handoffs: None,
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
+                codex_response_handoff_prefix: None,
                 thread_id: "thr_123".to_string(),
+                model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: None,
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: None,
                 transport: None,
+                version: None,
                 voice: None,
             },
         };
@@ -3223,6 +3506,21 @@ mod tests {
     }
 
     #[test]
+    fn turn_moderation_metadata_notification_is_marked_experimental() {
+        let notification =
+            ServerNotification::TurnModerationMetadata(v2::TurnModerationMetadataNotification {
+                thread_id: "thr_123".to_string(),
+                turn_id: "turn_123".to_string(),
+                metadata: json!({"presentation": "inline"}),
+            });
+
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&notification),
+            Some("turn/moderationMetadata")
+        );
+    }
+
+    #[test]
     fn thread_realtime_started_notification_is_marked_experimental() {
         let notification =
             ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
@@ -3260,6 +3558,7 @@ mod tests {
             item_id: "call_123".to_string(),
             started_at_ms: 0,
             approval_id: None,
+            environment_id: None,
             reason: None,
             network_approval_context: None,
             command: Some("cat file".to_string()),
@@ -3268,7 +3567,7 @@ mod tests {
             additional_permissions: Some(v2::AdditionalPermissionProfile {
                 network: None,
                 file_system: Some(v2::AdditionalFileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/allowed")]),
+                    read: Some(vec![absolute_path("/tmp/allowed").into()]),
                     write: None,
                     glob_scan_max_depth: None,
                     entries: None,

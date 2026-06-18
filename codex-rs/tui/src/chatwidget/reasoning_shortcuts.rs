@@ -8,15 +8,14 @@
 //! The shortcut state machine is deliberately narrow: it only handles key
 //! presses when no modal or popup owns input, it anchors unset reasoning to the
 //! current model preset's default, and it walks only efforts advertised by the
-//! active model. Unsupported current efforts are not normalized eagerly; the
-//! next shortcut moves to the nearest supported effort in the requested
-//! direction.
+//! active model. Unsupported efforts anchor to the model default, or the first
+//! advertised effort when the default is absent, before stepping through the
+//! advertised order.
 
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crossterm::event::KeyEvent;
-use strum::IntoEnumIterator;
 
 use super::ChatWidget;
 use crate::app_event::AppEvent;
@@ -30,8 +29,8 @@ pub(super) enum ReasoningShortcutDirection {
 }
 
 impl ReasoningShortcutDirection {
-    fn bound_message(self, effort: ReasoningEffortConfig) -> String {
-        let label = ChatWidget::reasoning_effort_label(effort).to_lowercase();
+    fn bound_message(self, effort: &ReasoningEffortConfig) -> String {
+        let label = ChatWidget::reasoning_effort_sentence_label(effort);
         match self {
             Self::Lower => format!("Reasoning is already at the lowest level ({label})."),
             Self::Raise => format!("Reasoning is already at the highest level ({label})."),
@@ -90,12 +89,23 @@ impl ChatWidget {
         };
 
         let choices = reasoning_choices(&preset);
-        let current_effort = self
+        let configured_effort = self
             .effective_reasoning_effort()
-            .unwrap_or(preset.default_reasoning_effort);
-        let Some(next_effort) = next_reasoning_effort(&choices, Some(current_effort), direction)
+            .unwrap_or_else(|| preset.default_reasoning_effort.clone());
+        let current_effort = if choices.contains(&configured_effort) {
+            configured_effort
+        } else if choices.contains(&preset.default_reasoning_effort) {
+            preset.default_reasoning_effort
+        } else {
+            choices
+                .first()
+                .cloned()
+                .unwrap_or(preset.default_reasoning_effort)
+        };
+        let Some(next_effort) =
+            next_reasoning_effort(&choices, Some(current_effort.clone()), direction)
         else {
-            self.add_info_message(direction.bound_message(current_effort), /*hint*/ None);
+            self.add_info_message(direction.bound_message(&current_effort), /*hint*/ None);
             return true;
         };
 
@@ -120,18 +130,13 @@ impl ChatWidget {
 }
 
 fn reasoning_choices(preset: &ModelPreset) -> Vec<ReasoningEffortConfig> {
-    let mut choices = Vec::new();
-    for effort in ReasoningEffortConfig::iter() {
-        if preset
-            .supported_reasoning_efforts
-            .iter()
-            .any(|option| option.effort == effort)
-        {
-            choices.push(effort);
-        }
-    }
+    let mut choices: Vec<ReasoningEffortConfig> = preset
+        .supported_reasoning_efforts
+        .iter()
+        .map(|option| option.effort.clone())
+        .collect();
     if choices.is_empty() {
-        choices.push(preset.default_reasoning_effort);
+        choices.push(preset.default_reasoning_effort.clone());
     }
     choices
 }
@@ -142,33 +147,17 @@ fn next_reasoning_effort(
     direction: ReasoningShortcutDirection,
 ) -> Option<ReasoningEffortConfig> {
     let current_effort = current_effort?;
-    if choices.is_empty() {
-        return None;
+    if let Some(current_index) = choices.iter().position(|choice| choice == &current_effort) {
+        return match direction {
+            ReasoningShortcutDirection::Lower => current_index
+                .checked_sub(1)
+                .and_then(|index| choices.get(index))
+                .cloned(),
+            ReasoningShortcutDirection::Raise => choices.get(current_index + 1).cloned(),
+        };
     }
 
-    let current_rank = effort_rank(current_effort);
-    match direction {
-        ReasoningShortcutDirection::Lower => choices
-            .iter()
-            .rev()
-            .copied()
-            .find(|choice| effort_rank(*choice) < current_rank),
-        ReasoningShortcutDirection::Raise => choices
-            .iter()
-            .copied()
-            .find(|choice| effort_rank(*choice) > current_rank),
-    }
-}
-
-fn effort_rank(effort: ReasoningEffortConfig) -> i32 {
-    match effort {
-        ReasoningEffortConfig::None => 0,
-        ReasoningEffortConfig::Minimal => 1,
-        ReasoningEffortConfig::Low => 2,
-        ReasoningEffortConfig::Medium => 3,
-        ReasoningEffortConfig::High => 4,
-        ReasoningEffortConfig::XHigh => 5,
-    }
+    None
 }
 
 #[cfg(test)]
@@ -214,24 +203,52 @@ mod tests {
     }
 
     #[test]
-    fn next_reasoning_effort_skips_to_supported_level_from_unsupported_current() {
+    fn next_reasoning_effort_does_not_infer_position_for_unsupported_current() {
         let choices = vec![ReasoningEffortConfig::Low, ReasoningEffortConfig::High];
 
         assert_eq!(
-            next_reasoning_effort(
-                &choices,
-                Some(ReasoningEffortConfig::Medium),
-                ReasoningShortcutDirection::Raise,
+            (
+                next_reasoning_effort(
+                    &choices,
+                    Some(ReasoningEffortConfig::Medium),
+                    ReasoningShortcutDirection::Raise,
+                ),
+                next_reasoning_effort(
+                    &choices,
+                    Some(ReasoningEffortConfig::Medium),
+                    ReasoningShortcutDirection::Lower,
+                ),
             ),
-            Some(ReasoningEffortConfig::High)
+            (None, None)
         );
+    }
+
+    #[test]
+    fn next_reasoning_effort_uses_advertised_order_for_custom_levels() {
+        let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
+        let choices = vec![
+            ReasoningEffortConfig::High,
+            ReasoningEffortConfig::Low,
+            custom_effort.clone(),
+        ];
+
         assert_eq!(
-            next_reasoning_effort(
-                &choices,
-                Some(ReasoningEffortConfig::Medium),
-                ReasoningShortcutDirection::Lower,
+            (
+                next_reasoning_effort(
+                    &choices,
+                    Some(ReasoningEffortConfig::High),
+                    ReasoningShortcutDirection::Raise,
+                ),
+                next_reasoning_effort(
+                    &choices,
+                    Some(custom_effort),
+                    ReasoningShortcutDirection::Lower,
+                ),
             ),
-            Some(ReasoningEffortConfig::Low)
+            (
+                Some(ReasoningEffortConfig::Low),
+                Some(ReasoningEffortConfig::Low),
+            )
         );
     }
 

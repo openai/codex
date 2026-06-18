@@ -4,8 +4,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-mod transcript;
-
 use crate::app_server_session::AppServerSession;
 use crate::clipboard_paste::normalize_pasted_search_query;
 use crate::color::blend;
@@ -25,6 +23,9 @@ use crate::status::format_directory_display;
 use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_bg;
 use crate::text_formatting::truncate_text;
+use crate::thread_transcript::RawReasoningVisibility;
+use crate::thread_transcript::TranscriptCells;
+use crate::thread_transcript::load_session_transcript;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
@@ -60,9 +61,6 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
-use transcript::RawReasoningVisibility;
-use transcript::TranscriptCells;
-use transcript::load_session_transcript;
 use unicode_width::UnicodeWidthStr;
 
 const PAGE_SIZE: usize = 25;
@@ -610,7 +608,7 @@ fn spawn_app_server_page_loader(
 fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
     match sort_key {
         ThreadSortKey::CreatedAt => "Created",
-        ThreadSortKey::UpdatedAt => "Updated",
+        ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => "Updated",
     }
 }
 
@@ -774,6 +772,7 @@ async fn load_transcript_preview(
         .thread_read(thread_id, /*include_turns*/ true)
         .await
         .map_err(std::io::Error::other)?;
+    let cwd = thread.cwd.as_path();
     let mut lines = thread
         .turns
         .iter()
@@ -794,7 +793,7 @@ async fn load_transcript_preview(
             }),
             ThreadItem::AgentMessage { text, .. } => Some(TranscriptPreviewLine {
                 speaker: TranscriptPreviewSpeaker::Assistant,
-                text: parse_assistant_markdown(text).visible_markdown,
+                text: parse_assistant_markdown(text, cwd).visible_markdown,
             }),
             _ => None,
         })
@@ -1615,7 +1614,7 @@ impl PickerState {
     fn toggle_sort_key(&mut self) {
         self.sort_key = match self.sort_key {
             ThreadSortKey::CreatedAt => ThreadSortKey::UpdatedAt,
-            ThreadSortKey::UpdatedAt => ThreadSortKey::CreatedAt,
+            ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => ThreadSortKey::CreatedAt,
         };
         self.start_initial_load();
     }
@@ -1822,6 +1821,7 @@ fn thread_list_params(
         },
         source_kinds: Some(crate::resume_source_kinds(include_non_interactive)),
         archived: Some(false),
+        parent_thread_id: None,
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
         use_state_db_only: false,
         search_term: None,
@@ -2613,7 +2613,7 @@ fn render_dense_session_lines(
     let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
     let date = match state.sort_key {
         ThreadSortKey::CreatedAt => created,
-        ThreadSortKey::UpdatedAt => updated,
+        ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => updated,
     };
     let mut lines = vec![dense_summary_line(DenseSummaryInput {
         marker,
@@ -2742,7 +2742,7 @@ fn render_footer_lines(
 ) -> Vec<Line<'static>> {
     let date = match sort_key {
         ThreadSortKey::CreatedAt => created,
-        ThreadSortKey::UpdatedAt => updated,
+        ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => updated,
     };
     let mut parts = vec![FooterPart::Date(date.to_string())];
     if show_cwd {
@@ -5728,6 +5728,7 @@ session_picker_view = "dense"
             model_provider: String::from("openai"),
             created_at: 1,
             updated_at: 2,
+            recency_at: Some(2),
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: None,
             cwd: test_path_buf("/tmp").abs(),
@@ -5750,7 +5751,7 @@ session_picker_view = "dense"
 
     #[test]
     fn thread_to_transcript_cells_renders_core_message_types() {
-        use transcript::thread_to_transcript_cells;
+        use crate::thread_transcript::thread_to_transcript_cells;
 
         let thread_id = ThreadId::new();
         let thread = Thread {
@@ -5763,6 +5764,7 @@ session_picker_view = "dense"
             model_provider: String::from("openai"),
             created_at: 1,
             updated_at: 2,
+            recency_at: Some(2),
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: None,
             cwd: test_path_buf("/tmp").abs(),
@@ -5819,7 +5821,7 @@ session_picker_view = "dense"
 
     #[test]
     fn thread_to_transcript_cells_hides_raw_reasoning_when_not_enabled() {
-        use transcript::thread_to_transcript_cells;
+        use crate::thread_transcript::thread_to_transcript_cells;
 
         let thread_id = ThreadId::new();
         let thread = Thread {
@@ -5832,6 +5834,7 @@ session_picker_view = "dense"
             model_provider: String::from("openai"),
             created_at: 1,
             updated_at: 2,
+            recency_at: Some(2),
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: None,
             cwd: test_path_buf("/tmp").abs(),
@@ -5877,7 +5880,7 @@ session_picker_view = "dense"
 
     #[test]
     fn thread_to_transcript_cells_shows_raw_reasoning_over_summary_when_enabled() {
-        use transcript::thread_to_transcript_cells;
+        use crate::thread_transcript::thread_to_transcript_cells;
 
         let thread_id = ThreadId::new();
         let thread = Thread {
@@ -5890,6 +5893,7 @@ session_picker_view = "dense"
             model_provider: String::from("openai"),
             created_at: 1,
             updated_at: 2,
+            recency_at: Some(2),
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: None,
             cwd: test_path_buf("/tmp").abs(),

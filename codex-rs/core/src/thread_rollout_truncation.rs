@@ -19,6 +19,7 @@ pub(crate) fn initial_history_has_prior_user_turns(conversation_history: &Initia
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => is_user_turn_boundary(item),
+        RolloutItem::InterAgentCommunication(_) => true,
         _ => false,
     }
 }
@@ -58,7 +59,8 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
 ///
 /// A fork-turn boundary is either:
 /// - a real user message boundary, or
-/// - an assistant inter-agent envelope whose parsed `trigger_turn` is `true`.
+/// - an inter-agent communication whose `trigger_turn` is `true`, or
+/// - a legacy assistant inter-agent envelope with the same flag.
 ///
 /// Like `user_message_positions_in_rollout`, this applies `ThreadRolledBack` markers so indexing
 /// reflects the effective post-rollback history. Rollback counts instruction turns, so a rollback
@@ -74,6 +76,12 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
                     rollback_turn_positions.push(idx);
                 }
                 if is_real_user_message_boundary(item) || is_trigger_turn_boundary(item) {
+                    fork_turn_positions.push(idx);
+                }
+            }
+            RolloutItem::InterAgentCommunication(communication) => {
+                rollback_turn_positions.push(idx);
+                if communication.trigger_turn {
                     fork_turn_positions.push(idx);
                 }
             }

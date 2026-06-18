@@ -195,6 +195,97 @@ fn spawn_runtime_payload_falls_back_to_child_thread_without_delivery_item() -> a
 }
 
 #[test]
+fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_agent_writer(&temp)?;
+    start_agent_turn(&writer, "turn-1")?;
+    let child_thread_id = "019d0000-0000-7000-8000-000000000002";
+    let invocation_payload = writer.write_json_payload(
+        RawPayloadKind::ToolInvocation,
+        &json!({
+            "tool_name": "spawn_agent",
+            "payload": {
+                "type": "function",
+                "arguments": "{\"message\":\"review this\",\"task_name\":\"reviewer\"}"
+            }
+        }),
+    )?;
+    writer.append_with_context(
+        trace_context_for_agent("turn-1"),
+        RawTraceEventPayload::ToolCallStarted {
+            tool_call_id: "call-spawn-v2".to_string(),
+            model_visible_call_id: Some("call-spawn-v2".to_string()),
+            code_mode_runtime_tool_id: None,
+            requester: RawToolCallRequester::Model,
+            kind: ToolCallKind::SpawnAgent,
+            summary: ToolCallSummary::Generic {
+                label: "spawn_agent".to_string(),
+                input_preview: None,
+                output_preview: None,
+            },
+            invocation_payload: Some(invocation_payload.clone()),
+        },
+    )?;
+    let activity_payload = writer.write_json_payload(
+        RawPayloadKind::ToolRuntimeEvent,
+        &json!({
+            "event_id": "call-spawn-v2",
+            "occurred_at_ms": 1234,
+            "agent_thread_id": child_thread_id,
+            "agent_path": "/root/reviewer",
+            "kind": "started"
+        }),
+    )?;
+    writer.append_with_context(
+        trace_context_for_agent("turn-1"),
+        RawTraceEventPayload::ToolCallRuntimeEnded {
+            tool_call_id: "call-spawn-v2".to_string(),
+            status: ExecutionStatus::Completed,
+            runtime_payload: activity_payload.clone(),
+        },
+    )?;
+    start_thread(&writer, child_thread_id, "/root/reviewer")?;
+    start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
+    append_inference_request(
+        &writer,
+        child_thread_id,
+        "turn-child-1",
+        "inference-child-1",
+        vec![json!({
+            "type": "agent_message",
+            "author": "/root",
+            "recipient": "/root/reviewer",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Message Type: NEW_TASK\nTask name: /root/reviewer\nSender: /root\nPayload:\n"
+                },
+                {"type": "encrypted_content", "encrypted_content": "review this"}
+            ]
+        })],
+    )?;
+
+    let replayed = replay_bundle(temp.path())?;
+    let edge_id = format!("edge:spawn:019d0000-0000-7000-8000-000000000001:{child_thread_id}");
+    let edge = &replayed.interaction_edges[&edge_id];
+    assert_eq!(edge.kind, InteractionEdgeKind::SpawnAgent);
+    let target_item_id = target_conversation_item_id(&edge.target);
+    assert_eq!(edge.carried_item_ids, vec![target_item_id.clone()]);
+    assert_eq!(
+        replayed.conversation_items[target_item_id].thread_id,
+        child_thread_id
+    );
+    assert_eq!(
+        edge.carried_raw_payload_ids,
+        vec![
+            invocation_payload.raw_payload_id,
+            activity_payload.raw_payload_id,
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn send_message_runtime_payload_targets_delivered_child_message() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_agent_writer(&temp)?;
@@ -296,6 +387,178 @@ fn send_message_runtime_payload_targets_delivered_child_message() -> anyhow::Res
         "019d0000-0000-7000-8000-000000000002"
     );
     assert!(edge.ended_at_unix_ms.is_some());
+
+    Ok(())
+}
+
+#[test]
+fn send_message_activity_targets_delivered_child_message() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_agent_writer(&temp)?;
+    start_agent_turn(&writer, "turn-1")?;
+    let child_thread_id = "019d0000-0000-7000-8000-000000000002";
+    let invocation_payload = writer.write_json_payload(
+        RawPayloadKind::ToolInvocation,
+        &json!({
+            "tool_name": "send_message",
+            "payload": {
+                "type": "function",
+                "arguments": "{\"target\":\"/root/child\",\"message\":\"hello again\"}"
+            }
+        }),
+    )?;
+    writer.append_with_context(
+        trace_context_for_agent("turn-1"),
+        RawTraceEventPayload::ToolCallStarted {
+            tool_call_id: "call-send-v2".to_string(),
+            model_visible_call_id: Some("call-send-v2".to_string()),
+            code_mode_runtime_tool_id: None,
+            requester: RawToolCallRequester::Model,
+            kind: ToolCallKind::SendMessage,
+            summary: ToolCallSummary::Generic {
+                label: "send_message".to_string(),
+                input_preview: None,
+                output_preview: None,
+            },
+            invocation_payload: Some(invocation_payload.clone()),
+        },
+    )?;
+    let activity_payload = writer.write_json_payload(
+        RawPayloadKind::ToolRuntimeEvent,
+        &json!({
+            "event_id": "call-send-v2",
+            "occurred_at_ms": 1234,
+            "agent_thread_id": child_thread_id,
+            "agent_path": "/root/child",
+            "kind": "interacted"
+        }),
+    )?;
+    writer.append_with_context(
+        trace_context_for_agent("turn-1"),
+        RawTraceEventPayload::ToolCallRuntimeEnded {
+            tool_call_id: "call-send-v2".to_string(),
+            status: ExecutionStatus::Completed,
+            runtime_payload: activity_payload.clone(),
+        },
+    )?;
+    start_thread(&writer, child_thread_id, "/root/child")?;
+    start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
+    let delivered = inter_agent_message(
+        "/root",
+        "/root/child",
+        "hello again",
+        /*trigger_turn*/ false,
+    );
+    append_inference_request(
+        &writer,
+        child_thread_id,
+        "turn-child-1",
+        "inference-child-1",
+        vec![message("assistant", &delivered)],
+    )?;
+
+    let replayed = replay_bundle(temp.path())?;
+    let edge = &replayed.interaction_edges["edge:tool:call-send-v2"];
+    assert_eq!(edge.kind, InteractionEdgeKind::SendMessage);
+    let target_item_id = target_conversation_item_id(&edge.target);
+    assert_eq!(edge.carried_item_ids, vec![target_item_id.clone()]);
+    assert_eq!(
+        replayed.conversation_items[target_item_id].thread_id,
+        child_thread_id
+    );
+    assert_eq!(
+        edge.carried_raw_payload_ids,
+        vec![
+            invocation_payload.raw_payload_id,
+            activity_payload.raw_payload_id,
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn followup_activity_targets_delivered_child_message() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_agent_writer(&temp)?;
+    start_agent_turn(&writer, "turn-1")?;
+    let child_thread_id = "019d0000-0000-7000-8000-000000000002";
+    let invocation_payload = writer.write_json_payload(
+        RawPayloadKind::ToolInvocation,
+        &json!({
+            "tool_name": "followup_task",
+            "payload": {
+                "type": "function",
+                "arguments": "{\"target\":\"/root/child\",\"message\":\"continue\"}"
+            }
+        }),
+    )?;
+    writer.append_with_context(
+        trace_context_for_agent("turn-1"),
+        RawTraceEventPayload::ToolCallStarted {
+            tool_call_id: "call-followup-v2".to_string(),
+            model_visible_call_id: Some("call-followup-v2".to_string()),
+            code_mode_runtime_tool_id: None,
+            requester: RawToolCallRequester::Model,
+            kind: ToolCallKind::AssignAgentTask,
+            summary: ToolCallSummary::Generic {
+                label: "followup_task".to_string(),
+                input_preview: None,
+                output_preview: None,
+            },
+            invocation_payload: Some(invocation_payload.clone()),
+        },
+    )?;
+    let activity_payload = writer.write_json_payload(
+        RawPayloadKind::ToolRuntimeEvent,
+        &json!({
+            "event_id": "call-followup-v2",
+            "occurred_at_ms": 1234,
+            "agent_thread_id": child_thread_id,
+            "agent_path": "/root/child",
+            "kind": "interacted"
+        }),
+    )?;
+    writer.append_with_context(
+        trace_context_for_agent("turn-1"),
+        RawTraceEventPayload::ToolCallRuntimeEnded {
+            tool_call_id: "call-followup-v2".to_string(),
+            status: ExecutionStatus::Completed,
+            runtime_payload: activity_payload.clone(),
+        },
+    )?;
+    start_thread(&writer, child_thread_id, "/root/child")?;
+    start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
+    let delivered = inter_agent_message(
+        "/root",
+        "/root/child",
+        "continue",
+        /*trigger_turn*/ true,
+    );
+    append_inference_request(
+        &writer,
+        child_thread_id,
+        "turn-child-1",
+        "inference-child-1",
+        vec![message("assistant", &delivered)],
+    )?;
+
+    let replayed = replay_bundle(temp.path())?;
+    let edge = &replayed.interaction_edges["edge:tool:call-followup-v2"];
+    assert_eq!(edge.kind, InteractionEdgeKind::AssignAgentTask);
+    let target_item_id = target_conversation_item_id(&edge.target);
+    assert_eq!(edge.carried_item_ids, vec![target_item_id.clone()]);
+    assert_eq!(
+        replayed.conversation_items[target_item_id].thread_id,
+        child_thread_id
+    );
+    assert_eq!(
+        edge.carried_raw_payload_ids,
+        vec![
+            invocation_payload.raw_payload_id,
+            activity_payload.raw_payload_id,
+        ]
+    );
 
     Ok(())
 }
@@ -515,10 +778,9 @@ fn agent_result_edge_falls_back_to_child_thread_without_result_message() -> anyh
     let temp = TempDir::new()?;
     let writer = create_started_agent_writer(&temp)?;
 
-    // The child thread and turn exist, but there is intentionally no completed
-    // assistant message for this turn. Failed child tasks can still notify the
-    // parent through AgentStatus, so the result edge must not require a final
-    // transcript item from the child.
+    // The child received its task but produced no assistant output. Failed
+    // child tasks can still notify the parent through AgentStatus, so the
+    // inbound task must not be mistaken for the child's result.
     start_thread(
         &writer,
         "019d0000-0000-7000-8000-000000000002",
@@ -528,6 +790,18 @@ fn agent_result_edge_falls_back_to_child_thread_without_result_message() -> anyh
         &writer,
         "019d0000-0000-7000-8000-000000000002",
         "turn-child-1",
+    )?;
+    append_inference_request(
+        &writer,
+        "019d0000-0000-7000-8000-000000000002",
+        "turn-child-1",
+        "inference-child-1",
+        vec![json!({
+            "type": "agent_message",
+            "author": "/root",
+            "recipient": "/root/child",
+            "content": [{"type": "input_text", "text": "do the task"}]
+        })],
     )?;
 
     let notification = r#"<subagent_notification>{"agent_path":"/root/child","status":{"failed":"boom"}}</subagent_notification>"#;

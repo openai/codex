@@ -65,7 +65,7 @@ impl SessionTask for ReviewTask {
         for item in input {
             match item {
                 TurnInput::UserInput { mut content, .. } => user_input.append(&mut content),
-                TurnInput::ResponseItem(_) => {}
+                TurnInput::ResponseItem(_) | TurnInput::InterAgentCommunication(_) => {}
             }
         }
 
@@ -247,6 +247,7 @@ pub(crate) async fn exit_review_mode(
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
                 phase: None,
+                metadata: None,
             }],
         )
         .await;
@@ -267,6 +268,7 @@ pub(crate) async fn exit_review_mode(
                     text: assistant_message,
                 }],
                 phase: None,
+                metadata: None,
             },
         )
         .await;

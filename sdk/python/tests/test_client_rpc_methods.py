@@ -185,6 +185,32 @@ def test_turn_notification_router_demuxes_registered_turns() -> None:
     ]
 
 
+def test_goal_notification_router_routes_by_thread_id() -> None:
+    """A goal operation should receive turn notifications across physical turn ids."""
+    client = CodexClient()
+    state = client.register_goal_operation("thread-1")
+
+    client._router.route_notification(
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "continued",
+                "itemId": "item-1",
+                "threadId": "thread-1",
+                "turnId": "turn-2",
+            },
+        )
+    )
+
+    event = client.next_goal_notification(state)
+
+    assert isinstance(event.payload, AgentMessageDeltaNotification)
+    assert (event.method, event.payload.delta) == (
+        "item/agentMessage/delta",
+        "continued",
+    )
+
+
 def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> None:
     """Reader-loop routing should preserve order within each interleaved turn stream."""
     client = CodexClient()

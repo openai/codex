@@ -8,6 +8,7 @@ use codex_client::StreamResponse;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnModerationMetadataEvent;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -22,6 +23,7 @@ use tracing::debug;
 use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
@@ -55,8 +57,8 @@ pub fn spawn_response_stream(
     if let Some(turn_state) = turn_state.as_ref()
         && let Some(header_value) = stream_response
             .headers
-            .get("x-codex-turn-state")
-            .and_then(|v| v.to_str().ok())
+            .get(X_CODEX_TURN_STATE_HEADER)
+            .and_then(|value| value.to_str().ok())
     {
         let _ = turn_state.set(header_value.to_string());
     }
@@ -183,6 +185,16 @@ impl ResponsesStreamEvent {
         }
     }
 
+    pub(crate) fn turn_state(&self) -> Option<String> {
+        if self.kind() != "response.metadata" {
+            return None;
+        }
+
+        self.headers
+            .as_ref()
+            .and_then(header_turn_state_value_from_json)
+    }
+
     pub(crate) fn model_verifications(&self) -> Option<Vec<ModelVerification>> {
         if self.kind() != "response.metadata" {
             return None;
@@ -193,6 +205,18 @@ impl ResponsesStreamEvent {
             .and_then(|metadata| metadata.get("openai_verification_recommendation"))
             .and_then(model_verifications_from_json_value)
     }
+
+    pub(crate) fn turn_moderation_metadata(&self) -> Option<TurnModerationMetadataEvent> {
+        if self.kind() != "response.metadata" {
+            return None;
+        }
+
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("openai_chatgpt_moderation_metadata"))
+            .cloned()
+            .map(|metadata| TurnModerationMetadataEvent { metadata })
+    }
 }
 
 fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
@@ -200,6 +224,17 @@ fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
     headers.iter().find_map(|(name, value)| {
         if name.eq_ignore_ascii_case("openai-model") || name.eq_ignore_ascii_case("x-openai-model")
         {
+            json_value_as_string(value)
+        } else {
+            None
+        }
+    })
+}
+
+fn header_turn_state_value_from_json(value: &Value) -> Option<String> {
+    let headers = value.as_object()?;
+    headers.iter().find_map(|(name, value)| {
+        if name.eq_ignore_ascii_case(X_CODEX_TURN_STATE_HEADER) {
             json_value_as_string(value)
         } else {
             None
@@ -444,6 +479,7 @@ pub async fn process_sse(
             }
         };
         let model_verifications = event.model_verifications();
+        let turn_moderation_metadata = event.turn_moderation_metadata();
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -460,6 +496,14 @@ pub async fn process_sse(
         if let Some(verifications) = model_verifications
             && tx_event
                 .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                .await
+                .is_err()
+        {
+            return;
+        }
+        if let Some(metadata) = turn_moderation_metadata
+            && tx_event
+                .send(Ok(ResponseEvent::TurnModerationMetadata(metadata)))
                 .await
                 .is_err()
         {
@@ -1204,6 +1248,41 @@ mod tests {
             &events[0],
             ResponseEvent::ModelVerifications(verifications)
                 if verifications == &vec![ModelVerification::TrustedAccessForCyber]
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: None,
+                end_turn: None,
+            } if response_id == "resp-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_sse_emits_turn_moderation_metadata_field() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.metadata",
+                "metadata": {
+                    "openai_chatgpt_moderation_metadata": {
+                        "presentation": "inline"
+                    }
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-1"
+                }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::TurnModerationMetadata(result)
+                if result.metadata == json!({"presentation": "inline"})
         );
         assert_matches!(
             &events[1],

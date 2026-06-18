@@ -1,0 +1,2 @@
+ALTER TABLE remote_control_enrollments
+ADD COLUMN remote_control_enabled INTEGER;

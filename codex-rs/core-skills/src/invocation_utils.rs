@@ -3,6 +3,8 @@ use std::path::Path;
 
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
+use codex_protocol::parse_command::ParsedCommand;
+use codex_shell_command::parse_command::parse_command_impl;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub(crate) fn build_implicit_skill_path_indexes(
@@ -101,31 +103,16 @@ fn detect_skill_doc_read(
     tokens: &[String],
     workdir: &AbsolutePathBuf,
 ) -> Option<SkillMetadata> {
-    if !command_reads_file(tokens) {
-        return None;
-    }
-
-    for token in tokens.iter().skip(1) {
-        if token.starts_with('-') {
-            continue;
-        }
-        let path = Path::new(token);
-        let candidate_path = canonicalize_if_exists(&workdir.join(path));
-        if let Some(candidate) = outcome.implicit_skills_by_doc_path.get(&candidate_path) {
-            return Some(candidate.clone());
+    for command in parse_command_impl(tokens) {
+        if let ParsedCommand::Read { path, .. } = command {
+            let candidate_path = canonicalize_if_exists(&workdir.join(path.as_path()));
+            if let Some(candidate) = outcome.implicit_skills_by_doc_path.get(&candidate_path) {
+                return Some(candidate.clone());
+            }
         }
     }
 
     None
-}
-
-fn command_reads_file(tokens: &[String]) -> bool {
-    const READERS: [&str; 8] = ["cat", "sed", "head", "tail", "less", "more", "bat", "awk"];
-    let Some(program) = tokens.first() else {
-        return false;
-    };
-    let program = command_basename(program).to_ascii_lowercase();
-    READERS.contains(&program.as_str())
 }
 
 fn command_basename(command: &str) -> String {
