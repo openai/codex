@@ -86,12 +86,10 @@ where
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
-    let stream_span = tracing::debug_span!(
-        "noise_relay.stream",
-        noise_side = "harness",
-        environment_id = %environment_id,
-        executor_registration_id = %executor_registration_id,
-        stream_id = %stream_id,
+    let stream_span = tracing::debug_span!("noise_relay.stream", noise_side = "harness",);
+    debug!(
+        environment_id,
+        executor_registration_id, stream_id, "Noise harness relay details"
     );
 
     let websocket_task = tokio::spawn(async move {
