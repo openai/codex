@@ -8,7 +8,7 @@ use crate::requests::Compression;
 use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use crate::requests::strip_response_item_ids;
+use crate::requests::response_request_json;
 use crate::sse::spawn_response_stream;
 use crate::telemetry::SseTelemetry;
 use codex_client::EncodedJsonBody;
@@ -84,11 +84,8 @@ impl<T: HttpTransport> ResponsesClient<T> {
             include_item_ids,
         } = options;
 
-        let mut body = serde_json::to_value(&request)
+        let body = response_request_json(&request, include_item_ids)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
-        if !include_item_ids {
-            strip_response_item_ids(&mut body);
-        }
         let body = EncodedJsonBody::encode(&body)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 

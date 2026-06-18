@@ -42,6 +42,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -195,6 +196,27 @@ fn user_message(text: &str) -> ResponseItem {
         phase: None,
         metadata: None,
     }
+}
+
+#[test]
+fn assign_missing_response_item_ids_skips_agent_messages() {
+    let mut items = Cow::Owned(vec![
+        ResponseItem::AgentMessage {
+            id: None,
+            author: "worker".to_string(),
+            recipient: "root".to_string(),
+            content: vec![AgentMessageInputContent::InputText {
+                text: "done".to_string(),
+            }],
+            metadata: None,
+        },
+        user_message("hello"),
+    ]);
+
+    Session::assign_missing_response_item_ids(&mut items);
+
+    assert_eq!(items[0].id(), None);
+    assert!(items[1].id().is_some_and(|id| id.starts_with("msg_")));
 }
 
 fn assistant_message(text: &str) -> ResponseItem {

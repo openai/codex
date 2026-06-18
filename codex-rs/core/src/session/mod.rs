@@ -2658,7 +2658,6 @@ impl Session {
             }
             let prefix = match item {
                 ResponseItem::Message { .. } => "msg",
-                ResponseItem::AgentMessage { .. } => "amsg",
                 ResponseItem::Reasoning { .. } => "rs",
                 ResponseItem::LocalShellCall { .. } => "lsh",
                 ResponseItem::FunctionCall { .. } => "fc",
@@ -2670,7 +2669,9 @@ impl Session {
                 ResponseItem::WebSearchCall { .. } => "ws",
                 ResponseItem::ImageGenerationCall { .. } => "ig",
                 ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
-                ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => continue,
+                ResponseItem::AgentMessage { .. }
+                | ResponseItem::CompactionTrigger { .. }
+                | ResponseItem::Other => continue,
             };
             item.set_id(format!("{prefix}_{}", Uuid::now_v7()));
         }

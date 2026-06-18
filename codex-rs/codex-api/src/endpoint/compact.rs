@@ -3,14 +3,13 @@ use crate::common::CompactionInput;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::requests::strip_response_item_ids;
+use crate::requests::response_request_json;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::models::ResponseItem;
 use http::HeaderMap;
 use http::Method;
 use serde::Deserialize;
-use serde_json::to_value;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -78,11 +77,8 @@ impl<T: HttpTransport> CompactClient<T> {
         turn_state: Option<&OnceLock<String>>,
         include_item_ids: bool,
     ) -> Result<Vec<ResponseItem>, ApiError> {
-        let mut body = to_value(input)
+        let body = response_request_json(input, include_item_ids)
             .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
-        if !include_item_ids {
-            strip_response_item_ids(&mut body);
-        }
         self.compact(body, extra_headers, request_timeout, turn_state)
             .await
     }

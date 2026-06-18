@@ -61,6 +61,7 @@ use codex_api::auth_header_telemetry;
 use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
+use codex_api::response_request_json;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -1315,7 +1316,9 @@ impl ModelClientSession {
             )?;
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
-            inference_trace_attempt.record_started(&request);
+            let trace_request =
+                response_request_json(&request, self.client.state.item_ids_enabled)?;
+            inference_trace_attempt.record_started(&trace_request);
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1480,14 +1483,15 @@ impl ModelClientSession {
                 inference_trace.start_attempt()
             };
             stamp_ws_stream_request_start_ms(&mut ws_request);
-            if previous_response_id_from_untraced_warmup {
+            let trace_request = if previous_response_id_from_untraced_warmup {
                 // The transport can reuse an untraced warmup response id and omit the
                 // already-sent input, but rollout replay needs the logical model-visible
                 // request rather than the compressed websocket delta.
-                inference_trace_attempt.record_started(&request);
+                response_request_json(&request, self.client.state.item_ids_enabled)?
             } else {
-                inference_trace_attempt.record_started(&ws_request);
-            }
+                response_request_json(&ws_request, self.client.state.item_ids_enabled)?
+            };
+            inference_trace_attempt.record_started(&trace_request);
             self.websocket_session.last_request = Some(request);
             self.websocket_session.last_response_from_untraced_warmup = warmup;
             let websocket_connection =

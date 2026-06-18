@@ -5,7 +5,7 @@ use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
-use crate::requests::strip_response_item_ids;
+use crate::requests::response_request_json;
 use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
@@ -793,11 +793,8 @@ fn serialize_websocket_request(
     request: &ResponsesWsRequest,
     include_item_ids: bool,
 ) -> Result<String, ApiError> {
-    let mut payload = serde_json::to_value(request)
+    let payload = response_request_json(request, include_item_ids)
         .map_err(|err| ApiError::Stream(format!("failed to encode websocket request: {err}")))?;
-    if !include_item_ids {
-        strip_response_item_ids(&mut payload);
-    }
     serde_json::to_string(&payload)
         .map_err(|err| ApiError::Stream(format!("failed to encode websocket request: {err}")))
 }
