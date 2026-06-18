@@ -16,16 +16,19 @@ use std::ffi::OsString;
 use std::fs;
 use std::fs::File;
 use std::fs::Metadata;
+use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::permissions::is_protected_metadata_name;
 use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
@@ -54,6 +57,7 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
 ];
 
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
+const MAX_BWRAP_PRESERVED_FILES: usize = 128;
 
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -436,6 +440,31 @@ fn create_filesystem_args(
     );
     unreadable_roots.sort();
     unreadable_roots.dedup();
+    let unreadable_paths: HashSet<PathBuf> = unreadable_roots.iter().cloned().collect();
+    // Exact deny roots may intentionally have a narrower readable-file
+    // carveback. Keep only glob denies in this matcher so unexpanded glob
+    // matches cannot be reopened without treating the parent deny itself as
+    // overriding that explicit carveback.
+    let mut deny_glob_policy = file_system_sandbox_policy.clone();
+    deny_glob_policy.entries.retain(|entry| {
+        entry.access == FileSystemAccessMode::Deny
+            && matches!(entry.path, FileSystemPath::GlobPattern { .. })
+    });
+    let read_deny_glob_matcher = ReadDenyMatcher::new(&deny_glob_policy, cwd);
+
+    let mut readable_roots: BTreeSet<PathBuf> = file_system_sandbox_policy
+        .get_readable_roots_with_cwd(cwd)
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    if file_system_sandbox_policy.include_platform_defaults() {
+        readable_roots.extend(
+            LINUX_PLATFORM_DEFAULT_READ_ROOTS
+                .iter()
+                .map(|path| PathBuf::from(*path))
+                .filter(|path| path.exists()),
+        );
+    }
 
     let args = if file_system_sandbox_policy.has_full_disk_read_access() {
         // Read-only root, then mount a minimal device tree.
@@ -460,20 +489,6 @@ fn create_filesystem_args(
             "/dev".to_string(),
         ];
 
-        let mut readable_roots: BTreeSet<PathBuf> = file_system_sandbox_policy
-            .get_readable_roots_with_cwd(cwd)
-            .into_iter()
-            .map(PathBuf::from)
-            .collect();
-        if file_system_sandbox_policy.include_platform_defaults() {
-            readable_roots.extend(
-                LINUX_PLATFORM_DEFAULT_READ_ROOTS
-                    .iter()
-                    .map(|path| PathBuf::from(*path))
-                    .filter(|path| path.exists()),
-            );
-        }
-
         // A restricted policy can still explicitly request `/`, which is
         // the broad read baseline. Explicit unreadable carveouts are
         // re-applied later.
@@ -486,7 +501,7 @@ fn create_filesystem_args(
                 "/dev".to_string(),
             ];
         } else {
-            for root in readable_roots {
+            for root in &readable_roots {
                 if !root.exists() {
                     continue;
                 }
@@ -498,9 +513,9 @@ fn create_filesystem_args(
                     .iter()
                     .any(|writable_root| root.starts_with(writable_root.root.as_path()))
                 {
-                    canonical_target_if_symlinked_path(&root).unwrap_or(root)
+                    canonical_target_if_symlinked_path(root).unwrap_or_else(|| root.clone())
                 } else {
-                    root
+                    root.clone()
                 };
                 args.push("--ro-bind".to_string());
                 args.push(path_to_string(&mount_root));
@@ -524,7 +539,34 @@ fn create_filesystem_args(
             allowed_write_paths.push(target);
         }
     }
-    let unreadable_paths: HashSet<PathBuf> = unreadable_roots.iter().cloned().collect();
+    let mut reopened_readable_files = readable_roots
+        .into_iter()
+        .filter(|path| {
+            std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+        })
+        .filter(|path| !unreadable_paths.contains(path))
+        .filter(|path| {
+            !read_deny_glob_matcher
+                .as_ref()
+                .is_some_and(|matcher| matcher.is_read_denied(path))
+        })
+        .filter(|path| !file_system_sandbox_policy.can_write_path_with_cwd(path, cwd))
+        .filter(|path| {
+            unreadable_roots
+                .iter()
+                .any(|unreadable_root| path != unreadable_root && path.starts_with(unreadable_root))
+        })
+        .collect::<Vec<_>>();
+    if reopened_readable_files.iter().any(|path| {
+        allowed_write_paths
+            .iter()
+            .any(|writable_root| path.starts_with(writable_root))
+    }) {
+        return Err(CodexErr::Fatal(
+            "cannot reopen a sandbox-readable file below a sandbox-writable root".to_string(),
+        ));
+    }
+    reopened_readable_files.sort_by_key(|path| path_depth(path));
     let mut sorted_writable_roots = writable_roots;
     sorted_writable_roots.sort_by_key(|writable_root| path_depth(writable_root.root.as_path()));
     // Mask only the unreadable ancestors that sit outside every writable root.
@@ -546,7 +588,12 @@ fn create_filesystem_args(
     unreadable_ancestors_of_writable_roots.sort_by_key(|path| path_depth(path));
 
     for unreadable_root in &unreadable_ancestors_of_writable_roots {
-        append_unreadable_root_args(&mut bwrap_args, unreadable_root, &allowed_write_paths)?;
+        append_unreadable_root_args(
+            &mut bwrap_args,
+            unreadable_root,
+            &allowed_write_paths,
+            &reopened_readable_files,
+        )?;
     }
 
     for writable_root in &sorted_writable_roots {
@@ -605,9 +652,14 @@ fn create_filesystem_args(
             nested_unreadable_roots =
                 remap_paths_for_symlink_target(nested_unreadable_roots, root, target);
         }
-        nested_unreadable_roots.sort_by_key(|path| path_depth(path));
+        nested_unreadable_roots.sort_by_key(|path| std::cmp::Reverse(path_depth(path)));
         for unreadable_root in nested_unreadable_roots {
-            append_unreadable_root_args(&mut bwrap_args, &unreadable_root, &allowed_write_paths)?;
+            append_unreadable_root_args(
+                &mut bwrap_args,
+                &unreadable_root,
+                &allowed_write_paths,
+                &reopened_readable_files,
+            )?;
         }
     }
 
@@ -621,9 +673,29 @@ fn create_filesystem_args(
         })
         .cloned()
         .collect();
-    rootless_unreadable_roots.sort_by_key(|path| path_depth(path));
+    // Apply narrower masks before their denied ancestors. A directory mask is
+    // remounted read-only, so a later nested file mask could not create its
+    // mount target. The final ancestor mask still subsumes every child that is
+    // not explicitly reopened below.
+    rootless_unreadable_roots.sort_by_key(|path| std::cmp::Reverse(path_depth(path)));
     for unreadable_root in rootless_unreadable_roots {
-        append_unreadable_root_args(&mut bwrap_args, &unreadable_root, &allowed_write_paths)?;
+        append_unreadable_root_args(
+            &mut bwrap_args,
+            &unreadable_root,
+            &allowed_write_paths,
+            &reopened_readable_files,
+        )?;
+    }
+
+    // Unreadable directory masks are layered after the initial read mounts.
+    // Preserve each narrower read-only file by descriptor so its source stays
+    // available after the denied parent has hidden the original path.
+    for readable_file in reopened_readable_files {
+        let file = open_reopened_readable_file(&readable_file)?;
+        let file_fd = preserve_file(&mut bwrap_args, file)?;
+        bwrap_args.args.push("--ro-bind-data".to_string());
+        bwrap_args.args.push(file_fd);
+        bwrap_args.args.push(path_to_string(&readable_file));
     }
 
     Ok(bwrap_args)
@@ -1013,6 +1085,11 @@ fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Pa
         .collect();
     mount_target_dirs.reverse();
     for mount_target_dir in mount_target_dirs {
+        // These directories only make a narrower mount target reachable below
+        // a denied parent. Keep them traversable but not listable; the real
+        // readable/writable descendant is mounted over the final target later.
+        args.push("--perms".to_string());
+        args.push("111".to_string());
         args.push("--dir".to_string());
         args.push(path_to_string(&mount_target_dir));
     }
@@ -1072,14 +1149,51 @@ fn append_read_only_subpath_args(
 }
 
 fn append_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
-    if bwrap_args.preserved_files.is_empty() {
-        bwrap_args.preserved_files.push(File::open("/dev/null")?);
-    }
-    let null_fd = bwrap_args.preserved_files[0].as_raw_fd().to_string();
+    let null_fd = empty_file_fd(bwrap_args)?;
     bwrap_args.args.push("--ro-bind-data".to_string());
     bwrap_args.args.push(null_fd);
     bwrap_args.args.push(path_to_string(path));
     Ok(())
+}
+
+fn empty_file_fd(bwrap_args: &mut BwrapArgs) -> Result<String> {
+    if bwrap_args.preserved_files.is_empty() {
+        bwrap_args.preserved_files.push(File::open("/dev/null")?);
+    }
+    Ok(bwrap_args.preserved_files[0].as_raw_fd().to_string())
+}
+
+fn empty_file_copy_fd(bwrap_args: &mut BwrapArgs) -> Result<String> {
+    // `--file` consumes its input descriptor, while `--ro-bind-data` can reuse
+    // one descriptor. Reserve the shared descriptor first so later masks never
+    // reuse a descriptor that an earlier `--file` operation closed.
+    empty_file_fd(bwrap_args)?;
+    preserve_file(bwrap_args, File::open("/dev/null")?)
+}
+
+fn preserve_file(bwrap_args: &mut BwrapArgs, file: File) -> Result<String> {
+    if bwrap_args.preserved_files.len() >= MAX_BWRAP_PRESERVED_FILES {
+        return Err(CodexErr::Fatal(format!(
+            "cannot construct bubblewrap filesystem with more than {MAX_BWRAP_PRESERVED_FILES} preserved files"
+        )));
+    }
+    let fd = file.as_raw_fd().to_string();
+    bwrap_args.preserved_files.push(file);
+    Ok(fd)
+}
+
+fn open_reopened_readable_file(path: &Path) -> Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(CodexErr::Fatal(format!(
+            "cannot reopen sandbox readable path because it is not a regular file: {}",
+            path.display()
+        )));
+    }
+    Ok(file)
 }
 
 fn append_empty_directory_args(bwrap_args: &mut BwrapArgs, path: &Path) {
@@ -1140,6 +1254,7 @@ fn append_unreadable_root_args(
     bwrap_args: &mut BwrapArgs,
     unreadable_root: &Path,
     allowed_write_paths: &[PathBuf],
+    reopened_readable_files: &[PathBuf],
 ) -> Result<()> {
     if let Some(symlink) =
         first_writable_symlink_component_in_path(unreadable_root, allowed_write_paths)
@@ -1167,42 +1282,62 @@ fn append_unreadable_root_args(
         return Ok(());
     }
 
-    append_existing_unreadable_path_args(bwrap_args, unreadable_root, allowed_write_paths)
+    append_existing_unreadable_path_args(
+        bwrap_args,
+        unreadable_root,
+        allowed_write_paths,
+        reopened_readable_files,
+    )
 }
 
 fn append_existing_unreadable_path_args(
     bwrap_args: &mut BwrapArgs,
     unreadable_root: &Path,
     allowed_write_paths: &[PathBuf],
+    reopened_readable_files: &[PathBuf],
 ) -> Result<()> {
     if unreadable_root.is_dir() {
-        let mut writable_descendants: Vec<&Path> = allowed_write_paths
+        let mut reopened_descendants: Vec<&Path> = allowed_write_paths
             .iter()
+            .chain(reopened_readable_files)
             .map(PathBuf::as_path)
             .filter(|path| *path != unreadable_root && path.starts_with(unreadable_root))
             .collect();
         bwrap_args.args.push("--perms".to_string());
         // Execute-only perms let the process traverse into explicitly
-        // re-opened writable descendants while still hiding the denied
-        // directory contents. Plain denied directories with no writable child
+        // re-opened readable or writable descendants while still hiding the
+        // denied directory contents. Plain denied directories with no child
         // mounts stay at `000`.
-        bwrap_args.args.push(if writable_descendants.is_empty() {
+        bwrap_args.args.push(if reopened_descendants.is_empty() {
             "000".to_string()
         } else {
             "111".to_string()
         });
         bwrap_args.args.push("--tmpfs".to_string());
         bwrap_args.args.push(path_to_string(unreadable_root));
-        // Recreate any writable descendants inside the tmpfs before remounting
-        // the denied parent read-only. Otherwise bubblewrap cannot mkdir the
-        // nested mount targets after the parent has been frozen.
-        writable_descendants.sort_by_key(|path| path_depth(path));
-        for writable_descendant in writable_descendants {
+        // Recreate any narrower readable or writable descendants inside the
+        // tmpfs before remounting the denied parent read-only. Otherwise
+        // bubblewrap cannot mkdir the nested mount targets after the parent has
+        // been frozen.
+        reopened_descendants.sort_by_key(|path| path_depth(path));
+        for reopened_descendant in reopened_descendants {
             append_mount_target_parent_dir_args(
                 &mut bwrap_args.args,
-                writable_descendant,
+                reopened_descendant,
                 unreadable_root,
             );
+        }
+        // File bind destinations must exist before the denied parent becomes
+        // read-only. Install empty placeholders now; the real readable files
+        // are rebound after every deny mask has been layered.
+        for readable_file in reopened_readable_files
+            .iter()
+            .filter(|path| path.as_path() != unreadable_root && path.starts_with(unreadable_root))
+        {
+            let null_fd = empty_file_copy_fd(bwrap_args)?;
+            bwrap_args.args.push("--file".to_string());
+            bwrap_args.args.push(null_fd);
+            bwrap_args.args.push(path_to_string(readable_file));
         }
         bwrap_args.args.push("--remount-ro".to_string());
         bwrap_args.args.push(path_to_string(unreadable_root));
@@ -2422,6 +2557,196 @@ mod tests {
             blocked_none_index < allowed_bind_index,
             "expected unreadable parent mask before rebinding writable file child: {:#?}",
             args.args
+        );
+    }
+
+    #[test]
+    fn split_policy_reenables_readable_files_after_unreadable_parent() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let blocked = temp_dir.path().join("blocked");
+        let active_dir = blocked.join("active");
+        let active_file = active_dir.join("ca-bundle.pem");
+        let glob_denied_file = active_dir.join("glob-denied.pem");
+        let stale_file = blocked.join("stale-bundle.pem");
+        std::fs::create_dir_all(&active_dir).expect("create blocked/active");
+        std::fs::write(&active_file, "active").expect("create active bundle");
+        std::fs::write(&glob_denied_file, "denied").expect("create glob-denied bundle");
+        std::fs::write(&stale_file, "stale").expect("create stale bundle");
+        let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked");
+        let active_file =
+            AbsolutePathBuf::from_absolute_path(&active_file).expect("absolute active file");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: blocked.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: active_file.clone(),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::from_absolute_path(&glob_denied_file)
+                        .expect("absolute glob-denied file"),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    // Root-prefix globs are intentionally not expanded by the
+                    // host scan, so direct matcher enforcement must keep this
+                    // explicit read grant from being reopened.
+                    pattern: "/**/glob-denied.pem".to_string(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]);
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let blocked_str = path_to_string(blocked.as_path());
+        let active_dir_str = path_to_string(&active_dir);
+        let active_file_str = path_to_string(active_file.as_path());
+        let glob_denied_file_str = path_to_string(&glob_denied_file);
+        let stale_file_str = path_to_string(&stale_file);
+        assert!(
+            args.preserved_files.len() >= 2,
+            "expected distinct descriptors for the placeholder and active bundle"
+        );
+        let active_fd = args
+            .preserved_files
+            .last()
+            .expect("active bundle descriptor")
+            .as_raw_fd()
+            .to_string();
+        let blocked_mask_index = args
+            .args
+            .windows(4)
+            .position(|window| window == ["--perms", "111", "--tmpfs", blocked_str.as_str()])
+            .expect("blocked should be masked with traversal enabled");
+        let active_dir_index = args
+            .args
+            .windows(2)
+            .position(|window| window == ["--dir", active_dir_str.as_str()])
+            .expect("active bundle parent should be recreated");
+        let active_dir_perms_index = args
+            .args
+            .windows(4)
+            .position(|window| window == ["--perms", "111", "--dir", active_dir_str.as_str()])
+            .expect("active bundle parent should be execute-only");
+        let active_placeholder_index = args
+            .args
+            .windows(3)
+            .position(|window| {
+                window.first().is_some_and(|arg| arg == "--file")
+                    && window.get(2).is_some_and(|arg| arg == &active_file_str)
+            })
+            .expect("active bundle should have a placeholder before remounting");
+        let placeholder_fd = args
+            .args
+            .get(active_placeholder_index + 1)
+            .expect("active placeholder descriptor");
+        assert_ne!(placeholder_fd, &active_fd);
+        let blocked_remount_index = args
+            .args
+            .windows(2)
+            .position(|window| window == ["--remount-ro", blocked_str.as_str()])
+            .expect("blocked parent should be remounted read-only");
+        let active_bind_index = args
+            .args
+            .windows(3)
+            .position(|window| {
+                window
+                    == [
+                        "--ro-bind-data",
+                        active_fd.as_str(),
+                        active_file_str.as_str(),
+                    ]
+            })
+            .expect("active bundle should be rebound read-only from a preserved descriptor");
+
+        assert!(
+            blocked_mask_index < active_dir_perms_index
+                && active_dir_perms_index < active_dir_index
+                && active_dir_index < active_placeholder_index
+                && active_placeholder_index < blocked_remount_index
+                && blocked_remount_index < active_bind_index,
+            "expected active bundle to be reopened after masking its parent: {:#?}",
+            args.args
+        );
+        assert!(
+            !args.args.windows(3).any(|window| {
+                window
+                    == [
+                        "--ro-bind-data",
+                        active_fd.as_str(),
+                        stale_file_str.as_str(),
+                    ]
+            }),
+            "stale sibling must remain hidden: {:#?}",
+            args.args
+        );
+        assert!(
+            !args.args.windows(3).any(|window| {
+                window
+                    == [
+                        "--ro-bind-data",
+                        active_fd.as_str(),
+                        glob_denied_file_str.as_str(),
+                    ]
+            }),
+            "glob-denied file must not be reopened: {:#?}",
+            args.args
+        );
+    }
+
+    #[test]
+    fn split_policy_rejects_readable_carveback_below_writable_root() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let blocked = temp_dir.path().join("proxy");
+        let active_file = blocked.join("ca-bundle.pem");
+        std::fs::create_dir_all(&blocked).expect("create proxy dir");
+        std::fs::write(&active_file, "active").expect("create active bundle");
+        let writable_root =
+            AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute writable root");
+        let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute proxy dir");
+        let active_file =
+            AbsolutePathBuf::from_absolute_path(&active_file).expect("absolute active bundle");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: writable_root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: blocked },
+                access: FileSystemAccessMode::Deny,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: active_file },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        let err =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect_err("writable ancestry must fail closed");
+        assert!(
+            err.to_string()
+                .contains("cannot reopen a sandbox-readable file below a sandbox-writable root"),
+            "unexpected error: {err}"
         );
     }
 

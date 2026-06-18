@@ -308,6 +308,97 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
 }
 
 #[test]
+fn explicit_readable_file_is_reopened_below_unreadable_parent() {
+    let temp_dir = TempDir::new_in("/private/tmp").expect("temp dir");
+    let proxy_dir = temp_dir.path().join("proxy");
+    fs::create_dir_all(&proxy_dir).expect("create proxy dir");
+    let active_bundle = proxy_dir.join("ca-bundle-active.pem");
+    let stale_bundle = proxy_dir.join("ca-bundle-stale.pem");
+    let ca_key = proxy_dir.join("ca.key");
+    fs::write(&active_bundle, "active").expect("write active bundle");
+    fs::write(&stale_bundle, "stale").expect("write stale bundle");
+    fs::write(&ca_key, "private").expect("write CA key");
+    let proxy_dir = AbsolutePathBuf::from_absolute_path(
+        proxy_dir.canonicalize().expect("canonicalize proxy dir"),
+    )
+    .expect("absolute proxy dir");
+    let active_bundle = AbsolutePathBuf::from_absolute_path(
+        active_bundle
+            .canonicalize()
+            .expect("canonicalize active bundle"),
+    )
+    .expect("absolute active bundle");
+    let stale_bundle = AbsolutePathBuf::from_absolute_path(
+        stale_bundle
+            .canonicalize()
+            .expect("canonicalize stale bundle"),
+    )
+    .expect("absolute stale bundle");
+    let ca_key =
+        AbsolutePathBuf::from_absolute_path(ca_key.canonicalize().expect("canonicalize CA key"))
+            .expect("absolute CA key");
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: proxy_dir },
+            access: FileSystemAccessMode::Deny,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: active_bundle.clone(),
+            },
+            access: FileSystemAccessMode::Read,
+        },
+    ]);
+    let command = vec![
+        "bash".to_string(),
+        "-c".to_string(),
+        r#"set -e
+test "$(cat "$1")" = active
+! cat "$2" >/dev/null 2>&1
+! cat "$3" >/dev/null 2>&1
+"#
+        .to_string(),
+        "bash".to_string(),
+        active_bundle.to_string_lossy().into_owned(),
+        stale_bundle.to_string_lossy().into_owned(),
+        ca_key.to_string_lossy().into_owned(),
+    ];
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command,
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Enabled,
+        sandbox_policy_cwd: temp_dir.path(),
+        enforce_managed_network: false,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    });
+
+    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+        .args(&args)
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("execute seatbelt command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success()
+        && stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted")
+    {
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "expected only the active bundle to be readable; status={:?}; stdout={}; stderr={stderr}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+#[test]
 fn unreadable_globstar_slash_matches_zero_or_more_directories() {
     let regex = seatbelt_regex_for_unreadable_glob("/tmp/repo/**/*.env");
     assert_eq!(regex.as_deref(), Some(r"^/tmp/repo/(.*/)?[^/]*\.env$"));

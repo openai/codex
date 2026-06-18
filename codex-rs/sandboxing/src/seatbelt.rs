@@ -389,6 +389,33 @@ fn build_seatbelt_access_policy(
     }
 }
 
+fn build_seatbelt_unreadable_root_policy(
+    unreadable_roots: &[AbsolutePathBuf],
+) -> (String, Vec<(String, PathBuf)>) {
+    let mut policy_components = Vec::new();
+    let mut params = Vec::new();
+    for (index, unreadable_root) in unreadable_roots.iter().enumerate() {
+        let unreadable_root = normalize_path_for_sandbox(unreadable_root.as_path())
+            .unwrap_or_else(|| unreadable_root.clone());
+        let param = format!("UNREADABLE_ROOT_{index}");
+        params.push((param.clone(), unreadable_root.into_path_buf()));
+        policy_components.push(format!("(literal (param \"{param}\"))"));
+        policy_components.push(format!("(subpath (param \"{param}\"))"));
+    }
+
+    if policy_components.is_empty() {
+        (String::new(), params)
+    } else {
+        (
+            format!(
+                "(deny file-read* file-write*\n{}\n)",
+                policy_components.join(" ")
+            ),
+            params,
+        )
+    }
+}
+
 fn seatbelt_protected_metadata_name_regex(root: &AbsolutePathBuf, name: &str) -> String {
     let mut root = root.to_string_lossy().to_string();
     while root.len() > 1 && root.ends_with('/') {
@@ -612,6 +639,8 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
 
     let unreadable_roots =
         file_system_sandbox_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd);
+    let readable_roots = file_system_sandbox_policy.get_readable_roots_with_cwd(sandbox_policy_cwd);
+    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
     let (file_write_policy, file_write_dir_params) =
         if file_system_sandbox_policy.has_full_disk_write_access() {
             if unreadable_roots.is_empty() {
@@ -635,9 +664,9 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
             build_seatbelt_access_policy(
                 "file-write*",
                 "WRITABLE_ROOT",
-                file_system_sandbox_policy
-                    .get_writable_roots_with_cwd(sandbox_policy_cwd)
-                    .into_iter()
+                writable_roots
+                    .iter()
+                    .cloned()
                     .map(|root| SeatbeltAccessRoot {
                         protected_metadata_names: protected_metadata_names_for_writable_root(
                             file_system_sandbox_policy,
@@ -664,7 +693,7 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
                     "READABLE_ROOT",
                     vec![SeatbeltAccessRoot {
                         root: root_absolute_path(),
-                        excluded_subpaths: unreadable_roots,
+                        excluded_subpaths: unreadable_roots.clone(),
                         protected_metadata_names: Vec::new(),
                     }],
                 );
@@ -677,9 +706,9 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
             let (policy, params) = build_seatbelt_access_policy(
                 "file-read*",
                 "READABLE_ROOT",
-                file_system_sandbox_policy
-                    .get_readable_roots_with_cwd(sandbox_policy_cwd)
-                    .into_iter()
+                readable_roots
+                    .iter()
+                    .cloned()
                     .map(|root| SeatbeltAccessRoot {
                         excluded_subpaths: unreadable_roots
                             .iter()
@@ -701,29 +730,108 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
             }
         };
 
+    // Platform-default grants such as `/private/tmp` are appended separately
+    // from explicit filesystem roots. Reassert exact denies after those broad
+    // grants, then reopen only narrower explicit roots. This preserves the
+    // deny-parent/read-file shape used for per-command managed CA bundles.
+    let (unreadable_root_policy, unreadable_root_dir_params) =
+        build_seatbelt_unreadable_root_policy(&unreadable_roots);
+    let (readable_carveback_policy, readable_carveback_dir_params) = build_seatbelt_access_policy(
+        "file-read*",
+        "READABLE_CARVEBACK",
+        readable_roots
+            .iter()
+            .filter(|root| {
+                unreadable_roots.iter().any(|unreadable_root| {
+                    root.as_path() != unreadable_root.as_path()
+                        && root.as_path().starts_with(unreadable_root.as_path())
+                })
+            })
+            .cloned()
+            .map(|root| SeatbeltAccessRoot {
+                excluded_subpaths: unreadable_roots
+                    .iter()
+                    .filter(|path| {
+                        path.as_path() != root.as_path()
+                            && path.as_path().starts_with(root.as_path())
+                    })
+                    .cloned()
+                    .collect(),
+                protected_metadata_names: Vec::new(),
+                root,
+            })
+            .collect(),
+    );
+    let (writable_carveback_policy, writable_carveback_dir_params) = build_seatbelt_access_policy(
+        "file-write*",
+        "WRITABLE_CARVEBACK",
+        writable_roots
+            .iter()
+            .filter(|root| {
+                unreadable_roots.iter().any(|unreadable_root| {
+                    root.root.as_path() != unreadable_root.as_path()
+                        && root.root.as_path().starts_with(unreadable_root.as_path())
+                })
+            })
+            .cloned()
+            .map(|root| {
+                let protected_metadata_names = protected_metadata_names_for_writable_root(
+                    file_system_sandbox_policy,
+                    &root,
+                    sandbox_policy_cwd,
+                );
+                let mut excluded_subpaths = root.read_only_subpaths;
+                excluded_subpaths.extend(
+                    unreadable_roots
+                        .iter()
+                        .filter(|path| {
+                            path.as_path() != root.root.as_path()
+                                && path.as_path().starts_with(root.root.as_path())
+                        })
+                        .cloned(),
+                );
+                excluded_subpaths.sort();
+                excluded_subpaths.dedup();
+                SeatbeltAccessRoot {
+                    root: root.root,
+                    excluded_subpaths,
+                    protected_metadata_names,
+                }
+            })
+            .collect(),
+    );
+
     let proxy = proxy_policy_inputs(network, extra_allow_unix_sockets);
     let network_policy =
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
 
     let include_platform_defaults = file_system_sandbox_policy.include_platform_defaults();
-    let deny_read_policy =
+    let deny_read_glob_policy =
         build_seatbelt_unreadable_glob_policy(file_system_sandbox_policy, sandbox_policy_cwd);
     let mut policy_sections = vec![
         MACOS_SEATBELT_BASE_POLICY.to_string(),
         file_read_policy,
         file_write_policy,
-        deny_read_policy,
         network_policy,
     ];
     if include_platform_defaults {
         policy_sections.push(MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS.to_string());
     }
+    policy_sections.push(unreadable_root_policy);
+    policy_sections.push(readable_carveback_policy);
+    policy_sections.push(writable_carveback_policy);
+    // Glob denies remain last so they cannot be overridden by an explicit
+    // carveback or a broad platform-default grant.
+    policy_sections.push(deny_read_glob_policy);
 
     let full_policy = policy_sections.join("\n");
 
     let dir_params = [
         file_read_dir_params,
         file_write_dir_params,
+        unreadable_root_dir_params,
+        readable_carveback_dir_params,
+        writable_carveback_dir_params,
         unix_socket_dir_params(&proxy),
     ]
     .concat();

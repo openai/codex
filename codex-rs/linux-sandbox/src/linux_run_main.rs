@@ -527,6 +527,11 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
         exec_bwrap(args, preserved_files);
     }
 
+    // The forked child owns the descriptors bubblewrap needs. Close the
+    // parent's copies before allowing untrusted code to start so a fallback
+    // that preserves the host /proc cannot expose their backing files through
+    // /proc/<parent-pid>/fd.
+    drop(preserved_files);
     close_child_exec_start_read(exec_start_pipe[0]);
     let protected_create_monitor = ProtectedCreateMonitor::start(&protected_create_targets);
     let signal_forwarders = install_bwrap_signal_forwarders(pid);

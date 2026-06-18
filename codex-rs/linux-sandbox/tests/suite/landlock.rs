@@ -908,6 +908,91 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
 }
 
 #[tokio::test]
+async fn sandbox_reenables_only_selected_readable_file_under_unreadable_parent() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let proxy_dir = tmpdir.path().join("proxy");
+    std::fs::create_dir_all(&proxy_dir).expect("create proxy dir");
+    let active_bundle = proxy_dir.join("ca-bundle-active.pem");
+    let glob_denied_bundle = proxy_dir.join("ca-bundle-glob-denied.pem");
+    let stale_bundle = proxy_dir.join("ca-bundle-stale.pem");
+    let ca_key = proxy_dir.join("ca.key");
+    std::fs::write(&active_bundle, "active").expect("write active bundle");
+    std::fs::write(&glob_denied_bundle, "glob denied").expect("write glob-denied bundle");
+    std::fs::write(&stale_bundle, "stale").expect("write stale bundle");
+    std::fs::write(&ca_key, "private").expect("write CA key");
+
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(proxy_dir.as_path()).expect("absolute proxy dir"),
+            },
+            access: FileSystemAccessMode::Deny,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(active_bundle.as_path())
+                    .expect("absolute active bundle"),
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(glob_denied_bundle.as_path())
+                    .expect("absolute glob-denied bundle"),
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: format!("{}/**/ca-bundle-glob-denied.pem", tmpdir.path().display()),
+            },
+            access: FileSystemAccessMode::Deny,
+        },
+    ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Enabled,
+    );
+    let script = format!(
+        r#"set -e
+test "$(cat '{active_bundle}')" = active
+! cat '{stale_bundle}' >/dev/null 2>&1
+! cat '{glob_denied_bundle}' >/dev/null 2>&1
+! cat '{ca_key}' >/dev/null 2>&1
+"#,
+        active_bundle = active_bundle.display(),
+        stale_bundle = stale_bundle.display(),
+        glob_denied_bundle = glob_denied_bundle.display(),
+        ca_key = ca_key.display(),
+    );
+    let output = run_cmd_result_with_permission_profile(
+        &["bash", "-lc", &script],
+        permission_profile,
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+    )
+    .await
+    .expect("nested readable carveback should execute under bubblewrap");
+
+    assert_eq!(
+        output.exit_code, 0,
+        "stdout:\n{}\nstderr:\n{}",
+        output.stdout.text, output.stderr.text
+    );
+}
+
+#[tokio::test]
 async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
