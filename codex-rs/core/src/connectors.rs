@@ -31,7 +31,6 @@ use codex_core_plugins::PluginsManager;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
@@ -111,7 +110,6 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
             directory_connectors,
             accessible_connectors,
             &connector_ids,
-            originator().value.as_str(),
         )
         .into_iter()
         .map(DiscoverableTool::from);
@@ -142,12 +140,7 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
         return Some(Vec::new());
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    read_cached_accessible_connectors(&cache_key).map(|connectors| {
-        codex_connectors::filter::filter_disallowed_connectors(
-            connectors,
-            originator().value.as_str(),
-        )
-    })
+    read_cached_accessible_connectors(&cache_key)
 }
 
 pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
@@ -160,10 +153,7 @@ pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     }
 
     let cache_key = accessible_connectors_cache_key(config, auth);
-    let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
-        accessible_connectors_from_mcp_tools(mcp_tools),
-        originator().value.as_str(),
-    );
+    let accessible_connectors = accessible_connectors_from_mcp_tools(mcp_tools);
     write_cached_accessible_connectors(cache_key, &accessible_connectors);
 }
 
@@ -239,10 +229,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
-        let cached_connectors = codex_connectors::filter::filter_disallowed_connectors(
-            cached_connectors,
-            originator().value.as_str(),
-        );
         let cached_connectors = with_app_plugin_sources(cached_connectors, &tool_plugin_provenance);
         return Ok(AccessibleConnectorsStatus {
             connectors: cached_connectors,
@@ -351,10 +337,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         cancel_token.cancel();
     }
 
-    let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
-        accessible_connectors_from_mcp_tools(&tools),
-        originator().value.as_str(),
-    );
+    let accessible_connectors = accessible_connectors_from_mcp_tools(&tools);
     if codex_apps_ready || !accessible_connectors.is_empty() {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
     }
