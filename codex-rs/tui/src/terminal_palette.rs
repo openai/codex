@@ -40,7 +40,7 @@ pub fn best_color_for_level(target: (u8, u8, u8), color_level: StdoutColorLevel)
     best_color_for_color_level(target, color_level)
 }
 
-fn effective_stdout_color_level() -> StdoutColorLevel {
+pub(crate) fn effective_stdout_color_level() -> StdoutColorLevel {
     stdout_color_level_for_terminal(
         stdout_color_level(),
         terminal_info().name,
@@ -87,7 +87,7 @@ pub fn requery_default_colors() {
     imp::requery_default_colors();
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DefaultColors {
     fg: (u8, u8, u8),
     bg: (u8, u8, u8),
@@ -264,19 +264,36 @@ mod imp {
                 bg: colors.bg,
             });
             cache.attempted = true;
+            tracing::info!(
+                ?colors,
+                stdout_color_level = ?super::stdout_color_level(),
+                effective_stdout_color_level = ?super::effective_stdout_color_level(),
+                "cached Windows terminal default colors"
+            );
+        } else {
+            tracing::warn!("failed to lock Windows terminal default color cache");
         }
     }
 
-    pub(super) fn requery_default_colors() {}
+    pub(super) fn requery_default_colors() {
+        tracing::info!(
+            "Windows terminal default color requery skipped; retaining startup probe cache"
+        );
+    }
 
     fn query_default_colors() -> Option<DefaultColors> {
-        crate::terminal_probe::default_colors(crate::terminal_probe::DEFAULT_TIMEOUT)
+        let colors = crate::terminal_probe::default_colors(crate::terminal_probe::DEFAULT_TIMEOUT)
             .ok()
             .flatten()
             .map(|colors| DefaultColors {
                 fg: colors.fg,
                 bg: colors.bg,
-            })
+            });
+        tracing::info!(
+            ?colors,
+            "initialized Windows terminal default color cache outside startup probe"
+        );
+        colors
     }
 }
 

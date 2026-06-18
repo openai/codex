@@ -593,17 +593,73 @@ mod imp {
     /// currently Unix-only. Failures and missing responses are reported as `Ok(None)` by callers so
     /// terminals without OSC 10/11 support keep the existing conservative palette fallback.
     pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColors>> {
-        let Ok(output) = std_handle(STD_OUTPUT_HANDLE) else {
-            return Ok(None);
+        let output = match std_handle(STD_OUTPUT_HANDLE) {
+            Ok(output) => output,
+            Err(err) => {
+                tracing::warn!(error = %err, "terminal default color probe has no stdout handle");
+                return Ok(None);
+            }
         };
 
-        if let Ok(input) = std_handle(STD_INPUT_HANDLE)
-            && let Ok(Some(colors)) = query_osc_default_colors(input, output, timeout)
-        {
-            return Ok(Some(colors));
+        let input = std_handle(STD_INPUT_HANDLE);
+        tracing::info!(
+            stdin_handle = ?input.as_ref().map(|handle| *handle as usize),
+            stdin_is_console = input
+                .as_ref()
+                .ok()
+                .is_some_and(|handle| console_mode(*handle).is_some()),
+            stdout_handle = output as usize,
+            stdout_is_console = console_mode(output).is_some(),
+            term = ?std::env::var_os("TERM"),
+            colorterm = ?std::env::var_os("COLORTERM"),
+            wt_session = std::env::var_os("WT_SESSION").is_some(),
+            ssh_connection = std::env::var_os("SSH_CONNECTION").is_some(),
+            "starting Windows terminal default color probe"
+        );
+
+        match input {
+            Ok(input) => match query_osc_default_colors(input, output, timeout) {
+                Ok(Some(colors)) => {
+                    tracing::info!(
+                        ?colors,
+                        source = "osc_10_11",
+                        "terminal default colors resolved"
+                    );
+                    return Ok(Some(colors));
+                }
+                Ok(None) => {
+                    tracing::info!(
+                        source = "osc_10_11",
+                        "terminal default color probe returned no colors"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, source = "osc_10_11", "terminal default color probe failed");
+                }
+            },
+            Err(err) => {
+                tracing::warn!(error = %err, "terminal default color probe has no stdin handle");
+            }
         }
 
-        Ok(query_console_default_colors(output).ok().flatten())
+        match query_console_default_colors(output) {
+            Ok(Some(colors)) => {
+                tracing::info!(
+                    ?colors,
+                    source = "console_attributes",
+                    "terminal default colors resolved"
+                );
+                Ok(Some(colors))
+            }
+            Ok(None) => {
+                tracing::info!(source = "none", "terminal default colors unavailable");
+                Ok(None)
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, source = "console_attributes", "terminal default color fallback failed");
+                Ok(None)
+            }
+        }
     }
 
     fn query_osc_default_colors(
@@ -622,10 +678,13 @@ mod imp {
         if unsafe { GetConsoleScreenBufferInfoEx(output, &mut info) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(Some(decode_console_default_colors(
-            info.wAttributes,
-            &info.ColorTable,
-        )))
+        let colors = decode_console_default_colors(info.wAttributes, &info.ColorTable);
+        tracing::info!(
+            attributes = %format_args!("{:#06x}", info.wAttributes),
+            ?colors,
+            "decoded Windows console default colors"
+        );
+        Ok(Some(colors))
     }
 
     fn decode_console_default_colors(attributes: u16, color_table: &[u32; 16]) -> DefaultColors {
@@ -655,6 +714,11 @@ mod imp {
         Ok(handle)
     }
 
+    fn console_mode(handle: HANDLE) -> Option<u32> {
+        let mut mode = 0;
+        (unsafe { GetConsoleMode(handle, &mut mode) } != 0).then_some(mode)
+    }
+
     struct VirtualTerminalInputMode {
         handle: HANDLE,
         original_mode: u32,
@@ -671,6 +735,12 @@ mod imp {
             if unsafe { SetConsoleMode(handle, requested_mode) } == 0 {
                 return Err(io::Error::last_os_error());
             }
+
+            tracing::info!(
+                original_mode = %format_args!("{original_mode:#010x}"),
+                requested_mode = %format_args!("{requested_mode:#010x}"),
+                "enabled Windows virtual terminal input for default color probe"
+            );
 
             Ok(Self {
                 handle,
@@ -719,11 +789,13 @@ mod imp {
         let mut buffer = Vec::new();
         loop {
             if let Some(value) = parse(&buffer) {
+                log_probe_bytes("parsed", &buffer);
                 return Ok(Some(value));
             }
 
             let now = Instant::now();
             if now >= deadline {
+                log_probe_bytes("deadline", &buffer);
                 return Ok(None);
             }
             let timeout_ms = deadline
@@ -732,10 +804,31 @@ mod imp {
                 .min(u32::MAX as u128) as u32;
             match unsafe { WaitForSingleObject(handle, timeout_ms) } {
                 WAIT_OBJECT_0 => read_once(handle, &mut buffer)?,
-                WAIT_TIMEOUT => return Ok(None),
+                WAIT_TIMEOUT => {
+                    log_probe_bytes("wait_timeout", &buffer);
+                    return Ok(None);
+                }
                 _ => return Err(io::Error::last_os_error()),
             }
         }
+    }
+
+    fn log_probe_bytes(outcome: &str, buffer: &[u8]) {
+        const MAX_LOGGED_BYTES: usize = 512;
+
+        let escaped = buffer
+            .iter()
+            .take(MAX_LOGGED_BYTES)
+            .flat_map(|byte| std::ascii::escape_default(*byte))
+            .map(char::from)
+            .collect::<String>();
+        tracing::info!(
+            outcome,
+            byte_count = buffer.len(),
+            truncated = buffer.len() > MAX_LOGGED_BYTES,
+            escaped_bytes = %escaped,
+            "Windows OSC default color probe input"
+        );
     }
 
     fn read_once(handle: HANDLE, buffer: &mut Vec<u8>) -> io::Result<()> {

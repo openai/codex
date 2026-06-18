@@ -488,6 +488,7 @@ fn probe_windows_default_colors() {
                 "terminal default color probe completed"
             );
             crate::terminal_palette::set_default_colors_from_startup_probe(colors);
+            log_windows_terminal_palette_resolution();
         }
         Err(err) => {
             tracing::warn!(
@@ -495,8 +496,24 @@ fn probe_windows_default_colors() {
                 "terminal default color probe failed: {err}"
             );
             crate::terminal_palette::set_default_colors_from_startup_probe(/*colors*/ None);
+            log_windows_terminal_palette_resolution();
         }
     }
+}
+
+#[cfg(windows)]
+fn log_windows_terminal_palette_resolution() {
+    let foreground = crate::terminal_palette::default_fg();
+    let background = crate::terminal_palette::default_bg();
+    let composer_background = crate::style::user_message_style_for(background).bg;
+    tracing::info!(
+        ?foreground,
+        ?background,
+        stdout_color_level = ?crate::terminal_palette::stdout_color_level(),
+        effective_stdout_color_level = ?crate::terminal_palette::effective_stdout_color_level(),
+        ?composer_background,
+        "resolved Windows terminal palette and composer style"
+    );
 }
 
 fn set_panic_hook() {
