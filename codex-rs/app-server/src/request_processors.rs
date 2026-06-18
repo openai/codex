@@ -541,6 +541,36 @@ fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, 
     .transpose()
 }
 
+fn resolve_turn_environment_selections(
+    thread_manager: &ThreadManager,
+    environments: Option<Vec<TurnEnvironmentParams>>,
+) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
+    let Some(environments) = environments else {
+        return Ok(None);
+    };
+    let mut selections = Vec::with_capacity(environments.len());
+    for environment in environments {
+        let environment_id = environment.environment_id;
+        let cwd = environment
+            .cwd
+            .to_inferred_path_uri()
+            .ok_or_else(|| {
+                invalid_request(format!(
+                    "invalid cwd for environment `{environment_id}`: path `{}` does not use absolute POSIX or Windows path syntax",
+                    environment.cwd
+                ))
+            })?;
+        selections.push(TurnEnvironmentSelection {
+            environment_id,
+            cwd,
+        });
+    }
+    thread_manager
+        .validate_environment_selections(&selections)
+        .map_err(environment_selection_error)?;
+    Ok(Some(selections))
+}
+
 fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
     let mut resolved_roots = Vec::new();
     for root in workspace_roots {

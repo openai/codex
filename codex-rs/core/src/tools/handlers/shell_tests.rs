@@ -83,7 +83,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     #[allow(deprecated)]
     let expected_cwd = turn_context.resolve_path(workdir.clone());
     let expected_env = create_env(
-        &turn_context.shell_environment_policy,
+        &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
     );
 

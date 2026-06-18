@@ -850,6 +850,7 @@ interface:
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("twilio-developer-kit@test".to_string()),
+        plugin_namespace: None,
         plugin_root: Some(plugin_root_abs.clone()),
     }])
     .await;
@@ -907,6 +908,7 @@ interface:
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("twilio-developer-kit@test".to_string()),
+        plugin_namespace: None,
         plugin_root: Some(plugin_root.abs()),
     }])
     .await;
@@ -1053,6 +1055,7 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
         scope: SkillScope::Admin,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_namespace: None,
         plugin_root: None,
     }])
     .await;
@@ -1135,6 +1138,7 @@ async fn system_scope_ignores_symlinked_subdir() {
         scope: SkillScope::System,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_namespace: None,
         plugin_root: None,
     }])
     .await;
@@ -1169,6 +1173,7 @@ async fn respects_max_scan_depth_for_user_scope() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_namespace: None,
         plugin_root: None,
     }])
     .await;
@@ -1256,7 +1261,7 @@ async fn falls_back_to_directory_name_when_skill_name_is_missing() {
 }
 
 #[tokio::test]
-async fn namespaces_plugin_skills_using_plugin_name() {
+async fn namespaces_plugin_skills_using_provided_namespace() {
     let root = tempfile::tempdir().expect("tempdir");
     let plugin_root = root.path().join("plugins/sample");
     let skill_path = write_raw_skill_at(
@@ -1267,7 +1272,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
     fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
     fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"sample"}"#,
+        r#"{"name":"should-not-be-read"}"#,
     )
     .unwrap();
 
@@ -1276,6 +1281,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
+        plugin_namespace: Some("sample".to_string()),
         plugin_root: Some(plugin_root.abs()),
     }])
     .await;
@@ -1321,6 +1327,7 @@ async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
+        plugin_namespace: Some(plugin_name.clone()),
         plugin_root: Some(plugin_root.abs()),
     }])
     .await;
@@ -1366,6 +1373,7 @@ async fn plugin_skill_name_length_limit_rejects_overlong_qualified_name() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
+        plugin_namespace: Some(plugin_name.clone()),
         plugin_root: Some(plugin_root.abs()),
     }])
     .await;
@@ -1401,6 +1409,134 @@ async fn loads_short_description_from_metadata() {
             name: "demo-skill".to_string(),
             description: "long description".to_string(),
             short_description: Some("short summary".to_string()),
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn loads_unquoted_description_containing_colon_space() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_raw_skill_at(
+        &codex_home.path().join("skills"),
+        "colon-description",
+        "name: colon-description\ndescription: AWS deployment patterns: ECS Fargate, Lambda, and S3",
+    );
+
+    let cfg = make_config(&codex_home).await;
+    let outcome = load_skills_for_test(&cfg).await;
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "colon-description".to_string(),
+            description: "AWS deployment patterns: ECS Fargate, Lambda, and S3".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn loads_unquoted_short_description_containing_colon_space_and_apostrophe() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_raw_skill_at(
+        &codex_home.path().join("skills"),
+        "colon-short-description",
+        "name: colon-short-description\ndescription: long description\nmetadata:\n  short-description: What's included: builds and tests",
+    );
+
+    let cfg = make_config(&codex_home).await;
+    let outcome = load_skills_for_test(&cfg).await;
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "colon-short-description".to_string(),
+            description: "long description".to_string(),
+            short_description: Some("What's included: builds and tests".to_string()),
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn loads_unrecognized_frontmatter_fields_that_need_quotes() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_raw_skill_at(
+        &codex_home.path().join("skills"),
+        "repaired-unknown-fields",
+        "name: repaired-unknown-fields\ndescription: valid description\nargument-hint: <duration: e.g. 7d, 2w>\ntags: [next,@supabase/ssr]",
+    );
+
+    let cfg = make_config(&codex_home).await;
+    let outcome = load_skills_for_test(&cfg).await;
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "repaired-unknown-fields".to_string(),
+            description: "valid description".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn preserves_block_scalar_body_while_repairing_other_fields() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_raw_skill_at(
+        &codex_home.path().join("skills"),
+        "block-description-with-repair",
+        "name: block-description-with-repair\ndescription: |-\n  Build for AWS: ECS\nargument-hint: <duration: e.g. 7d>",
+    );
+
+    let cfg = make_config(&codex_home).await;
+    let outcome = load_skills_for_test(&cfg).await;
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "block-description-with-repair".to_string(),
+            description: "Build for AWS: ECS".to_string(),
+            short_description: None,
             interface: None,
             dependencies: None,
             policy: None,
@@ -1677,6 +1813,7 @@ async fn deduplicates_by_path_preferring_first_root() {
             scope: SkillScope::Repo,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
+            plugin_namespace: None,
             plugin_root: None,
         },
         SkillRoot {
@@ -1684,6 +1821,7 @@ async fn deduplicates_by_path_preferring_first_root() {
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
+            plugin_namespace: None,
             plugin_root: None,
         },
     ])

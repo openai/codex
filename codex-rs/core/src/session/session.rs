@@ -438,7 +438,7 @@ pub(crate) struct AppServerClientMetadata {
 async fn warm_plugins_and_skills_for_session_init(
     config: Arc<Config>,
     plugins_manager: Arc<PluginsManager>,
-    skills_manager: Arc<SkillsManager>,
+    skills_service: Arc<SkillsService>,
     turn_environments: &TurnEnvironmentSnapshot,
 ) -> Vec<SkillError> {
     let fs = turn_environments.primary_filesystem();
@@ -446,10 +446,12 @@ async fn warm_plugins_and_skills_for_session_init(
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots);
-    skills_manager
-        .skills_for_config(&skills_input, fs)
+    skills_service
+        .snapshot_for_config(&skills_input, fs)
         .await
+        .outcome()
         .errors
+        .clone()
 }
 
 impl Session {
@@ -477,7 +479,7 @@ impl Session {
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
-        skills_manager: Arc<SkillsManager>,
+        skills_service: Arc<SkillsService>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
@@ -828,7 +830,7 @@ impl Session {
             let plugin_skill_errors = warm_plugins_and_skills_for_session_init(
                 Arc::clone(&config),
                 Arc::clone(&plugins_manager),
-                Arc::clone(&skills_manager),
+                Arc::clone(&skills_service),
                 &resolved_environments,
             )
             .instrument(info_span!(
@@ -999,7 +1001,7 @@ impl Session {
                 guardian_rejections: Mutex::new(HashMap::new()),
                 guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
                 runtime_handle: tokio::runtime::Handle::current(),
-                skills_manager,
+                skills_service,
                 plugins_manager: Arc::clone(&plugins_manager),
                 mcp_manager: Arc::clone(&mcp_manager),
                 extensions,
@@ -1119,9 +1121,12 @@ impl Session {
             };
             let mcp_runtime_context = {
                 let turn_environments = sess.services.turn_environments.snapshot().await;
+                // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment
+                // cwd values can be used without falling back to the session host cwd.
                 let cwd = turn_environments
                     .primary()
-                    .map(|turn_environment| turn_environment.cwd().to_path_buf())
+                    .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+                    .map(|cwd| cwd.to_path_buf())
                     .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
                 McpRuntimeContext::new(
                     sess.services.turn_environments.environment_manager(),

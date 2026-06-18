@@ -238,6 +238,7 @@ fn build_compacted_history_preserves_user_message_metadata() {
             message: "first user message".to_string(),
             metadata: Some(ResponseItemMetadata {
                 turn_id: Some("turn-1".to_string()),
+                ..Default::default()
             }),
         }],
         "summary text",
@@ -653,6 +654,7 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_summary_last() 
 #[test]
 fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last() {
     let compacted_history = vec![ResponseItem::Compaction {
+        id: None,
         encrypted_content: "encrypted".to_string(),
         metadata: None,
     }];
@@ -679,6 +681,7 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last
             metadata: None,
         },
         ResponseItem::Compaction {
+            id: None,
             encrypted_content: "encrypted".to_string(),
             metadata: None,
         },

@@ -76,6 +76,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
+use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -1326,7 +1327,10 @@ async fn turn_start_rejects_unknown_environment_before_starting_turn() -> Result
             }],
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "missing".to_string(),
-                cwd: codex_home.path().to_path_buf().try_into()?,
+                cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                    codex_home.path().to_path_buf(),
+                )?
+                .into(),
             }]),
             ..Default::default()
         })
@@ -2063,6 +2067,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         panic!("expected CommandExecutionRequestApproval request");
     };
     assert_eq!(params.item_id, "call1");
+    assert_eq!(params.environment_id.as_deref(), Some("local"));
     let resolved_request_id = request_id.clone();
 
     // Approve and wait for task completion
@@ -2435,7 +2440,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     else {
         unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(cwd.as_path(), second_cwd.as_path());
+    assert_eq!(cwd.as_str(), second_cwd.to_string_lossy().as_ref());
     let expected_command = format_with_current_shell_display("echo second turn");
     assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);
@@ -2669,7 +2674,7 @@ async fn run_environment_selection_case(
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
-            environments: environment_params(case.sticky, workspace)?,
+            environments: environment_params(case.sticky, workspace),
             ..Default::default()
         })
         .await?;
@@ -2688,7 +2693,7 @@ async fn run_environment_selection_case(
                 text: format!("run {}", case.name),
                 text_elements: Vec::new(),
             }],
-            environments: environment_params(case.turn, workspace)?,
+            environments: environment_params(case.turn, workspace),
             cwd: Some(workspace.to_path_buf()),
             model: Some("mock-model".to_string()),
             ..Default::default()
@@ -2735,21 +2740,15 @@ async fn run_environment_selection_case(
     Ok(())
 }
 
-fn environment_params(
-    ids: Option<&[&str]>,
-    cwd: &Path,
-) -> Result<Option<Vec<TurnEnvironmentParams>>> {
+fn environment_params(ids: Option<&[&str]>, cwd: &Path) -> Option<Vec<TurnEnvironmentParams>> {
     ids.map(|ids| {
         ids.iter()
-            .map(|id| {
-                Ok(TurnEnvironmentParams {
-                    environment_id: (*id).to_string(),
-                    cwd: cwd.to_path_buf().try_into()?,
-                })
+            .map(|id| TurnEnvironmentParams {
+                environment_id: (*id).to_string(),
+                cwd: cwd.abs().into(),
             })
             .collect()
     })
-    .transpose()
 }
 
 #[tokio::test]

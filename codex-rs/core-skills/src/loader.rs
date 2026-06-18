@@ -157,6 +157,7 @@ pub struct SkillRoot {
     pub scope: SkillScope,
     pub file_system: Arc<dyn ExecutorFileSystem>,
     pub plugin_id: Option<String>,
+    pub plugin_namespace: Option<String>,
     pub plugin_root: Option<AbsolutePathBuf>,
 }
 
@@ -178,6 +179,7 @@ where
             &root_path,
             root.scope,
             root.plugin_id.as_deref(),
+            root.plugin_namespace.as_deref(),
             root.plugin_root.as_ref(),
             &mut outcome,
         )
@@ -266,6 +268,7 @@ async fn skill_roots_with_home_dir(
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some(root.plugin_id),
+        plugin_namespace: Some(root.plugin_namespace),
         plugin_root: Some(root.plugin_root),
     }));
     roots.extend(extra_skill_roots.into_iter().map(|path| SkillRoot {
@@ -273,6 +276,7 @@ async fn skill_roots_with_home_dir(
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_namespace: None,
         plugin_root: None,
     }));
     roots.extend(repo_agents_skill_roots(fs, config_layer_stack, cwd).await);
@@ -303,6 +307,7 @@ fn skill_roots_from_layer_stack_inner(
                         scope: SkillScope::Repo,
                         file_system: Arc::clone(repo_fs),
                         plugin_id: None,
+                        plugin_namespace: None,
                         plugin_root: None,
                     });
                 }
@@ -315,6 +320,7 @@ fn skill_roots_from_layer_stack_inner(
                     scope: SkillScope::User,
                     file_system: Arc::clone(&LOCAL_FS),
                     plugin_id: None,
+                    plugin_namespace: None,
                     plugin_root: None,
                 });
 
@@ -325,6 +331,7 @@ fn skill_roots_from_layer_stack_inner(
                         scope: SkillScope::User,
                         file_system: Arc::clone(&LOCAL_FS),
                         plugin_id: None,
+                        plugin_namespace: None,
                         plugin_root: None,
                     });
                 }
@@ -336,6 +343,7 @@ fn skill_roots_from_layer_stack_inner(
                     scope: SkillScope::System,
                     file_system: Arc::clone(&LOCAL_FS),
                     plugin_id: None,
+                    plugin_namespace: None,
                     plugin_root: None,
                 });
             }
@@ -347,6 +355,7 @@ fn skill_roots_from_layer_stack_inner(
                     scope: SkillScope::Admin,
                     file_system: Arc::clone(&LOCAL_FS),
                     plugin_id: None,
+                    plugin_namespace: None,
                     plugin_root: None,
                 });
             }
@@ -382,6 +391,7 @@ async fn repo_agents_skill_roots(
                 scope: SkillScope::Repo,
                 file_system: Arc::clone(&fs),
                 plugin_id: None,
+                plugin_namespace: None,
                 plugin_root: None,
             }),
             Ok(_) => {}
@@ -490,6 +500,7 @@ async fn discover_skills_under_root(
     root: &AbsolutePathBuf,
     scope: SkillScope,
     plugin_id: Option<&str>,
+    plugin_namespace: Option<&str>,
     plugin_root: Option<&AbsolutePathBuf>,
     outcome: &mut SkillLoadOutcome,
 ) {
@@ -610,7 +621,16 @@ async fn discover_skills_under_root(
             }
 
             if metadata.is_file && file_name == SKILLS_FILENAME {
-                match parse_skill_file(fs, &path, scope, plugin_id, plugin_root.as_ref()).await {
+                match parse_skill_file(
+                    fs,
+                    &path,
+                    scope,
+                    plugin_id,
+                    plugin_namespace,
+                    plugin_root.as_ref(),
+                )
+                .await
+                {
                     Ok(skill) => {
                         outcome.skills.push(skill);
                     }
@@ -641,6 +661,7 @@ async fn parse_skill_file(
     path: &AbsolutePathBuf,
     scope: SkillScope,
     plugin_id: Option<&str>,
+    plugin_namespace: Option<&str>,
     plugin_root: Option<&AbsolutePathBuf>,
 ) -> Result<SkillMetadata, SkillParseError> {
     let path_uri = PathUri::from_abs_path(path);
@@ -651,8 +672,19 @@ async fn parse_skill_file(
 
     let frontmatter = extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
 
-    let parsed: SkillFrontmatter =
-        serde_yaml::from_str(&frontmatter).map_err(SkillParseError::InvalidYaml)?;
+    let parsed: SkillFrontmatter = match serde_yaml::from_str(&frontmatter) {
+        Ok(parsed) => Ok(parsed),
+        Err(original_error) => match repair_frontmatter_scalar_fields(&frontmatter) {
+            // Some third-party skills use prose like `description: Build for AWS: ECS`
+            // or `argument-hint: <duration: e.g. 7d>`. Keep the repair line-oriented
+            // so unrelated invalid YAML still surfaces.
+            Some(repaired_frontmatter) => {
+                serde_yaml::from_str(&repaired_frontmatter).map_err(|_| original_error)
+            }
+            None => Err(original_error),
+        },
+    }
+    .map_err(SkillParseError::InvalidYaml)?;
 
     let base_name = parsed
         .name
@@ -660,7 +692,7 @@ async fn parse_skill_file(
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default_skill_name(path));
-    let name = namespaced_skill_name(fs, path, &base_name).await;
+    let name = namespaced_skill_name(fs, path, &base_name, plugin_namespace).await;
     let description = parsed
         .description
         .as_deref()
@@ -720,7 +752,11 @@ async fn namespaced_skill_name(
     fs: &dyn ExecutorFileSystem,
     path: &AbsolutePathBuf,
     base_name: &str,
+    plugin_namespace: Option<&str>,
 ) -> String {
+    if let Some(plugin_namespace) = plugin_namespace {
+        return format!("{plugin_namespace}:{base_name}");
+    }
     plugin_namespace_for_skill_path(fs, path)
         .await
         .map(|namespace| format!("{namespace}:{base_name}"))
@@ -995,6 +1031,91 @@ fn lexically_normalize(path: &Path) -> PathBuf {
 
 fn sanitize_single_line(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn repair_frontmatter_scalar_fields(frontmatter: &str) -> Option<String> {
+    let mut changed = false;
+    let mut block_scalar_indent: Option<usize> = None;
+    let mut repaired_lines: Vec<String> = Vec::new();
+    for line in frontmatter.lines() {
+        let indent = line
+            .chars()
+            .take_while(|character| *character == ' ')
+            .count();
+        if let Some(block_indent) = block_scalar_indent {
+            if line.trim().is_empty() || indent > block_indent {
+                repaired_lines.push(line.to_string());
+                continue;
+            }
+            block_scalar_indent = None;
+        }
+
+        let Some((key, value)) = line.split_once(':') else {
+            repaired_lines.push(line.to_string());
+            continue;
+        };
+        if key.trim().is_empty() || !value.chars().next().is_none_or(char::is_whitespace) {
+            repaired_lines.push(line.to_string());
+            continue;
+        }
+
+        let trimmed_start = value.trim_start();
+        let leading_whitespace = &value[..value.len() - trimmed_start.len()];
+        let mut scalar = trimmed_start;
+        let mut comment = "";
+        for (index, character) in trimmed_start.char_indices() {
+            if character == '#'
+                && (index == 0
+                    || trimmed_start[..index]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace))
+            {
+                let comment_start = trimmed_start[..index].trim_end().len();
+                scalar = &trimmed_start[..comment_start];
+                comment = &trimmed_start[comment_start..];
+                break;
+            }
+        }
+
+        let scalar = scalar.trim_end();
+        let Some(first_char) = scalar.chars().next() else {
+            repaired_lines.push(line.to_string());
+            continue;
+        };
+        if matches!(first_char, '|' | '>') {
+            block_scalar_indent = Some(indent);
+            repaired_lines.push(line.to_string());
+            continue;
+        }
+        if matches!(first_char, '\'' | '"') {
+            repaired_lines.push(line.to_string());
+            continue;
+        }
+        let mut has_colon_separator = false;
+        let mut chars = scalar.chars().peekable();
+        while let Some(character) = chars.next() {
+            if character == ':'
+                && matches!(chars.peek(), Some(next_character) if next_character.is_whitespace())
+            {
+                has_colon_separator = true;
+                break;
+            }
+        }
+        let invalid_flow_like_scalar = matches!(first_char, '[' | '{' | '@' | '`')
+            && serde_yaml::from_str::<serde_yaml::Value>(scalar).is_err();
+        if !has_colon_separator && !invalid_flow_like_scalar {
+            repaired_lines.push(line.to_string());
+            continue;
+        }
+
+        let quoted_scalar = format!("'{}'", scalar.replace('\'', "''"));
+        repaired_lines.push(format!(
+            "{key}:{leading_whitespace}{quoted_scalar}{comment}"
+        ));
+        changed = true;
+    }
+    changed.then(|| repaired_lines.join("\n"))
 }
 
 fn validate_len(

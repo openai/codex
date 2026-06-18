@@ -23,6 +23,7 @@ fn prompt_with_image_outputs() -> Prompt {
                 metadata: None,
             },
             ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: "function-call".to_string(),
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
@@ -33,6 +34,7 @@ fn prompt_with_image_outputs() -> Prompt {
                 metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: "custom-call".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
@@ -69,6 +71,7 @@ fn responses_lite_request_copies_strip_image_details() {
                 metadata: None,
             },
             ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: "function-call".to_string(),
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
@@ -79,6 +82,7 @@ fn responses_lite_request_copies_strip_image_details() {
                 metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: "custom-call".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
