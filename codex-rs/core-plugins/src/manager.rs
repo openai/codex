@@ -1764,7 +1764,11 @@ impl PluginsManager {
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         if config.plugins_enabled {
-            self.start_curated_repo_sync();
+            let use_remote_global_catalog =
+                config.remote_plugin_enabled && auth_manager.current_auth_uses_codex_backend();
+            if !use_remote_global_catalog {
+                self.start_curated_repo_sync();
+            }
             let should_spawn_marketplace_auto_upgrade = {
                 let mut state = match self.configured_marketplace_upgrade_state.write() {
                     Ok(state) => state,
