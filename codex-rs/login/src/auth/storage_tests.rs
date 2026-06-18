@@ -172,6 +172,38 @@ async fn file_storage_loads_empty_agent_identity_email_as_none() -> anyhow::Resu
 }
 
 #[tokio::test]
+async fn file_storage_writes_missing_agent_identity_email_as_empty_string() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: None,
+        agent_identity: Some(AgentIdentityStorage::Record(AgentIdentityAuthRecord {
+            agent_runtime_id: "agent-runtime-id".to_string(),
+            agent_private_key: "private-key".to_string(),
+            account_id: "account-id".to_string(),
+            chatgpt_user_id: "user-id".to_string(),
+            email: None,
+            plan_type: AccountPlanType::Pro,
+            chatgpt_account_is_fedramp: false,
+            task_id: None,
+        })),
+        personal_access_token: None,
+        bedrock_api_key: None,
+    };
+
+    storage.save(&auth_dot_json)?;
+
+    let auth_file = get_auth_file(codex_home.path());
+    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(auth_file)?)?;
+    assert_eq!(saved["agent_identity"]["email"], "");
+    assert_eq!(storage.load()?, Some(auth_dot_json));
+    Ok(())
+}
+
+#[tokio::test]
 async fn file_storage_round_trips_personal_access_token_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
