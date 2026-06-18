@@ -612,7 +612,7 @@ fn codex_apps_tools_cache_is_scoped_per_user() {
 }
 
 #[test]
-fn codex_apps_tools_cache_filters_disallowed_connectors() {
+fn codex_apps_tools_cache_preserves_formerly_disallowed_connectors() {
     let codex_home = tempdir().expect("tempdir");
     let cache_context = create_codex_apps_tools_cache_context(
         codex_home.path().to_path_buf(),
@@ -622,13 +622,13 @@ fn codex_apps_tools_cache_filters_disallowed_connectors() {
     let tools = vec![
         create_test_tool_with_connector(
             CODEX_APPS_MCP_SERVER_NAME,
-            "blocked_tool",
+            "formerly_blocked_tool",
             "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
-            Some("Blocked"),
+            Some("Formerly Blocked"),
         ),
         create_test_tool_with_connector(
             CODEX_APPS_MCP_SERVER_NAME,
-            "allowed_tool",
+            "calendar_tool",
             "calendar",
             Some("Calendar"),
         ),
@@ -637,9 +637,19 @@ fn codex_apps_tools_cache_filters_disallowed_connectors() {
     write_cached_codex_apps_tools(&cache_context, &tools);
     let cached = read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for user");
 
-    assert_eq!(cached.len(), 1);
-    assert_eq!(cached[0].callable_name, "allowed_tool");
-    assert_eq!(cached[0].connector_id.as_deref(), Some("calendar"));
+    assert_eq!(
+        cached
+            .iter()
+            .map(|tool| (tool.callable_name.as_str(), tool.connector_id.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "formerly_blocked_tool",
+                Some("connector_2b0a9009c9c64bf9933a3dae3f2b1254")
+            ),
+            ("calendar_tool", Some("calendar")),
+        ]
+    );
 }
 
 #[test]

@@ -1245,7 +1245,7 @@ async fn plugin_install_skips_mcp_oauth_for_chatgpt_dual_surface_plugin() -> Res
 }
 
 #[tokio::test]
-async fn plugin_install_starts_mcp_oauth_when_only_plugin_apps_are_disallowed() -> Result<()> {
+async fn plugin_install_starts_mcp_oauth_with_formerly_disallowed_plugin_app() -> Result<()> {
     let (apps_server_url, apps_server_handle, _apps_server_control) =
         start_apps_server(Vec::new(), Vec::new()).await?;
     let oauth_server = MockServer::start().await;
@@ -1296,8 +1296,22 @@ async fn plugin_install_starts_mcp_oauth_when_only_plugin_apps_are_disallowed() 
     .await??;
     let response: PluginInstallResponse = to_response(response)?;
 
-    assert_eq!(response.auth_policy, PluginAuthPolicy::OnInstall);
-    assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
+    assert_eq!(
+        response,
+        PluginInstallResponse {
+            auth_policy: PluginAuthPolicy::OnInstall,
+            apps_needing_auth: vec![AppSummary {
+                id: "asdk_app_6938a94a61d881918ef32cb999ff937c".to_string(),
+                name: "asdk_app_6938a94a61d881918ef32cb999ff937c".to_string(),
+                description: None,
+                install_url: Some(
+                    "https://chatgpt.com/apps/asdk-app-6938a94a61d881918ef32cb999ff937c/asdk_app_6938a94a61d881918ef32cb999ff937c"
+                        .to_string(),
+                ),
+                category: None,
+            }],
+        }
+    );
     assert!(oauth_discovery_request_count(&oauth_server).await > 0);
 
     apps_server_handle.abort();
@@ -1461,7 +1475,7 @@ async fn plugin_install_skips_remote_mcp_oauth_for_bundled_same_name_app() -> Re
 }
 
 #[tokio::test]
-async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
+async fn plugin_install_includes_formerly_disallowed_apps_needing_auth() -> Result<()> {
     let connectors = vec![AppInfo {
         id: "alpha".to_string(),
         name: "Alpha".to_string(),
@@ -1537,6 +1551,16 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
                 name: "Alpha".to_string(),
                 description: Some("Alpha connector".to_string()),
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+                category: None,
+            },
+            AppSummary {
+                id: "asdk_app_6938a94a61d881918ef32cb999ff937c".to_string(),
+                name: "asdk_app_6938a94a61d881918ef32cb999ff937c".to_string(),
+                description: None,
+                install_url: Some(
+                    "https://chatgpt.com/apps/asdk-app-6938a94a61d881918ef32cb999ff937c/asdk_app_6938a94a61d881918ef32cb999ff937c"
+                        .to_string(),
+                ),
                 category: None,
             }],
         }

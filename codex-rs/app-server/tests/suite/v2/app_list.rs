@@ -365,10 +365,11 @@ connectors = false
 
 #[tokio::test]
 async fn list_apps_keeps_apps_with_app_only_tools_accessible() -> Result<()> {
+    let connector_id = "connector_2b0a9009c9c64bf9933a3dae3f2b1254";
     let connectors = vec![AppInfo {
-        id: "beta".to_string(),
-        name: "Beta".to_string(),
-        description: Some("Beta connector".to_string()),
+        id: connector_id.to_string(),
+        name: "Formerly Blocked".to_string(),
+        description: Some("Formerly blocked connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
         distribution_channel: None,
@@ -380,7 +381,7 @@ async fn list_apps_keeps_apps_with_app_only_tools_accessible() -> Result<()> {
         is_enabled: true,
         plugin_display_names: Vec::new(),
     }];
-    let mut app_only_tool = connector_tool("beta", "Beta App")?;
+    let mut app_only_tool = connector_tool(connector_id, "Formerly Blocked")?;
     app_only_tool
         .meta
         .as_mut()
@@ -421,7 +422,7 @@ async fn list_apps_keeps_apps_with_app_only_tools_accessible() -> Result<()> {
     let AppsListResponse { data, next_cursor } = to_response(response)?;
 
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0].id, "beta");
+    assert_eq!(data[0].id, connector_id);
     assert!(data[0].is_accessible);
     assert!(next_cursor.is_none());
 
