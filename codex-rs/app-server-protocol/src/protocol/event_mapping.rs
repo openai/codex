@@ -21,7 +21,6 @@ use crate::protocol::v2::ThreadItem;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::protocol::EventMsg;
 use std::collections::HashMap;
-use std::io;
 
 /// Build the v2 app-server notification that directly corresponds to a single core event.
 ///
@@ -32,10 +31,10 @@ pub fn item_event_to_server_notification(
     msg: EventMsg,
     thread_id: &str,
     turn_id: &str,
-) -> io::Result<ServerNotification> {
+) -> ServerNotification {
     let thread_id = thread_id.to_string();
     let turn_id = turn_id.to_string();
-    Ok(match msg {
+    match msg {
         EventMsg::DynamicToolCallResponse(response) => {
             let status = if response.success {
                 DynamicToolCallStatus::Completed
@@ -427,7 +426,7 @@ pub fn item_event_to_server_notification(
             ServerNotification::ItemStarted(ItemStartedNotification {
                 thread_id,
                 turn_id,
-                item: build_command_execution_begin_item(&exec_command_begin_event)?,
+                item: build_command_execution_begin_item(&exec_command_begin_event),
                 started_at_ms: exec_command_begin_event.started_at_ms,
             })
         }
@@ -456,12 +455,12 @@ pub fn item_event_to_server_notification(
             ServerNotification::ItemCompleted(ItemCompletedNotification {
                 thread_id,
                 turn_id,
-                item: build_command_execution_end_item(&exec_command_end_event)?,
+                item: build_command_execution_end_item(&exec_command_end_event),
                 completed_at_ms: exec_command_end_event.completed_at_ms,
             })
         }
         _ => unreachable!("unsupported item event"),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -521,8 +520,7 @@ mod tests {
             EventMsg::CollabResumeBegin(event.clone()),
             "thread-1",
             "turn-1",
-        )
-        .expect("event should map");
+        );
         assert_item_started_server_notification(
             notification,
             ItemStartedNotification {
@@ -561,8 +559,7 @@ mod tests {
             EventMsg::CollabResumeEnd(event.clone()),
             "thread-2",
             "turn-2",
-        )
-        .expect("event should map");
+        );
         assert_item_completed_server_notification(
             notification,
             ItemCompletedNotification {
@@ -599,8 +596,7 @@ mod tests {
             }),
             "thread-1",
             "turn-1",
-        )
-        .expect("event should map");
+        );
 
         assert_command_execution_output_delta_server_notification(
             notification,

@@ -134,21 +134,6 @@ struct CommandExecutionCompletionItem {
     command_actions: Vec<V2ParsedCommand>,
 }
 
-async fn send_item_event_notification(
-    msg: EventMsg,
-    conversation_id: &ThreadId,
-    event_turn_id: &str,
-    outgoing: &ThreadScopedOutgoingMessageSender,
-) {
-    // TODO(anp): Stop dropping item notifications here once
-    // `codex_app_server_protocol::protocol::item_builders` can build command actions from
-    // `PathUri` and `protocol::v2::item::CommandAction` carries `PathUri` paths.
-    match item_event_to_server_notification(msg, &conversation_id.to_string(), event_turn_id) {
-        Ok(notification) => outgoing.send_server_notification(notification).await,
-        Err(error) => error!(%error, "failed to map item event to app-server notification"),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -876,7 +861,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         | EventMsg::ReasoningContentDelta(_)
         | EventMsg::ReasoningRawContentDelta(_)
         | EventMsg::AgentReasoningSectionBreak(_)) => {
-            send_item_event_notification(msg, &conversation_id, &event_turn_id, &outgoing).await;
+            let notification = item_event_to_server_notification(
+                msg,
+                &conversation_id.to_string(),
+                &event_turn_id,
+            );
+            outgoing.send_server_notification(notification).await;
         }
         EventMsg::SubAgentActivity(activity) => {
             if activity.kind == SubAgentActivityKind::Interrupted
@@ -889,13 +879,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .remove_thread(&activity.agent_thread_id.to_string())
                     .await;
             }
-            send_item_event_notification(
+            let notification = item_event_to_server_notification(
                 EventMsg::SubAgentActivity(activity),
-                &conversation_id,
+                &conversation_id.to_string(),
                 &event_turn_id,
-                &outgoing,
-            )
-            .await;
+            );
+            outgoing.send_server_notification(notification).await;
         }
         EventMsg::CollabCloseEnd(end_event) => {
             if thread_manager
@@ -907,13 +896,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .remove_thread(&end_event.receiver_thread_id.to_string())
                     .await;
             }
-            send_item_event_notification(
+            let notification = item_event_to_server_notification(
                 EventMsg::CollabCloseEnd(end_event),
-                &conversation_id,
+                &conversation_id.to_string(),
                 &event_turn_id,
-                &outgoing,
-            )
-            .await;
+            );
+            outgoing.send_server_notification(notification).await;
         }
         EventMsg::ContextCompacted(..) => {
             // Core still fans out this deprecated event for legacy clients;
@@ -1023,7 +1011,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         | EventMsg::ItemCompleted(_)
         | EventMsg::PatchApplyUpdated(_)
         | EventMsg::TerminalInteraction(_)) => {
-            send_item_event_notification(msg, &conversation_id, &event_turn_id, &outgoing).await;
+            let notification = item_event_to_server_notification(
+                msg,
+                &conversation_id.to_string(),
+                &event_turn_id,
+            );
+            outgoing.send_server_notification(notification).await;
         }
         EventMsg::HookStarted(event) => {
             let notification = HookStartedNotification {
@@ -1112,23 +1105,21 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .insert(item_id.clone())
             };
             if first_start {
-                send_item_event_notification(
+                let notification = item_event_to_server_notification(
                     EventMsg::ExecCommandBegin(exec_command_begin_event),
-                    &conversation_id,
+                    &conversation_id.to_string(),
                     &event_turn_id,
-                    &outgoing,
-                )
-                .await;
+                );
+                outgoing.send_server_notification(notification).await;
             }
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
-            send_item_event_notification(
+            let notification = item_event_to_server_notification(
                 EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event),
-                &conversation_id,
+                &conversation_id.to_string(),
                 &event_turn_id,
-                &outgoing,
-            )
-            .await;
+            );
+            outgoing.send_server_notification(notification).await;
         }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
             let call_id = exec_command_end_event.call_id.clone();
@@ -1148,13 +1139,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                 // emitted for unified exec interactions.
                 return;
             }
-            send_item_event_notification(
+            let notification = item_event_to_server_notification(
                 EventMsg::ExecCommandEnd(exec_command_end_event),
-                &conversation_id,
+                &conversation_id.to_string(),
                 &event_turn_id,
-                &outgoing,
-            )
-            .await;
+            );
+            outgoing.send_server_notification(notification).await;
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {

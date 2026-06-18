@@ -840,13 +840,11 @@ fn exec_approval_request_from_params(
     params: CommandExecutionRequestApprovalParams,
     fallback_cwd: &AbsolutePathBuf,
 ) -> ExecApprovalRequestEvent {
+    // TODO(anp): Keep this as PathUri once `tui::approval_events::ExecApprovalRequestEvent` and
+    // approval rendering support foreign paths.
     let cwd = params
         .cwd
-        .and_then(|cwd| {
-            let convention = cwd.infer_absolute_path_convention()?;
-            cwd.to_path_uri(convention).ok()
-        })
-        .and_then(|cwd| cwd.to_abs_path().ok())
+        .and_then(|cwd| cwd.to_inferred_abs_path())
         .unwrap_or_else(|| fallback_cwd.clone());
     ExecApprovalRequestEvent {
         call_id: params.item_id,

@@ -38,8 +38,8 @@ use codex_shell_command::parse_command::shlex_join;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
-use std::io;
 use std::path::PathBuf;
+use tracing::warn;
 
 pub fn build_file_change_approval_request_item(
     payload: &ApplyPatchApprovalRequestEvent,
@@ -89,11 +89,9 @@ pub fn build_command_execution_approval_request_item(
     }
 }
 
-pub fn build_command_execution_begin_item(
-    payload: &ExecCommandBeginEvent,
-) -> io::Result<ThreadItem> {
-    let command_actions = command_actions_for_path_uri(&payload.parsed_cmd, &payload.cwd)?;
-    Ok(ThreadItem::CommandExecution {
+pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> ThreadItem {
+    let command_actions = command_actions_for_path_uri(&payload.parsed_cmd, &payload.cwd);
+    ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
         cwd: payload.cwd.clone().into(),
@@ -104,19 +102,19 @@ pub fn build_command_execution_begin_item(
         aggregated_output: None,
         exit_code: None,
         duration_ms: None,
-    })
+    }
 }
 
-pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> io::Result<ThreadItem> {
+pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> ThreadItem {
     let aggregated_output = if payload.aggregated_output.is_empty() {
         None
     } else {
         Some(payload.aggregated_output.clone())
     };
     let duration_ms = i64::try_from(payload.duration.as_millis()).unwrap_or(i64::MAX);
-    let command_actions = command_actions_for_path_uri(&payload.parsed_cmd, &payload.cwd)?;
+    let command_actions = command_actions_for_path_uri(&payload.parsed_cmd, &payload.cwd);
 
-    Ok(ThreadItem::CommandExecution {
+    ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
         cwd: payload.cwd.clone().into(),
@@ -127,17 +125,14 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> io::Re
         aggregated_output,
         exit_code: Some(payload.exit_code),
         duration_ms: Some(duration_ms),
-    })
+    }
 }
 
-fn command_actions_for_path_uri(
-    parsed_cmd: &[ParsedCommand],
-    cwd: &PathUri,
-) -> io::Result<Vec<CommandAction>> {
+fn command_actions_for_path_uri(parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> Vec<CommandAction> {
     // TODO(anp): Carry PathUri into CommandAction so foreign Read actions retain resolved paths.
-    // Until then, fail the entire conversion rather than project a foreign cwd onto the host.
+    // Until then, omit those actions rather than project a foreign cwd onto the host.
     let native_cwd = if cwd.infer_path_convention() == Some(PathConvention::native()) {
-        Some(cwd.to_abs_path()?)
+        cwd.to_abs_path().ok()
     } else {
         None
     };
@@ -145,29 +140,31 @@ fn command_actions_for_path_uri(
     parsed_cmd
         .iter()
         .cloned()
-        .map(|parsed| match parsed {
-            ParsedCommand::Read { cmd, name, path } => {
-                let cwd = native_cwd.as_ref().ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("cannot resolve command action path against foreign cwd `{cwd}`"),
-                    )
-                })?;
-                Ok(CommandAction::Read {
+        .filter_map(|parsed| match parsed {
+            ParsedCommand::Read { cmd, name, path } => match native_cwd.as_ref() {
+                Some(native_cwd) => Some(CommandAction::Read {
                     command: cmd,
                     name,
-                    path: cwd.join(path),
-                })
-            }
+                    path: native_cwd.join(path),
+                }),
+                None => {
+                    warn!(
+                        command = cmd,
+                        %cwd,
+                        "omitting read command action whose path cannot be resolved against a foreign cwd"
+                    );
+                    None
+                }
+            },
             ParsedCommand::ListFiles { cmd, path } => {
-                Ok(CommandAction::ListFiles { command: cmd, path })
+                Some(CommandAction::ListFiles { command: cmd, path })
             }
-            ParsedCommand::Search { cmd, query, path } => Ok(CommandAction::Search {
+            ParsedCommand::Search { cmd, query, path } => Some(CommandAction::Search {
                 command: cmd,
                 query,
                 path,
             }),
-            ParsedCommand::Unknown { cmd } => Ok(CommandAction::Unknown { command: cmd }),
+            ParsedCommand::Unknown { cmd } => Some(CommandAction::Unknown { command: cmd }),
         })
         .collect()
 }

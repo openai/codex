@@ -70,9 +70,19 @@ impl LegacyAppPathString {
         PathUri::from_absolute_native_path(&self.0, convention).ok_or_else(|| {
             LegacyAppPathStringError::InvalidNativePath {
                 path: self.0.clone(),
-                convention,
+                convention: Some(convention),
             }
         })
+    }
+
+    /// Parses this API string as an absolute path using the convention inferred from its spelling.
+    pub fn to_inferred_path_uri(&self) -> Option<PathUri> {
+        PathUri::try_from(self.clone()).ok()
+    }
+
+    /// Parses this API string as a host-native absolute path.
+    pub fn to_inferred_abs_path(&self) -> Option<AbsolutePathBuf> {
+        AbsolutePathBuf::try_from(self.clone()).ok()
     }
 
     /// Infers the path convention of an absolute API path from its spelling.
@@ -114,6 +124,38 @@ impl From<AbsolutePathBuf> for LegacyAppPathString {
 impl From<PathUri> for LegacyAppPathString {
     fn from(path: PathUri) -> Self {
         Self(path.inferred_native_path_string())
+    }
+}
+
+impl TryFrom<LegacyAppPathString> for PathUri {
+    type Error = LegacyAppPathStringError;
+
+    fn try_from(path: LegacyAppPathString) -> Result<Self, Self::Error> {
+        let Some(convention) = path.infer_absolute_path_convention() else {
+            return Err(LegacyAppPathStringError::InvalidNativePath {
+                path: path.0,
+                convention: None,
+            });
+        };
+        PathUri::from_absolute_native_path(path.as_str(), convention).ok_or({
+            LegacyAppPathStringError::InvalidNativePath {
+                path: path.0,
+                convention: Some(convention),
+            }
+        })
+    }
+}
+
+impl TryFrom<LegacyAppPathString> for AbsolutePathBuf {
+    type Error = LegacyAppPathStringError;
+
+    fn try_from(path: LegacyAppPathString) -> Result<Self, Self::Error> {
+        AbsolutePathBuf::from_absolute_path_checked(path.as_str()).map_err(|_| {
+            LegacyAppPathStringError::InvalidNativePath {
+                path: path.0,
+                convention: None,
+            }
+        })
     }
 }
 
@@ -285,10 +327,13 @@ pub enum LegacyAppPathStringError {
         path: String,
         convention: PathConvention,
     },
-    #[error("path `{path}` is not absolute using {convention} path syntax")]
+    #[error(
+        "path `{path}` is not absolute{convention}",
+        convention = .convention.map(|convention| format!(" using {convention} path syntax")).unwrap_or_default()
+    )]
     InvalidNativePath {
         path: String,
-        convention: PathConvention,
+        convention: Option<PathConvention>,
     },
 }
 

@@ -649,24 +649,12 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_exec_command_begin(&mut self, payload: &ExecCommandBeginEvent) {
-        let item = match build_command_execution_begin_item(payload) {
-            Ok(item) => item,
-            Err(error) => {
-                warn!(%error, call_id = payload.call_id, "failed to rebuild exec command begin item");
-                return;
-            }
-        };
+        let item = build_command_execution_begin_item(payload);
         self.upsert_item_in_turn_id(&payload.turn_id, item);
     }
 
     fn handle_exec_command_end(&mut self, payload: &ExecCommandEndEvent) {
-        let item = match build_command_execution_end_item(payload) {
-            Ok(item) => item,
-            Err(error) => {
-                warn!(%error, call_id = payload.call_id, "failed to rebuild exec command end item");
-                return;
-            }
-        };
+        let item = build_command_execution_end_item(payload);
         // Command completions can arrive out of order. Unified exec may return
         // while a PTY is still running, then emit ExecCommandEnd later from a
         // background exit watcher when that process finally exits. By then, a

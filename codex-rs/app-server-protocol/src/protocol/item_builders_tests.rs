@@ -2,7 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn foreign_read_fails_the_entire_command_action_conversion() {
+fn foreign_read_is_omitted_without_dropping_other_command_actions() {
     #[cfg(windows)]
     let cwd = PathUri::parse("file:///usr/local/src").expect("valid foreign POSIX cwd");
     #[cfg(not(windows))]
@@ -24,13 +24,18 @@ fn foreign_read_fails_the_entire_command_action_conversion() {
         },
     ];
 
-    let error = command_actions_for_path_uri(&parsed_cmd, &cwd)
-        .expect_err("foreign read should fail the entire conversion");
     assert_eq!(
-        (error.kind(), error.to_string()),
-        (
-            io::ErrorKind::InvalidInput,
-            format!("cannot resolve command action path against foreign cwd `{cwd}`"),
-        )
+        command_actions_for_path_uri(&parsed_cmd, &cwd),
+        vec![
+            CommandAction::ListFiles {
+                command: "ls".to_string(),
+                path: Some("subdir".to_string()),
+            },
+            CommandAction::Search {
+                command: "rg needle".to_string(),
+                query: Some("needle".to_string()),
+                path: Some("src".to_string()),
+            },
+        ]
     );
 }
