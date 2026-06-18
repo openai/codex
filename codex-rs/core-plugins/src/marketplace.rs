@@ -8,6 +8,7 @@ use codex_plugin::PluginIdError;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::io;
@@ -29,6 +30,7 @@ pub struct ResolvedMarketplacePlugin {
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
     pub manifest: Option<crate::manifest::PluginManifest>,
+    pub manifest_fallback: MarketplacePluginManifestFallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +56,34 @@ pub struct MarketplaceListOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketplaceInterface {
     pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplacePluginManifestFallback {
+    contents: String,
+    has_metadata: bool,
+}
+
+impl MarketplacePluginManifestFallback {
+    pub fn contents(&self) -> &str {
+        &self.contents
+    }
+
+    pub(crate) fn contents_if_has_metadata(&self) -> Option<&str> {
+        self.has_metadata.then_some(self.contents())
+    }
+
+    pub(crate) fn parse_for_plugin_root(
+        &self,
+        plugin_root: &Path,
+    ) -> Option<crate::manifest::PluginManifest> {
+        crate::manifest::parse_plugin_manifest(
+            plugin_root,
+            &fallback_plugin_manifest_path(plugin_root),
+            &self.contents,
+        )
+        .ok()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -434,13 +464,24 @@ fn resolve_marketplace_plugin_entry(
         source,
         policy,
         category,
+        manifest_fields,
     } = plugin;
     let Some(source) = resolve_supported_plugin_source(marketplace_path, &name, source) else {
         return Ok(None);
     };
+    let manifest_fallback =
+        marketplace_plugin_manifest_fallback(&name, category.as_deref(), &manifest_fields);
 
     let manifest = match &source {
-        MarketplacePluginSource::Local { path } => load_plugin_manifest(path.as_path()),
+        MarketplacePluginSource::Local { path } => {
+            if codex_utils_plugins::find_plugin_manifest_path(path.as_path()).is_some() {
+                load_plugin_manifest(path.as_path())
+            } else if manifest_fallback.has_metadata {
+                manifest_fallback.parse_for_plugin_root(path.as_path())
+            } else {
+                None
+            }
+        }
         MarketplacePluginSource::Git { .. } => None,
     };
     let interface = plugin_interface_with_marketplace_category(
@@ -462,6 +503,7 @@ fn resolve_marketplace_plugin_entry(
         },
         interface,
         manifest,
+        manifest_fallback,
     }))
 }
 
@@ -765,6 +807,9 @@ struct RawMarketplaceManifestPlugin {
     policy: RawMarketplaceManifestPluginPolicy,
     #[serde(default)]
     category: Option<String>,
+    #[serde(default)]
+    #[serde(flatten)]
+    manifest_fields: JsonMap<String, JsonValue>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -820,6 +865,85 @@ fn resolve_marketplace_interface(
     } else {
         None
     }
+}
+
+fn fallback_plugin_manifest_path(plugin_root: &Path) -> PathBuf {
+    plugin_root.join(".codex-plugin/plugin.json")
+}
+
+fn marketplace_plugin_manifest_fallback(
+    name: &str,
+    category: Option<&str>,
+    manifest_fields: &JsonMap<String, JsonValue>,
+) -> MarketplacePluginManifestFallback {
+    let mut manifest = manifest_fields.clone();
+    manifest.insert("name".to_string(), JsonValue::String(name.to_string()));
+    if let Some(category) = category {
+        manifest.insert(
+            "category".to_string(),
+            JsonValue::String(category.to_string()),
+        );
+    }
+    if let Some(interface) = plugin_manifest_interface(manifest_fields, category) {
+        manifest.insert("interface".to_string(), interface);
+    }
+
+    let contents = serde_json::to_string_pretty(&JsonValue::Object(manifest))
+        .unwrap_or_else(|_| format!(r#"{{"name":"{name}"}}"#));
+    MarketplacePluginManifestFallback {
+        contents,
+        has_metadata: !manifest_fields.is_empty() || category.is_some(),
+    }
+}
+
+fn plugin_manifest_interface(
+    fields: &JsonMap<String, JsonValue>,
+    category: Option<&str>,
+) -> Option<JsonValue> {
+    let mut interface = fields
+        .get("interface")
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    if !interface.contains_key("displayName")
+        && let Some(display_name) = fields.get("displayName").and_then(JsonValue::as_str)
+    {
+        interface.insert(
+            "displayName".to_string(),
+            JsonValue::String(display_name.to_string()),
+        );
+    }
+    if !interface.contains_key("developerName")
+        && let Some(author_name) = fields
+            .get("author")
+            .and_then(|author| author.get("name"))
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    {
+        interface.insert(
+            "developerName".to_string(),
+            JsonValue::String(author_name.to_string()),
+        );
+    }
+    if !interface.contains_key("websiteUrl")
+        && !interface.contains_key("websiteURL")
+        && let Some(homepage) = fields.get("homepage").and_then(JsonValue::as_str)
+    {
+        interface.insert(
+            "websiteUrl".to_string(),
+            JsonValue::String(homepage.to_string()),
+        );
+    }
+    if let Some(category) = category.map(str::trim).filter(|value| !value.is_empty()) {
+        interface.insert(
+            "category".to_string(),
+            JsonValue::String(category.to_string()),
+        );
+    }
+
+    (!interface.is_empty()).then_some(JsonValue::Object(interface))
 }
 
 #[cfg(test)]

@@ -7,10 +7,10 @@ use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
 use crate::loader::installed_plugin_telemetry_metadata;
-use crate::loader::load_plugin_apps;
+use crate::loader::load_plugin_apps_from_manifest;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
-use crate::loader::load_plugin_mcp_servers;
+use crate::loader::load_plugin_mcp_servers_from_manifest;
 use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::log_plugin_load_errors;
@@ -27,6 +27,7 @@ use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
 use crate::marketplace::MarketplaceListOutcome;
 use crate::marketplace::MarketplacePluginAuthPolicy;
+use crate::marketplace::MarketplacePluginManifestFallback;
 use crate::marketplace::MarketplacePluginPolicy;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::ResolvedMarketplacePlugin;
@@ -1256,15 +1257,32 @@ impl PluginsManager {
             };
         let store = self.store.clone();
         let codex_home = self.codex_home.clone();
+        let manifest_fallback_contents = resolved
+            .manifest_fallback
+            .contents_if_has_metadata()
+            .map(str::to_string);
         let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
             let materialized =
                 materialize_marketplace_plugin_source(codex_home.as_path(), &resolved.source)
                     .map_err(PluginStoreError::Invalid)?;
             let source_path = materialized.path;
-            if let Some(plugin_version) = plugin_version {
-                store.install_with_version(source_path, resolved.plugin_id, plugin_version)
-            } else {
-                store.install(source_path, resolved.plugin_id)
+            match (plugin_version, manifest_fallback_contents.as_deref()) {
+                (Some(plugin_version), Some(manifest_contents)) => store
+                    .install_with_version_and_fallback_manifest(
+                        source_path,
+                        resolved.plugin_id,
+                        plugin_version,
+                        manifest_contents,
+                    ),
+                (Some(plugin_version), None) => {
+                    store.install_with_version(source_path, resolved.plugin_id, plugin_version)
+                }
+                (None, Some(manifest_contents)) => store.install_with_fallback_manifest(
+                    source_path,
+                    resolved.plugin_id,
+                    manifest_contents,
+                ),
+                (None, None) => store.install(source_path, resolved.plugin_id),
             }
         })
         .await
@@ -1491,6 +1509,10 @@ impl PluginsManager {
 
         let marketplace_name = plugin.plugin_id.marketplace_name.clone();
         let plugin_key = plugin.plugin_id.as_key();
+        let manifest_fallback = plugin
+            .manifest_fallback
+            .contents_if_has_metadata()
+            .map(|_| plugin.manifest_fallback.clone());
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let installed = installed_plugins.contains(&plugin_key);
         let installed_version = if installed {
@@ -1499,7 +1521,7 @@ impl PluginsManager {
             None
         };
         let plugin = self
-            .read_plugin_detail_for_marketplace_plugin(
+            .read_plugin_detail_for_marketplace_plugin_with_fallback(
                 config,
                 &marketplace_name,
                 ConfiguredMarketplacePlugin {
@@ -1521,6 +1543,7 @@ impl PluginsManager {
                     installed,
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
+                manifest_fallback,
             )
             .await?;
 
@@ -1537,6 +1560,22 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         marketplace_name: &str,
         plugin: ConfiguredMarketplacePlugin,
+    ) -> Result<PluginDetail, MarketplaceError> {
+        self.read_plugin_detail_for_marketplace_plugin_with_fallback(
+            config,
+            marketplace_name,
+            plugin,
+            /*manifest_fallback*/ None,
+        )
+        .await
+    }
+
+    async fn read_plugin_detail_for_marketplace_plugin_with_fallback(
+        &self,
+        config: &PluginsConfigInput,
+        marketplace_name: &str,
+        plugin: ConfiguredMarketplacePlugin,
+        manifest_fallback: Option<MarketplacePluginManifestFallback>,
     ) -> Result<PluginDetail, MarketplaceError> {
         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
             return Err(MarketplaceError::PluginNotFound {
@@ -1604,9 +1643,15 @@ impl PluginsManager {
                 "path does not exist or is not a directory".to_string(),
             ));
         }
-        let manifest = load_plugin_manifest(source_path.as_path()).ok_or_else(|| {
-            MarketplaceError::InvalidPlugin("missing or invalid plugin.json".to_string())
-        })?;
+        let manifest = load_plugin_manifest(source_path.as_path())
+            .or_else(|| {
+                manifest_fallback
+                    .as_ref()
+                    .and_then(|fallback| fallback.parse_for_plugin_root(source_path.as_path()))
+            })
+            .ok_or_else(|| {
+                MarketplaceError::InvalidPlugin("missing or invalid plugin.json".to_string())
+            })?;
         let description = manifest.description.clone();
         let marketplace_category = plugin
             .interface
@@ -1637,8 +1682,14 @@ impl PluginsManager {
             })
             .collect();
         let auth_mode = self.auth_mode();
-        let mut app_declarations = load_plugin_apps(source_path.as_path()).await;
-        let mut mcp_servers = load_plugin_mcp_servers(source_path.as_path(), auth_mode).await;
+        let mut app_declarations =
+            load_plugin_apps_from_manifest(source_path.as_path(), &manifest.paths).await;
+        let mut mcp_servers = load_plugin_mcp_servers_from_manifest(
+            source_path.as_path(),
+            &manifest.paths,
+            /*plugin_policy*/ None,
+        )
+        .await;
         if auth_mode.is_some() {
             apply_app_mcp_routing_policy(
                 &mut app_declarations,

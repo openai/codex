@@ -2242,6 +2242,98 @@ async fn install_plugin_uses_manifest_version_for_non_curated_plugins() {
 }
 
 #[tokio::test]
+async fn install_plugin_writes_marketplace_manifest_fallback_when_missing_plugin_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("plugins/quality-review");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(plugin_root.join("skills/thermo-nuclear-code-quality-review")).unwrap();
+    fs::write(
+        plugin_root.join("skills/thermo-nuclear-code-quality-review/SKILL.md"),
+        "review skill",
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "quality-review",
+      "description": "Strict code quality review focused on maintainability.",
+      "source": "./plugins/quality-review",
+      "author": {
+        "name": "Byron Grogan"
+      },
+      "skills": [
+        "./skills/thermo-nuclear-code-quality-review"
+      ],
+      "category": "code-review"
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let result = PluginsManager::new(tmp.path().to_path_buf())
+        .install_plugin(PluginInstallRequest {
+            plugin_name: "quality-review".to_string(),
+            marketplace_path: AbsolutePathBuf::try_from(
+                repo_root.join(".agents/plugins/marketplace.json"),
+            )
+            .unwrap(),
+        })
+        .await
+        .unwrap();
+
+    let installed_path = tmp.path().join("plugins/cache/debug/quality-review/local");
+    assert_eq!(
+        result,
+        PluginInstallOutcome {
+            plugin_id: PluginId::new("quality-review".to_string(), "debug".to_string()).unwrap(),
+            plugin_version: "local".to_string(),
+            installed_path: AbsolutePathBuf::try_from(installed_path.clone()).unwrap(),
+            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+        }
+    );
+    assert!(!plugin_root.join(".codex-plugin/plugin.json").exists());
+    assert!(
+        !tmp.path()
+            .join("plugins/.marketplace-plugin-source-staging")
+            .exists()
+    );
+
+    let manifest = crate::manifest::load_plugin_manifest(&installed_path).unwrap();
+    assert_eq!(manifest.name, "quality-review");
+    assert_eq!(
+        manifest.description.as_deref(),
+        Some("Strict code quality review focused on maintainability.")
+    );
+    assert_eq!(
+        manifest.paths.skills,
+        vec![
+            AbsolutePathBuf::try_from(
+                installed_path.join("skills/thermo-nuclear-code-quality-review")
+            )
+            .unwrap()
+        ]
+    );
+    let interface = manifest.interface.expect("fallback interface");
+    assert_eq!(interface.developer_name.as_deref(), Some("Byron Grogan"));
+    assert_eq!(interface.category.as_deref(), Some("code-review"));
+    let fallback_json: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(installed_path.join(".codex-plugin/plugin.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        fallback_json["author"],
+        serde_json::json!({ "name": "Byron Grogan" })
+    );
+    assert_eq!(fallback_json["category"], "code-review");
+}
+
+#[tokio::test]
 async fn install_plugin_supports_git_subdir_marketplace_sources() {
     let tmp = tempfile::tempdir().unwrap();
     let repo_root = tmp.path().join("marketplace");
@@ -2766,6 +2858,67 @@ plugins = true
         vec!["other-mcp".to_string(), "sample-mcp".to_string()]
     );
     assert!(api_key_outcome.plugin.apps.is_empty());
+}
+
+#[tokio::test]
+async fn read_plugin_for_config_uses_marketplace_manifest_fallback_paths_for_local_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("sample-plugin");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_file(
+        &repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": "./sample-plugin",
+      "apps": "./config/custom.app.json",
+      "mcpServers": {
+        "sample-mcp": {
+          "command": "sample-mcp"
+        }
+      }
+    }
+  ]
+}"#,
+    );
+    write_file(
+        &plugin_root.join("config/custom.app.json"),
+        r#"{"apps":{"sample-app":{"id":"connector_sample"}}}"#,
+    );
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), &repo_root).await;
+    let outcome = PluginsManager::new(tmp.path().to_path_buf())
+        .read_plugin_for_config(
+            &config,
+            &PluginReadRequest {
+                plugin_name: "sample-plugin".to_string(),
+                marketplace_path: AbsolutePathBuf::try_from(
+                    repo_root.join(".agents/plugins/marketplace.json"),
+                )
+                .unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outcome.plugin.apps,
+        vec![AppConnectorId("connector_sample".to_string())]
+    );
+    assert_eq!(
+        outcome.plugin.mcp_server_names,
+        vec!["sample-mcp".to_string()]
+    );
 }
 
 #[tokio::test]
