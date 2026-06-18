@@ -53,7 +53,9 @@ def display_name_from_plugin_name(plugin_name: str) -> str:
     return " ".join(part.capitalize() for part in re.split(r"[-_]+", plugin_name))
 
 
-def build_plugin_json(plugin_name: str, *, with_mcp: bool, with_apps: bool) -> dict[str, Any]:
+def build_plugin_json(
+    plugin_name: str, *, with_agents: bool, with_mcp: bool, with_apps: bool
+) -> dict[str, Any]:
     display_name = display_name_from_plugin_name(plugin_name)
     payload: dict[str, Any] = {
         "name": plugin_name,
@@ -73,6 +75,8 @@ def build_plugin_json(plugin_name: str, *, with_mcp: bool, with_apps: bool) -> d
             "defaultPrompt": f"Help me use {display_name}.",
         },
     }
+    if with_agents:
+        payload["agents"] = "./agents/"
     if with_mcp:
         payload["mcpServers"] = "./.mcp.json"
     if with_apps:
@@ -204,6 +208,9 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--with-skills", action="store_true", help="Create skills/ directory")
+    parser.add_argument(
+        "--with-agents", action="store_true", help="Create agents/ directory"
+    )
     parser.add_argument("--with-hooks", action="store_true", help="Create hooks/ directory")
     parser.add_argument("--with-scripts", action="store_true", help="Create scripts/ directory")
     parser.add_argument("--with-assets", action="store_true", help="Create assets/ directory")
@@ -272,11 +279,17 @@ def main() -> None:
     plugin_json_path = plugin_root / ".codex-plugin" / "plugin.json"
     write_json(
         plugin_json_path,
-        build_plugin_json(plugin_name, with_mcp=args.with_mcp, with_apps=args.with_apps),
+        build_plugin_json(
+            plugin_name,
+            with_agents=args.with_agents,
+            with_mcp=args.with_mcp,
+            with_apps=args.with_apps,
+        ),
         args.force,
     )
 
     optional_directories = {
+        "agents": args.with_agents,
         "skills": args.with_skills,
         "hooks": args.with_hooks,
         "scripts": args.with_scripts,

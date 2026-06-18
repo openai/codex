@@ -8,6 +8,8 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::PluginAgentRoot;
+use codex_utils_plugins::plugin_namespace_for_skill_path;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -113,6 +115,81 @@ pub(crate) async fn load_agent_roles(
     }
 
     Ok(roles)
+}
+
+pub(crate) async fn load_plugin_agent_roles(
+    fs: &dyn ExecutorFileSystem,
+    plugin_agent_roots: Vec<PluginAgentRoot>,
+    startup_warnings: &mut Vec<String>,
+) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
+    let mut roles = BTreeMap::new();
+    for plugin_agent_root in plugin_agent_roots {
+        let discovered_roles = discover_agent_roles_in_dir(
+            fs,
+            &plugin_agent_root.path,
+            &BTreeSet::new(),
+            startup_warnings,
+        )
+        .await?;
+        if discovered_roles.is_empty() {
+            continue;
+        }
+        let Some(plugin_namespace) = plugin_agent_role_namespace(fs, &plugin_agent_root).await
+        else {
+            push_agent_role_warning(
+                startup_warnings,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "unable to determine plugin namespace for agent roles in {}",
+                        plugin_agent_root.path.as_path().display()
+                    ),
+                ),
+            );
+            continue;
+        };
+
+        for (role_name, role) in discovered_roles {
+            let namespaced_role_name = format!("{plugin_namespace}:{role_name}");
+            if roles.contains_key(&namespaced_role_name) {
+                push_agent_role_warning(
+                    startup_warnings,
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "duplicate plugin agent role name `{namespaced_role_name}` discovered in {}",
+                            plugin_agent_root.path.as_path().display()
+                        ),
+                    ),
+                );
+                continue;
+            }
+            if let Err(err) = validate_required_agent_role_description(
+                &namespaced_role_name,
+                role.description.as_deref(),
+            ) {
+                push_agent_role_warning(startup_warnings, err);
+                continue;
+            }
+            roles.insert(namespaced_role_name, role);
+        }
+    }
+
+    Ok(roles)
+}
+
+async fn plugin_agent_role_namespace(
+    fs: &dyn ExecutorFileSystem,
+    plugin_agent_root: &PluginAgentRoot,
+) -> Option<String> {
+    plugin_namespace_for_skill_path(fs, &plugin_agent_root.path)
+        .await
+        .or_else(|| {
+            plugin_agent_root
+                .plugin_id
+                .split_once('@')
+                .map(|(name, _)| name.to_string())
+        })
 }
 
 fn push_agent_role_warning(startup_warnings: &mut Vec<String>, err: std::io::Error) {

@@ -401,6 +401,7 @@ fn resolved_plugin(
             description: None,
             keywords: Vec::new(),
             paths: PluginManifestPaths {
+                agents: Vec::new(),
                 skills: Vec::new(),
                 mcp_servers,
                 apps: None,

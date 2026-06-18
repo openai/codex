@@ -14,6 +14,7 @@
   "repository": "https://github.com/author/plugin",
   "license": "MIT",
   "keywords": ["keyword1", "keyword2"],
+  "agents": "./agents/",
   "skills": "./skills/",
   "hooks": "./hooks.json",
   "mcpServers": "./.mcp.json",
@@ -61,6 +62,7 @@
 - `repository` (`string`): Source code URL.
 - `license` (`string`): License identifier (for example `MIT`, `Apache-2.0`).
 - `keywords` (`array` of `string`): Search/discovery tags.
+- `agents` (`string`): Relative path to plugin-bundled agent role TOML files.
 - `skills` (`string`): Relative path to skill directories/files.
 - `hooks` (`string`): Hook config path.
 - `mcpServers` (`string` or `object`): MCP config path, or an object whose keys are MCP server names and whose values are MCP server config objects.
@@ -114,7 +116,7 @@ Or as an object directly in `plugin.json`:
 ### Path conventions and defaults
 
 - Path values should be relative and begin with `./`.
-- `skills`, `hooks`, and string-valued `mcpServers` are supplemented on top of default component discovery; they do not replace defaults.
+- `agents`, `skills`, `hooks`, and string-valued `mcpServers` are supplemented on top of default component discovery; they do not replace defaults.
 - Custom path values must follow the plugin root convention and naming/namespacing rules.
 - This repo’s scaffold writes `.codex-plugin/plugin.json`; treat that as the manifest location this skill generates.
 
@@ -209,6 +211,8 @@ personal marketplace unless the caller explicitly requests a repo-local destinat
   present.
 - `composerIcon`, `logo`, `logoDark`, and `screenshots` must point to real files inside the plugin archive when
   present.
+- `agents` should appear in `plugin.json` only when the plugin has an `agents/` directory with
+  role TOML files.
 - `apps` should appear in `plugin.json` only when `.app.json` actually exists.
 - `mcpServers` may point to `.mcp.json` or contain the MCP server object directly in
   `plugin.json`.

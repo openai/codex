@@ -95,6 +95,7 @@ use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_plugins::PluginAgentRoot;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -7459,6 +7460,62 @@ nickname_candidates = ["Noether"]
             .as_ref()
             .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
         Some(vec!["Hypatia"])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_agent_roles_are_namespaced_with_plugin_manifest_name() -> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let plugin_root = temp_dir.path().join("plugins").join("sample");
+    let agents_dir = plugin_root.join("agents");
+    let agent_path = agents_dir.join("researcher.toml");
+    tokio::fs::create_dir_all(plugin_root.join(".codex-plugin")).await?;
+    tokio::fs::write(
+        plugin_root.join(".codex-plugin").join("plugin.json"),
+        r#"{"name":"sample-plugin"}"#,
+    )
+    .await?;
+    tokio::fs::create_dir_all(&agents_dir).await?;
+    tokio::fs::write(
+        &agent_path,
+        r#"
+name = "researcher"
+description = "Research role"
+nickname_candidates = ["Hypatia"]
+developer_instructions = "Research carefully"
+model = "gpt-5.2"
+"#,
+    )
+    .await?;
+
+    let mut startup_warnings = Vec::new();
+    let roles = agent_roles::load_plugin_agent_roles(
+        LOCAL_FS.as_ref(),
+        vec![PluginAgentRoot {
+            path: agents_dir.abs(),
+            plugin_id: "fallback@test".to_string(),
+            plugin_root: plugin_root.abs(),
+        }],
+        &mut startup_warnings,
+    )
+    .await?;
+
+    assert_eq!(startup_warnings, Vec::<String>::new());
+    assert_eq!(
+        roles.get("sample-plugin:researcher").map(|role| (
+            role.description.as_deref(),
+            role.config_file.as_ref(),
+            role.nickname_candidates
+                .as_ref()
+                .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>())
+        )),
+        Some((
+            Some("Research role"),
+            Some(&agent_path),
+            Some(vec!["Hypatia"])
+        ))
     );
 
     Ok(())
