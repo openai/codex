@@ -100,7 +100,6 @@ impl ThreadEnvironments {
         let previous = self.environments.load();
         let mut seen_environment_ids = HashSet::with_capacity(environments.len());
         let mut next = Vec::with_capacity(environments.len());
-        let mut new_resolutions = Vec::new();
         for selected_environment in environments {
             if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
                 continue;
@@ -118,14 +117,14 @@ impl ThreadEnvironments {
                 tracing::warn!("skipping unknown turn environment `{environment_id}`");
                 continue;
             };
-            let delayed_start = environment.is_remote() && !environment.startup_finished();
+            let delayed_start = !environment.startup_finished();
             let resolution = Self::resolve_environment(
                 selected_environment.clone(),
                 environment,
                 self.local_shell.clone(),
                 self.shell_snapshot.clone(),
             );
-            new_resolutions.push(resolution.clone());
+            drop(tokio::spawn(resolution.clone()));
             next.push(SelectedTurnEnvironment {
                 selection: selected_environment.clone(),
                 delayed_start,
@@ -133,9 +132,6 @@ impl ThreadEnvironments {
             });
         }
         self.environments.store(Arc::new(next));
-        for resolution in new_resolutions {
-            drop(tokio::spawn(resolution));
-        }
     }
 
     fn resolve_environment(
