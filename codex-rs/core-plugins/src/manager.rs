@@ -563,6 +563,17 @@ impl PluginsManager {
         cache.entry = None;
     }
 
+    fn clear_caches_after_marketplace_source_refresh(
+        &self,
+        installed_plugin_cache_refreshed: bool,
+    ) {
+        if installed_plugin_cache_refreshed {
+            self.clear_cache();
+        } else {
+            self.tool_suggest_metadata_cache.clear();
+        }
+    }
+
     /// Load plugins for a config layer stack without touching the plugins cache.
     pub async fn plugins_for_layer_stack(
         &self,
@@ -1816,9 +1827,7 @@ impl PluginsManager {
                 &outcome.upgraded_roots,
             ) {
                 Ok(cache_refreshed) => {
-                    if cache_refreshed {
-                        self.clear_cache();
-                    }
+                    self.clear_caches_after_marketplace_source_refresh(cache_refreshed);
                 }
                 Err(err) => {
                     self.clear_cache();
@@ -1998,9 +2007,8 @@ impl PluginsManager {
                             &configured_curated_plugin_ids,
                         ) {
                             Ok(cache_refreshed) => {
-                                if cache_refreshed {
-                                    manager.clear_cache();
-                                }
+                                manager
+                                    .clear_caches_after_marketplace_source_refresh(cache_refreshed);
                             }
                             Err(err) => {
                                 manager.clear_cache();
