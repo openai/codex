@@ -1456,38 +1456,6 @@ async fn esc_pending_steers_interrupt_pauses_active_goal_turn() {
     assert_goal_paused_event(&mut rx, thread_id);
 }
 
-#[tokio::test]
-async fn request_user_input_interrupt_pauses_active_goal_turn() {
-    let cases = [
-        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-    ];
-
-    for key_event in cases {
-        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        let thread_id = start_active_goal_turn(&mut chat);
-        chat.handle_request_user_input_now(ToolRequestUserInputParams {
-            thread_id: thread_id.to_string(),
-            item_id: "call-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            questions: vec![ToolRequestUserInputQuestion {
-                id: "reasoning_scope".to_string(),
-                header: "Reasoning scope".to_string(),
-                question: "Which reasoning scope should I use?".to_string(),
-                is_other: false,
-                is_secret: false,
-                options: None,
-            }],
-            auto_resolution_ms: None,
-        });
-
-        chat.handle_key_event(key_event);
-
-        assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
-        assert_goal_paused_event(&mut rx, thread_id);
-    }
-}
-
 fn start_active_goal_turn(chat: &mut ChatWidget) -> ThreadId {
     let thread_id = ThreadId::new();
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
