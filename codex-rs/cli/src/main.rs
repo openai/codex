@@ -12,6 +12,7 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::read_access_token_from_stdin;
 use codex_cli::read_api_key_from_stdin;
+use codex_cli::resolve_cli_source_surface_stable_id;
 use codex_cli::run_login_status;
 use codex_cli::run_login_with_access_token;
 use codex_cli::run_login_with_api_key;
@@ -1817,6 +1818,7 @@ async fn load_exec_server_remote_auth(
 ) -> anyhow::Result<codex_login::CodexAuth> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
+    auth_manager.set_source_surface_stable_id(resolve_cli_source_surface_stable_id(config).await);
 
     let auth = match auth_manager.auth().await {
         Some(auth) => auth,

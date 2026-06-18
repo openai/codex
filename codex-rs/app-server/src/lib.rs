@@ -750,6 +750,9 @@ pub async fn run_main_with_transport_options(
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+    if !single_client_mode {
+        auth_manager.set_source_surface_stable_id(Some(installation_id.clone()));
+    }
 
     let remote_control_enabled = remote_control_policy == RemoteControlPolicy::Allowed
         && remote_control_explicitly_requested

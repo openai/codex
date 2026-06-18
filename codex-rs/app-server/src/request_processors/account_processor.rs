@@ -88,7 +88,23 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
+        accepts_client_source_surface_stable_id: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let source_surface_stable_id = match &params {
+            LoginAccountParams::Chatgpt {
+                source_surface_stable_id,
+                ..
+            }
+            | LoginAccountParams::ChatgptDeviceCode {
+                source_surface_stable_id,
+            } => source_surface_stable_id.clone(),
+            _ => None,
+        };
+        self.set_client_source_surface_stable_id(
+            accepts_client_source_surface_stable_id,
+            source_surface_stable_id,
+        );
+
         self.login_v2(request_id, params).await.map(|()| None)
     }
 
@@ -111,7 +127,13 @@ impl AccountRequestProcessor {
     pub(crate) async fn get_account(
         &self,
         params: GetAccountParams,
+        accepts_client_source_surface_stable_id: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.set_client_source_surface_stable_id(
+            accepts_client_source_surface_stable_id,
+            params.source_surface_stable_id.clone(),
+        );
+
         self.get_account_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -239,11 +261,12 @@ impl AccountRequestProcessor {
             }
             LoginAccountParams::Chatgpt {
                 codex_streamlined_login,
+                ..
             } => {
                 self.login_chatgpt_v2(request_id, codex_streamlined_login)
                     .await;
             }
-            LoginAccountParams::ChatgptDeviceCode => {
+            LoginAccountParams::ChatgptDeviceCode { .. } => {
                 self.login_chatgpt_device_code_v2(request_id).await;
             }
             LoginAccountParams::ChatgptAuthTokens {
@@ -342,6 +365,7 @@ impl AccountRequestProcessor {
         let opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
+            source_surface_stable_id: self.auth_manager.source_surface_stable_id(),
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 oauth_client_id(),
@@ -362,6 +386,16 @@ impl AccountRequestProcessor {
         };
 
         Ok(opts)
+    }
+
+    fn set_client_source_surface_stable_id(
+        &self,
+        accepts_client_source_surface_stable_id: bool,
+        value: Option<String>,
+    ) {
+        if accepts_client_source_surface_stable_id && let Some(value) = value {
+            self.auth_manager.set_source_surface_stable_id(Some(value));
+        }
     }
 
     fn login_chatgpt_device_code_start_error(err: IoError) -> JSONRPCErrorError {

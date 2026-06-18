@@ -71,6 +71,7 @@ pub struct ServerOptions {
     pub codex_streamlined_login: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub auth_keyring_backend_kind: AuthKeyringBackendKind,
+    pub source_surface_stable_id: Option<String>,
 }
 
 impl ServerOptions {
@@ -93,6 +94,7 @@ impl ServerOptions {
             codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
             auth_keyring_backend_kind,
+            source_surface_stable_id: None,
         }
     }
 }
@@ -162,6 +164,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         &pkce,
         &state,
         opts.forced_chatgpt_workspace_id.as_deref(),
+        opts.source_surface_stable_id.as_deref(),
     );
 
     if opts.open_browser {
@@ -336,8 +339,15 @@ async fn process_request(
                 }
             };
 
-            match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
-                .await
+            match exchange_code_for_tokens(
+                &opts.issuer,
+                &opts.client_id,
+                redirect_uri,
+                pkce,
+                &code,
+                opts.source_surface_stable_id.as_deref(),
+            )
+            .await
             {
                 Ok(tokens) => {
                     if let Err(message) = ensure_workspace_allowed(
@@ -489,6 +499,7 @@ fn build_authorize_url(
     pkce: &PkceCodes,
     state: &str,
     forced_chatgpt_workspace_ids: Option<&[String]>,
+    source_surface_stable_id: Option<&str>,
 ) -> String {
     let mut query = vec![
         ("response_type".to_string(), "code".to_string()),
@@ -511,6 +522,14 @@ fn build_authorize_url(
     ];
     if let Some(workspace_ids) = forced_chatgpt_workspace_ids {
         query.push(("allowed_workspace_id".to_string(), workspace_ids.join(",")));
+    }
+    if let Some(source_surface_stable_id) =
+        crate::valid_source_surface_stable_id(source_surface_stable_id)
+    {
+        query.push((
+            "source_surface_stable_id".to_string(),
+            source_surface_stable_id.to_string(),
+        ));
     }
     let qs = query
         .into_iter()
@@ -719,6 +738,7 @@ pub(crate) async fn exchange_code_for_tokens(
     redirect_uri: &str,
     pkce: &PkceCodes,
     code: &str,
+    source_surface_stable_id: Option<&str>,
 ) -> io::Result<ExchangedTokens> {
     #[derive(serde::Deserialize)]
     struct TokenResponse {
@@ -735,16 +755,23 @@ pub(crate) async fn exchange_code_for_tokens(
         redirect_uri = %redirect_uri,
         "starting oauth token exchange"
     );
+    let mut body = format!(
+        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+        urlencoding::encode(code),
+        urlencoding::encode(redirect_uri),
+        urlencoding::encode(client_id),
+        urlencoding::encode(&pkce.code_verifier)
+    );
+    if let Some(source_surface_stable_id) =
+        crate::valid_source_surface_stable_id(source_surface_stable_id)
+    {
+        body.push_str("&source_surface_stable_id=");
+        body.push_str(&urlencoding::encode(source_surface_stable_id));
+    }
     let resp = client
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
-            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
-            urlencoding::encode(code),
-            urlencoding::encode(redirect_uri),
-            urlencoding::encode(client_id),
-            urlencoding::encode(&pkce.code_verifier)
-        ))
+        .body(body)
         .send()
         .await;
     let resp = match resp {

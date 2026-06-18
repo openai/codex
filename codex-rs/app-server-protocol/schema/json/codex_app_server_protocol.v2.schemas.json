@@ -6617,6 +6617,13 @@
         "refreshToken": {
           "description": "When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
           "type": "boolean"
+        },
+        "sourceSurfaceStableId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "title": "GetAccountParams",
@@ -7810,6 +7817,13 @@
             "codexStreamlinedLogin": {
               "type": "boolean"
             },
+            "sourceSurfaceStableId": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "chatgpt"
@@ -7826,6 +7840,13 @@
         },
         {
           "properties": {
+            "sourceSurfaceStableId": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "chatgptDeviceCode"

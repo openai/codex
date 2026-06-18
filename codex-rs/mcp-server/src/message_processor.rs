@@ -63,6 +63,7 @@ impl MessageProcessor {
             /*enable_codex_api_key_env*/ false,
         )
         .await;
+        auth_manager.set_source_surface_stable_id(Some(installation_id.clone()));
         let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
             config.codex_home.clone(),
         ));

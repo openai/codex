@@ -10,6 +10,7 @@
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
+use codex_core::resolve_installation_id;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
@@ -136,6 +137,7 @@ pub async fn login_with_chatgpt(
     forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     auth_keyring_backend_kind: AuthKeyringBackendKind,
+    source_surface_stable_id: Option<String>,
 ) -> std::io::Result<()> {
     clear_existing_auth_before_login(
         &codex_home,
@@ -144,13 +146,14 @@ pub async fn login_with_chatgpt(
     )
     .await;
 
-    let opts = ServerOptions::new(
+    let mut opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
         auth_keyring_backend_kind,
     );
+    opts.source_surface_stable_id = source_surface_stable_id;
     let server = run_login_server(opts)?;
 
     print_login_server_start(server.actual_port, &server.auth_url);
@@ -169,12 +172,14 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     }
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
+    let source_surface_stable_id = resolve_cli_source_surface_stable_id(&config).await;
 
     match login_with_chatgpt(
         config.codex_home.to_path_buf(),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
+        source_surface_stable_id,
     )
     .await
     {
@@ -307,6 +312,7 @@ pub async fn run_login_with_device_code(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
+    let source_surface_stable_id = resolve_cli_source_surface_stable_id(&config).await;
     clear_existing_auth_before_login(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
@@ -321,6 +327,7 @@ pub async fn run_login_with_device_code(
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
     );
+    opts.source_surface_stable_id = source_surface_stable_id;
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }
@@ -352,6 +359,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
+    let source_surface_stable_id = resolve_cli_source_surface_stable_id(&config).await;
     clear_existing_auth_before_login(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
@@ -367,6 +375,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
     );
+    opts.source_surface_stable_id = source_surface_stable_id;
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }
@@ -478,6 +487,16 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
         Err(e) => {
             eprintln!("Error logging out: {e}");
             std::process::exit(1);
+        }
+    }
+}
+
+pub async fn resolve_cli_source_surface_stable_id(config: &Config) -> Option<String> {
+    match resolve_installation_id(&config.codex_home).await {
+        Ok(installation_id) => Some(installation_id),
+        Err(err) => {
+            tracing::warn!("failed to resolve installation ID for auth request: {err}");
+            None
         }
     }
 }

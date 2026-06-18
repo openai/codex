@@ -1465,6 +1465,7 @@ mod tests {
                 request_id: RequestId::Integer(1),
                 params: codex_app_server_protocol::GetAccountParams {
                     refresh_token: false,
+                    source_surface_stable_id: None,
                 },
             })
             .await
@@ -1523,6 +1524,7 @@ mod tests {
                 request_id: RequestId::Integer(1),
                 params: codex_app_server_protocol::GetAccountParams {
                     refresh_token: false,
+                    source_surface_stable_id: None,
                 },
             })
             .await
@@ -1566,6 +1568,7 @@ mod tests {
                 request_id: RequestId::Integer(1),
                 params: codex_app_server_protocol::GetAccountParams {
                     refresh_token: false,
+                    source_surface_stable_id: None,
                 },
             })
             .await
@@ -1696,6 +1699,7 @@ mod tests {
                     request_id: RequestId::Integer(1),
                     params: codex_app_server_protocol::GetAccountParams {
                         refresh_token: false,
+                        source_surface_stable_id: None,
                     },
                 })
                 .await
@@ -1711,6 +1715,7 @@ mod tests {
                 request_id: RequestId::Integer(1),
                 params: codex_app_server_protocol::GetAccountParams {
                     refresh_token: false,
+                    source_surface_stable_id: None,
                 },
             })
             .await

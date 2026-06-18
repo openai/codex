@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
@@ -168,6 +169,14 @@ async fn device_login_revokes_existing_auth_before_requesting_new_tokens() -> Re
             "token_type_hint": "refresh_token",
             "client_id": CLIENT_ID,
         })
+    );
+    let token_exchange = url::form_urlencoded::parse(&requests[3].body).collect::<HashMap<_, _>>();
+    let installation_id = std::fs::read_to_string(codex_home.path().join("installation_id"))?;
+    assert_eq!(
+        token_exchange
+            .get("source_surface_stable_id")
+            .map(std::convert::AsRef::as_ref),
+        Some(installation_id.trim())
     );
 
     let auth = read_auth_json(codex_home.path())?;
