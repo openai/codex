@@ -329,6 +329,23 @@ impl ThreadStateManager {
             .min_by_key(|connection_id| connection_id.0)
     }
 
+    pub(crate) async fn wait_for_thread_subscriber(&self, thread_id: ThreadId) {
+        let mut has_connections = {
+            let mut state = self.state.lock().await;
+            state
+                .threads
+                .entry(thread_id)
+                .or_default()
+                .has_connections_watcher
+                .subscribe()
+        };
+        while !*has_connections.borrow_and_update() {
+            if has_connections.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
         let state = self.state.lock().await;
         state

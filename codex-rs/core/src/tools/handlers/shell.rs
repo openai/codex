@@ -26,6 +26,7 @@ use crate::tools::sandboxing::ToolCtx;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
+use codex_utils_path_uri::PathUri;
 
 mod shell_command;
 
@@ -139,9 +140,10 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     }
 
     // Intercept apply_patch if present.
+    let apply_patch_cwd = PathUri::from_abs_path(&exec_params.cwd);
     if let Some(output) = intercept_apply_patch(
         &exec_params.command,
-        &exec_params.cwd,
+        &apply_patch_cwd,
         fs.as_ref(),
         turn_environment.clone(),
         session.clone(),
