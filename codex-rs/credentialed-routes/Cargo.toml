@@ -19,3 +19,7 @@ codex-login = { workspace = true }
 codex-network-proxy = { workspace = true }
 http = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

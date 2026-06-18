@@ -2830,6 +2830,8 @@ dependencies = [
  "codex-login",
  "codex-network-proxy",
  "http 1.4.0",
+ "pretty_assertions",
+ "tokio",
  "tracing",
 ]
 
