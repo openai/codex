@@ -233,6 +233,66 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
     }
 }
 
+fn create_runner_child_token(
+    token_mode: WindowsSandboxTokenMode,
+    base_token: HANDLE,
+    cap_psid_ptrs: &[*mut std::ffi::c_void],
+    include_user_sid: bool,
+) -> Result<OwnedWinHandle> {
+    let token = unsafe {
+        match (token_mode, include_user_sid) {
+            (WindowsSandboxTokenMode::ReadOnlyCapability, true) => {
+                create_readonly_token_with_caps_and_user_from(base_token, cap_psid_ptrs)
+            }
+            (WindowsSandboxTokenMode::ReadOnlyCapability, false) => {
+                codex_windows_sandbox::create_readonly_token_with_caps_from(
+                    base_token,
+                    cap_psid_ptrs,
+                )
+            }
+            (WindowsSandboxTokenMode::WritableRootsCapability, true) => {
+                create_workspace_write_token_with_caps_and_user_from(base_token, cap_psid_ptrs)
+            }
+            (WindowsSandboxTokenMode::WritableRootsCapability, false) => {
+                codex_windows_sandbox::create_workspace_write_token_with_caps_from(
+                    base_token,
+                    cap_psid_ptrs,
+                )
+            }
+        }
+    }?;
+    Ok(OwnedWinHandle::new(token))
+}
+
+fn should_retry_spawn_without_user_sid(err: &anyhow::Error) -> bool {
+    let msg = err.to_string();
+    msg.contains("CreateProcessAsUserW failed: 5")
+        || msg.contains("CreateProcessAsUserW failed: 1312")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_retry_spawn_without_user_sid;
+
+    #[test]
+    fn retries_access_denied_spawn_failures() {
+        let err = anyhow::anyhow!("CreateProcessAsUserW failed: 5");
+        assert!(should_retry_spawn_without_user_sid(&err));
+    }
+
+    #[test]
+    fn retries_no_such_logon_session_spawn_failures() {
+        let err = anyhow::anyhow!("runner error: CreateProcessAsUserW failed: 1312");
+        assert!(should_retry_spawn_without_user_sid(&err));
+    }
+
+    #[test]
+    fn ignores_unrelated_spawn_failures() {
+        let err = anyhow::anyhow!("CreateProcessAsUserW failed: 87");
+        assert!(!should_retry_spawn_without_user_sid(&err));
+    }
+}
+
 fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     let log_dir = req.codex_home.clone();
     hide_current_user_profile_dir(req.codex_home.as_path());
@@ -259,16 +319,6 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     // child is fully spawned still releases the backing LocalAlloc memory automatically.
     let cap_psid_ptrs: Vec<*mut _> = cap_psids.iter().map(LocalSid::as_ptr).collect();
     let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
-    let h_token = OwnedWinHandle::new(unsafe {
-        match token_mode {
-            WindowsSandboxTokenMode::ReadOnlyCapability => {
-                create_readonly_token_with_caps_and_user_from(base.raw(), &cap_psid_ptrs)
-            }
-            WindowsSandboxTokenMode::WritableRootsCapability => {
-                create_workspace_write_token_with_caps_and_user_from(base.raw(), &cap_psid_ptrs)
-            }
-        }
-    }?);
     unsafe {
         // These ACL adjustments need the raw SID values, but ownership stays with `cap_psids`.
         // We do not manually `LocalFree` anything here; the wrappers handle every return path.
@@ -280,71 +330,89 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
 
     let effective_cwd = effective_cwd(&req.cwd, Some(log_dir.as_path()));
 
-    let mut conpty_owner = None;
-    let mut hpc_handle: Option<HANDLE> = None;
-    let mut pipe_handles = None;
-    let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
-        let (pi, mut conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
-            h_token.raw(),
-            &req.command,
-            &effective_cwd,
-            &req.env,
-            req.use_private_desktop,
-            Some(log_dir.as_path()),
-        )?;
-        hpc_handle = conpty.raw_handle();
-        let input_write = conpty.take_input_write();
-        let output_read = conpty.take_output_read();
-        conpty_owner = Some(conpty);
-        let stdin_handle = if req.stdin_open {
-            Some(input_write)
+    let try_spawn = |include_user_sid: bool| -> Result<IpcSpawnedProcess> {
+        let h_token =
+            create_runner_child_token(token_mode, base.raw(), &cap_psid_ptrs, include_user_sid)?;
+        let mut conpty_owner = None;
+        let mut hpc_handle: Option<HANDLE> = None;
+        let mut pipe_handles = None;
+        let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
+            let (pi, mut conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
+                h_token.raw(),
+                &req.command,
+                &effective_cwd,
+                &req.env,
+                req.use_private_desktop,
+                Some(log_dir.as_path()),
+            )?;
+            hpc_handle = conpty.raw_handle();
+            let input_write = conpty.take_input_write();
+            let output_read = conpty.take_output_read();
+            conpty_owner = Some(conpty);
+            let stdin_handle = if req.stdin_open {
+                Some(input_write)
+            } else {
+                unsafe {
+                    CloseHandle(input_write);
+                }
+                None
+            };
+            (
+                pi,
+                output_read,
+                windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE,
+                stdin_handle,
+            )
         } else {
-            unsafe {
-                CloseHandle(input_write);
-            }
-            None
+            let stdin_mode = if req.stdin_open {
+                StdinMode::Open
+            } else {
+                StdinMode::Closed
+            };
+            let spawned_pipes: PipeSpawnHandles = spawn_process_with_pipes(
+                h_token.raw(),
+                &req.command,
+                &effective_cwd,
+                &req.env,
+                stdin_mode,
+                StderrMode::Separate,
+                req.use_private_desktop,
+                Some(log_dir.as_path()),
+            )?;
+            let pi = spawned_pipes.process;
+            let stdout_handle = spawned_pipes.stdout_read;
+            let stderr_handle = spawned_pipes
+                .stderr_read
+                .unwrap_or(windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE);
+            let stdin_handle = spawned_pipes.stdin_write;
+            pipe_handles = Some(spawned_pipes);
+            (pi, stdout_handle, stderr_handle, stdin_handle)
         };
-        (
+        Ok(IpcSpawnedProcess {
+            log_dir: log_dir.clone(),
             pi,
-            output_read,
-            windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE,
+            stdout_handle,
+            stderr_handle,
             stdin_handle,
-        )
-    } else {
-        let stdin_mode = if req.stdin_open {
-            StdinMode::Open
-        } else {
-            StdinMode::Closed
-        };
-        let spawned_pipes: PipeSpawnHandles = spawn_process_with_pipes(
-            h_token.raw(),
-            &req.command,
-            &effective_cwd,
-            &req.env,
-            stdin_mode,
-            StderrMode::Separate,
-            req.use_private_desktop,
-            Some(log_dir.as_path()),
-        )?;
-        let pi = spawned_pipes.process;
-        let stdout_handle = spawned_pipes.stdout_read;
-        let stderr_handle = spawned_pipes
-            .stderr_read
-            .unwrap_or(windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE);
-        let stdin_handle = spawned_pipes.stdin_write;
-        pipe_handles = Some(spawned_pipes);
-        (pi, stdout_handle, stderr_handle, stdin_handle)
+            conpty_owner,
+            hpc_handle,
+            _pipe_handles: pipe_handles,
+        })
     };
-    Ok(IpcSpawnedProcess {
-        log_dir,
-        pi,
-        stdout_handle,
-        stderr_handle,
-        stdin_handle,
-        conpty_owner,
-        hpc_handle,
-        _pipe_handles: pipe_handles,
-    })
+
+    match try_spawn(true) {
+        Ok(spawned) => Ok(spawned),
+        Err(err) if should_retry_spawn_without_user_sid(&err) => {
+            log_note(
+                &format!(
+                    "retrying CreateProcessAsUserW with legacy elevated restricted token after initial failure: {err}"
+                ),
+                Some(log_dir.as_path()),
+            );
+            try_spawn(false)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Stream stdout/stderr from the child into Output frames.
