@@ -14,10 +14,10 @@ use codex_protocol::protocol::Product;
 use tokio::sync::Semaphore;
 
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
-use crate::loader::ResolvedPluginSkills;
+use crate::loader::PluginSkillInventory;
 use crate::loader::load_plugin_apps;
 use crate::loader::load_plugin_mcp_servers;
-use crate::loader::load_plugin_skills;
+use crate::loader::load_plugin_skill_inventory;
 use crate::manager::ConfiguredMarketplacePlugin;
 use crate::manager::remote_plugin_install_required_description;
 use crate::manifest::load_plugin_manifest;
@@ -26,12 +26,12 @@ use crate::marketplace::MarketplacePluginSource;
 
 const MAX_TOOL_SUGGEST_METADATA_CACHE_ENTRIES: usize = 1024;
 
-type ToolSuggestMetadataEntry = Result<CachedToolSuggestMetadata, String>;
+type ToolSuggestMetadataEntry = Result<Arc<ToolSuggestMetadataFragment>, String>;
 
 /// Source-derived plugin metadata cached for tool suggestions.
 ///
-/// `PluginsManager` clears these entries alongside its loaded-plugin cache. Runtime eligibility
-/// remains live in `discoverable` and is not part of this cache.
+/// `PluginsManager` clears these entries alongside its loaded-plugin cache. Current skill config
+/// and auth routing are projected after each lookup and are not part of this cache.
 pub(crate) struct ToolSuggestMetadataCache {
     state: RwLock<ToolSuggestMetadataCacheState>,
     load_semaphore: Semaphore,
@@ -49,45 +49,50 @@ struct PluginArtifactIdentity {
     source: MarketplacePluginSource,
 }
 
-#[derive(Clone)]
-struct CachedToolSuggestMetadata {
-    summary: PluginCapabilitySummary,
+pub(crate) struct ToolSuggestMetadataFragment {
+    config_name: String,
+    display_name: String,
+    description: Option<String>,
+    mcp_server_names: Vec<String>,
     app_declarations: Vec<AppDeclaration>,
-    resolved_skills: Option<Arc<ResolvedPluginSkills>>,
+    skill_inventory: Option<PluginSkillInventory>,
 }
 
-impl CachedToolSuggestMetadata {
-    fn into_summary(
-        self,
+impl ToolSuggestMetadataFragment {
+    pub(crate) fn project(
+        &self,
         skill_config_rules: &SkillConfigRules,
         auth_mode: Option<AuthMode>,
     ) -> PluginCapabilitySummary {
-        let Self {
-            mut summary,
-            mut app_declarations,
-            resolved_skills,
-        } = self;
-        if let Some(resolved_skills) = resolved_skills {
-            summary.has_skills = resolved_skills.has_enabled_skills_with_rules(skill_config_rules);
-        }
-        let Some(auth_mode) = auth_mode else {
-            return summary;
-        };
-        let mut mcp_servers = summary
+        let mut app_declarations = self.app_declarations.clone();
+        let mut mcp_servers = self
             .mcp_server_names
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|name| (name, ()))
             .collect::<HashMap<_, _>>();
-        apply_app_mcp_routing_policy(
-            &mut app_declarations,
-            &mut mcp_servers,
-            Some(auth_mode),
-            /*plugin_active*/ true,
-        );
-        summary.mcp_server_names = mcp_servers.into_keys().collect();
-        summary.mcp_server_names.sort_unstable();
-        summary.app_connector_ids = app_connector_ids_from_declarations(&app_declarations);
-        summary
+        if auth_mode.is_some() {
+            apply_app_mcp_routing_policy(
+                &mut app_declarations,
+                &mut mcp_servers,
+                auth_mode,
+                /*plugin_active*/ true,
+            );
+        }
+        let mut mcp_server_names = mcp_servers.into_keys().collect::<Vec<_>>();
+        mcp_server_names.sort_unstable();
+
+        PluginCapabilitySummary {
+            config_name: self.config_name.clone(),
+            display_name: self.display_name.clone(),
+            description: self.description.clone(),
+            has_skills: self
+                .skill_inventory
+                .as_ref()
+                .is_some_and(|inventory| inventory.has_enabled_skills(skill_config_rules)),
+            mcp_server_names,
+            app_connector_ids: app_connector_ids_from_declarations(&app_declarations),
+        }
     }
 }
 
@@ -113,18 +118,14 @@ impl ToolSuggestMetadataCache {
         marketplace_name: &str,
         plugin: &ConfiguredMarketplacePlugin,
         restriction_product: Option<Product>,
-        skill_config_rules: &SkillConfigRules,
-        auth_mode: Option<AuthMode>,
-    ) -> Result<PluginCapabilitySummary, MarketplaceError> {
+    ) -> Result<Arc<ToolSuggestMetadataFragment>, MarketplaceError> {
         let artifact = PluginArtifactIdentity {
             plugin_id: plugin.id.clone(),
             source: plugin.source.clone(),
         };
         loop {
             if let Some(entry) = self.cached_entry(&artifact) {
-                return entry
-                    .map(|metadata| metadata.into_summary(skill_config_rules, auth_mode))
-                    .map_err(MarketplaceError::InvalidPlugin);
+                return entry.map_err(MarketplaceError::InvalidPlugin);
             }
 
             let _load_permit = self.load_semaphore.acquire().await.map_err(|_| {
@@ -133,17 +134,13 @@ impl ToolSuggestMetadataCache {
                 )
             })?;
             if let Some(entry) = self.cached_entry(&artifact) {
-                return entry
-                    .map(|metadata| metadata.into_summary(skill_config_rules, auth_mode))
-                    .map_err(MarketplaceError::InvalidPlugin);
+                return entry.map_err(MarketplaceError::InvalidPlugin);
             }
 
             let generation = self.generation();
             let entry = load_plugin_metadata(marketplace_name, plugin, restriction_product).await;
             if self.cache_entry_if_current(generation, artifact.clone(), entry.clone()) {
-                return entry
-                    .map(|metadata| metadata.into_summary(skill_config_rules, auth_mode))
-                    .map_err(MarketplaceError::InvalidPlugin);
+                return entry.map_err(MarketplaceError::InvalidPlugin);
             }
         }
     }
@@ -197,32 +194,24 @@ async fn load_plugin_metadata(
     )?;
 
     let MarketplacePluginSource::Local { path: plugin_root } = &plugin.source else {
-        return Ok(CachedToolSuggestMetadata {
-            summary: PluginCapabilitySummary {
-                config_name: plugin.id.clone(),
-                display_name: plugin.name.clone(),
-                description: prompt_safe_plugin_description(Some(
-                    &remote_plugin_install_required_description(&plugin.source),
-                )),
-                ..PluginCapabilitySummary::default()
-            },
+        return Ok(Arc::new(ToolSuggestMetadataFragment {
+            config_name: plugin.id.clone(),
+            display_name: plugin.name.clone(),
+            description: prompt_safe_plugin_description(Some(
+                &remote_plugin_install_required_description(&plugin.source),
+            )),
+            mcp_server_names: Vec::new(),
             app_declarations: Vec::new(),
-            resolved_skills: None,
-        });
+            skill_inventory: None,
+        }));
     };
     if !plugin_root.as_path().is_dir() {
         return Err("path does not exist or is not a directory".to_string());
     }
     let manifest = load_plugin_manifest(plugin_root.as_path())
         .ok_or_else(|| "missing or invalid plugin.json".to_string())?;
-    let resolved_skills = load_plugin_skills(
-        plugin_root,
-        &plugin_id,
-        &manifest.paths,
-        restriction_product,
-        &SkillConfigRules::default(),
-    )
-    .await;
+    let skill_inventory =
+        load_plugin_skill_inventory(plugin_root, &plugin_id, &manifest, restriction_product).await;
     let mut mcp_server_names =
         load_plugin_mcp_servers(plugin_root.as_path(), /*auth_mode*/ None)
             .await
@@ -231,18 +220,13 @@ async fn load_plugin_metadata(
     mcp_server_names.sort_unstable();
     mcp_server_names.dedup();
     let app_declarations = load_plugin_apps(plugin_root.as_path()).await;
-    let app_connector_ids = app_connector_ids_from_declarations(&app_declarations);
 
-    Ok(CachedToolSuggestMetadata {
-        summary: PluginCapabilitySummary {
-            config_name: plugin.id.clone(),
-            display_name: plugin.name.clone(),
-            description: prompt_safe_plugin_description(manifest.description.as_deref()),
-            has_skills: resolved_skills.has_enabled_skills(),
-            mcp_server_names,
-            app_connector_ids,
-        },
+    Ok(Arc::new(ToolSuggestMetadataFragment {
+        config_name: plugin.id.clone(),
+        display_name: plugin.name.clone(),
+        description: prompt_safe_plugin_description(manifest.description.as_deref()),
+        mcp_server_names,
         app_declarations,
-        resolved_skills: Some(Arc::new(resolved_skills)),
-    })
+        skill_inventory: Some(skill_inventory),
+    }))
 }
