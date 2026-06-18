@@ -281,11 +281,14 @@ impl ThreadManager {
             Arc::clone(&plugins_manager),
             Arc::clone(&extensions),
         ));
-        let skills_service = Arc::new(SkillsService::new_with_restriction_product(
-            codex_home,
-            config.bundled_skills_enabled(),
-            restriction_product,
-        ));
+        let skills_service = Arc::new(
+            SkillsService::new_with_restriction_product(
+                codex_home,
+                config.bundled_skills_enabled(),
+                restriction_product,
+            )
+            .with_plugin_skill_root_cache(plugins_manager.plugin_skill_root_cache()),
+        );
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -373,11 +376,14 @@ impl ThreadManager {
             auth_manager.get_api_auth_mode(),
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-        let skills_service = Arc::new(SkillsService::new_with_restriction_product(
-            skills_codex_home,
-            /*bundled_skills_enabled*/ true,
-            restriction_product,
-        ));
+        let skills_service = Arc::new(
+            SkillsService::new_with_restriction_product(
+                skills_codex_home,
+                /*bundled_skills_enabled*/ true,
+                restriction_product,
+            )
+            .with_plugin_skill_root_cache(plugins_manager.plugin_skill_root_cache()),
+        );
         // This test constructor has no Config input. Tests that need a non-local
         // process store should construct ThreadManager::new with an explicit store.
         let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(

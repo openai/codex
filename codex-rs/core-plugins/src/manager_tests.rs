@@ -34,6 +34,7 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core_skills::PluginSkillRootCache;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_login::CodexAuth;
 use codex_plugin::AppDeclaration;
@@ -1466,6 +1467,7 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
         interface: None,
     };
     let plugin_id = PluginId::parse("sample@test").expect("plugin id should parse");
+    let plugin_skill_root_cache = PluginSkillRootCache::default();
 
     let resolved = load_plugin_skills(
         &plugin_root,
@@ -1473,6 +1475,7 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
         &manifest,
         /*restriction_product*/ None,
         &SkillConfigRules::default(),
+        &plugin_skill_root_cache,
     )
     .await;
 
@@ -4820,10 +4823,12 @@ async fn load_plugins_ignores_project_config_files() {
     )
     .expect("config layer stack should build");
 
+    let plugin_skill_root_cache = PluginSkillRootCache::default();
     let plugins = load_plugins_from_layer_stack(
         &stack,
         std::collections::HashMap::new(),
         &PluginStore::new(codex_home.path().to_path_buf()),
+        &plugin_skill_root_cache,
         Some(Product::Codex),
         /*prefer_remote_curated_conflicts*/ false,
     )
