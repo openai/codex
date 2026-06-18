@@ -12,6 +12,11 @@ pub struct CodeModeConfigToml {
     /// Exact tool namespaces to omit from the code-mode nested tool surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub excluded_tool_namespaces: Option<Vec<String>>,
+    /// Exact tool namespaces to expose only as direct model tools.
+    /// These tools bypass deferral, remain top-level in code-mode-only sessions, and are omitted
+    /// from the nested code-mode tool surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_only_tool_namespaces: Option<Vec<String>>,
 }
 
 impl FeatureConfig for CodeModeConfigToml {

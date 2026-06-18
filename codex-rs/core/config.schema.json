@@ -362,6 +362,13 @@
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "direct_only_tool_namespaces": {
+          "description": "Exact tool namespaces to expose only as direct model tools. These tools bypass deferral, remain top-level in code-mode-only sessions, and are omitted from the nested code-mode tool surface.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "enabled": {
           "type": "boolean"
         },

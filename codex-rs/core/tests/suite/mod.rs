@@ -65,6 +65,7 @@ mod image_rollout;
 mod items;
 mod json_result;
 mod live_cli;
+mod mcp_tool_exposure;
 mod mcp_turn_metadata;
 mod model_overrides;
 mod model_runtime_selectors;
