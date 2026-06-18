@@ -17,6 +17,7 @@ use crate::custom_ca::build_reqwest_client_with_custom_ca;
 use thiserror::Error;
 
 const SYSTEM_PROXY_SUCCESS_CACHE_TTL: Duration = Duration::from_secs(60);
+const SYSTEM_PROXY_UNAVAILABLE_CACHE_TTL: Duration = Duration::from_secs(5);
 
 /// Coarse semantic bucket for the HTTP or WebSocket client being constructed.
 ///
@@ -255,9 +256,12 @@ fn cached_system_proxy_decision(request_url: &str) -> Option<SystemProxyDecision
 }
 
 fn cache_system_proxy_decision(request_url: &str, decision: SystemProxyDecision) {
-    if matches!(decision, SystemProxyDecision::Unavailable { .. }) {
-        return;
-    }
+    let ttl = match &decision {
+        SystemProxyDecision::Direct | SystemProxyDecision::Proxy { .. } => {
+            SYSTEM_PROXY_SUCCESS_CACHE_TTL
+        }
+        SystemProxyDecision::Unavailable { .. } => SYSTEM_PROXY_UNAVAILABLE_CACHE_TTL,
+    };
 
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut cache) = cache.lock() {
@@ -267,7 +271,7 @@ fn cache_system_proxy_decision(request_url: &str, decision: SystemProxyDecision)
             request_url.to_string(),
             CachedSystemProxyDecision {
                 decision,
-                expires_at: now + SYSTEM_PROXY_SUCCESS_CACHE_TTL,
+                expires_at: now + ttl,
             },
         );
     }

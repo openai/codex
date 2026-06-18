@@ -30,3 +30,15 @@ fn environment_fallback_reads_injected_proxy_environment() {
         })
     ));
 }
+
+#[test]
+fn unavailable_system_proxy_decision_is_cached() {
+    let request_url = "https://unavailable-cache.test/oauth/token";
+    let decision = SystemProxyDecision::Unavailable {
+        failure: RouteFailureClass::ProxyResolutionUnavailable,
+    };
+
+    cache_system_proxy_decision(request_url, decision.clone());
+
+    assert_eq!(cached_system_proxy_decision(request_url), Some(decision));
+}
