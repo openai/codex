@@ -76,6 +76,17 @@ impl FeatureConfig for MultiAgentV2ConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RolloutBudgetConfigToml {
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VarlatencyClockSource {
+    #[default]
+    System,
+    AppServerClient,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VarlatencyConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,6 +104,12 @@ pub struct RolloutBudgetConfigToml {
 }
 
 impl FeatureConfig for RolloutBudgetConfigToml {
+    pub reminder_interval_model_requests: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clock_source: Option<VarlatencyClockSource>,
+}
+
+impl FeatureConfig for VarlatencyConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }

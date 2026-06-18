@@ -695,6 +695,9 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
+            "varlatency": {
+              "$ref": "#/definitions/FeatureToml_for_VarlatencyConfigToml"
+            },
             "web_search": {
               "type": "boolean"
             },
@@ -912,12 +915,14 @@
       ]
     },
     "FeatureToml_for_RolloutBudgetConfigToml": {
+    "FeatureToml_for_VarlatencyConfigToml": {
       "anyOf": [
         {
           "type": "boolean"
         },
         {
           "$ref": "#/definitions/RolloutBudgetConfigToml"
+          "$ref": "#/definitions/VarlatencyConfigToml"
         }
       ]
     },
@@ -4344,6 +4349,30 @@
         }
       ]
     },
+    "VarlatencyClockSource": {
+      "enum": [
+        "system",
+        "app_server_client"
+      ],
+      "type": "string"
+    },
+    "VarlatencyConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "clock_source": {
+          "$ref": "#/definitions/VarlatencyClockSource"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "reminder_interval_model_requests": {
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "Verbosity": {
       "description": "Controls output length/detail on GPT-5 models via the Responses API. Serialized with lowercase values to match the OpenAI API.",
       "enum": [
@@ -4897,6 +4926,9 @@
         },
         "use_linux_sandbox_bwrap": {
           "type": "boolean"
+        },
+        "varlatency": {
+          "$ref": "#/definitions/FeatureToml_for_VarlatencyConfigToml"
         },
         "web_search": {
           "type": "boolean"

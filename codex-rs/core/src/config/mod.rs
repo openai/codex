@@ -66,6 +66,8 @@ use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
+use codex_features::VarlatencyClockSource;
+use codex_features::VarlatencyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
@@ -1022,6 +1024,8 @@ pub struct Config {
 
     /// Shared token budget for the root thread and its sub-agents.
     pub rollout_budget: Option<RolloutBudgetConfig>,
+    /// Current-time reminder configuration, when enabled.
+    pub varlatency: Option<VarlatencyConfig>,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
@@ -1073,6 +1077,21 @@ pub struct RolloutBudgetConfig {
     pub reminder_interval_tokens: i64,
     pub sampling_token_weight: f64,
     pub prefill_token_weight: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct VarlatencyConfig {
+    pub reminder_interval_model_requests: u64,
+    pub clock_source: VarlatencyClockSource,
+}
+
+impl Default for VarlatencyConfig {
+    fn default() -> Self {
+        Self {
+            reminder_interval_model_requests: 1,
+            clock_source: VarlatencyClockSource::System,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2536,6 +2555,31 @@ fn resolve_rollout_budget_config(
         reminder_interval_tokens,
         sampling_token_weight,
         prefill_token_weight,
+fn resolve_varlatency_config(
+    config_toml: &ConfigToml,
+    features: &ManagedFeatures,
+) -> std::io::Result<Option<VarlatencyConfig>> {
+    if !features.enabled(Feature::Varlatency) {
+        return Ok(None);
+    }
+
+    let base = varlatency_toml_config(config_toml.features.as_ref());
+    let default = VarlatencyConfig::default();
+    let reminder_interval_model_requests = base
+        .and_then(|config| config.reminder_interval_model_requests)
+        .unwrap_or(default.reminder_interval_model_requests);
+    if reminder_interval_model_requests == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.varlatency.reminder_interval_model_requests must be positive",
+        ));
+    }
+
+    Ok(Some(VarlatencyConfig {
+        reminder_interval_model_requests,
+        clock_source: base
+            .and_then(|config| config.clock_source)
+            .unwrap_or(default.clock_source),
     }))
 }
 
@@ -2573,6 +2617,13 @@ fn code_mode_toml_config(features: Option<&FeaturesToml>) -> Option<&CodeModeCon
 
 fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
     match features?.multi_agent_v2.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
+fn varlatency_toml_config(features: Option<&FeaturesToml>) -> Option<&VarlatencyConfigToml> {
+    match features?.varlatency.as_ref()? {
         FeatureToml::Enabled(_) => None,
         FeatureToml::Config(config) => Some(config),
     }
@@ -3217,6 +3268,7 @@ impl Config {
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
+        let varlatency = resolve_varlatency_config(&cfg, &features)?;
         let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
@@ -3758,6 +3810,7 @@ impl Config {
             ghost_snapshot,
             multi_agent_v2,
             rollout_budget,
+            varlatency,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning

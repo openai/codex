@@ -7,6 +7,7 @@ use codex_features::FeatureToml;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::RolloutBudgetConfigToml;
+use codex_features::VarlatencyConfigToml;
 use codex_protocol::ThreadId;
 
 use crate::config::Config;
@@ -154,6 +155,11 @@ fn save_config_resolved_fields(
             resolved_config_to_toml(rollout_budget, "features.rollout_budget")?;
         rollout_budget.enabled = Some(config.features.enabled(Feature::RolloutBudget));
         features.rollout_budget = Some(FeatureToml::Config(rollout_budget));
+    if let Some(varlatency) = config.varlatency.as_ref() {
+        let mut varlatency: VarlatencyConfigToml =
+            resolved_config_to_toml(varlatency, "features.varlatency")?;
+        varlatency.enabled = Some(config.features.enabled(Feature::Varlatency));
+        features.varlatency = Some(FeatureToml::Config(varlatency));
     }
     lock_config.memories = Some(resolved_config_to_toml::<MemoriesToml>(
         &config.memories,
@@ -227,6 +233,11 @@ mod tests {
             .features
             .enable(Feature::RolloutBudget)
             .expect("rollout_budget should be enableable in tests");
+        config.varlatency = Some(crate::config::VarlatencyConfig::default());
+        config
+            .features
+            .enable(Feature::Varlatency)
+            .expect("varlatency should be enableable in tests");
         sc.original_config_do_not_use = Arc::new(config);
         sc.base_instructions = "resolved instructions".to_string();
         sc.developer_instructions = Some("resolved developer instructions".to_string());
@@ -300,6 +311,11 @@ mod tests {
                 reminder_interval_tokens: Some(10_000),
                 sampling_token_weight: Some(1.0),
                 prefill_token_weight: Some(0.25),
+            features.varlatency,
+            Some(FeatureToml::Config(VarlatencyConfigToml {
+                enabled: Some(true),
+                reminder_interval_model_requests: Some(1),
+                clock_source: Some(codex_features::VarlatencyClockSource::System),
             }))
         );
 
