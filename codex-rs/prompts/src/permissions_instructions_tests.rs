@@ -287,8 +287,8 @@ fn auto_review_approvals_append_auto_review_specific_guidance() {
         "Request escalation for git operations that may write lock files, such as updating the index or refs"
     ));
     assert!(!text.contains("Request escalation for GUI commands"));
-    assert!(text.contains("Use escalation when it is the direct or most reliable way"));
-    assert!(text.contains("Do not spend extra turns running likely-to-fail sandbox probes first"));
+    assert!(!text.contains("Use escalation when it is the direct or most reliable way"));
+    assert!(!text.contains("Do not spend extra turns running likely-to-fail sandbox probes first"));
     assert!(text.contains("Do not include a `prefix_rule` parameter."));
     assert!(text.contains(
         "Request escalation for commands that may need network access, including HTTP calls, package registries, internal services, data-service APIs, remote queries, data fetches, or live probes"

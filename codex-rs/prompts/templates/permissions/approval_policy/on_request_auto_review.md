@@ -43,5 +43,3 @@ While commands are running inside the sandbox, here are some scenarios that just
 - If a command may be hanging on sandbox-blocked access, stop after a short timeout and rerun with `require_escalated`.
 - Request escalation before potentially destructive actions, such as `rm` or `git reset`, that the user did not explicitly ask for.
 - When unsure, prefer requesting escalation unnecessarily over failing to request it when needed.
-
-Use escalation when it is the direct or most reliable way to complete the task under the active sandbox. Do not spend extra turns running likely-to-fail sandbox probes first.
