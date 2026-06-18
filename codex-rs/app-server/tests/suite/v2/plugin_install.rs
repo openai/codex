@@ -1010,15 +1010,12 @@ async fn plugin_install_tracks_remote_plugin_analytics_event() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_install_errors_when_remote_bundle_download_fails() -> Result<()> {
+async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_large() -> Result<()>
+{
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    let bundle_url = mount_remote_plugin_bundle(
-        &server,
-        /*status_code*/ 503,
-        b"bundle temporarily unavailable".to_vec(),
-    )
-    .await;
+    let bundle_url =
+        mount_remote_plugin_bundle(&server, /*status_code*/ 503, vec![b'x'; 8 * 1024 + 1]).await;
     configure_remote_plugin_test(codex_home.path(), &server)?;
     mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
     mount_empty_remote_installed_plugins(&server).await;
@@ -1041,6 +1038,20 @@ async fn plugin_install_errors_when_remote_bundle_download_fails() -> Result<()>
 
     assert_eq!(err.error.code, -32603);
     assert!(err.error.message.contains("failed with status 503"));
+    assert!(
+        err.error
+            .message
+            .contains("[response body truncated after 8192 bytes]")
+    );
+    assert_eq!(
+        err.error
+            .message
+            .bytes()
+            .filter(|byte| *byte == b'x')
+            .count(),
+        8192
+    );
+    assert!(!err.error.message.contains("exceeded maximum size"));
     wait_for_remote_plugin_request_count(
         &server,
         "GET",
