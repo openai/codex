@@ -237,6 +237,22 @@ async fn file_system_get_metadata_reports_symlink_targets(
     );
     assert!(symlink_metadata.modified_at_ms > 0);
 
+    let link_metadata = file_system
+        .get_symlink_metadata(&PathUri::from_path(&symlink_path)?, /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        link_metadata,
+        FileMetadata {
+            is_directory: false,
+            is_file: false,
+            is_symlink: true,
+            size: std::fs::symlink_metadata(&symlink_path)?.len(),
+            created_at_ms: link_metadata.created_at_ms,
+            modified_at_ms: link_metadata.modified_at_ms,
+        }
+    );
+
     let dir_path = tmp.path().join("notes");
     std::fs::create_dir(&dir_path)?;
     let dir_symlink_path = tmp.path().join("notes-link");
@@ -259,6 +275,34 @@ async fn file_system_get_metadata_reports_symlink_targets(
             modified_at_ms: dir_symlink_metadata.modified_at_ms,
         }
     );
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_read_directory_reports_symlinks(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let target_path = tmp.path().join("target");
+    std::fs::create_dir(&target_path)?;
+    symlink(&target_path, tmp.path().join("target-link"))?;
+
+    let entries = file_system
+        .read_directory(&PathUri::from_path(tmp.path())?, /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    let entry = entries
+        .into_iter()
+        .find(|entry| entry.file_name == "target-link")
+        .context("missing symlink entry")?;
+    assert_eq!(entry.is_directory, true);
+    assert_eq!(entry.is_file, false);
+    assert_eq!(entry.is_symlink, true);
 
     Ok(())
 }
@@ -564,7 +608,10 @@ async fn file_system_copy_rejects_symlink_escape_destination(
         .copy(
             &PathUri::from_path(allowed_dir.join("source.txt"))?,
             &PathUri::from_path(&requested_destination)?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             Some(&sandbox),
         )
         .await
@@ -642,7 +689,10 @@ async fn file_system_copy_preserves_symlink_source(
         .copy(
             &PathUri::from_path(&source_symlink)?,
             &PathUri::from_path(&copied_symlink)?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             Some(&sandbox),
         )
         .await
@@ -720,7 +770,10 @@ async fn file_system_copy_rejects_symlink_escape_source(
         .copy(
             &PathUri::from_path(&requested_source)?,
             &PathUri::from_path(&requested_destination)?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             Some(&sandbox),
         )
         .await
@@ -754,7 +807,10 @@ async fn file_system_copy_preserves_symlinks_in_recursive_copy(
         .copy(
             &PathUri::from_path(&source_dir)?,
             &PathUri::from_path(&copied_dir)?,
-            CopyOptions { recursive: true },
+            CopyOptions {
+                recursive: true,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await
@@ -800,7 +856,10 @@ async fn file_system_copy_ignores_unknown_special_files_in_recursive_copy(
         .copy(
             &PathUri::from_path(&source_dir)?,
             &PathUri::from_path(&copied_dir)?,
-            CopyOptions { recursive: true },
+            CopyOptions {
+                recursive: true,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await
@@ -839,7 +898,10 @@ async fn file_system_copy_rejects_standalone_fifo_source(
         .copy(
             &PathUri::from_path(&fifo_path)?,
             &PathUri::from_path(tmp.path().join("copied"))?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await;

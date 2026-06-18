@@ -35,6 +35,7 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::rpc::already_exists;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
@@ -152,11 +153,16 @@ impl FileSystemHandler {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
-        let metadata = self
-            .file_system
-            .get_metadata(&params.path, params.sandbox.as_ref())
-            .await
-            .map_err(map_fs_error)?;
+        let metadata = if params.follow_symlinks {
+            self.file_system
+                .get_metadata(&params.path, params.sandbox.as_ref())
+                .await
+        } else {
+            self.file_system
+                .get_symlink_metadata(&params.path, params.sandbox.as_ref())
+                .await
+        }
+        .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
             is_directory: metadata.is_directory,
             is_file: metadata.is_file,
@@ -193,6 +199,7 @@ impl FileSystemHandler {
                 file_name: entry.file_name,
                 is_directory: entry.is_directory,
                 is_file: entry.is_file,
+                is_symlink: entry.is_symlink,
             })
             .collect();
         Ok(FsReadDirectoryResponse { entries })
@@ -225,6 +232,7 @@ impl FileSystemHandler {
                 &params.destination_path,
                 CopyOptions {
                     recursive: params.recursive,
+                    exclusive: params.exclusive,
                 },
                 params.sandbox.as_ref(),
             )
@@ -246,6 +254,7 @@ fn validate_file_read_handle_id(handle_id: &str) -> Result<(), JSONRPCErrorError
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
     match err.kind() {
         io::ErrorKind::NotFound => not_found(err.to_string()),
+        io::ErrorKind::AlreadyExists => already_exists(err.to_string()),
         io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {
             invalid_request(err.to_string())
         }

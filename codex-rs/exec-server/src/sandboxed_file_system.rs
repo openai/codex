@@ -148,6 +148,25 @@ impl SandboxedFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
+        self.get_metadata_with_follow_symlinks(path, sandbox, true)
+            .await
+    }
+
+    async fn get_symlink_metadata(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileMetadata> {
+        self.get_metadata_with_follow_symlinks(path, sandbox, false)
+            .await
+    }
+
+    async fn get_metadata_with_follow_symlinks(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+        follow_symlinks: bool,
+    ) -> FileSystemResult<FileMetadata> {
         let sandbox = require_platform_sandbox(sandbox)?;
         validate_native_path(path)?;
         let response = self
@@ -155,6 +174,7 @@ impl SandboxedFileSystem {
                 sandbox,
                 FsHelperRequest::GetMetadata(FsGetMetadataParams {
                     path: path.clone(),
+                    follow_symlinks,
                     sandbox: None,
                 }),
             )
@@ -196,6 +216,7 @@ impl SandboxedFileSystem {
                 file_name: entry.file_name,
                 is_directory: entry.is_directory,
                 is_file: entry.is_file,
+                is_symlink: entry.is_symlink,
             })
             .collect())
     }
@@ -239,6 +260,7 @@ impl SandboxedFileSystem {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
+                exclusive: options.exclusive,
                 sandbox: None,
             }),
         )
@@ -307,6 +329,16 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(SandboxedFileSystem::get_metadata(self, path, sandbox))
+    }
+
+    fn get_symlink_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(SandboxedFileSystem::get_symlink_metadata(
+            self, path, sandbox,
+        ))
     }
 
     fn read_directory<'a>(

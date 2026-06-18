@@ -813,6 +813,7 @@ fn fs_get_metadata_response_round_trips_minimal_fields() {
         is_directory: false,
         is_file: true,
         is_symlink: false,
+        size_bytes: 5,
         created_at_ms: 123,
         modified_at_ms: 456,
     };
@@ -824,6 +825,7 @@ fn fs_get_metadata_response_round_trips_minimal_fields() {
             "isDirectory": false,
             "isFile": true,
             "isSymlink": false,
+            "sizeBytes": 5,
             "createdAtMs": 123,
             "modifiedAtMs": 456,
         })
@@ -920,6 +922,7 @@ fn fs_copy_params_round_trip_with_recursive_directory_copy() {
         source_path: absolute_path("tmp/source"),
         destination_path: absolute_path("tmp/destination"),
         recursive: true,
+        exclusive: true,
     };
 
     let value = serde_json::to_value(&params).expect("serialize fs/copy params");
@@ -928,6 +931,7 @@ fn fs_copy_params_round_trip_with_recursive_directory_copy() {
         json!({
             "sourcePath": absolute_path_string("tmp/source"),
             "destinationPath": absolute_path_string("tmp/destination"),
+            "exclusive": true,
             "recursive": true,
         })
     );

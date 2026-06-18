@@ -280,6 +280,7 @@ pub struct FsCreateDirectoryResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct FsGetMetadataParams {
     pub path: PathUri,
+    pub follow_symlinks: bool,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
 
@@ -320,6 +321,7 @@ pub struct FsReadDirectoryEntry {
     pub file_name: String,
     pub is_directory: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,6 +349,7 @@ pub struct FsCopyParams {
     pub source_path: PathUri,
     pub destination_path: PathUri,
     pub recursive: bool,
+    pub exclusive: bool,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
 

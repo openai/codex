@@ -116,15 +116,20 @@ impl FsRequestProcessor {
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let path = PathUri::from_abs_path(&params.path);
-        let metadata = self
-            .file_system()?
-            .get_metadata(&path, /*sandbox*/ None)
-            .await
-            .map_err(map_fs_error)?;
+        let file_system = self.file_system()?;
+        let metadata = if params.follow_symlinks.unwrap_or(true) {
+            file_system.get_metadata(&path, /*sandbox*/ None).await
+        } else {
+            file_system
+                .get_symlink_metadata(&path, /*sandbox*/ None)
+                .await
+        }
+        .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
             is_directory: metadata.is_directory,
             is_file: metadata.is_file,
             is_symlink: metadata.is_symlink,
+            size_bytes: metadata.size,
             created_at_ms: metadata.created_at_ms,
             modified_at_ms: metadata.modified_at_ms,
         })
@@ -147,6 +152,7 @@ impl FsRequestProcessor {
                     file_name: entry.file_name,
                     is_directory: entry.is_directory,
                     is_file: entry.is_file,
+                    is_symlink: entry.is_symlink,
                 })
                 .collect(),
         })
@@ -183,6 +189,7 @@ impl FsRequestProcessor {
                 &destination_path,
                 CopyOptions {
                     recursive: params.recursive,
+                    exclusive: params.exclusive,
                 },
                 /*sandbox*/ None,
             )
@@ -211,9 +218,13 @@ impl FsRequestProcessor {
 }
 
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
-    if err.kind() == io::ErrorKind::InvalidInput {
-        invalid_request(err.to_string())
-    } else {
-        internal_error(err.to_string())
+    match err.kind() {
+        io::ErrorKind::InvalidInput => invalid_request(err.to_string()),
+        io::ErrorKind::AlreadyExists => JSONRPCErrorError {
+            code: -32603,
+            message: err.to_string(),
+            data: Some(serde_json::json!({ "code": "EEXIST" })),
+        },
+        _ => internal_error(err.to_string()),
     }
 }

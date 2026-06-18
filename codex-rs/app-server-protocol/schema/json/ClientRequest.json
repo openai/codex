@@ -928,6 +928,10 @@
           ],
           "description": "Absolute destination path."
         },
+        "exclusive": {
+          "description": "Fail if the destination already exists.",
+          "type": "boolean"
+        },
         "recursive": {
           "description": "Required for directory copies; ignored for file copies.",
           "type": "boolean"
@@ -974,6 +978,13 @@
     "FsGetMetadataParams": {
       "description": "Request metadata for an absolute path.",
       "properties": {
+        "followSymlinks": {
+          "description": "Whether metadata should describe the symlink target. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "path": {
           "allOf": [
             {

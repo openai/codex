@@ -64,6 +64,9 @@ pub struct FsCreateDirectoryResponse {}
 pub struct FsGetMetadataParams {
     /// Absolute path to inspect.
     pub path: AbsolutePathBuf,
+    /// Whether metadata should describe the symlink target. Defaults to `true`.
+    #[ts(optional = nullable)]
+    pub follow_symlinks: Option<bool>,
 }
 
 /// Metadata returned by `fs/getMetadata`.
@@ -77,6 +80,9 @@ pub struct FsGetMetadataResponse {
     pub is_file: bool,
     /// Whether the path itself is a symbolic link.
     pub is_symlink: bool,
+    /// File size in bytes.
+    #[ts(type = "number")]
+    pub size_bytes: u64,
     /// File creation time in Unix milliseconds when available, otherwise `0`.
     #[ts(type = "number")]
     pub created_at_ms: i64,
@@ -105,6 +111,8 @@ pub struct FsReadDirectoryEntry {
     pub is_directory: bool,
     /// Whether this entry resolves to a regular file.
     pub is_file: bool,
+    /// Whether this entry itself is a symbolic link.
+    pub is_symlink: bool,
 }
 
 /// Directory entries returned by `fs/readDirectory`.
@@ -149,6 +157,9 @@ pub struct FsCopyParams {
     /// Required for directory copies; ignored for file copies.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recursive: bool,
+    /// Fail if the destination already exists.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclusive: bool,
 }
 
 /// Successful response for `fs/copy`.

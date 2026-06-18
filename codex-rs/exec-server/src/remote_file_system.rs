@@ -27,6 +27,7 @@ use crate::protocol::FsWriteFileParams;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const NOT_FOUND_ERROR_CODE: i64 = -32004;
+const ALREADY_EXISTS_ERROR_CODE: i64 = -32005;
 
 #[path = "remote_file_stream.rs"]
 mod file_stream;
@@ -139,11 +140,31 @@ impl RemoteFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
+        self.get_metadata_with_follow_symlinks(path, sandbox, true)
+            .await
+    }
+
+    async fn get_symlink_metadata(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileMetadata> {
+        self.get_metadata_with_follow_symlinks(path, sandbox, false)
+            .await
+    }
+
+    async fn get_metadata_with_follow_symlinks(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+        follow_symlinks: bool,
+    ) -> FileSystemResult<FileMetadata> {
         trace!("remote fs get_metadata");
         let client = self.client.get().await.map_err(map_remote_error)?;
         let response = client
             .fs_get_metadata(FsGetMetadataParams {
                 path: path.clone(),
+                follow_symlinks,
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await
@@ -179,6 +200,7 @@ impl RemoteFileSystem {
                 file_name: entry.file_name,
                 is_directory: entry.is_directory,
                 is_file: entry.is_file,
+                is_symlink: entry.is_symlink,
             })
             .collect())
     }
@@ -217,6 +239,7 @@ impl RemoteFileSystem {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
+                exclusive: options.exclusive,
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await
@@ -278,6 +301,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Box::pin(RemoteFileSystem::get_metadata(self, path, sandbox))
     }
 
+    fn get_symlink_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(RemoteFileSystem::get_symlink_metadata(self, path, sandbox))
+    }
+
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -324,6 +355,9 @@ fn map_remote_error(error: ExecServerError) -> io::Error {
     match error {
         ExecServerError::Server { code, message } if code == NOT_FOUND_ERROR_CODE => {
             io::Error::new(io::ErrorKind::NotFound, message)
+        }
+        ExecServerError::Server { code, message } if code == ALREADY_EXISTS_ERROR_CODE => {
+            io::Error::new(io::ErrorKind::AlreadyExists, message)
         }
         ExecServerError::Server { code, message } if code == INVALID_REQUEST_ERROR_CODE => {
             io::Error::new(io::ErrorKind::InvalidInput, message)
