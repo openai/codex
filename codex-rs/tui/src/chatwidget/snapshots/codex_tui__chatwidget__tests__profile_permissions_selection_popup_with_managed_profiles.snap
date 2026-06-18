@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/permissions.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Update Model Permissions
+
+› 1. Read Only (current)  Codex can read files in the current workspace.
+                          Approval is required to edit files or access the
+                          internet.
+
+  Press enter to confirm or esc to go back
