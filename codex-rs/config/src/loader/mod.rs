@@ -146,7 +146,11 @@ pub async fn load_config_layers_state(
                 CloudConfigBundleLayers::from_bundle(bundle, &cloud_config_base_dir)?
             };
             let CloudConfigBundleLayers {
+                baseline_config: _,
+                system_overlay_config: _,
                 enterprise_managed_config,
+                baseline_requirements: _,
+                system_overlay_requirements: _,
                 enterprise_managed_requirements,
             } = bundle_layers;
             bundle_requirements_layers = enterprise_managed_requirements;

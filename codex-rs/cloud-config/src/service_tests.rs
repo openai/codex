@@ -9,12 +9,15 @@ use crate::metrics::bundle_shape_tag;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_backend_client::ConfigBundleResponse;
+use codex_backend_client::DeliveredManagedLayers;
 use codex_backend_client::DeliveredTomlFragment;
 use codex_config::AbsolutePathBuf;
 use codex_config::CloudConfigFragment;
 use codex_config::CloudConfigTomlBundle;
+use codex_config::CloudConfigTomlManagedLayers;
 use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
+use codex_config::CloudRequirementsTomlManagedLayers;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::auth::AgentIdentityAuth;
@@ -197,9 +200,11 @@ fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
             enterprise_managed: vec![test_config_fragment()],
+            managed_layers: Default::default(),
         },
         requirements_toml: CloudRequirementsTomlBundle {
             enterprise_managed: vec![test_requirements_fragment()],
+            managed_layers: Default::default(),
         },
     }
 }
@@ -228,8 +233,26 @@ fn invalid_config_bundle() -> CloudConfigBundle {
                 name: "Invalid config".to_string(),
                 contents: "model = [".to_string(),
             }],
+            managed_layers: Default::default(),
         },
         requirements_toml: CloudRequirementsTomlBundle::default(),
+    }
+}
+
+fn invalid_managed_requirements_bundle() -> CloudConfigBundle {
+    CloudConfigBundle {
+        config_toml: CloudConfigTomlBundle::default(),
+        requirements_toml: CloudRequirementsTomlBundle {
+            enterprise_managed: Vec::new(),
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: None,
+                system_overlay: Some(vec![CloudRequirementsFragment {
+                    id: "req_invalid".to_string(),
+                    name: "Invalid managed requirements".to_string(),
+                    contents: "allowed_approval_policies = [".to_string(),
+                }]),
+            },
+        },
     }
 }
 
@@ -330,7 +353,7 @@ impl BundleClient for UnauthorizedBundleClient {
 }
 
 #[test]
-fn bundle_shape_tag_describes_sorted_enterprise_sources() {
+fn bundle_shape_tag_describes_sorted_buckets() {
     assert_eq!(bundle_shape_tag(/*bundle*/ None), "none");
     assert_eq!(
         bundle_shape_tag(Some(&CloudConfigBundle::default())),
@@ -340,6 +363,7 @@ fn bundle_shape_tag_describes_sorted_enterprise_sources() {
         bundle_shape_tag(Some(&CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
                 enterprise_managed: vec![test_config_fragment()],
+                managed_layers: Default::default(),
             },
             requirements_toml: CloudRequirementsTomlBundle::default(),
         })),
@@ -350,6 +374,7 @@ fn bundle_shape_tag_describes_sorted_enterprise_sources() {
             config_toml: CloudConfigTomlBundle::default(),
             requirements_toml: CloudRequirementsTomlBundle {
                 enterprise_managed: vec![test_requirements_fragment()],
+                managed_layers: Default::default(),
             },
         })),
         "enterprise_requirements"
@@ -358,12 +383,23 @@ fn bundle_shape_tag_describes_sorted_enterprise_sources() {
         bundle_shape_tag(Some(&CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
                 enterprise_managed: vec![test_config_fragment()],
+                managed_layers: CloudConfigTomlManagedLayers {
+                    baseline: Some(vec![test_config_fragment()]),
+                    system_overlay: Some(Vec::new()),
+                },
             },
             requirements_toml: CloudRequirementsTomlBundle {
                 enterprise_managed: vec![test_requirements_fragment()],
+                managed_layers: CloudRequirementsTomlManagedLayers {
+                    baseline: Some(vec![test_requirements_fragment()]),
+                    system_overlay: Some(Vec::new()),
+                },
             },
         })),
-        "enterprise_config,enterprise_requirements"
+        concat!(
+            "baseline_config,baseline_requirements,enterprise_config,",
+            "enterprise_requirements,system_overlay_config,system_overlay_requirements"
+        )
     );
 }
 
@@ -475,30 +511,35 @@ async fn get_bundle_skips_team_like_usage_based_plan() {
 }
 
 #[tokio::test]
-async fn get_bundle_rejects_invalid_remote_bundle_before_cache_write() {
-    let codex_home = tempdir().expect("tempdir");
-    let fetcher = Arc::new(StaticBundleClient::new(invalid_config_bundle()));
-    let service = CloudConfigBundleService::new(
-        auth_manager_with_plan("business").await,
-        fetcher.clone(),
-        codex_home.path().to_path_buf(),
-        CLOUD_CONFIG_BUNDLE_TIMEOUT,
-    );
+async fn get_bundle_rejects_invalid_remote_buckets_before_cache_write() {
+    for bundle in [
+        invalid_config_bundle(),
+        invalid_managed_requirements_bundle(),
+    ] {
+        let codex_home = tempdir().expect("tempdir");
+        let fetcher = Arc::new(StaticBundleClient::new(bundle));
+        let service = CloudConfigBundleService::new(
+            auth_manager_with_plan("business").await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_CONFIG_BUNDLE_TIMEOUT,
+        );
 
-    let err = service
-        .load_startup_bundle()
-        .await
-        .expect_err("invalid remote bundle should fail closed");
+        let err = service
+            .load_startup_bundle()
+            .await
+            .expect_err("invalid remote bundle should fail closed");
 
-    assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
-    assert!(err.to_string().contains("invalid cloud config bundle"));
-    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    assert!(
-        !codex_home
-            .path()
-            .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
-            .exists()
-    );
+        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
+        assert!(err.to_string().contains("invalid cloud config bundle"));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+        assert!(
+            !codex_home
+                .path()
+                .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
+                .exists()
+        );
+    }
 }
 
 #[tokio::test]
@@ -602,6 +643,7 @@ async fn get_bundle_ignores_cache_for_different_auth_identity() {
                 name: "Replacement requirements".to_string(),
                 contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
             }],
+            managed_layers: Default::default(),
         },
     };
     let fetcher = Arc::new(SequenceBundleClient::new(vec![Ok(
@@ -931,6 +973,7 @@ async fn get_bundle_does_not_use_cache_when_auth_identity_is_incomplete() {
                 name: "Replacement requirements".to_string(),
                 contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
             }],
+            managed_layers: Default::default(),
         },
     };
     let fetcher = Arc::new(SequenceBundleClient::new(vec![Ok(
@@ -996,6 +1039,7 @@ async fn refresh_from_remote_updates_cached_bundle() {
                 name: "Replacement requirements".to_string(),
                 contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
             }],
+            managed_layers: Default::default(),
         },
     };
     let codex_home = tempdir().expect("tempdir");
@@ -1022,7 +1066,7 @@ async fn refresh_from_remote_updates_cached_bundle() {
 }
 
 #[test]
-fn bundle_response_conversion_preserves_fragment_order() {
+fn bundle_response_conversion_preserves_fragment_order_and_managed_presence() {
     let response = ConfigBundleResponse {
         config_toml: Some(Some(Box::new(codex_backend_client::DeliveredConfigToml {
             enterprise_managed: Some(Some(vec![
@@ -1037,6 +1081,14 @@ fn bundle_response_conversion_preserves_fragment_order() {
                     "model = \"low\"".to_string(),
                 ),
             ])),
+            managed_layers: Some(Some(Box::new(DeliveredManagedLayers {
+                baseline: Some(Some(vec![DeliveredTomlFragment::new(
+                    "cfg_baseline".to_string(),
+                    "Config baseline".to_string(),
+                    "model = \"baseline\"".to_string(),
+                )])),
+                system_overlay: Some(Some(Vec::new())),
+            }))),
         }))),
         requirements_toml: Some(Some(Box::new(
             codex_backend_client::DeliveredRequirementsToml {
@@ -1045,6 +1097,14 @@ fn bundle_response_conversion_preserves_fragment_order() {
                     "High requirements".to_string(),
                     "allowed_approval_policies = [\"never\"]".to_string(),
                 )])),
+                managed_layers: Some(Some(Box::new(DeliveredManagedLayers {
+                    baseline: None,
+                    system_overlay: Some(Some(vec![DeliveredTomlFragment::new(
+                        "req_overlay".to_string(),
+                        "Requirements overlay".to_string(),
+                        "allowed_approval_policies = [\"on-request\"]".to_string(),
+                    )])),
+                }))),
             },
         ))),
     };
@@ -1065,6 +1125,14 @@ fn bundle_response_conversion_preserves_fragment_order() {
                         contents: "model = \"low\"".to_string(),
                     },
                 ],
+                managed_layers: CloudConfigTomlManagedLayers {
+                    baseline: Some(vec![CloudConfigFragment {
+                        id: "cfg_baseline".to_string(),
+                        name: "Config baseline".to_string(),
+                        contents: "model = \"baseline\"".to_string(),
+                    }]),
+                    system_overlay: Some(Vec::new()),
+                },
             },
             requirements_toml: CloudRequirementsTomlBundle {
                 enterprise_managed: vec![CloudRequirementsFragment {
@@ -1072,6 +1140,14 @@ fn bundle_response_conversion_preserves_fragment_order() {
                     name: "High requirements".to_string(),
                     contents: "allowed_approval_policies = [\"never\"]".to_string(),
                 }],
+                managed_layers: CloudRequirementsTomlManagedLayers {
+                    baseline: None,
+                    system_overlay: Some(vec![CloudRequirementsFragment {
+                        id: "req_overlay".to_string(),
+                        name: "Requirements overlay".to_string(),
+                        contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
+                    }]),
+                },
             },
         }
     );

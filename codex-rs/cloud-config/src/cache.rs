@@ -27,6 +27,9 @@ const CLOUD_CONFIG_BUNDLE_CACHE_WRITE_HMAC_KEY: &[u8] =
     b"codex-cloud-config-bundle-cache-v1-6160ae70-bcfd-4ca8-a99b-40f73b3b072e";
 const CLOUD_CONFIG_BUNDLE_CACHE_READ_HMAC_KEYS: &[&[u8]] =
     &[CLOUD_CONFIG_BUNDLE_CACHE_WRITE_HMAC_KEY];
+const MANAGED_LAYERS_CACHE_WRITE_HMAC_KEY: &[u8] =
+    b"codex-cloud-config-bundle-cache-v1-managed-layers-8fe40af0-ec6d-4740-900d-d4bdd771ea2f";
+const MANAGED_LAYERS_CACHE_READ_HMAC_KEYS: &[&[u8]] = &[MANAGED_LAYERS_CACHE_WRITE_HMAC_KEY];
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -71,7 +74,7 @@ impl CloudConfigBundleCache {
                 return Err(CacheLoadStatus::CacheParseFailed(err.to_string()));
             }
         };
-        let payload_bytes = match cache_payload_bytes(&cache_file.signed_payload) {
+        let legacy_payload_bytes = match legacy_cache_payload_bytes(&cache_file.signed_payload) {
             Some(payload_bytes) => payload_bytes,
             None => {
                 return Err(CacheLoadStatus::CacheParseFailed(
@@ -79,8 +82,25 @@ impl CloudConfigBundleCache {
                 ));
             }
         };
-        if !verify_cache_signature(&payload_bytes, &cache_file.signature) {
+        if !verify_cache_signature(&legacy_payload_bytes, &cache_file.signature) {
             return Err(CacheLoadStatus::CacheSignatureInvalid);
+        }
+        match cache_file.managed_layers_signature.as_deref() {
+            Some(signature) => {
+                let payload_bytes =
+                    cache_payload_bytes(&cache_file.signed_payload).ok_or_else(|| {
+                        CacheLoadStatus::CacheParseFailed(
+                            "failed to serialize cache payload".to_string(),
+                        )
+                    })?;
+                if !verify_managed_layers_cache_signature(&payload_bytes, signature) {
+                    return Err(CacheLoadStatus::CacheManagedLayersSignatureInvalid);
+                }
+            }
+            None if cache_file.signed_payload.bundle.has_managed_layer_buckets() => {
+                return Err(CacheLoadStatus::CacheManagedLayersSignatureInvalid);
+            }
+            None => {}
         }
         if cache_file.signed_payload.version != CLOUD_CONFIG_BUNDLE_CACHE_VERSION {
             return Err(CacheLoadStatus::CacheVersionUnsupported(
@@ -116,6 +136,7 @@ impl CloudConfigBundleCache {
             CacheLoadStatus::CacheReadFailed(_)
                 | CacheLoadStatus::CacheParseFailed(_)
                 | CacheLoadStatus::CacheSignatureInvalid
+                | CacheLoadStatus::CacheManagedLayersSignatureInvalid
         );
 
         if warn {
@@ -146,10 +167,17 @@ impl CloudConfigBundleCache {
             account_id,
             bundle,
         };
+        let legacy_payload_bytes =
+            legacy_cache_payload_bytes(&signed_payload).ok_or(CloudConfigBundleCacheError)?;
         let payload_bytes =
             cache_payload_bytes(&signed_payload).ok_or(CloudConfigBundleCacheError)?;
         let serialized = serde_json::to_vec_pretty(&CloudConfigBundleCacheFile {
-            signature: sign_cache_payload(&payload_bytes).ok_or(CloudConfigBundleCacheError)?,
+            signature: sign_cache_payload(&legacy_payload_bytes)
+                .ok_or(CloudConfigBundleCacheError)?,
+            managed_layers_signature: Some(
+                sign_managed_layers_cache_payload(&payload_bytes)
+                    .ok_or(CloudConfigBundleCacheError)?,
+            ),
             signed_payload,
         })
         .map_err(|_| CloudConfigBundleCacheError)?;
@@ -179,6 +207,8 @@ pub(super) enum CacheLoadStatus {
     CacheParseFailed(String),
     #[error("Cloud config bundle cache failed signature verification.")]
     CacheSignatureInvalid,
+    #[error("Cloud config bundle cache failed managed-layers signature verification.")]
+    CacheManagedLayersSignatureInvalid,
     #[error("Ignoring cloud config bundle cache because cached identity is incomplete.")]
     CacheIdentityIncomplete,
     #[error("Ignoring cloud config bundle cache for different auth identity.")]
@@ -199,6 +229,8 @@ pub(super) struct CloudConfigBundleCacheError;
 pub(super) struct CloudConfigBundleCacheFile {
     pub(super) signed_payload: CloudConfigBundleCacheSignedPayload,
     pub(super) signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) managed_layers_signature: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -217,11 +249,21 @@ pub(super) fn cache_payload_bytes(
     serde_json::to_vec(&payload).ok()
 }
 
+pub(super) fn legacy_cache_payload_bytes(
+    payload: &CloudConfigBundleCacheSignedPayload,
+) -> Option<Vec<u8>> {
+    let mut legacy_payload = payload.clone();
+    legacy_payload.bundle.config_toml.managed_layers = Default::default();
+    legacy_payload.bundle.requirements_toml.managed_layers = Default::default();
+    cache_payload_bytes(&legacy_payload)
+}
+
 pub(super) fn sign_cache_payload(payload_bytes: &[u8]) -> Option<String> {
-    let mut mac = HmacSha256::new_from_slice(CLOUD_CONFIG_BUNDLE_CACHE_WRITE_HMAC_KEY).ok()?;
-    mac.update(payload_bytes);
-    let signature = mac.finalize().into_bytes();
-    Some(BASE64_STANDARD.encode(signature))
+    sign_cache_payload_with_key(payload_bytes, CLOUD_CONFIG_BUNDLE_CACHE_WRITE_HMAC_KEY)
+}
+
+pub(super) fn sign_managed_layers_cache_payload(payload_bytes: &[u8]) -> Option<String> {
+    sign_cache_payload_with_key(payload_bytes, MANAGED_LAYERS_CACHE_WRITE_HMAC_KEY)
 }
 
 pub(super) fn verify_cache_signature(payload_bytes: &[u8], signature: &str) -> bool {
@@ -233,6 +275,24 @@ pub(super) fn verify_cache_signature(payload_bytes: &[u8], signature: &str) -> b
     CLOUD_CONFIG_BUNDLE_CACHE_READ_HMAC_KEYS
         .iter()
         .any(|key| verify_cache_signature_with_key(payload_bytes, &signature_bytes, key))
+}
+
+pub(super) fn verify_managed_layers_cache_signature(payload_bytes: &[u8], signature: &str) -> bool {
+    let signature_bytes = match BASE64_STANDARD.decode(signature) {
+        Ok(signature_bytes) => signature_bytes,
+        Err(_) => return false,
+    };
+
+    MANAGED_LAYERS_CACHE_READ_HMAC_KEYS
+        .iter()
+        .any(|key| verify_cache_signature_with_key(payload_bytes, &signature_bytes, key))
+}
+
+fn sign_cache_payload_with_key(payload_bytes: &[u8], key: &[u8]) -> Option<String> {
+    let mut mac = HmacSha256::new_from_slice(key).ok()?;
+    mac.update(payload_bytes);
+    let signature = mac.finalize().into_bytes();
+    Some(BASE64_STANDARD.encode(signature))
 }
 
 fn verify_cache_signature_with_key(

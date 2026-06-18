@@ -152,6 +152,30 @@ where
                     elapsed_ms = started_at.elapsed().as_millis(),
                     config_fragments = bundle.config_toml.enterprise_managed.len(),
                     requirements_fragments = bundle.requirements_toml.enterprise_managed.len(),
+                    config_baseline_fragments = ?bundle
+                        .config_toml
+                        .managed_layers
+                        .baseline
+                        .as_ref()
+                        .map(Vec::len),
+                    config_system_overlay_fragments = ?bundle
+                        .config_toml
+                        .managed_layers
+                        .system_overlay
+                        .as_ref()
+                        .map(Vec::len),
+                    requirements_baseline_fragments = ?bundle
+                        .requirements_toml
+                        .managed_layers
+                        .baseline
+                        .as_ref()
+                        .map(Vec::len),
+                    requirements_system_overlay_fragments = ?bundle
+                        .requirements_toml
+                        .managed_layers
+                        .system_overlay
+                        .as_ref()
+                        .map(Vec::len),
                     "Cloud config bundle load completed"
                 );
                 emit_load_metric("startup", "success", Some(bundle));

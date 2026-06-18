@@ -66,8 +66,25 @@ pub(crate) fn bundle_shape_tag(bundle: Option<&CloudConfigBundle>) -> String {
     if !bundle.config_toml.enterprise_managed.is_empty() {
         sources.push("enterprise_config");
     }
+    if bundle.config_toml.managed_layers.baseline.is_some() {
+        sources.push("baseline_config");
+    }
+    if bundle.config_toml.managed_layers.system_overlay.is_some() {
+        sources.push("system_overlay_config");
+    }
     if !bundle.requirements_toml.enterprise_managed.is_empty() {
         sources.push("enterprise_requirements");
+    }
+    if bundle.requirements_toml.managed_layers.baseline.is_some() {
+        sources.push("baseline_requirements");
+    }
+    if bundle
+        .requirements_toml
+        .managed_layers
+        .system_overlay
+        .is_some()
+    {
+        sources.push("system_overlay_requirements");
     }
 
     if sources.is_empty() {

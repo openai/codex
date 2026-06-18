@@ -1,11 +1,14 @@
 use codex_backend_client::Client as BackendClient;
 use codex_backend_client::ConfigBundleResponse;
+use codex_backend_client::DeliveredManagedLayers;
 use codex_backend_client::DeliveredTomlFragment;
 use codex_config::CloudConfigBundle;
 use codex_config::CloudConfigFragment;
 use codex_config::CloudConfigTomlBundle;
+use codex_config::CloudConfigTomlManagedLayers;
 use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
+use codex_config::CloudRequirementsTomlManagedLayers;
 use codex_login::CodexAuth;
 use std::future::Future;
 
@@ -92,16 +95,30 @@ pub(crate) fn bundle_from_response(response: ConfigBundleResponse) -> CloudConfi
         .config_toml
         .flatten()
         .map(|config_toml| *config_toml)
-        .and_then(|config_toml| config_toml.enterprise_managed.flatten())
-        .unwrap_or_default()
-        .into_iter()
-        .map(config_fragment_from_delivered)
-        .collect();
+        .unwrap_or_default();
     let requirements_toml = response
         .requirements_toml
         .flatten()
         .map(|requirements_toml| *requirements_toml)
-        .and_then(|requirements_toml| requirements_toml.enterprise_managed.flatten())
+        .unwrap_or_default();
+    let (config_baseline, config_system_overlay) = managed_fragments_from_delivered(
+        config_toml.managed_layers,
+        config_fragment_from_delivered,
+    );
+    let (requirements_baseline, requirements_system_overlay) = managed_fragments_from_delivered(
+        requirements_toml.managed_layers,
+        requirements_fragment_from_delivered,
+    );
+    let config_enterprise_managed = config_toml
+        .enterprise_managed
+        .flatten()
+        .unwrap_or_default()
+        .into_iter()
+        .map(config_fragment_from_delivered)
+        .collect();
+    let requirements_enterprise_managed = requirements_toml
+        .enterprise_managed
+        .flatten()
         .unwrap_or_default()
         .into_iter()
         .map(requirements_fragment_from_delivered)
@@ -109,12 +126,39 @@ pub(crate) fn bundle_from_response(response: ConfigBundleResponse) -> CloudConfi
 
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
-            enterprise_managed: config_toml,
+            enterprise_managed: config_enterprise_managed,
+            managed_layers: CloudConfigTomlManagedLayers {
+                baseline: config_baseline,
+                system_overlay: config_system_overlay,
+            },
         },
         requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: requirements_toml,
+            enterprise_managed: requirements_enterprise_managed,
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: requirements_baseline,
+                system_overlay: requirements_system_overlay,
+            },
         },
     }
+}
+
+fn managed_fragments_from_delivered<T>(
+    managed_layers: Option<Option<Box<DeliveredManagedLayers>>>,
+    convert: fn(DeliveredTomlFragment) -> T,
+) -> (Option<Vec<T>>, Option<Vec<T>>) {
+    let managed_layers = managed_layers
+        .flatten()
+        .map(|managed_layers| *managed_layers)
+        .unwrap_or_default();
+    let baseline = managed_layers
+        .baseline
+        .flatten()
+        .map(|fragments| fragments.into_iter().map(convert).collect());
+    let system_overlay = managed_layers
+        .system_overlay
+        .flatten()
+        .map(|fragments| fragments.into_iter().map(convert).collect());
+    (baseline, system_overlay)
 }
 
 fn config_fragment_from_delivered(fragment: DeliveredTomlFragment) -> CloudConfigFragment {
