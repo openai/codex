@@ -1184,7 +1184,8 @@ client_request_definitions! {
 macro_rules! server_request_definitions {
     (
         $(
-            $(#[$variant_meta:meta])*
+            $(#[experimental($reason:expr)])?
+            $(#[doc = $variant_doc:literal])*
             $variant:ident $(=> $wire:literal)? {
                 params: $params:ty,
                 response: $response:ty,
@@ -1197,7 +1198,7 @@ macro_rules! server_request_definitions {
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ServerRequest {
             $(
-                $(#[$variant_meta])*
+                $(#[doc = $variant_doc])*
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
@@ -1237,7 +1238,7 @@ macro_rules! server_request_definitions {
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ServerResponse {
             $(
-                $(#[$variant_meta])*
+                $(#[doc = $variant_doc])*
                 $(#[serde(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
@@ -1280,6 +1281,22 @@ macro_rules! server_request_definitions {
                 }
             }
         }
+
+        pub(crate) const EXPERIMENTAL_SERVER_METHODS: &[&str] = &[
+            $(
+                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
+            )*
+        ];
+        pub(crate) const EXPERIMENTAL_SERVER_METHOD_PARAM_TYPES: &[&str] = &[
+            $(
+                experimental_type_entry!($(#[experimental($reason)])? $params),
+            )*
+        ];
+        pub(crate) const EXPERIMENTAL_SERVER_METHOD_RESPONSE_TYPES: &[&str] = &[
+            $(
+                experimental_type_entry!($(#[experimental($reason)])? $response),
+            )*
+        ];
 
         pub fn export_server_responses(
             out_dir: &::std::path::Path,
@@ -1470,6 +1487,7 @@ server_request_definitions! {
         response: v2::AttestationGenerateResponse,
     },
 
+    #[experimental("currentTime/read")]
     /// Read the current time from an external clock owned by the client.
     CurrentTimeRead => "currentTime/read" {
         params: v2::CurrentTimeReadParams,
