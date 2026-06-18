@@ -22,7 +22,6 @@ wine_rust_test(
         "//codex-rs/protocol",
         "//codex-rs/utils/path-uri",
         "@crates//:anyhow",
-        "@crates//:base64",
         "@crates//:pretty_assertions",
         "@crates//:serde_json",
         "@crates//:tempfile",

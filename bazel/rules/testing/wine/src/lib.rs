@@ -105,6 +105,14 @@ impl WineTestCommand {
 }
 
 impl WineTestProcess {
+    /// Returns the host path to this process's isolated Wine prefix.
+    pub fn prefix_path(&self) -> &Path {
+        let Some(processes) = self.processes.as_ref() else {
+            panic!("Wine process guard is missing");
+        };
+        processes.prefix.path()
+    }
+
     /// Takes the piped standard output of the Wine process.
     ///
     /// This may only be called once for a process created by

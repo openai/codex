@@ -522,7 +522,7 @@ fn path_buf_uses_the_inferred_native_spelling() {
 }
 
 #[test]
-fn parent_uses_uri_hierarchy_and_preserves_authority() {
+fn parent_stops_at_posix_drive_and_unc_roots() {
     for (input, expected) in [
         (
             "file:///workspace/src/lib.rs",
@@ -531,16 +531,46 @@ fn parent_uses_uri_hierarchy_and_preserves_authority() {
         ("file:///workspace", Some("file:///")),
         ("file:///", None),
         ("file:///C:/Users", Some("file:///C:")),
-        ("file:///C:/", Some("file:///")),
+        ("file:///C:/", None),
+        ("file:///C:", None),
         (
             "file://server/share/src/main.rs",
             Some("file://server/share/src"),
         ),
-        ("file://server/share", Some("file://server/")),
+        ("file://server/share", None),
     ] {
         let uri = PathUri::parse(input).expect("valid file URI");
         let expected = expected.map(|value| PathUri::parse(value).expect("valid expected URI"));
         assert_eq!(uri.parent(), expected, "parent for {input}");
+    }
+}
+
+#[test]
+fn ancestors_include_self_and_stop_at_native_path_roots() {
+    for (input, expected) in [
+        (
+            "file:///workspace/src",
+            vec!["file:///workspace/src", "file:///workspace", "file:///"],
+        ),
+        (
+            "file:///C:/workspace/src",
+            vec![
+                "file:///C:/workspace/src",
+                "file:///C:/workspace",
+                "file:///C:",
+            ],
+        ),
+        (
+            "file://server/share/project",
+            vec!["file://server/share/project", "file://server/share"],
+        ),
+    ] {
+        let uri = PathUri::parse(input).expect("valid file URI");
+        let ancestors = uri
+            .ancestors()
+            .map(|path| path.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ancestors, expected, "ancestors for {input}");
     }
 }
 

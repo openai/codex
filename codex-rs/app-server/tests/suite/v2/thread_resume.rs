@@ -82,6 +82,7 @@ use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::read_session_meta_line;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -288,7 +289,8 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
         ..
     } = to_response::<ThreadStartResponse>(start_resp)?;
     let project_agents = AbsolutePathBuf::try_from(project_agents)?;
-    assert_eq!(instruction_sources, vec![project_agents.clone()]);
+    let project_agents_source = LegacyAppPathString::from_abs_path(&project_agents);
+    assert_eq!(instruction_sources, vec![project_agents_source.clone()]);
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -330,7 +332,7 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
         ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
-    assert_eq!(instruction_sources, vec![project_agents]);
+    assert_eq!(instruction_sources, vec![project_agents_source]);
 
     Ok(())
 }

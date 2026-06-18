@@ -16973,9 +16973,9 @@
           },
           "instructionSources": {
             "default": [],
-            "description": "Instruction source files currently loaded for this thread.",
+            "description": "Environment-native paths to instruction source files currently loaded for this thread.",
             "items": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": "array"
           },
@@ -18688,9 +18688,9 @@
           },
           "instructionSources": {
             "default": [],
-            "description": "Instruction source files currently loaded for this thread.",
+            "description": "Environment-native paths to instruction source files currently loaded for this thread.",
             "items": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": "array"
           },
@@ -19105,9 +19105,9 @@
           },
           "instructionSources": {
             "default": [],
-            "description": "Instruction source files currently loaded for this thread.",
+            "description": "Environment-native paths to instruction source files currently loaded for this thread.",
             "items": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": "array"
           },

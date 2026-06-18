@@ -36,11 +36,13 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::fs;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wine_exec_server_test_support::WineExecServer;
@@ -57,7 +59,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
     const VERIFY_COMMAND: &str = r#"$path = Join-Path (Get-Location) 'codex-apply-patch-smoke.txt'; if (-not (Test-Path $path)) { exit 1 }; if ([IO.File]::ReadAllText($path) -ne "patched through unified exec`n") { exit 2 }; Remove-Item $path; Write-Output 'PATCH_VERIFIED'"#;
 
     WineExecServer
-        .scope(|exec_server_url| async move {
+        .scope(|exec_server_url, _wine_prefix| async move {
             let server = start_mock_server().await;
             let arguments = serde_json::to_string(&json!({
                 "cmd": COMMAND,
@@ -245,8 +247,17 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Result<()> {
+    const AGENTS_INSTRUCTIONS: &str = "remote Windows workspace instructions";
+    const NATIVE_CWD: &str = r"C:\windows";
+
     WineExecServer
-        .scope(|exec_server_url| async move {
+        .scope(|exec_server_url, wine_prefix| async move {
+            let agents_path = PathUri::parse("file:///C:/windows/AGENTS.md")?;
+            fs::write(
+                wine_prefix.join("drive_c").join("windows").join("AGENTS.md"),
+                AGENTS_INSTRUCTIONS,
+            )?;
+
             let codex_home = TempDir::new()?;
             let server = create_mock_responses_server_repeating_assistant("done").await;
             write_mock_responses_config_toml(
@@ -272,7 +283,7 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 .send_thread_start_request(ThreadStartParams {
                     environments: Some(vec![TurnEnvironmentParams {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                        cwd: serde_json::from_value::<LegacyAppPathString>(json!(r"C:\windows"))?,
+                        cwd: serde_json::from_value::<LegacyAppPathString>(json!(NATIVE_CWD))?,
                     }]),
                     ..Default::default()
                 })
@@ -289,8 +300,13 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             assert_eq!(response.cwd, host_cwd);
             // TODO(anp): Derive runtime workspace roots from the selected remote environment.
             assert_eq!(response.runtime_workspace_roots, vec![host_cwd]);
-            // TODO(anp): Discover and report instruction sources from the remote filesystem.
-            assert_eq!(response.instruction_sources, Vec::new());
+            assert_eq!(
+                response.instruction_sources,
+                vec![LegacyAppPathString::from_path_uri(
+                    &agents_path,
+                    PathConvention::Windows,
+                )?]
+            );
             // TODO(anp): Report the implicit built-in permission profile instead of None.
             assert_eq!(response.active_permission_profile, None);
 
@@ -326,6 +342,17 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 .find(|request| request.url.path().ends_with("/responses"))
                 .context("turn should send a Responses request")?;
             let body = first_request.body_json::<Value>()?;
+            let remote_instructions = body["input"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+                .filter_map(|item| item.get("content").and_then(Value::as_array))
+                .flatten()
+                .filter_map(|content| content.get("text").and_then(Value::as_str))
+                .find(|text| text.contains(AGENTS_INSTRUCTIONS))
+                .context("remote workspace instructions should be model visible")?;
+            assert!(remote_instructions.contains(r"# AGENTS.md instructions for C:\windows"));
             let environment_context = body["input"]
                 .as_array()
                 .into_iter()

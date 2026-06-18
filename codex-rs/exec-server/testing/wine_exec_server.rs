@@ -1,6 +1,7 @@
 //! Test support for running the Windows exec-server under Wine.
 
 use std::future::Future;
+use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -12,16 +13,18 @@ use wine_test_support::WineTestCommand;
 pub struct WineExecServer;
 
 impl WineExecServer {
-    /// Starts the server, passes its WebSocket URL to `operation`, and tears it down afterward.
+    /// Starts the server, passes its WebSocket URL and Wine prefix to `operation`, and tears it
+    /// down afterward.
     pub async fn scope<T, F, Fut>(self, operation: F) -> Result<T>
     where
-        F: FnOnce(String) -> Fut,
+        F: FnOnce(String, PathBuf) -> Fut,
         Fut: Future<Output = Result<T>>,
     {
         let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
         let mut exec_server = WineTestCommand::new(executable)
             .env("CODEX_HOME", r"C:\codex-home")
             .spawn()?;
+        let wine_prefix = exec_server.prefix_path().to_path_buf();
         let stdout = exec_server.take_stdout();
 
         exec_server
@@ -36,7 +39,7 @@ impl WineExecServer {
                         break line;
                     }
                 };
-                operation(exec_server_url).await
+                operation(exec_server_url, wine_prefix).await
             })
             .await
     }

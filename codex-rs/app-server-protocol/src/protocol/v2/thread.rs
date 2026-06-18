@@ -26,6 +26,8 @@ use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -161,9 +163,9 @@ pub struct ThreadStartResponse {
     #[experimental("thread/start.runtimeWorkspaceRoots")]
     #[serde(default)]
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
-    /// Instruction source files currently loaded for this thread.
+    /// Environment-native paths to instruction source files currently loaded for this thread.
     #[serde(default)]
-    pub instruction_sources: Vec<AbsolutePathBuf>,
+    pub instruction_sources: Vec<LegacyAppPathString>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -177,6 +179,13 @@ pub struct ThreadStartResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+impl ThreadStartResponse {
+    /// Parses valid absolute instruction source paths and omits malformed legacy values.
+    pub fn instruction_source_path_uris(&self) -> Vec<PathUri> {
+        instruction_source_path_uris(&self.instruction_sources)
+    }
 }
 
 #[derive(
@@ -375,9 +384,9 @@ pub struct ThreadResumeResponse {
     #[experimental("thread/resume.runtimeWorkspaceRoots")]
     #[serde(default)]
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
-    /// Instruction source files currently loaded for this thread.
+    /// Environment-native paths to instruction source files currently loaded for this thread.
     #[serde(default)]
-    pub instruction_sources: Vec<AbsolutePathBuf>,
+    pub instruction_sources: Vec<LegacyAppPathString>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -395,6 +404,13 @@ pub struct ThreadResumeResponse {
     #[experimental("thread/resume.initialTurnsPage")]
     #[serde(default)]
     pub initial_turns_page: Option<TurnsPage>,
+}
+
+impl ThreadResumeResponse {
+    /// Parses valid absolute instruction source paths and omits malformed legacy values.
+    pub fn instruction_source_path_uris(&self) -> Vec<PathUri> {
+        instruction_source_path_uris(&self.instruction_sources)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -523,9 +539,9 @@ pub struct ThreadForkResponse {
     #[experimental("thread/fork.runtimeWorkspaceRoots")]
     #[serde(default)]
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
-    /// Instruction source files currently loaded for this thread.
+    /// Environment-native paths to instruction source files currently loaded for this thread.
     #[serde(default)]
-    pub instruction_sources: Vec<AbsolutePathBuf>,
+    pub instruction_sources: Vec<LegacyAppPathString>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -539,6 +555,30 @@ pub struct ThreadForkResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+impl ThreadForkResponse {
+    /// Parses valid absolute instruction source paths and omits malformed legacy values.
+    pub fn instruction_source_path_uris(&self) -> Vec<PathUri> {
+        instruction_source_path_uris(&self.instruction_sources)
+    }
+}
+
+fn instruction_source_path_uris(sources: &[LegacyAppPathString]) -> Vec<PathUri> {
+    // Instruction sources are advisory diagnostics. Warn and fail open so a malformed legacy
+    // path cannot fail thread start, resume, or fork.
+    sources
+        .iter()
+        .filter_map(|source| {
+            source.to_inferred_path_uri().or_else(|| {
+                tracing::warn!(
+                    path = source.as_str(),
+                    "ignoring invalid instruction source path from app-server"
+                );
+                None
+            })
+        })
+        .collect()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
