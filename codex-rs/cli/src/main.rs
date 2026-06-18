@@ -1706,7 +1706,10 @@ async fn run_exec_server_command(
             remote_config.name = name;
         }
         let remote_config = remote_config.with_telemetry(telemetry);
-        codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
+        exec_server_telemetry::run_until_shutdown(async move {
+            codex_exec_server::run_remote_environment(remote_config, runtime_paths).await
+        })
+        .await?;
         Ok(())
     } else {
         let config_result = load_exec_server_config(root_config_overrides, strict_config).await;
@@ -1718,11 +1721,12 @@ async fn run_exec_server_command(
         let (_otel, telemetry) = exec_server_telemetry::init(config.as_ref());
         let listen_url = cmd
             .listen
-            .as_deref()
-            .unwrap_or(codex_exec_server::DEFAULT_LISTEN_URL);
-        codex_exec_server::run_main_with_telemetry(listen_url, runtime_paths, telemetry)
-            .await
-            .map_err(anyhow::Error::from_boxed)
+            .unwrap_or_else(|| codex_exec_server::DEFAULT_LISTEN_URL.to_string());
+        exec_server_telemetry::run_until_shutdown(async move {
+            codex_exec_server::run_main_with_telemetry(&listen_url, runtime_paths, telemetry).await
+        })
+        .await
+        .map_err(anyhow::Error::from_boxed)
     }
 }
 

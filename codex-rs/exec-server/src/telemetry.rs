@@ -33,6 +33,12 @@ const REMOTE_RENDEZVOUS_METRICS: OperationMetrics = OperationMetrics {
     duration_name: "exec_server_remote_rendezvous_connect_duration_seconds",
     duration_description: "Duration of remote exec-server rendezvous connection attempts in seconds.",
 };
+const REMOTE_AUTHORIZATION_METRICS: OperationMetrics = OperationMetrics {
+    total_name: "exec_server_remote_authorization_total",
+    total_description: "Total number of remote exec-server harness authorization attempts.",
+    duration_name: "exec_server_remote_authorization_duration_seconds",
+    duration_description: "Duration of remote exec-server harness authorization attempts in seconds.",
+};
 const REMOTE_RECONNECTS_TOTAL_METRIC: &str = "exec_server_remote_reconnects_total";
 const REMOTE_RECONNECTS_TOTAL_DESCRIPTION: &str = "Total number of remote exec-server reconnects.";
 
@@ -151,6 +157,10 @@ impl ExecServerTelemetry {
 
     pub(crate) fn remote_rendezvous_completed(&self, result: &'static str, duration: Duration) {
         self.record_operation(REMOTE_RENDEZVOUS_METRICS, result, duration);
+    }
+
+    pub(crate) fn remote_authorization_completed(&self, result: &'static str, duration: Duration) {
+        self.record_operation(REMOTE_AUTHORIZATION_METRICS, result, duration);
     }
 
     pub(crate) fn remote_reconnect(&self, reason: &'static str) {

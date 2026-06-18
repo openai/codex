@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -41,6 +43,52 @@ pub(crate) fn init(
         .try_init();
     tracing::callsite::rebuild_interest_cache();
     (otel, telemetry)
+}
+
+pub(crate) async fn run_until_shutdown<F, E>(run: F) -> Result<(), E>
+where
+    F: Future<Output = Result<(), E>> + Send + 'static,
+    E: Send + 'static,
+{
+    let mut task = tokio::spawn(run);
+    tokio::select! {
+        result = &mut task => task_result(result),
+        signal = shutdown_signal() => {
+            match signal {
+                Ok(()) => {
+                    task.abort();
+                    let _ = task.await;
+                    Ok(())
+                }
+                Err(error) => {
+                    eprintln!("Could not listen for exec-server shutdown signal: {error}");
+                    task_result(task.await)
+                }
+            }
+        }
+    }
+}
+
+fn task_result<E>(result: Result<Result<(), E>, tokio::task::JoinError>) -> Result<(), E> {
+    match result {
+        Ok(result) => result,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => panic!("exec-server task was cancelled unexpectedly: {error}"),
+    }
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() -> std::io::Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() -> std::io::Result<()> {
+    tokio::signal::ctrl_c().await
 }
 
 fn stderr_env_filter() -> EnvFilter {

@@ -11,7 +11,10 @@ use http::HeaderValue;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::time::sleep;
+use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::connect_async_with_config;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -36,6 +39,7 @@ use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::HarnessKeyValidator;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
+use crate::trace_context::current_trace_context_headers;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
 const NOISE_RELAY_SECURITY_PROFILE: &str = "noise_hybrid_ik_v1";
@@ -120,6 +124,7 @@ impl EnvironmentRegistryClient {
                 &format!("/cloud/environment/{environment_id}/register"),
             ))
             .headers(self.auth_provider.to_auth_headers())
+            .headers(current_trace_context_headers())
             .json(&EnvironmentRegistryRegistrationRequest {
                 security_profile: NOISE_RELAY_SECURITY_PROFILE.to_string(),
                 executor_public_key: executor_public_key.clone(),
@@ -228,11 +233,8 @@ struct RegistryHarnessKeyValidator {
     executor_registration_id: String,
 }
 
-impl HarnessKeyValidator for RegistryHarnessKeyValidator {
-    /// Authorize the harness key recovered from the first IK message.
-    /// Noise proves key possession; the registry decides whether that key may use
-    /// this executor. The authorization token and public key are checked together.
-    async fn validate_harness_key(
+impl RegistryHarnessKeyValidator {
+    async fn validate_harness_key_inner(
         &self,
         harness_public_key: &NoiseChannelPublicKey,
         authorization: &str,
@@ -246,6 +248,7 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
                 &format!("/cloud/environment/{environment_id}/validate"),
             ))
             .headers(self.client.auth_provider.to_auth_headers())
+            .headers(current_trace_context_headers())
             .json(&EnvironmentRegistryHarnessKeyValidationRequest {
                 executor_registration_id: self.executor_registration_id.clone(),
                 harness_public_key: harness_public_key.clone(),
@@ -306,7 +309,11 @@ impl NoiseRendezvousEnvironmentConfig {
     ) -> Result<Self, ExecServerError> {
         let environment_id = normalize_environment_id(environment_id)?;
         let auth_provider = static_bearer_auth_provider(bearer_token, chatgpt_account_id)?;
-        let client = EnvironmentRegistryClient::new(base_url, auth_provider)?;
+        let client = EnvironmentRegistryClient::new_with_telemetry(
+            base_url,
+            auth_provider,
+            ExecServerTelemetry::default(),
+        )?;
         Ok(Self {
             provider: Arc::new(EnvironmentRegistryNoiseConnectProvider {
                 client,
@@ -404,6 +411,37 @@ fn static_bearer_auth_provider(
     }))
 }
 
+impl HarnessKeyValidator for RegistryHarnessKeyValidator {
+    /// Authorize the harness key recovered from the first IK message.
+    /// Noise proves key possession; the registry decides whether that key may use
+    /// this executor. The authorization token and public key are checked together.
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.authorize",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.authorize",
+            result = tracing::field::Empty,
+        )
+    )]
+    async fn validate_harness_key(
+        &self,
+        harness_public_key: &NoiseChannelPublicKey,
+        authorization: &str,
+    ) -> Result<(), ExecServerError> {
+        let started_at = Instant::now();
+        let result = self
+            .validate_harness_key_inner(harness_public_key, authorization)
+            .await;
+        let result_name = if result.is_ok() { "success" } else { "error" };
+        tracing::Span::current().record("result", result_name);
+        self.client
+            .telemetry
+            .remote_authorization_completed(result_name, started_at.elapsed());
+        result
+    }
+}
+
 /// Configuration for registering an exec-server for remote use.
 #[derive(Clone)]
 pub struct RemoteEnvironmentConfig {
@@ -453,11 +491,6 @@ impl RemoteEnvironmentConfig {
 /// reconnects. The registration and rendezvous URL are also reused until
 /// rendezvous rejects the URL, at which point the next attempt registers again.
 /// The websocket carries cleartext routing metadata and encrypted payloads.
-#[tracing::instrument(
-    name = "codex.exec_server",
-    skip_all,
-    fields(otel.kind = "internal")
-)]
 pub async fn run_remote_environment(
     config: RemoteEnvironmentConfig,
     runtime_paths: ExecServerRuntimePaths,
@@ -479,23 +512,8 @@ pub async fn run_remote_environment(
         .await?;
 
     loop {
-        let connect_started_at = Instant::now();
-        let connection = connect_async_with_config(
-            response.url.as_str(),
-            Some(noise_relay_websocket_config()),
-            /*disable_nagle*/ false,
-        )
-        .await;
-        config.telemetry.remote_rendezvous_completed(
-            if connection.is_ok() {
-                "success"
-            } else {
-                "error"
-            },
-            connect_started_at.elapsed(),
-        );
-        match connection {
-            Ok((websocket, _)) => {
+        match connect_rendezvous(&response.url, &config.telemetry).await {
+            Ok(websocket) => {
                 backoff = Duration::from_secs(1);
                 let executor_registration_id = response.executor_registration_id.clone();
                 info!(
@@ -545,6 +563,43 @@ pub async fn run_remote_environment(
         sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(30));
     }
+}
+
+#[tracing::instrument(
+    name = "codex.exec_server.remote.rendezvous.connect",
+    skip_all,
+    fields(
+        otel.kind = "client",
+        otel.name = "codex.exec_server.remote.rendezvous.connect",
+        result = tracing::field::Empty,
+    )
+)]
+async fn connect_rendezvous(
+    url: &str,
+    telemetry: &ExecServerTelemetry,
+) -> Result<
+    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    tokio_tungstenite::tungstenite::Error,
+> {
+    let started_at = Instant::now();
+    let result = async {
+        let mut request = url.into_client_request()?;
+        request
+            .headers_mut()
+            .extend(current_trace_context_headers());
+        connect_async_with_config(
+            request,
+            Some(noise_relay_websocket_config()),
+            /*disable_nagle*/ false,
+        )
+        .await
+        .map(|(websocket, _)| websocket)
+    }
+    .await;
+    let result_name = if result.is_ok() { "success" } else { "error" };
+    tracing::Span::current().record("result", result_name);
+    telemetry.remote_rendezvous_completed(result_name, started_at.elapsed());
+    result
 }
 
 fn normalize_environment_id(environment_id: String) -> Result<String, ExecServerError> {
@@ -638,12 +693,17 @@ mod tests {
     use codex_api::AuthProvider;
     use http::HeaderMap;
     use http::HeaderValue;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use tracing::Instrument;
+    use tracing_subscriber::prelude::*;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
     use wiremock::matchers::body_partial_json;
     use wiremock::matchers::header;
+    use wiremock::matchers::header_regex;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
@@ -669,8 +729,14 @@ mod tests {
         Arc::new(StaticRegistryAuthProvider)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn register_environment_posts_with_auth_provider_headers() {
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = provider.tracer("exec-server-test");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+        let _guard = subscriber.set_default();
+        tracing::callsite::rebuild_interest_cache();
         let server = MockServer::start().await;
         let executor_public_key = NoiseChannelIdentity::generate()
             .expect("identity")
@@ -679,6 +745,10 @@ mod tests {
             .and(path("/cloud/environment/environment-requested/register"))
             .and(header("authorization", "Bearer registry-token"))
             .and(header("chatgpt-account-id", "workspace-123"))
+            .and(header_regex(
+                "traceparent",
+                "^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$",
+            ))
             .and(body_partial_json(serde_json::json!({
                 "security_profile": NOISE_RELAY_SECURITY_PROFILE,
                 "executor_public_key": executor_public_key.clone(),
@@ -696,6 +766,7 @@ mod tests {
 
         let response = client
             .register_environment("environment-requested", &executor_public_key)
+            .instrument(tracing::info_span!("remote-operation"))
             .await
             .expect("register environment");
 
