@@ -61,6 +61,10 @@ async fn request_current_time(
         .current_time_capable_connections_for_thread(thread_id)
         .await;
     if connection_ids.is_empty() {
+        // External current time only needs to support a single app-server client for now. Wait for
+        // that client to subscribe, then verify below that it advertised `requestCurrentTime`.
+        // Supporting multiple clients would require a capability-aware wait, which adds complexity
+        // we do not currently need.
         timeout_at(
             deadline,
             thread_state_manager.wait_for_thread_subscriber(thread_id),
