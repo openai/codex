@@ -1305,7 +1305,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": null,
         "encrypted_content": encrypted_content_1,
-        "id": "m1",
         "summary": [
           {
             "text": "I will create a react app",
@@ -1406,7 +1405,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": null,
         "encrypted_content": encrypted_content_2,
-        "id": "m3",
         "summary": [
           {
             "text": "I will create a node app",
@@ -1507,7 +1505,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": null,
         "encrypted_content": encrypted_content_3,
-        "id": "m6",
         "summary": [
           {
             "text": "I will create a python app",
