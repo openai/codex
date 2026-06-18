@@ -238,7 +238,6 @@ struct ActiveNetworkApprovalCall {
 enum ActiveNetworkApprovalAttribution {
     None,
     Single(Arc<ActiveNetworkApprovalCall>),
-    Environment(String),
     Ambiguous,
 }
 
@@ -318,28 +317,13 @@ impl NetworkApprovalService {
 
     async fn resolve_active_call_attribution(&self) -> ActiveNetworkApprovalAttribution {
         let calls = self.calls.lock().await;
-        if calls.active_calls.len() == 1 {
-            return calls
-                .active_calls
-                .values()
-                .next()
-                .cloned()
-                .map_or(ActiveNetworkApprovalAttribution::None, |call| {
-                    ActiveNetworkApprovalAttribution::Single(call)
-                });
-        }
-
-        let mut environment_ids = calls
-            .active_calls
-            .values()
-            .map(|call| call.environment_id.as_str());
-        let Some(environment_id) = environment_ids.next() else {
-            return ActiveNetworkApprovalAttribution::None;
-        };
-        if environment_ids.all(|candidate| candidate == environment_id) {
-            ActiveNetworkApprovalAttribution::Environment(environment_id.to_string())
-        } else {
-            ActiveNetworkApprovalAttribution::Ambiguous
+        match calls.active_calls.len() {
+            0 => ActiveNetworkApprovalAttribution::None,
+            1 => calls.active_calls.values().next().cloned().map_or(
+                ActiveNetworkApprovalAttribution::None,
+                ActiveNetworkApprovalAttribution::Single,
+            ),
+            _ => ActiveNetworkApprovalAttribution::Ambiguous,
         }
     }
 
@@ -449,17 +433,20 @@ impl NetworkApprovalService {
         };
         let (owner_call, active_environment_id) =
             if let Some(environment_id) = request.environment_id.clone() {
-                // The proxy listener identifies the environment, not the originating tool call.
-                (None, Some(environment_id))
+                let owner_call = match self.resolve_active_call_attribution().await {
+                    ActiveNetworkApprovalAttribution::Single(call) => {
+                        (call.environment_id == environment_id).then_some(call)
+                    }
+                    ActiveNetworkApprovalAttribution::None
+                    | ActiveNetworkApprovalAttribution::Ambiguous => None,
+                };
+                (owner_call, Some(environment_id))
             } else {
                 match self.resolve_active_call_attribution().await {
                     ActiveNetworkApprovalAttribution::None => (None, None),
                     ActiveNetworkApprovalAttribution::Single(call) => {
                         let environment_id = call.environment_id.clone();
                         (Some(call), Some(environment_id))
-                    }
-                    ActiveNetworkApprovalAttribution::Environment(environment_id) => {
-                        (None, Some(environment_id))
                     }
                     ActiveNetworkApprovalAttribution::Ambiguous => {
                         return NetworkDecision::deny(REASON_NOT_ALLOWED);

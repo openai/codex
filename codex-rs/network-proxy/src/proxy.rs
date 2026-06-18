@@ -694,6 +694,20 @@ impl NetworkProxy {
         Ok(())
     }
 
+    pub fn apply_to_env_for_optional_environment(
+        &self,
+        env: &mut HashMap<String, String>,
+        environment_id: Option<&str>,
+    ) -> Result<()> {
+        match environment_id {
+            Some(environment_id) => self.apply_to_env_for_environment(env, environment_id),
+            None => {
+                self.apply_to_env(env);
+                Ok(())
+            }
+        }
+    }
+
     fn environment_proxy_addrs(&self, environment_id: &str) -> Result<EnvironmentProxyAddrs> {
         let mut proxies = self
             .environment_proxies

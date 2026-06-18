@@ -1031,17 +1031,18 @@ impl CoreShellCommandExecutor {
             self.windows_sandbox_workspace_roots.clone(),
         );
         if let Some(network) = exec_request.network.as_ref() {
-            if let Some(environment_id) = self.network_environment_id.as_deref() {
-                network
-                    .apply_to_env_for_environment(&mut exec_request.env, environment_id)
-                    .map_err(|err| {
-                        CodexErr::Io(io::Error::other(format!(
-                            "failed to prepare network proxy for environment `{environment_id}`: {err}"
-                        )))
-                    })?;
-            } else {
-                network.apply_to_env(&mut exec_request.env);
-            }
+            network
+                .apply_to_env_for_optional_environment(
+                    &mut exec_request.env,
+                    self.network_environment_id.as_deref(),
+                )
+                .map_err(|err| {
+                    let environment_id =
+                        self.network_environment_id.as_deref().unwrap_or("default");
+                    CodexErr::Io(io::Error::other(format!(
+                        "failed to prepare network proxy for environment `{environment_id}`: {err}"
+                    )))
+                })?;
         }
 
         Ok(PreparedExec {

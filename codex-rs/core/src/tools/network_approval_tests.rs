@@ -349,6 +349,20 @@ async fn active_call_preserves_triggering_command_context() {
 }
 
 #[tokio::test]
+async fn multiple_active_calls_are_ambiguous_even_in_the_same_environment() {
+    let service = NetworkApprovalService::default();
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
+    register_call_with_default_shell_trigger(&service, "registration-2").await;
+
+    match service.resolve_active_call_attribution().await {
+        ActiveNetworkApprovalAttribution::Ambiguous => {}
+        ActiveNetworkApprovalAttribution::None | ActiveNetworkApprovalAttribution::Single(_) => {
+            panic!("multiple active calls should be ambiguous")
+        }
+    }
+}
+
+#[tokio::test]
 async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
     let service = NetworkApprovalService::default();
     let cancellation_token =
