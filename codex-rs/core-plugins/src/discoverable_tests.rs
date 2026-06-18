@@ -337,6 +337,41 @@ enabled = false
 }
 
 #[tokio::test]
+async fn does_not_advertise_skills_when_skill_loading_fails() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_file(
+        &curated_root.join("plugins/slack/skills/SKILL.md"),
+        "---\nname: bad",
+    );
+
+    let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let discoverable_plugins = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(plugins, &[], &[], &[]),
+        /*auth*/ None,
+    )
+    .await;
+
+    assert_eq!(
+        discoverable_plugins,
+        vec![ToolSuggestDiscoverablePlugin {
+            id: "slack@openai-curated".to_string(),
+            remote_plugin_id: None,
+            name: "slack".to_string(),
+            description: Some(
+                "Plugin that includes skills, MCP servers, and app connectors".to_string(),
+            ),
+            has_skills: false,
+            mcp_server_names: vec!["sample-docs".to_string()],
+            app_connector_ids: vec!["connector_calendar".to_string()],
+        }]
+    );
+}
+
+#[tokio::test]
 async fn clear_cache_invalidates_cached_tool_suggest_metadata() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());

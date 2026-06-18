@@ -775,9 +775,8 @@ pub(crate) struct PluginSkillInventory {
 
 impl PluginSkillInventory {
     pub(crate) fn has_enabled_skills(&self, skill_config_rules: &SkillConfigRules) -> bool {
-        has_enabled_skills(
+        contains_enabled_skill(
             &self.skills,
-            self.had_errors,
             &resolve_disabled_skill_paths(&self.skills, skill_config_rules),
         )
     }
@@ -801,19 +800,17 @@ pub struct ResolvedPluginSkills {
 
 impl ResolvedPluginSkills {
     pub fn has_enabled_skills(&self) -> bool {
-        has_enabled_skills(&self.skills, self.had_errors, &self.disabled_skill_paths)
+        self.had_errors || contains_enabled_skill(&self.skills, &self.disabled_skill_paths)
     }
 }
 
-fn has_enabled_skills(
+fn contains_enabled_skill(
     skills: &[SkillMetadata],
-    had_errors: bool,
     disabled_skill_paths: &HashSet<AbsolutePathBuf>,
 ) -> bool {
-    had_errors
-        || skills
-            .iter()
-            .any(|skill| !disabled_skill_paths.contains(&skill.path_to_skills_md))
+    skills
+        .iter()
+        .any(|skill| !disabled_skill_paths.contains(&skill.path_to_skills_md))
 }
 
 pub async fn load_plugin_skills(
