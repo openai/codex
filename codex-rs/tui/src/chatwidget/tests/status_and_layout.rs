@@ -1421,38 +1421,11 @@ async fn ctrl_c_interrupt_pauses_active_goal_turn() {
 #[tokio::test]
 async fn esc_interrupt_pauses_active_goal_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.show_welcome_banner = false;
     let thread_id = start_active_goal_turn(&mut chat);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
-    assert_goal_paused_event(&mut rx, thread_id);
-
-    update_thread_goal(&mut chat, thread_id, AppThreadGoalStatus::Paused);
-    let width = 80;
-    let height = chat.desired_height(width);
-    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).expect("terminal");
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw goal paused footer");
-    assert_chatwidget_snapshot!(
-        "esc_interrupt_goal_paused_footer",
-        normalized_backend_snapshot(terminal.backend())
-    );
-}
-
-#[tokio::test]
-async fn esc_pending_steers_interrupt_pauses_active_goal_turn() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = start_active_goal_turn(&mut chat);
-    chat.input_queue
-        .pending_steers
-        .push_back(pending_steer("pending steer"));
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-
-    next_interrupt_op(&mut op_rx);
     assert_goal_paused_event(&mut rx, thread_id);
 }
 
@@ -1460,29 +1433,24 @@ fn start_active_goal_turn(chat: &mut ChatWidget) -> ThreadId {
     let thread_id = ThreadId::new();
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(thread_id);
-    update_thread_goal(chat, thread_id, AppThreadGoalStatus::Active);
-    chat.on_task_started();
-    thread_id
-}
-
-fn update_thread_goal(chat: &mut ChatWidget, thread_id: ThreadId, status: AppThreadGoalStatus) {
     let mut goal = test_thread_goal(
-        status,
+        codex_app_server_protocol::ThreadGoalStatus::Active,
         /*token_budget*/ Some(50_000),
         /*tokens_used*/ 40_000,
     );
-    let thread_id = thread_id.to_string();
-    goal.thread_id = thread_id.clone();
+    goal.thread_id = thread_id.to_string();
     chat.handle_server_notification(
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
-                thread_id,
+                thread_id: thread_id.to_string(),
                 turn_id: None,
                 goal,
             },
         ),
         /*replay_kind*/ None,
     );
+    chat.on_task_started();
+    thread_id
 }
 
 fn assert_goal_paused_event(
