@@ -634,6 +634,7 @@ fn list_marketplaces_supports_alternate_manifest_layout() {
                     brand_color: None,
                     composer_icon: None,
                     logo: None,
+                    logo_dark: None,
                     screenshots: Vec::new(),
                 }),
                 keywords: Vec::new(),
@@ -720,6 +721,7 @@ fn list_marketplaces_supports_repo_root_local_plugin_sources() {
                         brand_color: None,
                         composer_icon: None,
                         logo: None,
+                        logo_dark: None,
                         screenshots: Vec::new(),
                     }),
                     keywords: Vec::new(),
@@ -1625,6 +1627,7 @@ fn list_marketplaces_resolves_plugin_interface_paths_to_absolute() {
                 AbsolutePathBuf::try_from(plugin_root.join("assets/icon.png")).unwrap(),
             ),
             logo: Some(AbsolutePathBuf::try_from(plugin_root.join("assets/logo.png")).unwrap()),
+            logo_dark: None,
             screenshots: vec![
                 AbsolutePathBuf::try_from(plugin_root.join("assets/shot1.png")).unwrap(),
             ],
@@ -1739,6 +1742,7 @@ fn list_marketplaces_ignores_plugin_interface_assets_without_dot_slash() {
             brand_color: None,
             composer_icon: None,
             logo: None,
+            logo_dark: None,
             screenshots: Vec::new(),
         })
     );

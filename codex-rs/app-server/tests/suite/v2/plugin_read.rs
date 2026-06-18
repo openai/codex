@@ -162,7 +162,8 @@ apps = true
       "short_description": "Example plugin",
       "capabilities": [],
       "default_prompt": "Use the legacy example prompt",
-      "default_prompts": []
+      "default_prompts": [],
+      "logo_url_dark": "https://example.com/example-plugin-dark.png"
     },
     "skills": [],
     "mcp_servers": [
@@ -272,6 +273,15 @@ apps = true
             .as_ref()
             .and_then(|interface| interface.default_prompt.clone()),
         Some(vec!["Use the legacy example prompt".to_string()])
+    );
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.logo_url_dark.as_deref()),
+        Some("https://example.com/example-plugin-dark.png")
     );
     assert_eq!(
         response.plugin.mcp_servers,
@@ -1330,6 +1340,7 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
     "brandColor": "#3B82F6",
     "composerIcon": "./assets/icon.png",
     "logo": "./assets/logo.png",
+    "logoDark": "./assets/logo-dark.png",
     "screenshots": ["./assets/screenshot1.png"]
   }
 }"##,
@@ -1507,6 +1518,18 @@ enabled = false
             "Draft the reply".to_string(),
             "Find my next action".to_string()
         ])
+    );
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.logo_dark.as_ref()),
+        Some(
+            &AbsolutePathBuf::try_from(plugin_root.join("assets/logo-dark.png"))
+                .expect("absolute dark logo path")
+        )
     );
     assert_eq!(
         response.plugin.summary.keywords,

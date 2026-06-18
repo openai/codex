@@ -153,6 +153,7 @@ def validate_manifest_shape(
             "brandColor",
             "composerIcon",
             "logo",
+            "logoDark",
             "screenshots",
             "defaultPrompt",
             "default_prompt",
@@ -184,7 +185,7 @@ def validate_manifest_shape(
         not isinstance(brand_color, str) or HEX_COLOR_RE.fullmatch(brand_color) is None
     ):
         errors.append("plugin.json field `interface.brandColor` must use `#RRGGBB`")
-    for field in ("composerIcon", "logo"):
+    for field in ("composerIcon", "logo", "logoDark"):
         validate_optional_asset_path(plugin_root, plugin_root, interface, field, errors)
     screenshots = interface.get("screenshots", [])
     if not isinstance(screenshots, list):

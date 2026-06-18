@@ -77,7 +77,9 @@ fn local_plugin_interface_to_info(interface: PluginManifestInterface) -> PluginI
         composer_icon: interface.composer_icon,
         composer_icon_url: None,
         logo: interface.logo,
+        logo_dark: interface.logo_dark,
         logo_url: None,
+        logo_url_dark: None,
         screenshots: interface.screenshots,
         screenshot_urls: Vec::new(),
     }
