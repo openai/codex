@@ -183,6 +183,7 @@ impl FsRequestProcessor {
                 &destination_path,
                 CopyOptions {
                     recursive: params.recursive,
+                    exclusive: params.exclusive,
                 },
                 /*sandbox*/ None,
             )
@@ -211,9 +212,13 @@ impl FsRequestProcessor {
 }
 
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
-    if err.kind() == io::ErrorKind::InvalidInput {
-        invalid_request(err.to_string())
-    } else {
-        internal_error(err.to_string())
+    match err.kind() {
+        io::ErrorKind::InvalidInput => invalid_request(err.to_string()),
+        io::ErrorKind::AlreadyExists => JSONRPCErrorError {
+            code: -32603,
+            message: err.to_string(),
+            data: Some(serde_json::json!({ "code": "EEXIST" })),
+        },
+        _ => internal_error(err.to_string()),
     }
 }

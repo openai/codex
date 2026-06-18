@@ -27,6 +27,7 @@ use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
+pub(crate) const ALREADY_EXISTS_ERROR_CODE: i64 = -32005;
 
 #[derive(Debug)]
 pub(crate) enum RpcCallError {
@@ -459,6 +460,14 @@ pub(crate) fn invalid_params(message: String) -> JSONRPCErrorError {
 pub(crate) fn not_found(message: String) -> JSONRPCErrorError {
     JSONRPCErrorError {
         code: -32004,
+        data: None,
+        message,
+    }
+}
+
+pub(crate) fn already_exists(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: ALREADY_EXISTS_ERROR_CODE,
         data: None,
         message,
     }

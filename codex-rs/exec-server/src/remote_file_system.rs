@@ -27,6 +27,7 @@ use crate::protocol::FsWriteFileParams;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const NOT_FOUND_ERROR_CODE: i64 = -32004;
+const ALREADY_EXISTS_ERROR_CODE: i64 = -32005;
 
 #[path = "remote_file_stream.rs"]
 mod file_stream;
@@ -217,6 +218,7 @@ impl RemoteFileSystem {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
+                exclusive: options.exclusive,
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await
@@ -324,6 +326,9 @@ fn map_remote_error(error: ExecServerError) -> io::Error {
     match error {
         ExecServerError::Server { code, message } if code == NOT_FOUND_ERROR_CODE => {
             io::Error::new(io::ErrorKind::NotFound, message)
+        }
+        ExecServerError::Server { code, message } if code == ALREADY_EXISTS_ERROR_CODE => {
+            io::Error::new(io::ErrorKind::AlreadyExists, message)
         }
         ExecServerError::Server { code, message } if code == INVALID_REQUEST_ERROR_CODE => {
             io::Error::new(io::ErrorKind::InvalidInput, message)
