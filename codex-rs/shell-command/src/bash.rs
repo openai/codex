@@ -156,10 +156,10 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                 if word_node.kind() != "word" {
                     return None;
                 }
-                words.push(word_node.utf8_text(src.as_bytes()).ok()?.to_owned());
+                words.push(parse_unquoted_word(word_node, src)?);
             }
             "word" | "number" => {
-                words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
+                words.push(parse_unquoted_word(child, src)?);
             }
             "string" => {
                 let parsed = parse_double_quoted_string(child, src)?;
@@ -176,8 +176,7 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                 for part in child.named_children(&mut concat_cursor) {
                     match part.kind() {
                         "word" | "number" => {
-                            concatenated
-                                .push_str(part.utf8_text(src.as_bytes()).ok()?.to_owned().as_str());
+                            concatenated.push_str(&parse_unquoted_word(part, src)?);
                         }
                         "string" => {
                             let parsed = parse_double_quoted_string(part, src)?;
@@ -199,6 +198,19 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
         }
     }
     Some(words)
+}
+
+fn parse_unquoted_word(node: Node<'_>, src: &str) -> Option<String> {
+    if !matches!(node.kind(), "word" | "number") {
+        return None;
+    }
+
+    let word = node.utf8_text(src.as_bytes()).ok()?;
+    if word.contains(['*', '?', '[']) {
+        return None;
+    }
+
+    Some(word.to_owned())
 }
 
 fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> {
@@ -485,6 +497,34 @@ mod tests {
                 "-n".to_string(),
                 "pattern".to_string(),
                 "-g*.txt".to_string(),
+            ]]
+        );
+    }
+
+    #[test]
+    fn rejects_unquoted_glob_expansions() {
+        for script in [
+            "echo *",
+            "echo file?.txt",
+            "echo [ab].txt",
+            r#"echo prefix*"suffix""#,
+        ] {
+            assert!(
+                parse_seq(script).is_none(),
+                "expected unquoted glob expansion to be rejected: {script}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_quoted_glob_characters() {
+        assert_eq!(
+            parse_seq(r#"echo "*" '?' '[ab]'"#).unwrap(),
+            vec![vec![
+                "echo".to_string(),
+                "*".to_string(),
+                "?".to_string(),
+                "[ab]".to_string(),
             ]]
         );
     }

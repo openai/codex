@@ -435,6 +435,16 @@ mod tests {
             "--output=/tmp/git-show-out-test",
             "HEAD",
         ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git show --no-patch --output?poison HEAD",
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git show -- '*.rs'",
+        ])));
     }
 
     #[test]
