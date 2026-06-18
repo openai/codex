@@ -3754,6 +3754,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-shell-command",
  "codex-state",
  "codex-utils-path",
  "pretty_assertions",

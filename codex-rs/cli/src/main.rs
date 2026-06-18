@@ -55,6 +55,7 @@ mod plugin_cmd;
 mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
+mod slow_commands;
 mod state_db_recovery;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -233,6 +234,9 @@ enum DebugSubcommand {
 
     /// Render the model-visible prompt input list as JSON.
     PromptInput(DebugPromptInputCommand),
+
+    /// Analyze direct shell-command wait time in local rollout history.
+    SlowCommands(slow_commands::SlowCommandsCommand),
 
     /// Replay a rollout trace bundle and write reduced state JSON.
     #[clap(hide = true)]
@@ -1516,6 +1520,14 @@ async fn cli_main(
                     arg0_paths.clone(),
                 )
                 .await?;
+            }
+            DebugSubcommand::SlowCommands(cmd) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "debug slow-commands",
+                )?;
+                slow_commands::run(cmd).await?;
             }
             DebugSubcommand::TraceReduce(cmd) => {
                 reject_remote_mode_for_subcommand(

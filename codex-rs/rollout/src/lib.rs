@@ -12,6 +12,7 @@ pub(crate) mod policy;
 pub(crate) mod recorder;
 pub(crate) mod search;
 pub(crate) mod session_index;
+mod slow_commands;
 mod sqlite_metrics;
 pub mod state_db;
 
@@ -74,6 +75,15 @@ pub use session_index::find_thread_meta_by_name_str;
 pub use session_index::find_thread_name_by_id;
 pub use session_index::find_thread_names_by_ids;
 pub use session_index::remove_thread_name_entries;
+pub use slow_commands::SlowCommandAggregate;
+pub use slow_commands::SlowCommandAnalysis;
+pub use slow_commands::SlowCommandCollection;
+pub use slow_commands::SlowCommandContinuation;
+pub use slow_commands::SlowCommandDirectCall;
+pub use slow_commands::SlowCommandSummary;
+pub use slow_commands::analyze_slow_commands;
+pub use slow_commands::collect_slow_commands;
+pub use slow_commands::merge_slow_command_collections;
 pub use state_db::StateDbHandle;
 pub use state_db::sqlite_telemetry_recorder;
 
