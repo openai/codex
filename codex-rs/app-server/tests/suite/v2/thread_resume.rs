@@ -23,6 +23,7 @@ use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
@@ -729,6 +730,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 .expect("remote resume should include redacted MCP item");
             let ThreadItem::McpToolCall {
                 arguments,
+                app_context,
                 result,
                 error,
                 ..
@@ -737,6 +739,14 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 unreachable!("matched MCP item");
             };
             assert_eq!(arguments, &json!("[redacted]"));
+            assert_eq!(
+                app_context,
+                &Some(McpToolCallAppContext {
+                    connector_id: "calendar".to_string(),
+                    link_id: Some("link_calendar".to_string()),
+                    resource_uri: Some("ui://widget/lookup.html".to_string()),
+                })
+            );
             let result = result.as_ref().expect("redacted MCP result");
             assert_eq!(
                 result.content,
@@ -770,12 +780,23 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
         .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
         .expect("normal resume should include MCP item");
     let ThreadItem::McpToolCall {
-        arguments, result, ..
+        arguments,
+        app_context,
+        result,
+        ..
     } = normal_mcp_item
     else {
         unreachable!("matched MCP item");
     };
     assert_eq!(arguments, &json!({"secret":"argument"}));
+    assert_eq!(
+        app_context,
+        &Some(McpToolCallAppContext {
+            connector_id: "calendar".to_string(),
+            link_id: Some("link_calendar".to_string()),
+            resource_uri: Some("ui://widget/lookup.html".to_string()),
+        })
+    );
     let result = result.as_ref().expect("normal MCP result");
     assert_eq!(
         result.content,
@@ -877,7 +898,9 @@ fn append_resume_redaction_history(
                 tool: "lookup".to_string(),
                 arguments: Some(json!({"secret":"argument"})),
             },
+            connector_id: Some("calendar".to_string()),
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+            link_id: Some("link_calendar".to_string()),
             plugin_id: None,
             duration: Duration::from_millis(8),
             result: Ok(CallToolResult {
