@@ -308,7 +308,7 @@ text(result);
         search_body["settings"],
         serde_json::json!({
             "allowed_callers": ["direct"],
-            "mode": "index_gated",
+            "external_web_access": "index_only",
         })
     );
     assert_eq!(

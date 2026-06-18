@@ -55,6 +55,7 @@ mod tests {
     use crate::provider::RetryConfig;
     use crate::search::AllowedCaller;
     use crate::search::ApproximateLocation;
+    use crate::search::ExternalWebAccess;
     use crate::search::LocationType;
     use crate::search::OpenOperation;
     use crate::search::SearchCommands;
@@ -62,7 +63,6 @@ mod tests {
     use crate::search::SearchFilters;
     use crate::search::SearchImageSettings;
     use crate::search::SearchInput;
-    use crate::search::SearchMode;
     use crate::search::SearchQuery;
     use crate::search::SearchSettings;
     use codex_client::Request;
@@ -194,8 +194,7 @@ mod tests {
                             caption: Some(true),
                         }),
                         allowed_callers: Some(vec![AllowedCaller::Direct]),
-                        external_web_access: Some(true),
-                        mode: Some(SearchMode::Online),
+                        external_web_access: Some(ExternalWebAccess::Boolean(true)),
                     }),
                     max_output_tokens: Some(2500),
                 },
@@ -260,8 +259,7 @@ mod tests {
                     },
                     "image_settings": {"max_results": 4, "caption": true},
                     "allowed_callers": ["direct"],
-                    "external_web_access": true,
-                    "mode": "online"
+                    "external_web_access": true
                 },
                 "max_output_tokens": 2500
             })

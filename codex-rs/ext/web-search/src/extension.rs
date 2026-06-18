@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use codex_api::AllowedCaller;
 use codex_api::ApproximateLocation;
+use codex_api::ExternalWebAccess;
+use codex_api::ExternalWebAccessMode;
 use codex_api::LocationType;
 use codex_api::SearchContextSize;
 use codex_api::SearchFilters;
-use codex_api::SearchMode;
 use codex_api::SearchSettings;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
@@ -74,11 +75,11 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
                 blocked_domains: None,
             }),
         allowed_callers: Some(vec![AllowedCaller::Direct]),
-        mode: Some(match web_search_mode {
-            WebSearchMode::Disabled | WebSearchMode::Cached => SearchMode::Offline,
-            WebSearchMode::IndexGated => SearchMode::IndexGated,
-            WebSearchMode::Live => SearchMode::Online,
-        }),
+        external_web_access: Some(ExternalWebAccess::Mode(match web_search_mode {
+            WebSearchMode::Disabled | WebSearchMode::Cached => ExternalWebAccessMode::Offline,
+            WebSearchMode::IndexGated => ExternalWebAccessMode::IndexOnly,
+            WebSearchMode::Live => ExternalWebAccessMode::Online,
+        })),
         ..Default::default()
     }
 }
