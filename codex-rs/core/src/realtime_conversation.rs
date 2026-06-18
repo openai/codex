@@ -40,7 +40,6 @@ use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RealtimeConversationArchitecture;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationSdpEvent;
@@ -238,7 +237,6 @@ struct ConversationState {
 
 struct RealtimeStart {
     api_provider: ApiProvider,
-    architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
@@ -294,7 +292,6 @@ impl RealtimeConversationManager {
     async fn start_inner(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
         let RealtimeStart {
             api_provider,
-            architecture,
             extra_headers,
             codex_responses_as_items,
             codex_response_item_prefix,
@@ -337,7 +334,6 @@ impl RealtimeConversationManager {
                 .create_realtime_call_with_headers(
                     sdp,
                     session_config.clone(),
-                    architecture,
                     extra_headers.unwrap_or_default(),
                     realtime_call_api_provider,
                 )
@@ -673,7 +669,6 @@ pub(crate) async fn handle_start(
 
 struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
-    architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
@@ -712,15 +707,13 @@ async fn prepare_realtime_start(
         } else {
             None
         };
-    let version = params.version.unwrap_or(config.realtime.version);
-    // TODO(pbakkum): Remove the realtimeapi/AVAS branch once WebRTC realtime sessions always use AVAS.
-    let architecture = params.architecture.unwrap_or(config.realtime.architecture);
-    validate_realtime_architecture(
-        architecture,
-        version,
-        &transport,
-        config.realtime.session_type,
-    )?;
+    let version = params.version.unwrap_or(match &transport {
+        ConversationStartTransport::Websocket => config.realtime.version,
+        ConversationStartTransport::Webrtc { .. } => RealtimeWsVersion::V1,
+    });
+    if matches!(transport, ConversationStartTransport::Webrtc { .. }) {
+        validate_avas_webrtc_start(version, config.realtime.session_type)?;
+    }
     let session_config = build_realtime_session_config(sess, &params, version).await?;
     let requested_realtime_session_id = session_config.session_id.clone();
     let extra_headers = match transport {
@@ -742,7 +735,6 @@ async fn prepare_realtime_start(
     };
     Ok(PreparedRealtimeConversationStart {
         api_provider,
-        architecture,
         extra_headers,
         codex_responses_as_items: params.codex_responses_as_items,
         codex_response_item_prefix: params.codex_response_item_prefix,
@@ -754,28 +746,18 @@ async fn prepare_realtime_start(
     })
 }
 
-fn validate_realtime_architecture(
-    architecture: RealtimeConversationArchitecture,
+fn validate_avas_webrtc_start(
     version: RealtimeWsVersion,
-    transport: &ConversationStartTransport,
     session_type: RealtimeWsMode,
 ) -> CodexResult<()> {
-    if architecture != RealtimeConversationArchitecture::Avas {
-        return Ok(());
-    }
     if version != RealtimeWsVersion::V1 {
         return Err(CodexErr::InvalidRequest(
-            "AVAS realtime architecture requires realtime v1".to_string(),
-        ));
-    }
-    if !matches!(transport, ConversationStartTransport::Webrtc { .. }) {
-        return Err(CodexErr::InvalidRequest(
-            "AVAS realtime architecture requires WebRTC transport".to_string(),
+            "AVAS realtime calls require realtime v1".to_string(),
         ));
     }
     if session_type != RealtimeWsMode::Conversational {
         return Err(CodexErr::InvalidRequest(
-            "AVAS realtime architecture requires conversational realtime".to_string(),
+            "AVAS realtime calls require conversational realtime".to_string(),
         ));
     }
     Ok(())
@@ -912,7 +894,6 @@ async fn handle_start_inner(
 ) -> CodexResult<()> {
     let PreparedRealtimeConversationStart {
         api_provider,
-        architecture,
         extra_headers,
         codex_responses_as_items,
         codex_response_item_prefix,
@@ -929,7 +910,6 @@ async fn handle_start_inner(
     };
     let start = RealtimeStart {
         api_provider,
-        architecture,
         extra_headers,
         codex_responses_as_items,
         codex_response_item_prefix,
