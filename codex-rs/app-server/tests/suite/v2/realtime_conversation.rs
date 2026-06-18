@@ -538,6 +538,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             "session": { "id": "sess_backend", "instructions": "backend prompt" }
         })],
         vec![],
+        vec![],
         vec![
             json!({
                 "type": "response.output_audio.delta",
@@ -590,7 +591,6 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "message": "upstream boom"
             }),
         ],
-        vec![],
     ]])
     .await;
 
