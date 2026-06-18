@@ -132,8 +132,6 @@ pub enum Feature {
     LocalThreadStoreCompression,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
-    /// Append additional AGENTS.md guidance to user instructions.
-    ChildAgentsMd,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
     /// Start the managed network proxy for sandboxed sessions.
@@ -228,6 +226,8 @@ pub enum Feature {
     PreventIdleSleep,
     /// Enable remote compaction v2 over the normal Responses API.
     RemoteCompactionV2,
+    /// Use Agent Identity for ChatGPT-authenticated sessions.
+    UseAgentIdentity,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 
@@ -909,12 +909,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ChildAgentsMd,
-        key: "child_agents_md",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
         stage: Stage::Removed,
@@ -1313,6 +1307,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_compaction_v2",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::UseAgentIdentity,
+        key: "use_agent_identity",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WorkspaceDependencies,

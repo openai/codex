@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
@@ -31,6 +32,7 @@ use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_shell_command::shell_detect::detect_shell_type;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
@@ -172,7 +174,7 @@ impl ExecCommandHandler {
                 )));
             }
         };
-        let args: ExecCommandArgs = match native_cwd.as_ref() {
+        let mut args: ExecCommandArgs = match native_cwd.as_ref() {
             Some(native_cwd) => {
                 // The base path only resolves paths nested in the permissions config types.
                 parse_arguments_with_base_path(&arguments, native_cwd)?
@@ -195,7 +197,6 @@ impl ExecCommandHandler {
             )
             .await;
         }
-        let process_id = manager.allocate_process_id().await;
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
         // Remote environments may use a different OS and must build commands with their native
@@ -205,6 +206,26 @@ impl ExecCommandHandler {
             .clone()
             .map(Arc::new)
             .unwrap_or_else(|| session.user_shell());
+        // TODO(anp): Resolve requested shells in remote environments instead of restricting
+        // commands to the reported default shell.
+        if environment.is_remote()
+            && let Some(requested_shell) = args.shell.take()
+        {
+            let Some(remote_shell) = turn_environment.shell.as_ref() else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "environment `{}` does not report a shell",
+                    turn_environment.environment_id
+                )));
+            };
+            if detect_shell_type(Path::new(&requested_shell)) != Some(remote_shell.shell_type) {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "environment `{}` only supports `{}`",
+                    turn_environment.environment_id,
+                    remote_shell.name()
+                )));
+            }
+        }
+        let process_id = manager.allocate_process_id().await;
         let resolved_command = get_command(
             &args,
             shell,

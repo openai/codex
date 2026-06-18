@@ -7,10 +7,10 @@ use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
 use crate::loader::installed_plugin_telemetry_metadata;
-use crate::loader::load_plugin_apps;
+use crate::loader::load_plugin_apps_from_manifest;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
-use crate::loader::load_plugin_mcp_servers;
+use crate::loader::load_plugin_mcp_servers_from_manifest;
 use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::log_plugin_load_errors;
@@ -27,6 +27,7 @@ use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
 use crate::marketplace::MarketplaceListOutcome;
 use crate::marketplace::MarketplacePluginAuthPolicy;
+use crate::marketplace::MarketplacePluginManifestFallback;
 use crate::marketplace::MarketplacePluginPolicy;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::ResolvedMarketplacePlugin;
@@ -60,6 +61,7 @@ use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
+use codex_core_skills::PluginSkillSnapshots;
 use codex_core_skills::SkillMetadata;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
@@ -315,6 +317,7 @@ pub struct ConfiguredMarketplacePlugin {
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
     pub keywords: Vec<String>,
+    pub manifest_fallback: Option<MarketplacePluginManifestFallback>,
     pub installed: bool,
     pub enabled: bool,
 }
@@ -368,6 +371,7 @@ pub struct PluginsManager {
 struct LoadedPluginsCacheEntry {
     key: PluginLoadCacheKey,
     plugins: Vec<LoadedPlugin>,
+    plugin_skill_snapshots: PluginSkillSnapshots,
 }
 
 #[derive(Default)]
@@ -381,6 +385,16 @@ struct PluginLoadCacheKey {
     configured_plugins: HashMap<String, PluginConfig>,
     skill_config_rules: SkillConfigRules,
     remote_plugin_enabled: bool,
+}
+
+impl PluginLoadCacheKey {
+    fn from_config(config: &PluginsConfigInput) -> Self {
+        Self {
+            configured_plugins: configured_plugins_from_stack(&config.config_layer_stack),
+            skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
+            remote_plugin_enabled: config.remote_plugin_enabled,
+        }
+    }
 }
 
 impl PluginsManager {
@@ -468,6 +482,24 @@ impl PluginsManager {
             .await
     }
 
+    /// Returns skill snapshots parsed while loading the matching plugin cache entry.
+    pub fn plugin_skill_snapshots_for_config(
+        &self,
+        config: &PluginsConfigInput,
+    ) -> Option<PluginSkillSnapshots> {
+        if !config.plugins_enabled {
+            return None;
+        }
+        let key = PluginLoadCacheKey::from_config(config);
+        self.loaded_plugins_cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry
+            .as_ref()
+            .filter(|cached| cached.key == key)
+            .map(|cached| cached.plugin_skill_snapshots.clone())
+    }
+
     #[instrument(
         name = "plugins_for_config",
         level = "info",
@@ -487,11 +519,7 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         }
 
-        let cache_key = PluginLoadCacheKey {
-            configured_plugins: configured_plugins_from_stack(&config.config_layer_stack),
-            skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
-            remote_plugin_enabled: config.remote_plugin_enabled,
-        };
+        let cache_key = PluginLoadCacheKey::from_config(config);
         if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
             return self.resolve_loaded_plugins_for_auth(plugins);
         }
@@ -504,16 +532,23 @@ impl PluginsManager {
             return self.resolve_loaded_plugins_for_auth(plugins);
         }
         let cache_generation = self.loaded_plugins_cache_generation();
+        let plugin_skill_snapshots = PluginSkillSnapshots::for_plugin_load();
         let plugins = load_plugins_from_layer_stack(
             &config.config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
+            Some(&plugin_skill_snapshots),
             self.restriction_product,
             config.remote_plugin_enabled,
         )
         .await;
         log_plugin_load_errors(&plugins);
-        self.cache_loaded_plugins_if_current(cache_generation, cache_key, plugins.clone());
+        self.cache_loaded_plugins_if_current(
+            cache_generation,
+            cache_key,
+            plugins.clone(),
+            plugin_skill_snapshots,
+        );
         self.resolve_loaded_plugins_for_auth(plugins)
     }
 
@@ -587,6 +622,7 @@ impl PluginsManager {
             config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
+            /*plugin_skill_snapshots*/ None,
             self.restriction_product,
             config.remote_plugin_enabled,
         )
@@ -624,19 +660,13 @@ impl PluginsManager {
     }
 
     fn cached_loaded_plugins(&self, key: &PluginLoadCacheKey) -> Option<Vec<LoadedPlugin>> {
-        match self.loaded_plugins_cache.read() {
-            Ok(cache) => cache
-                .entry
-                .as_ref()
-                .filter(|cached| cached.key == *key)
-                .map(|cached| cached.plugins.clone()),
-            Err(err) => err
-                .into_inner()
-                .entry
-                .as_ref()
-                .filter(|cached| cached.key == *key)
-                .map(|cached| cached.plugins.clone()),
-        }
+        self.loaded_plugins_cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry
+            .as_ref()
+            .filter(|cached| cached.key == *key)
+            .map(|cached| cached.plugins.clone())
     }
 
     fn loaded_plugins_cache_generation(&self) -> u64 {
@@ -651,13 +681,18 @@ impl PluginsManager {
         generation: u64,
         key: PluginLoadCacheKey,
         plugins: Vec<LoadedPlugin>,
+        plugin_skill_snapshots: PluginSkillSnapshots,
     ) {
         let mut cache = match self.loaded_plugins_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
         if cache.generation == generation {
-            cache.entry = Some(LoadedPluginsCacheEntry { key, plugins });
+            cache.entry = Some(LoadedPluginsCacheEntry {
+                key,
+                plugins,
+                plugin_skill_snapshots,
+            });
         }
     }
 
@@ -1256,15 +1291,32 @@ impl PluginsManager {
             };
         let store = self.store.clone();
         let codex_home = self.codex_home.clone();
+        let manifest_fallback_contents = resolved
+            .manifest_fallback
+            .contents_if_has_metadata()
+            .map(str::to_string);
         let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
             let materialized =
                 materialize_marketplace_plugin_source(codex_home.as_path(), &resolved.source)
                     .map_err(PluginStoreError::Invalid)?;
             let source_path = materialized.path;
-            if let Some(plugin_version) = plugin_version {
-                store.install_with_version(source_path, resolved.plugin_id, plugin_version)
-            } else {
-                store.install(source_path, resolved.plugin_id)
+            match (plugin_version, manifest_fallback_contents.as_deref()) {
+                (Some(plugin_version), Some(manifest_contents)) => store
+                    .install_with_version_and_fallback_manifest(
+                        source_path,
+                        resolved.plugin_id,
+                        plugin_version,
+                        manifest_contents,
+                    ),
+                (Some(plugin_version), None) => {
+                    store.install_with_version(source_path, resolved.plugin_id, plugin_version)
+                }
+                (None, Some(manifest_contents)) => store.install_with_fallback_manifest(
+                    source_path,
+                    resolved.plugin_id,
+                    manifest_contents,
+                ),
+                (None, None) => store.install(source_path, resolved.plugin_id),
             }
         })
         .await
@@ -1394,6 +1446,7 @@ impl PluginsManager {
                         let enabled = enabled_plugins.contains(&plugin_key);
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
+                        let manifest_fallback = plugin.manifest_fallback.clone();
                         if installed
                             && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
                             && let Some(plugin_id) = plugin_id.as_ref()
@@ -1424,6 +1477,7 @@ impl PluginsManager {
                             policy: plugin.policy,
                             keywords: plugin.keywords,
                             interface,
+                            manifest_fallback,
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1491,6 +1545,10 @@ impl PluginsManager {
 
         let marketplace_name = plugin.plugin_id.marketplace_name.clone();
         let plugin_key = plugin.plugin_id.as_key();
+        let manifest_fallback = plugin
+            .manifest_fallback
+            .contents_if_has_metadata()
+            .map(|_| plugin.manifest_fallback.clone());
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let installed = installed_plugins.contains(&plugin_key);
         let installed_version = if installed {
@@ -1518,6 +1576,7 @@ impl PluginsManager {
                         .as_ref()
                         .map(|manifest| manifest.keywords.clone())
                         .unwrap_or_default(),
+                    manifest_fallback,
                     installed,
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
@@ -1604,9 +1663,18 @@ impl PluginsManager {
                 "path does not exist or is not a directory".to_string(),
             ));
         }
-        let manifest = load_plugin_manifest(source_path.as_path()).ok_or_else(|| {
-            MarketplaceError::InvalidPlugin("missing or invalid plugin.json".to_string())
-        })?;
+        let manifest =
+            if codex_utils_plugins::find_plugin_manifest_path(source_path.as_path()).is_some() {
+                load_plugin_manifest(source_path.as_path())
+            } else {
+                plugin
+                    .manifest_fallback
+                    .as_ref()
+                    .and_then(|fallback| fallback.parse_for_plugin_root(source_path.as_path()))
+            }
+            .ok_or_else(|| {
+                MarketplaceError::InvalidPlugin("missing or invalid plugin.json".to_string())
+            })?;
         let description = manifest.description.clone();
         let marketplace_category = plugin
             .interface
@@ -1624,6 +1692,7 @@ impl PluginsManager {
             &codex_core_skills::config_rules::skill_config_rules_from_stack(
                 &config.config_layer_stack,
             ),
+            /*plugin_skill_snapshots*/ None,
         )
         .await;
         let plugin_data_root = self.store.plugin_data_root(&plugin_id);
@@ -1637,8 +1706,14 @@ impl PluginsManager {
             })
             .collect();
         let auth_mode = self.auth_mode();
-        let mut app_declarations = load_plugin_apps(source_path.as_path()).await;
-        let mut mcp_servers = load_plugin_mcp_servers(source_path.as_path(), auth_mode).await;
+        let mut app_declarations =
+            load_plugin_apps_from_manifest(source_path.as_path(), &manifest.paths).await;
+        let mut mcp_servers = load_plugin_mcp_servers_from_manifest(
+            source_path.as_path(),
+            &manifest.paths,
+            /*plugin_policy*/ None,
+        )
+        .await;
         if auth_mode.is_some() {
             apply_app_mcp_routing_policy(
                 &mut app_declarations,

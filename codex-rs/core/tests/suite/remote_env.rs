@@ -228,6 +228,77 @@ async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
+    const CALL_ID: &str = "remote-explicit-shell";
+
+    let (shell, command) = match core_test_support::test_environment() {
+        TestEnvironment::Docker { .. } => (
+            "bash",
+            r#"case "$PWD" in /tmp/codex-core-test-cwd-*) ;; *) echo "unexpected cwd: $PWD" >&2; exit 1 ;; esac"#,
+        ),
+        TestEnvironment::WineExec => (
+            "powershell",
+            r#"$cwd = (Get-Location).Path; if ($cwd -notlike 'C:\codex-core-test-cwd-*') { Write-Error "unexpected cwd: $cwd"; exit 1 }"#,
+        ),
+        TestEnvironment::Local => return Ok(()),
+    };
+
+    let server = start_mock_server().await;
+    let arguments = serde_json::to_string(&json!({
+        "cmd": command,
+        "shell": shell,
+        "login": false,
+        "yield_time_ms": 10_000,
+    }))?;
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_remote_env(&server).await?;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(CALL_ID, "exec_command", &arguments),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn_with_environments(
+        "run the remote shell in the remote cwd",
+        Some(vec![TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&test.config.cwd),
+        }]),
+    )
+    .await?;
+    let request = response_mock
+        .last_request()
+        .context("model should receive the command output")?;
+    let (output, success) = request
+        .function_call_output_content_and_success(CALL_ID)
+        .context("remote shell tool result should be present")?;
+    assert_ne!(success, Some(false));
+    assert!(
+        output.is_some_and(|output| output.contains("Process exited with code 0")),
+        "remote shell command should exit successfully",
+    );
+
+    Ok(())
+}
+
 fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(path).expect("path should be absolute")
 }

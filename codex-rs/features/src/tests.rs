@@ -707,12 +707,15 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
 #[test]
 fn unstable_warning_event_only_mentions_enabled_under_development_features() {
     let mut configured_features = Table::new();
-    configured_features.insert("child_agents_md".to_string(), TomlValue::Boolean(true));
+    configured_features.insert(
+        "apply_patch_streaming_events".to_string(),
+        TomlValue::Boolean(true),
+    );
     configured_features.insert("personality".to_string(), TomlValue::Boolean(true));
     configured_features.insert("unknown".to_string(), TomlValue::Boolean(true));
 
     let mut features = Features::with_defaults();
-    features.enable(Feature::ChildAgentsMd);
+    features.enable(Feature::ApplyPatchStreamingEvents);
 
     let warning = unstable_features_warning_event(
         Some(&configured_features),
@@ -725,7 +728,7 @@ fn unstable_warning_event_only_mentions_enabled_under_development_features() {
     let EventMsg::Warning(WarningEvent { message }) = warning.msg else {
         panic!("expected warning event");
     };
-    assert!(message.contains("child_agents_md"));
+    assert!(message.contains("apply_patch_streaming_events"));
     assert!(!message.contains("personality"));
     assert!(message.contains("/tmp/config.toml"));
 }

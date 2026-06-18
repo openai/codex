@@ -446,9 +446,6 @@
             "browser_use_external": {
               "type": "boolean"
             },
-            "child_agents_md": {
-              "type": "boolean"
-            },
             "chronicle": {
               "type": "boolean"
             },
@@ -690,6 +687,9 @@
               "type": "boolean"
             },
             "unified_exec_zsh_fork": {
+              "type": "boolean"
+            },
+            "use_agent_identity": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -4686,9 +4686,6 @@
         "browser_use_external": {
           "type": "boolean"
         },
-        "child_agents_md": {
-          "type": "boolean"
-        },
         "chronicle": {
           "type": "boolean"
         },
@@ -4930,6 +4927,9 @@
           "type": "boolean"
         },
         "unified_exec_zsh_fork": {
+          "type": "boolean"
+        },
+        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {

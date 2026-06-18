@@ -722,13 +722,19 @@ impl Session {
                 .or(model_info.multi_agent_version)
                 .unwrap_or_else(|| per_turn_config.multi_agent_version_from_features()),
         };
+        let plugins_input = per_turn_config.plugins_config_input();
         let plugin_outcome = self
             .services
             .plugins_manager
-            .plugins_for_config(&per_turn_config.plugins_config_input())
+            .plugins_for_config(&plugins_input)
             .await;
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+        let plugin_skill_snapshots = self
+            .services
+            .plugins_manager
+            .plugin_skill_snapshots_for_config(&plugins_input);
+        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots)
+            .with_plugin_skill_snapshots(plugin_skill_snapshots);
         let fs = primary_turn_environment
             .map(|turn_environment| turn_environment.environment.get_filesystem());
         let skills_snapshot = self

@@ -42,6 +42,7 @@ use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::BTreeMap;
@@ -564,8 +565,17 @@ impl CodexThread {
     }
 
     /// Returns the files that supplied the thread's loaded model instructions.
-    pub async fn instruction_sources(&self) -> Vec<AbsolutePathBuf> {
+    pub async fn instruction_sources(&self) -> Vec<PathUri> {
         self.codex.instruction_sources().await
+    }
+
+    /// Returns loaded instruction sources rendered as legacy app-server path strings.
+    pub async fn legacy_instruction_sources(&self) -> Vec<LegacyAppPathString> {
+        self.instruction_sources()
+            .await
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 
     pub async fn config(&self) -> Arc<crate::config::Config> {

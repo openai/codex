@@ -32,6 +32,7 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
@@ -154,7 +155,7 @@ pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     }
 
     let cache_key = accessible_connectors_cache_key(config, auth);
-    let accessible_connectors = accessible_connectors_from_mcp_tools(mcp_tools);
+    let accessible_connectors = accessible_connectors_for_app_list_from_mcp_tools(mcp_tools);
     write_cached_accessible_connectors(cache_key, &accessible_connectors);
 }
 
@@ -339,7 +340,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         cancel_token.cancel();
     }
 
-    let accessible_connectors = accessible_connectors_from_mcp_tools(&tools);
+    let accessible_connectors = accessible_connectors_for_app_list_from_mcp_tools(&tools);
     if codex_apps_ready || !accessible_connectors.is_empty() {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
     }
@@ -469,9 +470,15 @@ async fn cached_directory_connectors_for_tool_suggest_with_auth(
 }
 
 pub(crate) fn accessible_connectors_from_mcp_tools(mcp_tools: &[ToolInfo]) -> Vec<AppInfo> {
+    collect_accessible_connectors_from_mcp_tools(mcp_tools.iter())
+}
+
+fn collect_accessible_connectors_from_mcp_tools<'a>(
+    mcp_tools: impl Iterator<Item = &'a ToolInfo>,
+) -> Vec<AppInfo> {
     // ToolInfo already carries plugin provenance, so app-level plugin sources
     // can be derived here instead of requiring a separate enrichment pass.
-    let tools = mcp_tools.iter().filter_map(|tool| {
+    let tools = mcp_tools.filter_map(|tool| {
         if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
             return None;
         }
@@ -484,6 +491,20 @@ pub(crate) fn accessible_connectors_from_mcp_tools(mcp_tools: &[ToolInfo]) -> Ve
         })
     });
     codex_connectors::accessible::collect_accessible_connectors(tools)
+}
+
+fn accessible_connectors_for_app_list_from_mcp_tools(mcp_tools: &[ToolInfo]) -> Vec<AppInfo> {
+    let non_synthetic_tools = mcp_tools.iter().filter(|tool| {
+        tool.tool
+            .meta
+            .as_deref()
+            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|meta| meta.get("synthetic_link"))
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+    });
+    collect_accessible_connectors_from_mcp_tools(non_synthetic_tools)
 }
 
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {

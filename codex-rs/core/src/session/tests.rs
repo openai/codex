@@ -5050,13 +5050,18 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         turn_environments: Arc::clone(&turn_environments),
     };
 
+    let plugins_input = per_turn_config.plugins_config_input();
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config.plugins_config_input())
+        .plugins_for_config(&plugins_input)
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
+    let plugin_skill_snapshots = services
+        .plugins_manager
+        .plugin_skill_snapshots_for_config(&plugins_input);
     let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots)
+            .with_plugin_skill_snapshots(plugin_skill_snapshots);
     let skill_fs = environment.get_filesystem();
     let skills_snapshot = services
         .skills_service
@@ -7099,13 +7104,18 @@ where
         turn_environments: Arc::clone(&turn_environments),
     };
 
+    let plugins_input = per_turn_config.plugins_config_input();
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config.plugins_config_input())
+        .plugins_for_config(&plugins_input)
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
+    let plugin_skill_snapshots = services
+        .plugins_manager
+        .plugin_skill_snapshots_for_config(&plugins_input);
     let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots)
+            .with_plugin_skill_snapshots(plugin_skill_snapshots);
     let skill_fs = environment.get_filesystem();
     let skills_snapshot = services
         .skills_service
