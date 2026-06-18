@@ -492,7 +492,7 @@ mod tests {
                 reason: Some("needs approval".to_string()),
                 network_approval_context: None,
                 command: Some("echo hello".to_string()),
-                cwd: Some(test_path_buf("/tmp/project").abs()),
+                cwd: Some(test_path_buf("/tmp/project").abs().into()),
                 command_actions: None,
                 additional_permissions: None,
                 proposed_execpolicy_amendment: None,

@@ -2378,7 +2378,7 @@
         "cwd": {
           "anyOf": [
             {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             {
               "type": "null"
@@ -17392,7 +17392,7 @@
               "cwd": {
                 "allOf": [
                   {
-                    "$ref": "#/definitions/v2/AbsolutePathBuf"
+                    "$ref": "#/definitions/v2/LegacyAppPathString"
                   }
                 ],
                 "description": "The command's working directory."

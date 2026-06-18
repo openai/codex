@@ -170,7 +170,7 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
     let command_item = ThreadItem::CommandExecution {
         id: "cmd-1".to_string(),
         command: "ls".to_string(),
-        cwd: test_path_buf("/tmp/project").abs(),
+        cwd: test_path_buf("/tmp/project").abs().into(),
         process_id: Some("123".to_string()),
         source: CommandExecutionSource::UserShell,
         status: ApiCommandExecutionStatus::InProgress,
@@ -210,7 +210,7 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
             item: ThreadItem::CommandExecution {
                 id: "cmd-1".to_string(),
                 command: "ls".to_string(),
-                cwd: test_path_buf("/tmp/project").abs(),
+                cwd: test_path_buf("/tmp/project").abs().into(),
                 process_id: Some("123".to_string()),
                 source: CommandExecutionSource::UserShell,
                 status: ApiCommandExecutionStatus::Completed,
@@ -1321,7 +1321,7 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
             item: ThreadItem::CommandExecution {
                 id: "cmd-1".to_string(),
                 command: "ls".to_string(),
-                cwd: test_path_buf("/tmp/project").abs(),
+                cwd: test_path_buf("/tmp/project").abs().into(),
                 process_id: Some("123".to_string()),
                 source: CommandExecutionSource::UserShell,
                 status: ApiCommandExecutionStatus::InProgress,
@@ -1361,7 +1361,7 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
                 items: vec![ThreadItem::CommandExecution {
                     id: "cmd-1".to_string(),
                     command: "ls".to_string(),
-                    cwd: test_path_buf("/tmp/project").abs(),
+                    cwd: test_path_buf("/tmp/project").abs().into(),
                     process_id: Some("123".to_string()),
                     source: CommandExecutionSource::UserShell,
                     status: ApiCommandExecutionStatus::Completed,

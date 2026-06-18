@@ -12,7 +12,9 @@ fn agent_status_uses_bounded_buffered_activity() {
             item: ThreadItem::CommandExecution {
                 id: "command-1".to_string(),
                 command: "cargo test -p codex-tui".to_string(),
-                cwd: AbsolutePathBuf::try_from("/workspace").expect("absolute path"),
+                cwd: AbsolutePathBuf::try_from("/workspace")
+                    .expect("absolute path")
+                    .into(),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,

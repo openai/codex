@@ -65,7 +65,7 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
                 shlex::try_join(["/bin/zsh", "-lc", script])
                     .expect("round-trippable shell wrapper"),
             ),
-            cwd: Some(test_path_buf("/tmp").abs()),
+            cwd: Some(test_path_buf("/tmp").abs().into()),
             command_actions: None,
             additional_permissions: None,
             proposed_execpolicy_amendment: None,
@@ -107,7 +107,7 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
                 protocol: codex_app_server_protocol::NetworkApprovalProtocol::Socks5Tcp,
             }),
             command: Some("ls".to_string()),
-            cwd: Some(test_path_buf("/tmp").abs()),
+            cwd: Some(test_path_buf("/tmp").abs().into()),
             command_actions: None,
             additional_permissions: Some(AppServerAdditionalPermissionProfile {
                 network: Some(AppServerAdditionalNetworkPermissions {
