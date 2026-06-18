@@ -92,11 +92,21 @@ pub struct AgentIdentityAuthRecord {
     pub agent_private_key: String,
     pub account_id: String,
     pub chatgpt_user_id: String,
-    pub email: String,
+    #[serde(default, deserialize_with = "deserialize_optional_non_empty_string")]
+    pub email: Option<String>,
     pub plan_type: AccountPlanType,
     pub chatgpt_account_is_fedramp: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+}
+
+fn deserialize_optional_non_empty_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(|value| value.filter(|value| !value.is_empty()))
 }
 
 impl AgentIdentityAuthRecord {

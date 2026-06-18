@@ -306,6 +306,32 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
     ]
 
 
+def test_schema_normalization_makes_chatgpt_account_email_nullable() -> None:
+    script = _load_update_script_module()
+    schema = {
+        "definitions": {
+            "Account": {
+                "oneOf": [
+                    {
+                        "properties": {
+                            "email": {"type": "string"},
+                            "type": {"enum": ["chatgpt"], "type": "string"},
+                        },
+                        "required": ["email", "type"],
+                        "type": "object",
+                    }
+                ]
+            }
+        }
+    }
+
+    script._make_chatgpt_account_email_nullable(schema)
+
+    chatgpt_account = schema["definitions"]["Account"]["oneOf"][0]
+    assert chatgpt_account["properties"]["email"]["type"] == ["string", "null"]
+    assert "email" in chatgpt_account["required"]
+
+
 def test_python_codegen_schema_annotation_adds_stable_variant_titles(
     tmp_path: Path,
 ) -> None:
