@@ -334,13 +334,13 @@ pub struct TurnPage {
     pub backwards_cursor: Option<String>,
 }
 
-/// Parameters for listing persisted items within a single turn.
+/// Parameters for listing persisted items within a thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListItemsParams {
     /// Thread id to read.
     pub thread_id: ThreadId,
-    /// Turn id to hydrate.
-    pub turn_id: String,
+    /// Optional turn id to filter by. When omitted, returns items across the thread.
+    pub turn_id: Option<String>,
     /// Whether archived threads are eligible.
     pub include_archived: bool,
     /// Opaque cursor returned by a previous list call.
@@ -361,7 +361,7 @@ pub struct StoredThreadItem {
     pub materialized_thread_item_json: Vec<u8>,
 }
 
-/// A page of persisted items within a turn.
+/// A page of persisted items within a thread, optionally filtered to a turn.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ItemPage {
     /// Items returned for this page.

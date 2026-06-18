@@ -250,6 +250,7 @@ mod tests {
                 Some(state_db.clone()),
                 "11111111-1111-4111-8111-111111111111".to_string(),
                 /*attestation_provider*/ None,
+                /*external_time_provider*/ None,
             )
         });
         thread_manager.start_thread(good_config).await?;

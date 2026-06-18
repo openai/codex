@@ -31,6 +31,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::RecommendedPluginsInstructions;
+use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
@@ -211,9 +212,11 @@ mod input_queue;
 mod mcp;
 mod multi_agents;
 mod review;
+mod rollout_budget;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+pub(crate) mod time_reminder;
 mod token_budget;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
@@ -434,9 +437,11 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) environment_selections: Vec<TurnEnvironmentSelection>,
     pub(crate) thread_extension_init: ExtensionDataInit,
+    pub(crate) supports_openai_form_elicitation: bool,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
 }
 
@@ -516,9 +521,11 @@ impl Codex {
             parent_trace: _,
             environment_selections,
             thread_extension_init,
+            supports_openai_form_elicitation,
             analytics_events_client,
             thread_store,
             attestation_provider,
+            external_time_provider,
             inherited_multi_agent_version,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -658,6 +665,7 @@ impl Codex {
             mcp_manager.clone(),
             extensions,
             thread_extension_init,
+            supports_openai_form_elicitation,
             agent_control,
             environment_manager,
             inherited_environments,
@@ -665,6 +673,7 @@ impl Codex {
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
+            external_time_provider,
             multi_agent_version,
         ))
         .await
@@ -3360,6 +3369,7 @@ impl Session {
                 }
                 state.token_info()
             };
+            self.record_rollout_budget_usage(token_usage);
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
                     contributor

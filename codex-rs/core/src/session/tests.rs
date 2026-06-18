@@ -4856,6 +4856,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
+        /*supports_openai_form_elicitation*/ false,
         AgentControl::default(),
         environment_manager,
         /*inherited_environments*/ None,
@@ -4866,6 +4867,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await;
@@ -5018,6 +5020,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
+        supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
@@ -5030,6 +5033,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*state_db*/ None,
         )),
         attestation_provider: None,
+        time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             thread_id,
@@ -5203,6 +5207,7 @@ async fn make_session_with_config_and_rx(
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
+        /*supports_openai_form_elicitation*/ false,
         AgentControl::default(),
         environment_manager,
         /*inherited_environments*/ None,
@@ -5213,6 +5218,7 @@ async fn make_session_with_config_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -5307,6 +5313,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
+        /*supports_openai_form_elicitation*/ false,
         agent_control,
         environment_manager,
         /*inherited_environments*/ None,
@@ -5324,6 +5331,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -7061,6 +7069,7 @@ where
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
+        supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
@@ -7073,6 +7082,7 @@ where
             state_db,
         )),
         attestation_provider: None,
+        time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             thread_id,
