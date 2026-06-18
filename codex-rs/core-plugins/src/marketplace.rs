@@ -66,7 +66,7 @@ pub struct MarketplacePlugin {
     pub keywords: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MarketplacePluginSource {
     Local {
         path: AbsolutePathBuf,
