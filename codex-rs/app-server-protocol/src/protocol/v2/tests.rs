@@ -2636,7 +2636,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             app_context: Some(McpToolCallAppContext {
                 connector_id: "calendar".to_string(),
                 link_id: Some("link_calendar".to_string()),
-                mcp_app_resource_uri: Some("app://connector".to_string()),
+                resource_uri: Some("app://connector".to_string()),
             }),
             mcp_app_resource_uri: Some("app://connector".to_string()),
             plugin_id: Some("sample@test".to_string()),
@@ -2699,7 +2699,7 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
         app_context: Some(McpToolCallAppContext {
             connector_id: "calendar".to_string(),
             link_id: Some("link_calendar".to_string()),
-            mcp_app_resource_uri: Some("app://connector".to_string()),
+            resource_uri: Some("app://connector".to_string()),
         }),
         mcp_app_resource_uri: Some("app://connector".to_string()),
         plugin_id: None,
@@ -2720,7 +2720,7 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
             "appContext": {
                 "connectorId": "calendar",
                 "linkId": "link_calendar",
-                "mcpAppResourceUri": "app://connector",
+                "resourceUri": "app://connector",
             },
             "mcpAppResourceUri": "app://connector",
             "pluginId": null,

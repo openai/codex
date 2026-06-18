@@ -582,8 +582,7 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
-            codex_protocol::items::TurnItem::Sleep(_)
-            | codex_protocol::items::TurnItem::McpToolCall(_) => {
+            codex_protocol::items::TurnItem::Sleep(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),
@@ -597,6 +596,7 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
             | codex_protocol::items::TurnItem::FileChange(_)
+            | codex_protocol::items::TurnItem::McpToolCall(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
     }
@@ -772,7 +772,7 @@ impl ThreadHistoryBuilder {
                 .map(|connector_id| McpToolCallAppContext {
                     connector_id,
                     link_id: payload.link_id.clone(),
-                    mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
+                    resource_uri: payload.mcp_app_resource_uri.clone(),
                 }),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             plugin_id: payload.plugin_id.clone(),
@@ -822,7 +822,7 @@ impl ThreadHistoryBuilder {
                 .map(|connector_id| McpToolCallAppContext {
                     connector_id,
                     link_id: payload.link_id.clone(),
-                    mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
+                    resource_uri: payload.mcp_app_resource_uri.clone(),
                 }),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             plugin_id: payload.plugin_id.clone(),
@@ -2530,7 +2530,7 @@ mod tests {
                 app_context: Some(McpToolCallAppContext {
                     connector_id: "calendar".into(),
                     link_id: Some("link_calendar".into()),
-                    mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
+                    resource_uri: Some("ui://widget/lookup.html".into()),
                 }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
                 plugin_id: Some("sample@test".into()),

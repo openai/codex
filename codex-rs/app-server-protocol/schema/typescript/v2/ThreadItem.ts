@@ -58,7 +58,7 @@ exitCode: number | null,
  */
 durationMs: number | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, appContext: McpToolCallAppContext | null,
 /**
- * Deprecated: use `appContext.mcpAppResourceUri` instead.
+ * Deprecated: use `appContext.resourceUri` instead.
  */
 mcpAppResourceUri?: string, pluginId: string | null, result: McpToolCallResult | null, error: McpToolCallError | null,
 /**

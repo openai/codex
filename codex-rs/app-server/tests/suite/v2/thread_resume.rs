@@ -744,7 +744,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 &Some(McpToolCallAppContext {
                     connector_id: "calendar".to_string(),
                     link_id: Some("link_calendar".to_string()),
-                    mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+                    resource_uri: Some("ui://widget/lookup.html".to_string()),
                 })
             );
             let result = result.as_ref().expect("redacted MCP result");
@@ -794,7 +794,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
         &Some(McpToolCallAppContext {
             connector_id: "calendar".to_string(),
             link_id: Some("link_calendar".to_string()),
-            mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+            resource_uri: Some("ui://widget/lookup.html".to_string()),
         })
     );
     let result = result.as_ref().expect("normal MCP result");
