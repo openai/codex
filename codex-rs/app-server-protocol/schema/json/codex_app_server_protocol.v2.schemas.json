@@ -6173,6 +6173,12 @@
           "description": "File modification time in Unix milliseconds when available, otherwise `0`.",
           "format": "int64",
           "type": "integer"
+        },
+        "sizeBytes": {
+          "description": "File size in bytes.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "required": [
@@ -6180,7 +6186,8 @@
         "isDirectory",
         "isFile",
         "isSymlink",
-        "modifiedAtMs"
+        "modifiedAtMs",
+        "sizeBytes"
       ],
       "title": "FsGetMetadataResponse",
       "type": "object"

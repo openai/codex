@@ -813,6 +813,7 @@ fn fs_get_metadata_response_round_trips_minimal_fields() {
         is_directory: false,
         is_file: true,
         is_symlink: false,
+        size_bytes: 5,
         created_at_ms: 123,
         modified_at_ms: 456,
     };
@@ -824,6 +825,7 @@ fn fs_get_metadata_response_round_trips_minimal_fields() {
             "isDirectory": false,
             "isFile": true,
             "isSymlink": false,
+            "sizeBytes": 5,
             "createdAtMs": 123,
             "modifiedAtMs": 456,
         })
