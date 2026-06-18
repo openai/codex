@@ -62,6 +62,25 @@ fn test_absolute_path() -> AbsolutePathBuf {
 }
 
 #[test]
+fn cloud_managed_config_source_serializes_with_layer_attribution() {
+    let source = ConfigLayerSource::CloudManaged {
+        layer: CloudManagedLayer::SystemOverlay,
+        id: "policy-1".to_string(),
+        name: "Workspace policy".to_string(),
+    };
+
+    assert_eq!(
+        serde_json::to_value(source).expect("serialize cloud-managed source"),
+        json!({
+            "type": "cloudManaged",
+            "layer": "systemOverlay",
+            "id": "policy-1",
+            "name": "Workspace policy",
+        })
+    );
+}
+
+#[test]
 fn thread_sources_round_trip_as_scalar_labels() {
     for (source, label) in [
         (ThreadSource::User, "user"),

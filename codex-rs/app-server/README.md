@@ -244,6 +244,19 @@ Example with notification opt-out:
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads, including multiple `desktop.*` edits.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), the layered permission-profile allow map (`allowedPermissionProfiles`), the managed permission-profile default (`defaultPermissions`), lifecycle hook lockdown (`allowManagedHooksOnly`), remote-control policy (`allowRemoteControl`; `false` force-disables remote control while `true` or `null` preserves existing behavior), computer use policy (`computerUse`), pinned feature values (`featureRequirements`), managed lifecycle hooks (`hooks`), `enforceResidency`, and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly` and `dangerFullAccessDenylistOnly`.
 
+Cloud-managed sources returned by `config/read` in `origins`, `layers`, or override metadata identify both the managed layer and the fragment that supplied the value:
+
+```json
+{
+  "type": "cloudManaged",
+  "layer": "baseline",
+  "id": "policy-1",
+  "name": "Default model policy"
+}
+```
+
+`layer` is either `baseline` or `systemOverlay`. Legacy cloud fallback continues to use the `enterpriseManaged` source type.
+
 ### Example: Start or resume a thread
 
 Start a fresh thread when you need a new Codex conversation.

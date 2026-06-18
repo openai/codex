@@ -4,6 +4,7 @@
 //! fragment, resolves relative path fields against the cloud config base
 //! directory, and returns layers in `ConfigLayerStack` order.
 
+use crate::CloudManagedLayer;
 use crate::ConfigLayerEntry;
 use crate::ConfigLayerSource;
 use crate::TomlValue;
@@ -69,19 +70,56 @@ pub fn cloud_config_layers_from_fragments(
     fragments: impl IntoIterator<Item = CloudConfigFragment>,
     base_dir: &AbsolutePathBuf,
 ) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
-    cloud_config_layers_from_fragments_impl(fragments, base_dir, /*strict_config*/ false)
+    cloud_config_layers_from_fragments_impl(
+        fragments,
+        base_dir,
+        |id, name| ConfigLayerSource::EnterpriseManaged { id, name },
+        /*strict_config*/ false,
+    )
 }
 
 pub(crate) fn cloud_config_layers_from_fragments_strict(
     fragments: impl IntoIterator<Item = CloudConfigFragment>,
     base_dir: &AbsolutePathBuf,
 ) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
-    cloud_config_layers_from_fragments_impl(fragments, base_dir, /*strict_config*/ true)
+    cloud_config_layers_from_fragments_impl(
+        fragments,
+        base_dir,
+        |id, name| ConfigLayerSource::EnterpriseManaged { id, name },
+        /*strict_config*/ true,
+    )
+}
+
+pub(crate) fn cloud_managed_config_layers_from_fragments(
+    fragments: impl IntoIterator<Item = CloudConfigFragment>,
+    base_dir: &AbsolutePathBuf,
+    layer: CloudManagedLayer,
+) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
+    cloud_config_layers_from_fragments_impl(
+        fragments,
+        base_dir,
+        move |id, name| ConfigLayerSource::CloudManaged { layer, id, name },
+        /*strict_config*/ false,
+    )
+}
+
+pub(crate) fn cloud_managed_config_layers_from_fragments_strict(
+    fragments: impl IntoIterator<Item = CloudConfigFragment>,
+    base_dir: &AbsolutePathBuf,
+    layer: CloudManagedLayer,
+) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
+    cloud_config_layers_from_fragments_impl(
+        fragments,
+        base_dir,
+        move |id, name| ConfigLayerSource::CloudManaged { layer, id, name },
+        /*strict_config*/ true,
+    )
 }
 
 fn cloud_config_layers_from_fragments_impl(
     fragments: impl IntoIterator<Item = CloudConfigFragment>,
     base_dir: &AbsolutePathBuf,
+    source_for_fragment: impl Fn(String, String) -> ConfigLayerSource,
     strict_config: bool,
 ) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
     let mut layers = Vec::new();
@@ -104,10 +142,7 @@ fn cloud_config_layers_from_fragments_impl(
                 }
             })?;
         layers.push(ConfigLayerEntry::new_with_raw_toml(
-            ConfigLayerSource::EnterpriseManaged {
-                id: fragment.id,
-                name: fragment.name,
-            },
+            source_for_fragment(fragment.id, fragment.name),
             resolved,
             raw_toml,
             base_dir.clone(),

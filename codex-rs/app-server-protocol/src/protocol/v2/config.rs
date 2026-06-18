@@ -18,8 +18,26 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use ts_rs::TS;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum CloudManagedLayer {
+    Baseline,
+    SystemOverlay,
+}
+
+impl fmt::Display for CloudManagedLayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CloudManagedLayer::Baseline => f.write_str("baseline"),
+            CloudManagedLayer::SystemOverlay => f.write_str("system-overlay"),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -53,6 +71,19 @@ pub enum ConfigLayerSource {
         /// Admin-facing name for the delivered layer. This is surfaced in
         /// diagnostics so users know which cloud layer needs administrator
         /// attention.
+        name: String,
+    },
+
+    /// Config fragment delivered through the generic cloud-managed layer contract.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    CloudManaged {
+        layer: CloudManagedLayer,
+
+        /// Stable identifier for the delivered fragment.
+        id: String,
+
+        /// Human-readable name for diagnostics and source attribution.
         name: String,
     },
 
@@ -104,6 +135,10 @@ impl ConfigLayerSource {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::EnterpriseManaged { .. } => 15,
+            ConfigLayerSource::CloudManaged { layer, .. } => match layer {
+                CloudManagedLayer::Baseline => -10,
+                CloudManagedLayer::SystemOverlay => 15,
+            },
             ConfigLayerSource::User { profile, .. } => {
                 if profile.is_some() {
                     21

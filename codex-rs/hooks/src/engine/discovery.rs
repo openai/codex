@@ -291,6 +291,13 @@ fn fallback_managed_hooks_source_path(
                 "<enterprise-managed:{name}:{id}>/requirements.toml"
             ))
         }
+        Some(RequirementSource::CloudManaged { layer, id, name }) => {
+            let name = escape_xml_text(name);
+            let id = escape_xml_text(id);
+            synthetic_layer_path(&format!(
+                "<cloud-managed:{layer}:{name}:{id}>/requirements.toml"
+            ))
+        }
         Some(RequirementSource::LegacyManagedConfigTomlFromMdm) => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
         }
@@ -377,6 +384,9 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
         }
         ConfigLayerSource::EnterpriseManaged { id, name } => synthetic_layer_path(&format!(
             "<enterprise-managed:{name}:{id}>/{CONFIG_TOML_FILE}"
+        )),
+        ConfigLayerSource::CloudManaged { layer, id, name } => synthetic_layer_path(&format!(
+            "<cloud-managed:{layer}:{name}:{id}>/{CONFIG_TOML_FILE}"
         )),
         ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
@@ -619,6 +629,7 @@ fn hook_metadata_for_config_layer_source(source: &ConfigLayerSource) -> (HookSou
         ConfigLayerSource::Project { .. } => (HookSource::Project, false),
         ConfigLayerSource::Mdm { .. } => (HookSource::Mdm, true),
         ConfigLayerSource::EnterpriseManaged { .. } => (HookSource::CloudManagedConfig, true),
+        ConfigLayerSource::CloudManaged { .. } => (HookSource::CloudManagedConfig, true),
         ConfigLayerSource::SessionFlags => (HookSource::SessionFlags, false),
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => {
             (HookSource::LegacyManagedConfigFile, true)
@@ -647,6 +658,7 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
             hook_source_for_requirement_source(sources.first())
         }
         Some(RequirementSource::EnterpriseManaged { .. }) => HookSource::CloudRequirements,
+        Some(RequirementSource::CloudManaged { .. }) => HookSource::CloudRequirements,
         Some(RequirementSource::Unknown) | None => HookSource::Unknown,
     }
 }

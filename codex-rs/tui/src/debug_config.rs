@@ -309,6 +309,7 @@ fn render_non_file_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>>
         ConfigLayerSource::SessionFlags => render_session_flag_details(&layer.config),
         ConfigLayerSource::Mdm { .. }
         | ConfigLayerSource::EnterpriseManaged { .. }
+        | ConfigLayerSource::CloudManaged { .. }
         | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => render_non_file_layer_value(layer),
         ConfigLayerSource::System { .. }
         | ConfigLayerSource::User { .. }
@@ -373,6 +374,7 @@ fn non_file_layer_value_label(source: &ConfigLayerSource) -> &'static str {
             "MDM value"
         }
         ConfigLayerSource::EnterpriseManaged { .. } => "Enterprise-managed config value",
+        ConfigLayerSource::CloudManaged { .. } => "Cloud-managed config value",
         ConfigLayerSource::SessionFlags
         | ConfigLayerSource::System { .. }
         | ConfigLayerSource::User { .. }
@@ -557,6 +559,7 @@ mod tests {
     use super::session_all_proxy_url;
     use crate::legacy_core::config::Permissions;
     use codex_app_server_protocol::AskForApproval;
+    use codex_config::CloudManagedLayer;
     use codex_config::ConfigLayerEntry;
     use codex_config::ConfigLayerSource;
     use codex_config::ConfigLayerStack;
@@ -799,13 +802,23 @@ mod tests {
             absolute_path("/home/alice/.codex/config.toml")
         };
         let stack = ConfigLayerStack::new(
-            vec![ConfigLayerEntry::new(
-                ConfigLayerSource::User {
-                    file: user_file,
-                    profile: None,
-                },
-                empty_toml_table(),
-            )],
+            vec![
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::CloudManaged {
+                        layer: CloudManagedLayer::Baseline,
+                        id: "policy-1".to_string(),
+                        name: "Baseline policy".to_string(),
+                    },
+                    TomlValue::Table(toml::toml! { model = "managed" }),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: user_file,
+                        profile: None,
+                    },
+                    empty_toml_table(),
+                ),
+            ],
             requirements,
             requirements_toml,
         )

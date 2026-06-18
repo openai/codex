@@ -5,6 +5,7 @@
 use crate::CloudConfigBundle;
 use crate::CloudConfigBundleLoader;
 use crate::CloudConfigFragment;
+use crate::CloudManagedLayer;
 use crate::CloudRequirementsFragment;
 
 #[derive(Debug, Clone, Default)]
@@ -70,6 +71,50 @@ impl CloudConfigBundleFixture {
                 },
                 contents: contents.into(),
             });
+        self
+    }
+
+    pub fn add_managed_requirement(
+        mut self,
+        layer: CloudManagedLayer,
+        contents: impl Into<String>,
+    ) -> Self {
+        let fragments = match layer {
+            CloudManagedLayer::Baseline => {
+                &mut self.bundle.requirements_toml.managed_layers.baseline
+            }
+            CloudManagedLayer::SystemOverlay => {
+                &mut self.bundle.requirements_toml.managed_layers.system_overlay
+            }
+        }
+        .get_or_insert_default();
+        let index = fragments.len() + 1;
+        fragments.push(CloudRequirementsFragment {
+            id: format!("managed_req_{index}"),
+            name: format!("{layer} requirements {index}"),
+            contents: contents.into(),
+        });
+        self
+    }
+
+    pub fn add_managed_config(
+        mut self,
+        layer: CloudManagedLayer,
+        contents: impl Into<String>,
+    ) -> Self {
+        let fragments = match layer {
+            CloudManagedLayer::Baseline => &mut self.bundle.config_toml.managed_layers.baseline,
+            CloudManagedLayer::SystemOverlay => {
+                &mut self.bundle.config_toml.managed_layers.system_overlay
+            }
+        }
+        .get_or_insert_default();
+        let index = fragments.len() + 1;
+        fragments.push(CloudConfigFragment {
+            id: format!("managed_cfg_{index}"),
+            name: format!("{layer} config {index}"),
+            contents: contents.into(),
+        });
         self
     }
 

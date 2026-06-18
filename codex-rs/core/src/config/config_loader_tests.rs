@@ -6,6 +6,7 @@ use crate::config::permission_profile_catalog;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::CloudConfigBundleLoadError;
 use codex_config::CloudConfigBundleLoader;
+use codex_config::CloudManagedLayer;
 use codex_config::ConfigError;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
@@ -1977,6 +1978,229 @@ model_provider = "cloud-provider"
                 profile: None,
             },
         ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_layers_applies_managed_buckets_at_generic_precedence() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), "model = \"user\"\n").await?;
+
+    let system_config_path = tmp.path().join("system_config.toml");
+    tokio::fs::write(
+        &system_config_path,
+        r#"model = "system"
+model_provider = "system-provider"
+review_model = "system-review"
+"#,
+    )
+    .await?;
+    let system_requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &system_requirements_path,
+        r#"allowed_web_search_modes = ["cached"]
+allowed_sandbox_modes = ["read-only"]
+"#,
+    )
+    .await?;
+    let managed_config_path = tmp.path().join("managed_config.toml");
+    tokio::fs::write(&managed_config_path, "approval_policy = \"never\"\n").await?;
+
+    let mut overrides =
+        LoaderOverrides::with_managed_config_path_for_tests(managed_config_path.clone());
+    overrides.system_config_path = Some(system_config_path.clone());
+    overrides.system_requirements_path = Some(system_requirements_path.clone());
+    let cloud_config_bundle =
+        CloudConfigBundleFixture::enterprise_config("model_provider = \"legacy-provider\"")
+            .add_managed_config(
+                CloudManagedLayer::Baseline,
+                r#"model = "baseline"
+model_provider = "baseline-provider"
+review_model = "baseline-review"
+"#,
+            )
+            .add_managed_config(
+                CloudManagedLayer::SystemOverlay,
+                "model_provider = \"overlay-provider\"",
+            )
+            .add_managed_requirement(
+                CloudManagedLayer::Baseline,
+                r#"allowed_web_search_modes = ["live"]
+allow_remote_control = true
+"#,
+            )
+            .add_managed_requirement(
+                CloudManagedLayer::SystemOverlay,
+                r#"allowed_sandbox_modes = ["read-only", "workspace-write"]
+allowed_approval_policies = ["on-request"]
+"#,
+            )
+            .into_loader();
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        ConfigLoadOptions {
+            loader_overrides: overrides,
+            cloud_config_bundle,
+            ..Default::default()
+        },
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    let table = layers
+        .effective_config()
+        .as_table()
+        .expect("merged config should be a table")
+        .clone();
+    assert_eq!(
+        table,
+        toml::toml! {
+            model = "user"
+            model_provider = "overlay-provider"
+            review_model = "system-review"
+            approval_policy = "never"
+        }
+    );
+    assert_eq!(
+        layers
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ false,
+            )
+            .iter()
+            .map(|layer| layer.name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::Baseline,
+                id: "managed_cfg_1".to_string(),
+                name: "baseline config 1".to_string(),
+            },
+            ConfigLayerSource::System {
+                file: AbsolutePathBuf::from_absolute_path(&system_config_path)?,
+            },
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
+                id: "managed_cfg_1".to_string(),
+                name: "system-overlay config 1".to_string(),
+            },
+            ConfigLayerSource::User {
+                file: AbsolutePathBuf::from_absolute_path(codex_home.join(CONFIG_TOML_FILE))?,
+                profile: None,
+            },
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                file: AbsolutePathBuf::from_absolute_path(&managed_config_path)?,
+            },
+        ]
+    );
+    assert_eq!(
+        layers.requirements().approval_policy.source,
+        Some(RequirementSource::LegacyManagedConfigTomlFromFile {
+            file: AbsolutePathBuf::from_absolute_path(managed_config_path)?,
+        })
+    );
+    assert_eq!(
+        layers
+            .requirements()
+            .allow_remote_control
+            .as_ref()
+            .map(|value| value.source.clone()),
+        Some(RequirementSource::CloudManaged {
+            layer: CloudManagedLayer::Baseline,
+            id: "managed_req_1".to_string(),
+            name: "baseline requirements 1".to_string(),
+        })
+    );
+    assert_eq!(
+        layers.requirements().web_search_mode.source,
+        Some(RequirementSource::SystemRequirementsToml {
+            file: AbsolutePathBuf::from_absolute_path(&system_requirements_path)?,
+        })
+    );
+    assert_eq!(
+        layers.requirements().permission_profile.source,
+        Some(RequirementSource::CloudManaged {
+            layer: CloudManagedLayer::SystemOverlay,
+            id: "managed_req_1".to_string(),
+            name: "system-overlay requirements 1".to_string(),
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_empty_system_overlay_suppresses_legacy_cloud_fallback() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let system_config_path = tmp.path().join("system_config.toml");
+    tokio::fs::write(
+        &system_config_path,
+        "model_provider = \"system-provider\"\n",
+    )
+    .await?;
+    let system_requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &system_requirements_path,
+        r#"allowed_approval_policies = ["on-request"]"#,
+    )
+    .await?;
+
+    let mut bundle =
+        CloudConfigBundleFixture::enterprise_config("model_provider = \"legacy-provider\"")
+            .add_enterprise_requirement(r#"allowed_approval_policies = ["never"]"#)
+            .into_bundle();
+    bundle.config_toml.managed_layers.system_overlay = Some(Vec::new());
+    bundle.requirements_toml.managed_layers.system_overlay = Some(Vec::new());
+    let cloud_config_bundle = CloudConfigBundleLoader::new(async move { Ok(Some(bundle)) });
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_config_path = Some(system_config_path);
+    overrides.system_requirements_path = Some(system_requirements_path.clone());
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        ConfigLoadOptions {
+            loader_overrides: overrides,
+            cloud_config_bundle,
+            ..Default::default()
+        },
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert_eq!(
+        layers
+            .effective_config()
+            .get("model_provider")
+            .and_then(TomlValue::as_str),
+        Some("system-provider")
+    );
+    assert!(
+        !layers
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ false,
+            )
+            .iter()
+            .any(|layer| matches!(layer.name, ConfigLayerSource::EnterpriseManaged { .. }))
+    );
+    assert_eq!(
+        layers.requirements().approval_policy.source,
+        Some(RequirementSource::SystemRequirementsToml {
+            file: AbsolutePathBuf::from_absolute_path(system_requirements_path)?,
+        })
     );
 
     Ok(())

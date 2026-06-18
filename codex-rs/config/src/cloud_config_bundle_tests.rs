@@ -75,11 +75,13 @@ fn bundle_layers_preserve_system_overlay_bucket_order() {
             .map(|layer| layer.name.clone())
             .collect::<Vec<_>>(),
         vec![
-            ConfigLayerSource::EnterpriseManaged {
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
                 id: "cfg_low".to_string(),
                 name: "Low config".to_string(),
             },
-            ConfigLayerSource::EnterpriseManaged {
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
                 id: "cfg_high".to_string(),
                 name: "High config".to_string(),
             },
@@ -92,6 +94,77 @@ fn bundle_layers_preserve_system_overlay_bucket_order() {
             .into_toml(),
         ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn bundle_layers_preserve_managed_bucket_order() {
+    let tempdir = tempdir().expect("tempdir");
+    let base_dir = AbsolutePathBuf::from_absolute_path(tempdir.path()).expect("absolute path");
+    let layers = CloudConfigBundleLayers::from_bundle(
+        CloudConfigBundle {
+            config_toml: CloudConfigTomlBundle {
+                managed_layers: CloudConfigTomlManagedLayers {
+                    baseline: vec![
+                        CloudConfigFragment {
+                            id: "baseline_high".to_string(),
+                            name: "Baseline high".to_string(),
+                            contents: "model = \"high\"".to_string(),
+                        },
+                        CloudConfigFragment {
+                            id: "baseline_low".to_string(),
+                            name: "Baseline low".to_string(),
+                            contents: "model = \"low\"".to_string(),
+                        },
+                    ],
+                    system_overlay: Vec::new(),
+                },
+            },
+            requirements_toml: CloudRequirementsTomlBundle {
+                managed_layers: CloudRequirementsTomlManagedLayers {
+                    baseline: Vec::new(),
+                    system_overlay: vec![CloudRequirementsFragment {
+                        id: "overlay".to_string(),
+                        name: "Overlay".to_string(),
+                        contents: "allowed_approval_policies = [\"never\"]".to_string(),
+                    }],
+                },
+            },
+        },
+        &base_dir,
+    )
+    .expect("bundle should be converted into layers");
+
+    assert_eq!(
+        layers
+            .baseline_config
+            .into_iter()
+            .map(|layer| layer.name)
+            .collect::<Vec<_>>(),
+        vec![
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::Baseline,
+                id: "baseline_low".to_string(),
+                name: "Baseline low".to_string(),
+            },
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::Baseline,
+                id: "baseline_high".to_string(),
+                name: "Baseline high".to_string(),
+            },
+        ]
+    );
+    assert_eq!(layers.system_overlay_config, Vec::new());
+    assert!(layers.baseline_requirements.is_empty());
+    assert_eq!(
+        compose_requirements(layers.system_overlay_requirements)
+            .expect("requirements should compose")
+            .expect("requirements should be present")
+            .into_toml(),
+        ConfigRequirementsToml {
+            allowed_approval_policies: Some(vec![AskForApproval::Never]),
             ..Default::default()
         }
     );
