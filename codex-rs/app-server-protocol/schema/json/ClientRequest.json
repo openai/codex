@@ -2357,6 +2357,12 @@
             "recipient": {
               "type": "string"
             },
+            "source_call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "agent_message"
@@ -2912,12 +2918,6 @@
     },
     "ResponseItemMetadata": {
       "properties": {
-        "source_call_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "turn_id": {
           "type": [
             "string",

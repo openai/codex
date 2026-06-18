@@ -693,6 +693,9 @@ pub struct InterAgentCommunication {
     pub encrypted_content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub source_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub metadata: Option<ResponseItemMetadata>,
     pub trigger_turn: bool,
 }
@@ -711,6 +714,7 @@ impl InterAgentCommunication {
             other_recipients,
             content,
             encrypted_content: None,
+            source_call_id: None,
             metadata: None,
             trigger_turn,
         }
@@ -729,6 +733,7 @@ impl InterAgentCommunication {
             other_recipients,
             content: String::new(),
             encrypted_content: Some(encrypted_content),
+            source_call_id: None,
             metadata: None,
             trigger_turn,
         }
@@ -772,6 +777,7 @@ impl InterAgentCommunication {
             id: None,
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
+            source_call_id: self.source_call_id.clone(),
             content,
             metadata: self.metadata.clone(),
         }
@@ -4263,6 +4269,7 @@ mod tests {
             other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],
             content: "review the diff".to_string(),
             encrypted_content: None,
+            source_call_id: None,
             metadata: None,
             trigger_turn: true,
         };
@@ -4295,6 +4302,7 @@ mod tests {
                 id: None,
                 author: "/root/worker".to_string(),
                 recipient: "/root".to_string(),
+                source_call_id: None,
                 content: vec![
                     AgentMessageInputContent::InputText {
                         text: "Message Type: MESSAGE\nTask name: /root\nSender: /root/worker\nPayload:\n"

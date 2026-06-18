@@ -909,9 +909,6 @@ pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub source_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -941,6 +938,9 @@ pub enum ResponseItem {
         id: Option<String>,
         author: String,
         recipient: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        source_call_id: Option<String>,
         content: Vec<AgentMessageInputContent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]

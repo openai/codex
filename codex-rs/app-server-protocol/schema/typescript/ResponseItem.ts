@@ -12,7 +12,7 @@ import type { ReasoningItemReasoningSummary } from "./ReasoningItemReasoningSumm
 import type { ResponseItemMetadata } from "./ResponseItemMetadata";
 import type { WebSearchAction } from "./WebSearchAction";
 
-export type ResponseItem = { "type": "message", role: string, content: Array<ContentItem>, phase?: MessagePhase, metadata?: ResponseItemMetadata, } | { "type": "agent_message", author: string, recipient: string, content: Array<AgentMessageInputContent>, metadata?: ResponseItemMetadata, } | { "type": "reasoning", summary: Array<ReasoningItemReasoningSummary>, content?: Array<ReasoningItemContent>, encrypted_content: string | null, metadata?: ResponseItemMetadata, } | { "type": "local_shell_call",
+export type ResponseItem = { "type": "message", role: string, content: Array<ContentItem>, phase?: MessagePhase, metadata?: ResponseItemMetadata, } | { "type": "agent_message", author: string, recipient: string, source_call_id?: string, content: Array<AgentMessageInputContent>, metadata?: ResponseItemMetadata, } | { "type": "reasoning", summary: Array<ReasoningItemReasoningSummary>, content?: Array<ReasoningItemContent>, encrypted_content: string | null, metadata?: ResponseItemMetadata, } | { "type": "local_shell_call",
 /**
  * Set when using the Responses API.
  */
