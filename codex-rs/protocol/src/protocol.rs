@@ -417,6 +417,7 @@ pub enum ConversationTextRole {
     #[default]
     User,
     Developer,
+    Assistant,
 }
 
 #[derive(Debug, Clone, PartialEq)]
