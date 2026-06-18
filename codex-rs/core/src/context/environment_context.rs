@@ -1,3 +1,4 @@
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -419,10 +420,14 @@ impl EnvironmentContext {
         )
     }
 
-    pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
+    pub(crate) fn from_turn_context(
+        turn_context: &TurnContext,
+        step_context: &StepContext,
+        shell: &Shell,
+    ) -> Self {
         let mut context = Self::new(
             EnvironmentContextEnvironment::from_turn_environments(
-                &turn_context.environments.turn_environments,
+                &step_context.environments.turn_environments,
                 shell,
             ),
             turn_context.current_date.clone(),

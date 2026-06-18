@@ -183,9 +183,11 @@ async fn late_network_denial_grace_observes_cancellation_after_exit() {
 #[tokio::test]
 async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
     let (session, turn, rx_event) = crate::session::tests::make_session_and_context_with_rx().await;
+    let step = crate::session::tests::step_context_for_session(session.as_ref()).await;
     let context = UnifiedExecContext::new(
         Arc::clone(&session),
         Arc::clone(&turn),
+        step.environments.clone(),
         "call-unified-denied".to_string(),
     );
     let request = ExecCommandRequest {
@@ -203,7 +205,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         cwd: turn.cwd.clone().into(),
         #[allow(deprecated)]
         sandbox_cwd: turn.cwd.clone().into(),
-        turn_environment: turn
+        turn_environment: step
             .environments
             .primary()
             .cloned()

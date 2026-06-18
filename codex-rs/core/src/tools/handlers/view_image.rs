@@ -104,6 +104,7 @@ impl ViewImageHandler {
         let ToolInvocation {
             session,
             turn,
+            step,
             payload,
             call_id,
             ..
@@ -137,7 +138,7 @@ impl ViewImageHandler {
         };
 
         let Some(turn_environment) =
-            resolve_tool_environment(turn.as_ref(), environment_id.as_deref())?
+            resolve_tool_environment(step.as_ref(), environment_id.as_deref())?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "view_image is unavailable in this session".to_string(),
@@ -272,6 +273,7 @@ impl ToolOutput for ViewImageOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::step_context::StepContext;
     use crate::session::tests::make_session_and_context;
     use crate::session::turn_context::TurnEnvironment;
     use crate::tools::context::ToolCallSource;
@@ -286,14 +288,14 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    fn replace_primary_environment_cwd(turn: &mut crate::TurnContext, cwd: AbsolutePathBuf) {
-        let current = turn
+    fn replace_primary_environment_cwd(step: &mut StepContext, cwd: AbsolutePathBuf) {
+        let current = step
             .environments
             .turn_environments
             .first()
             .cloned()
             .expect("default local turn environment");
-        turn.environments.turn_environments[0] = TurnEnvironment::new(
+        step.environments.turn_environments[0] = TurnEnvironment::new(
             current.environment_id,
             current.environment,
             PathUri::from_abs_path(&cwd),
@@ -337,7 +339,8 @@ mod tests {
         let image_dir = tempfile::tempdir().expect("create image temp dir");
         let image_cwd = image_dir.abs();
 
-        replace_primary_environment_cwd(&mut turn, image_cwd.clone());
+        let mut step = StepContext::local_for_test(&turn);
+        replace_primary_environment_cwd(&mut step, image_cwd.clone());
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::read_only();
@@ -346,6 +349,7 @@ mod tests {
             .handle(ToolInvocation {
                 session: Arc::new(session),
                 turn: Arc::new(turn),
+                step: Arc::new(step),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-view-image".to_string(),
@@ -369,11 +373,13 @@ mod tests {
     #[tokio::test]
     async fn handle_rejects_unsupported_detail() {
         let (session, turn) = make_session_and_context().await;
+        let step = Arc::new(StepContext::local_for_test(&turn));
 
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {
                 session: Arc::new(session),
                 turn: Arc::new(turn),
+                step,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-view-image".to_string(),
@@ -400,7 +406,8 @@ mod tests {
         let image_dir = tempfile::tempdir().expect("create image temp dir");
         let image_cwd = image_dir.abs();
 
-        replace_primary_environment_cwd(&mut turn, image_cwd.clone());
+        let mut step = StepContext::local_for_test(&turn);
+        replace_primary_environment_cwd(&mut step, image_cwd.clone());
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::Disabled;
@@ -409,6 +416,7 @@ mod tests {
             .handle(ToolInvocation {
                 session: Arc::new(session),
                 turn: Arc::new(turn),
+                step: Arc::new(step),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-view-image".to_string(),

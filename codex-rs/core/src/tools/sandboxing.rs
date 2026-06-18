@@ -4,6 +4,7 @@
 //! `ApprovalCtx`, `Approvable`) together with the sandbox orchestration traits
 //! and helpers (`Sandboxable`, `ToolRuntime`, `SandboxAttempt`, etc.).
 
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
@@ -119,6 +120,7 @@ where
 pub(crate) struct ApprovalCtx<'a> {
     pub session: &'a Arc<Session>,
     pub turn: &'a Arc<TurnContext>,
+    pub environments: &'a TurnEnvironmentSnapshot,
     pub call_id: &'a str,
     /// Guardian review lifecycle ID for this approval, when guardian is reviewing it.
     ///
@@ -379,6 +381,7 @@ pub(crate) trait Sandboxable {
 pub(crate) struct ToolCtx {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
+    pub environments: TurnEnvironmentSnapshot,
     pub call_id: String,
     pub tool_name: ToolName,
 }

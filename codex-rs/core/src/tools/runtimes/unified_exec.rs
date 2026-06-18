@@ -192,6 +192,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                 return review_approval_request(
                     session,
                     turn,
+                    ctx.environments.clone(),
                     review_id,
                     GuardianApprovalRequest::ExecCommand {
                         id: call_id,

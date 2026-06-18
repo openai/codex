@@ -79,6 +79,7 @@ impl ToolOrchestrator {
         let attempt_tool_ctx = ToolCtx {
             session: tool_ctx.session.clone(),
             turn: tool_ctx.turn.clone(),
+            environments: tool_ctx.environments.clone(),
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
         };
@@ -161,6 +162,7 @@ impl ToolOrchestrator {
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
+                        environments: &tool_ctx.environments,
                         call_id: &tool_ctx.call_id,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: None,
@@ -196,6 +198,7 @@ impl ToolOrchestrator {
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
+                    environments: &tool_ctx.environments,
                     call_id: &tool_ctx.call_id,
                     guardian_review_id: guardian_review_id.clone(),
                     retry_reason: reason.clone(),
@@ -379,6 +382,7 @@ impl ToolOrchestrator {
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
+                        environments: &tool_ctx.environments,
                         call_id: &tool_ctx.call_id,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: Some(retry_reason),

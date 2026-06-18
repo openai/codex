@@ -1,5 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -35,6 +36,7 @@ pub struct ToolCall {
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Vec<ToolSpec>,
+    step_context: Arc<StepContext>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
@@ -58,18 +60,29 @@ pub(crate) struct ToolSuggestCandidates {
 }
 
 impl ToolRouter {
-    pub(crate) fn from_turn_context(
+    pub(crate) fn from_contexts(
         turn_context: &TurnContext,
+        step_context: Arc<StepContext>,
         params: ToolRouterParams<'_>,
         tool_search_handler_cache: &ToolSearchHandlerCache,
     ) -> Self {
-        build_tool_router(turn_context, params, tool_search_handler_cache)
+        build_tool_router(
+            turn_context,
+            step_context,
+            params,
+            tool_search_handler_cache,
+        )
     }
 
-    pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
+    pub(crate) fn from_parts(
+        registry: ToolRegistry,
+        model_visible_specs: Vec<ToolSpec>,
+        step_context: Arc<StepContext>,
+    ) -> Self {
         Self {
             registry,
             model_visible_specs,
+            step_context,
         }
     }
 
@@ -160,6 +173,7 @@ impl ToolRouter {
     }
 
     #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
     #[instrument(level = "trace", skip_all, err)]
     pub async fn dispatch_tool_call_with_code_mode_result(
         &self,
@@ -226,6 +240,7 @@ impl ToolRouter {
         let invocation = ToolInvocation {
             session,
             turn,
+            step: Arc::clone(&self.step_context),
             cancellation_token,
             tracker,
             call_id,

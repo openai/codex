@@ -212,6 +212,7 @@ mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+pub(crate) mod step_context;
 mod token_budget;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
@@ -228,6 +229,7 @@ use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
+use self::step_context::StepContext;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
 #[cfg(test)]
@@ -374,7 +376,6 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnModerationMetadataEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
-use codex_tools::ToolEnvironmentMode;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
@@ -1623,6 +1624,7 @@ impl Session {
         &self,
         reference_context_item: Option<&TurnContextItem>,
         current_context: &TurnContext,
+        step_context: &StepContext,
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
@@ -1638,10 +1640,22 @@ impl Session {
             reference_context_item,
             previous_turn_settings.as_ref(),
             current_context,
+            step_context,
             shell.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
         )
+    }
+
+    #[cfg(test)]
+    async fn build_settings_update_items_for_test(
+        &self,
+        reference_context_item: Option<&TurnContextItem>,
+        current_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        let step_context = StepContext::new(self.services.turn_environments.snapshot().await);
+        self.build_settings_update_items(reference_context_item, current_context, &step_context)
+            .await
     }
 
     /// Record a terminal CodexErr before the app-server completion notification is reduced.
@@ -2156,6 +2170,7 @@ impl Session {
     pub(crate) async fn request_permissions_for_environment(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
+        environments: &TurnEnvironmentSnapshot,
         call_id: String,
         args: RequestPermissionsArgs,
         environment: TurnEnvironmentSelection,
@@ -2206,6 +2221,7 @@ impl Session {
             let review_id = crate::guardian::new_guardian_review_id();
             let session = Arc::clone(self);
             let turn = Arc::clone(turn_context);
+            let environments = environments.clone();
             let request = crate::guardian::GuardianApprovalRequest::RequestPermissions {
                 id: call_id,
                 turn_id: turn_context.sub_id.clone(),
@@ -2215,6 +2231,7 @@ impl Session {
             let review_rx = crate::guardian::spawn_approval_request_review(
                 session,
                 turn,
+                environments,
                 review_id,
                 request,
                 /*retry_reason*/ None,
@@ -2324,18 +2341,18 @@ impl Session {
     pub(crate) async fn request_permissions_for_cwd(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
+        environments: &TurnEnvironmentSnapshot,
         call_id: String,
         args: RequestPermissionsArgs,
         cwd: AbsolutePathBuf,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
         let turn_environment = match args.environment_id.as_deref() {
-            Some(environment_id) => turn_context
-                .environments
+            Some(environment_id) => environments
                 .turn_environments
                 .iter()
                 .find(|environment| environment.environment_id == environment_id),
-            None => turn_context.environments.primary(),
+            None => environments.primary(),
         };
         let Some(turn_environment) = turn_environment else {
             return Some(RequestPermissionsResponse {
@@ -2348,6 +2365,7 @@ impl Session {
         environment.cwd = PathUri::from_abs_path(&cwd);
         self.request_permissions_for_environment(
             turn_context,
+            environments,
             call_id,
             args,
             environment,
@@ -2863,6 +2881,7 @@ impl Session {
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
+        step_context: &StepContext,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
@@ -2894,14 +2913,14 @@ impl Session {
             developer_sections.push(model_switch_message);
         }
         if turn_context.config.include_permissions_instructions {
+            let cwd = step_context.effective_cwd(turn_context);
             developer_sections.push(
                 PermissionsInstructions::from_permission_profile(
                     &turn_context.permission_profile,
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
                     self.services.exec_policy.current().as_ref(),
-                    #[allow(deprecated)]
-                    &turn_context.cwd,
+                    &cwd,
                     turn_context
                         .config
                         .features
@@ -3071,9 +3090,13 @@ impl Session {
                 .format_environment_context_subagents(self.thread_id)
                 .await;
             contextual_user_sections.push(
-                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                    .with_subagents(subagents)
-                    .render(),
+                crate::context::EnvironmentContext::from_turn_context(
+                    turn_context,
+                    step_context,
+                    shell.as_ref(),
+                )
+                .with_subagents(subagents)
+                .render(),
             );
         }
 
@@ -3121,6 +3144,16 @@ impl Session {
         items
     }
 
+    #[cfg(test)]
+    pub(crate) async fn build_initial_context_for_test(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        let step_context = StepContext::new(self.services.turn_environments.snapshot().await);
+        self.build_initial_context(turn_context, &step_context)
+            .await
+    }
+
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         if let Some(live_thread) = self.live_thread()
             && let Err(e) = live_thread.append_items(items).await
@@ -3154,13 +3187,14 @@ impl Session {
     pub(crate) async fn maybe_start_new_context_window(
         &self,
         turn_context: &TurnContext,
+        step_context: &StepContext,
     ) -> Option<u64> {
         let window_id = {
             let mut state = self.state.lock().await;
             state.start_new_context_window_if_requested()
         };
         let window_id = window_id?;
-        let context_items = self.build_initial_context(turn_context).await;
+        let context_items = self.build_initial_context(turn_context, step_context).await;
         let turn_context_item = turn_context.to_turn_context_item();
         let replacement_history = context_items;
         {
@@ -3206,6 +3240,7 @@ impl Session {
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
+        step_context: &StepContext,
     ) {
         let reference_context_item = {
             let state = self.state.lock().await;
@@ -3213,11 +3248,15 @@ impl Session {
         };
         let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
-            self.build_initial_context(turn_context).await
+            self.build_initial_context(turn_context, step_context).await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
-            self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
-                .await
+            self.build_settings_update_items(
+                reference_context_item.as_ref(),
+                turn_context,
+                step_context,
+            )
+            .await
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
@@ -3233,6 +3272,16 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn record_context_updates_and_set_reference_context_item_for_test(
+        &self,
+        turn_context: &TurnContext,
+    ) {
+        let step_context = StepContext::new(self.services.turn_environments.snapshot().await);
+        self.record_context_updates_and_set_reference_context_item(turn_context, &step_context)
+            .await;
     }
 
     pub(crate) async fn update_token_usage_info(

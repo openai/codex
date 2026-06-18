@@ -36,6 +36,7 @@ use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
 
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -75,14 +76,21 @@ pub(crate) const MAX_UNIFIED_EXEC_PROCESSES: usize = 64;
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
+    pub environments: TurnEnvironmentSnapshot,
     pub call_id: String,
 }
 
 impl UnifiedExecContext {
-    pub fn new(session: Arc<Session>, turn: Arc<TurnContext>, call_id: String) -> Self {
+    pub fn new(
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        environments: TurnEnvironmentSnapshot,
+        call_id: String,
+    ) -> Self {
         Self {
             session,
             turn,
+            environments,
             call_id,
         }
     }

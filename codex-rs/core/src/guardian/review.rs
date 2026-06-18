@@ -24,6 +24,7 @@ use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
 
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -272,9 +273,11 @@ pub(crate) async fn record_guardian_denial_for_test(
 /// This function always fails closed: timeouts, review-session failures, and
 /// parse failures all block execution, but timeouts are still surfaced to the
 /// caller as distinct from explicit guardian denials.
+#[allow(clippy::too_many_arguments)]
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    environments: TurnEnvironmentSnapshot,
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -359,6 +362,7 @@ async fn run_guardian_review(
     let (outcome, analytics_result) = Box::pin(run_guardian_review_session_with_retry(
         session.clone(),
         turn.clone(),
+        environments,
         request,
         retry_reason.clone(),
         schema,
@@ -594,6 +598,7 @@ async fn run_guardian_review(
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
+    environments: TurnEnvironmentSnapshot,
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -603,6 +608,7 @@ pub(crate) async fn review_approval_request(
     Box::pin(run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
+        environments,
         review_id,
         request,
         retry_reason,
@@ -612,9 +618,11 @@ pub(crate) async fn review_approval_request(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn review_approval_request_with_cancel(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
+    environments: TurnEnvironmentSnapshot,
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -624,6 +632,7 @@ pub(crate) async fn review_approval_request_with_cancel(
     run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
+        environments,
         review_id,
         request,
         retry_reason,
@@ -633,9 +642,11 @@ pub(crate) async fn review_approval_request_with_cancel(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_approval_request_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    environments: TurnEnvironmentSnapshot,
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -654,6 +665,7 @@ pub(crate) fn spawn_approval_request_review(
         let decision = runtime.block_on(review_approval_request_with_cancel(
             &session,
             &turn,
+            environments,
             review_id,
             request,
             retry_reason,
@@ -679,9 +691,11 @@ pub(crate) fn spawn_approval_request_review(
 /// context. It may still reuse the parent's managed-network allowlist for
 /// read-only checks, but it intentionally runs without inherited exec-policy
 /// rules.
+#[allow(clippy::too_many_arguments)]
 async fn run_guardian_review_session_before_deadline(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    environments: TurnEnvironmentSnapshot,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     schema: serde_json::Value,
@@ -772,6 +786,7 @@ async fn run_guardian_review_session_before_deadline(
             .run_review(GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_turn: turn.clone(),
+                parent_environments: environments,
                 spawn_config: guardian_config,
                 request,
                 retry_reason,
@@ -841,9 +856,11 @@ async fn run_guardian_review_session_before_deadline(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_guardian_review_session_with_retry(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    environments: TurnEnvironmentSnapshot,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     schema: serde_json::Value,
@@ -857,6 +874,7 @@ pub(super) async fn run_guardian_review_session_with_retry(
         let (outcome, mut analytics_result) = run_guardian_review_session_before_deadline(
             Arc::clone(&session),
             Arc::clone(&turn),
+            environments.clone(),
             request.clone(),
             retry_reason.clone(),
             schema.clone(),

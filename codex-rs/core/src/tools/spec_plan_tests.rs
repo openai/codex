@@ -30,6 +30,7 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -176,10 +177,21 @@ async fn probe_with(
     configure_turn: impl FnOnce(&mut TurnContext),
     inputs: ToolPlanInputs,
 ) -> ToolPlanProbe {
-    let (_session, mut turn) = make_session_and_context().await;
+    probe_with_step(configure_turn, |_| {}, inputs).await
+}
+
+async fn probe_with_step(
+    configure_turn: impl FnOnce(&mut TurnContext),
+    configure_step: impl FnOnce(&mut StepContext),
+    inputs: ToolPlanInputs,
+) -> ToolPlanProbe {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut step = StepContext::new(session.services.turn_environments.snapshot().await);
     configure_turn(&mut turn);
-    let router = ToolRouter::from_turn_context(
+    configure_step(&mut step);
+    let router = ToolRouter::from_contexts(
         &turn,
+        Arc::new(step),
         ToolRouterParams {
             tool_suggest_candidates: inputs.tool_suggest_candidates,
             mcp_tools: inputs.mcp_tools,
@@ -331,10 +343,10 @@ impl ToolExecutor<ExtensionToolCall> for DeferredExtensionTool {
     }
 }
 
-fn duplicate_primary_environment(turn: &mut TurnContext) {
-    let mut second_environment = turn.environments.turn_environments[0].clone();
+fn duplicate_primary_environment(step: &mut StepContext) {
+    let mut second_environment = step.environments.turn_environments[0].clone();
     second_environment.environment_id = "secondary".to_string();
-    turn.environments.turn_environments.push(second_environment);
+    step.environments.turn_environments.push(second_environment);
 }
 
 fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
@@ -555,38 +567,43 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
         return;
     }
 
-    let plan = probe(|turn| {
-        set_features(
-            turn,
-            &[
-                Feature::ShellTool,
-                Feature::UnifiedExec,
-                Feature::ShellZshFork,
-                Feature::UnifiedExecZshFork,
-            ],
-        );
-        turn.unified_exec_shell_mode =
-            codex_tools::UnifiedExecShellMode::ZshFork(zsh_fork_config_for_spec_plan_tests());
-        let remote_cwd = turn
-            .environments
-            .primary()
-            .expect("primary environment")
-            .cwd()
-            .clone();
-        turn.environments.turn_environments.push(
-            crate::session::turn_context::TurnEnvironment::new(
-                "remote".to_string(),
-                Arc::new(
-                    codex_exec_server::Environment::create_for_tests(Some(
-                        "ws://127.0.0.1:1/remote-exec-server".to_string(),
-                    ))
-                    .expect("remote test environment"),
+    let plan = probe_with_step(
+        |turn| {
+            set_features(
+                turn,
+                &[
+                    Feature::ShellTool,
+                    Feature::UnifiedExec,
+                    Feature::ShellZshFork,
+                    Feature::UnifiedExecZshFork,
+                ],
+            );
+            turn.unified_exec_shell_mode =
+                codex_tools::UnifiedExecShellMode::ZshFork(zsh_fork_config_for_spec_plan_tests());
+        },
+        |step| {
+            let remote_cwd = step
+                .environments
+                .primary()
+                .expect("primary environment")
+                .cwd()
+                .clone();
+            step.environments.turn_environments.push(
+                crate::session::turn_context::TurnEnvironment::new(
+                    "remote".to_string(),
+                    Arc::new(
+                        codex_exec_server::Environment::create_for_tests(Some(
+                            "ws://127.0.0.1:1/remote-exec-server".to_string(),
+                        ))
+                        .expect("remote test environment"),
+                    ),
+                    remote_cwd,
+                    /*shell*/ None,
                 ),
-                remote_cwd,
-                /*shell*/ None,
-            ),
-        );
-    })
+            );
+        },
+        ToolPlanInputs::default(),
+    )
     .await;
 
     plan.assert_visible_contains(&["exec_command", "write_stdin"]);
@@ -599,11 +616,14 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
 
 #[tokio::test]
 async fn environment_count_controls_environment_backed_tools() {
-    let no_environment = probe(|turn| {
-        turn.environments.turn_environments.clear();
-        set_feature(turn, Feature::ShellTool, /*enabled*/ true);
-        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-    })
+    let no_environment = probe_with_step(
+        |turn| {
+            set_feature(turn, Feature::ShellTool, /*enabled*/ true);
+            turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        },
+        |step| step.environments.turn_environments.clear(),
+        ToolPlanInputs::default(),
+    )
     .await;
     no_environment.assert_visible_lacks(&[
         "shell_command",
@@ -618,12 +638,15 @@ async fn environment_count_controls_environment_backed_tools() {
         "view_image",
     ]);
 
-    let multiple_environments = probe(|turn| {
-        duplicate_primary_environment(turn);
-        set_feature(turn, Feature::ShellTool, /*enabled*/ true);
-        set_feature(turn, Feature::UnifiedExec, /*enabled*/ true);
-        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-    })
+    let multiple_environments = probe_with_step(
+        |turn| {
+            set_feature(turn, Feature::ShellTool, /*enabled*/ true);
+            set_feature(turn, Feature::UnifiedExec, /*enabled*/ true);
+            turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        },
+        duplicate_primary_environment,
+        ToolPlanInputs::default(),
+    )
     .await;
     multiple_environments.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
     assert!(has_parameter(
@@ -771,10 +794,14 @@ async fn deferred_extension_tools_are_discoverable_with_tool_search() {
 async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     let cache = ToolSearchHandlerCache::default();
 
-    let (_session, mut first_turn) = make_session_and_context().await;
+    let (first_session, mut first_turn) = make_session_and_context().await;
     first_turn.model_info.supports_search_tool = true;
-    let first_router = ToolRouter::from_turn_context(
+    let first_step = Arc::new(StepContext::new(
+        first_session.services.turn_environments.snapshot().await,
+    ));
+    let first_router = ToolRouter::from_contexts(
         &first_turn,
+        first_step,
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: Some(vec![mcp_tool("first", "mcp__first", "lookup")]),
@@ -786,10 +813,14 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     );
     let first_plan = ToolPlanProbe::from_router(first_router);
 
-    let (_session, mut second_turn) = make_session_and_context().await;
+    let (second_session, mut second_turn) = make_session_and_context().await;
     second_turn.model_info.supports_search_tool = true;
-    let second_router = ToolRouter::from_turn_context(
+    let second_step = Arc::new(StepContext::new(
+        second_session.services.turn_environments.snapshot().await,
+    ));
+    let second_router = ToolRouter::from_contexts(
         &second_turn,
+        second_step,
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: Some(vec![mcp_tool("second", "mcp__second", "lookup")]),

@@ -74,6 +74,9 @@ fn invocation(
 ) -> ToolInvocation {
     ToolInvocation {
         session,
+        step: Arc::new(crate::session::step_context::StepContext::local_for_test(
+            turn.as_ref(),
+        )),
         turn,
         cancellation_token: CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),

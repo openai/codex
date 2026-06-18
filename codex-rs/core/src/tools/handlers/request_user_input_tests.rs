@@ -21,6 +21,9 @@ async fn multi_agent_v2_request_user_input_rejects_subagent_threads() {
         agent_nickname: None,
         agent_role: None,
     });
+    let step = Arc::new(crate::session::step_context::StepContext::local_for_test(
+        &turn,
+    ));
 
     let result = RequestUserInputHandler {
         available_modes: Vec::new(),
@@ -28,6 +31,7 @@ async fn multi_agent_v2_request_user_input_rejects_subagent_threads() {
     .handle(ToolInvocation {
         session: Arc::new(session),
         turn: Arc::new(turn),
+        step,
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
         call_id: "call-1".to_string(),

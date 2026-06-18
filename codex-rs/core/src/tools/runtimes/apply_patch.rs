@@ -161,8 +161,15 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         return ReviewDecision::Abort;
                     }
                 };
-                return review_approval_request(session, turn, review_id, action, retry_reason)
-                    .await;
+                return review_approval_request(
+                    session,
+                    turn,
+                    ctx.environments.clone(),
+                    review_id,
+                    action,
+                    retry_reason,
+                )
+                .await;
             }
             if req.permissions_preapproved && retry_reason.is_none() {
                 return ReviewDecision::Approved;

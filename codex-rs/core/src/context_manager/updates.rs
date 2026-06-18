@@ -8,6 +8,7 @@ use crate::context::RealtimeEndInstructions;
 use crate::context::RealtimeStartInstructions;
 use crate::context::RealtimeStartWithInstructions;
 use crate::session::PreviousTurnSettings;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
@@ -21,6 +22,7 @@ use codex_protocol::protocol::TurnContextItem;
 fn build_environment_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
+    step: &StepContext,
     shell: &Shell,
 ) -> Option<ResponseItem> {
     if !next.config.include_environment_context {
@@ -29,7 +31,7 @@ fn build_environment_update_item(
 
     let prev = previous?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string());
-    let next_context = EnvironmentContext::from_turn_context(next, shell);
+    let next_context = EnvironmentContext::from_turn_context(next, step, shell);
     if prev_context.equals_except_shell(&next_context) {
         return None;
     }
@@ -42,6 +44,7 @@ fn build_environment_update_item(
 fn build_permissions_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
+    step: &StepContext,
     exec_policy: &Policy,
 ) -> Option<String> {
     if !next.config.include_permissions_instructions {
@@ -61,8 +64,7 @@ fn build_permissions_update_item(
             next.approval_policy.value(),
             next.config.approvals_reviewer,
             exec_policy,
-            #[allow(deprecated)]
-            &next.cwd,
+            &step.effective_cwd(next),
             next.config
                 .features
                 .enabled(Feature::ExecPermissionApprovals),
@@ -215,6 +217,7 @@ pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
     next: &TurnContext,
+    step: &StepContext,
     shell: &Shell,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
@@ -223,12 +226,12 @@ pub(crate) fn build_settings_update_items(
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
-    let contextual_user_message = build_environment_update_item(previous, next, shell);
+    let contextual_user_message = build_environment_update_item(previous, next, step, shell);
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
         build_model_instructions_update_item(previous_turn_settings, next),
-        build_permissions_update_item(previous, next, exec_policy),
+        build_permissions_update_item(previous, next, step, exec_policy),
         build_collaboration_mode_update_item(previous, next),
         build_realtime_update_item(previous, previous_turn_settings, next),
         build_personality_update_item(previous, next, personality_feature_enabled),

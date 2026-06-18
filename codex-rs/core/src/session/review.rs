@@ -6,6 +6,7 @@ pub(super) async fn spawn_review_thread(
     sess: Arc<Session>,
     config: Arc<Config>,
     parent_turn_context: Arc<TurnContext>,
+    parent_environments: TurnEnvironmentSnapshot,
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
@@ -114,7 +115,6 @@ pub(super) async fn spawn_review_thread(
         reasoning_summary,
         session_source,
         parent_thread_id: parent_turn_context.parent_thread_id,
-        environments: parent_turn_context.environments.clone(),
         available_models,
         unified_exec_shell_mode,
         current_date: parent_turn_context.current_date.clone(),
@@ -151,20 +151,30 @@ pub(super) async fn spawn_review_thread(
         }],
         client_id: None,
     }];
-    let tc = Arc::new(review_turn_context);
-    if tc.environments.single_local_environment_cwd().is_some() {
-        tc.turn_metadata_state.spawn_git_enrichment_task();
+    let review_context = Arc::new(review_turn_context);
+    if parent_environments.single_local_environment_cwd().is_some() {
+        review_context
+            .turn_metadata_state
+            .spawn_git_enrichment_task();
     }
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
+    sess.spawn_task(
+        Arc::clone(&review_context),
+        input,
+        ReviewTask::new(parent_environments),
+    )
+    .await;
 
     // Announce entering review mode so UIs can switch modes.
     let review_request = ReviewRequest {
         target: resolved.target,
         user_facing_hint: Some(resolved.user_facing_hint),
     };
-    sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
-        .await;
+    sess.send_event(
+        review_context.as_ref(),
+        EventMsg::EnteredReviewMode(review_request),
+    )
+    .await;
 }

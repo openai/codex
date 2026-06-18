@@ -125,8 +125,8 @@ pub(crate) async fn execute_user_shell_command(
         session.send_event(turn_context.as_ref(), event).await;
     }
 
-    let Some((turn_environment, environment_shell)) = turn_context
-        .environments
+    let environments = session.services.turn_environments.snapshot().await;
+    let Some((turn_environment, environment_shell)) = environments
         .local()
         .and_then(|environment| environment.shell.as_ref().map(|shell| (environment, shell)))
     else {

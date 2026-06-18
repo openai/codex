@@ -271,6 +271,9 @@ fn test_invocation_with_payload(
 ) -> ToolInvocation {
     ToolInvocation {
         session,
+        step: Arc::new(crate::session::step_context::StepContext::local_for_test(
+            turn.as_ref(),
+        )),
         turn,
         cancellation_token: CancellationToken::new(),
         tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),

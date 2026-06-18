@@ -229,6 +229,7 @@ pub(super) async fn try_run_zsh_fork(
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
+        environments: ctx.environments.clone(),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::Shell,
@@ -312,6 +313,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
+        environments: ctx.environments.clone(),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::UnifiedExec,
@@ -347,6 +349,7 @@ struct CoreShellActionProvider {
     policy: Arc<RwLock<Policy>>,
     session: Arc<crate::session::session::Session>,
     turn: Arc<crate::session::turn_context::TurnContext>,
+    environments: crate::environment_selection::TurnEnvironmentSnapshot,
     call_id: String,
     environment_id: String,
     tool_name: GuardianCommandSource,
@@ -443,6 +446,7 @@ impl CoreShellActionProvider {
         let workdir = workdir.clone();
         let session = self.session.clone();
         let turn = self.turn.clone();
+        let environments = self.environments.clone();
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let environment_id = Some(self.environment_id.clone());
@@ -486,6 +490,7 @@ impl CoreShellActionProvider {
                     let decision = review_approval_request(
                         &session,
                         &turn,
+                        environments,
                         review_id.clone(),
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),

@@ -9,6 +9,7 @@ use std::time::Instant;
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -335,6 +336,7 @@ impl ApplyPatchHandler {
         let ToolInvocation {
             session,
             turn,
+            step,
             tracker,
             call_id,
             tool_name,
@@ -360,7 +362,7 @@ impl ApplyPatchHandler {
 
         // Verify the parsed patch against the selected environment filesystem.
         let Some(turn_environment) =
-            resolve_tool_environment(turn.as_ref(), selected_environment_id.as_deref())?
+            resolve_tool_environment(step.as_ref(), selected_environment_id.as_deref())?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "apply_patch is unavailable in this session".to_string(),
@@ -431,6 +433,7 @@ impl ApplyPatchHandler {
                         let tool_ctx = ToolCtx {
                             session: session.clone(),
                             turn: turn.clone(),
+                            environments: step.environments.clone(),
                             call_id: call_id.clone(),
                             tool_name: tool_name.clone(),
                         };
@@ -536,6 +539,7 @@ pub(crate) async fn intercept_apply_patch(
     turn_environment: TurnEnvironment,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    environments: TurnEnvironmentSnapshot,
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
@@ -595,6 +599,7 @@ pub(crate) async fn intercept_apply_patch(
                     let tool_ctx = ToolCtx {
                         session: session.clone(),
                         turn: turn.clone(),
+                        environments,
                         call_id: call_id.to_string(),
                         tool_name: ToolName::plain(tool_name),
                     };

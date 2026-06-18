@@ -12,6 +12,7 @@
 //! inventory, so this module only handles the execution-time argument rewrite.
 
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
@@ -22,6 +23,7 @@ use serde_json::Value as JsonValue;
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     sess: &Session,
     turn_context: &TurnContext,
+    step_context: &StepContext,
     arguments_value: Option<JsonValue>,
     openai_file_input_params: Option<&[String]>,
 ) -> Result<Option<JsonValue>, String> {
@@ -42,9 +44,14 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
         let Some(value) = arguments.get(field_name) else {
             continue;
         };
-        let Some(uploaded_value) =
-            rewrite_argument_value_for_openai_files(turn_context, auth.as_ref(), field_name, value)
-                .await?
+        let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
+            turn_context,
+            step_context,
+            auth.as_ref(),
+            field_name,
+            value,
+        )
+        .await?
         else {
             continue;
         };
@@ -60,6 +67,7 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
 
 async fn rewrite_argument_value_for_openai_files(
     turn_context: &TurnContext,
+    step_context: &StepContext,
     auth: Option<&CodexAuth>,
     field_name: &str,
     value: &JsonValue,
@@ -68,6 +76,7 @@ async fn rewrite_argument_value_for_openai_files(
         JsonValue::String(file_path) => {
             let rewritten = build_uploaded_argument_value(
                 turn_context,
+                step_context,
                 auth,
                 field_name,
                 /*index*/ None,
@@ -84,6 +93,7 @@ async fn rewrite_argument_value_for_openai_files(
                 };
                 let rewritten = build_uploaded_argument_value(
                     turn_context,
+                    step_context,
                     auth,
                     field_name,
                     Some(index),
@@ -100,6 +110,7 @@ async fn rewrite_argument_value_for_openai_files(
 
 async fn build_uploaded_argument_value(
     turn_context: &TurnContext,
+    step_context: &StepContext,
     auth: Option<&CodexAuth>,
     field_name: &str,
     index: Option<usize>,
@@ -117,7 +128,7 @@ async fn build_uploaded_argument_value(
     if !auth.uses_codex_backend() {
         return Err("ChatGPT auth is required to upload files for Codex Apps tools".to_string());
     }
-    let Some(turn_environment) = turn_context.environments.primary() else {
+    let Some(turn_environment) = step_context.environments.primary() else {
         return Err(contextualize_error(
             "no primary turn environment is available".to_string(),
         ));
@@ -190,10 +201,9 @@ mod tests {
     use std::sync::Arc;
     use tempfile::tempdir;
 
-    fn set_primary_environment_cwd(turn_context: &mut TurnContext, cwd: &Path) {
+    fn set_primary_environment_cwd(step_context: &mut StepContext, cwd: &Path) {
         let cwd = AbsolutePathBuf::try_from(cwd).expect("absolute path");
-        turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
-        let primary = turn_context
+        let primary = step_context
             .environments
             .turn_environments
             .first_mut()
@@ -209,6 +219,7 @@ mod tests {
     #[tokio::test]
     async fn openai_file_argument_rewrite_requires_declared_file_params() {
         let (session, turn_context) = make_session_and_context().await;
+        let step_context = StepContext::local_for_test(&turn_context);
         let arguments = Some(serde_json::json!({
             "file": "/tmp/codex-smoke-file.txt"
         }));
@@ -216,6 +227,7 @@ mod tests {
         let rewritten = rewrite_mcp_tool_arguments_for_openai_files(
             &session,
             &Arc::new(turn_context),
+            &step_context,
             arguments.clone(),
             /*openai_file_input_params*/ None,
         )
@@ -271,13 +283,15 @@ mod tests {
             .await;
 
         let (_, mut turn_context) = make_session_and_context().await;
+        let mut step_context = StepContext::local_for_test(&turn_context);
+        turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         let local_path = dir.path().join("file_report.csv");
         tokio::fs::write(&local_path, b"hello")
             .await
             .expect("write local file");
-        set_primary_environment_cwd(&mut turn_context, dir.path());
+        set_primary_environment_cwd(&mut step_context, dir.path());
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());
@@ -285,6 +299,7 @@ mod tests {
 
         let rewritten = build_uploaded_argument_value(
             &turn_context,
+            &step_context,
             Some(&auth),
             "file",
             /*index*/ None,
@@ -309,16 +324,19 @@ mod tests {
     #[tokio::test]
     async fn build_uploaded_argument_value_rejects_oversized_file_before_reading() {
         let (_, mut turn_context) = make_session_and_context().await;
+        let mut step_context = StepContext::local_for_test(&turn_context);
+        turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         let file_path = dir.path().join("oversized.bin");
         let file = std::fs::File::create(&file_path).expect("create sparse file");
         file.set_len(OPENAI_FILE_UPLOAD_LIMIT_BYTES + 1)
             .expect("size sparse file");
-        set_primary_environment_cwd(&mut turn_context, dir.path());
+        set_primary_environment_cwd(&mut step_context, dir.path());
 
         let error = build_uploaded_argument_value(
             &turn_context,
+            &step_context,
             Some(&auth),
             "file",
             /*index*/ None,
@@ -377,19 +395,22 @@ mod tests {
             .await;
 
         let (_, mut turn_context) = make_session_and_context().await;
+        let mut step_context = StepContext::local_for_test(&turn_context);
+        turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         let local_path = dir.path().join("file_report.csv");
         tokio::fs::write(&local_path, b"hello")
             .await
             .expect("write local file");
-        set_primary_environment_cwd(&mut turn_context, dir.path());
+        set_primary_environment_cwd(&mut step_context, dir.path());
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());
         turn_context.config = Arc::new(config);
         let rewritten = rewrite_argument_value_for_openai_files(
             &turn_context,
+            &step_context,
             Some(&auth),
             "file",
             &serde_json::json!("file_report.csv"),
@@ -489,6 +510,8 @@ mod tests {
             .await;
 
         let (_, mut turn_context) = make_session_and_context().await;
+        let mut step_context = StepContext::local_for_test(&turn_context);
+        turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         tokio::fs::write(dir.path().join("one.csv"), b"one")
@@ -497,13 +520,14 @@ mod tests {
         tokio::fs::write(dir.path().join("two.csv"), b"two")
             .await
             .expect("write second local file");
-        set_primary_environment_cwd(&mut turn_context, dir.path());
+        set_primary_environment_cwd(&mut step_context, dir.path());
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());
         turn_context.config = Arc::new(config);
         let rewritten = rewrite_argument_value_for_openai_files(
             &turn_context,
+            &step_context,
             Some(&auth),
             "files",
             &serde_json::json!(["one.csv", "two.csv"]),
@@ -537,12 +561,14 @@ mod tests {
     #[tokio::test]
     async fn rewrite_mcp_tool_arguments_for_openai_files_surfaces_upload_failures() {
         let (mut session, turn_context) = make_session_and_context().await;
+        let step_context = StepContext::local_for_test(&turn_context);
         session.services.auth_manager = crate::test_support::auth_manager_from_auth(
             CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         );
         let error = rewrite_mcp_tool_arguments_for_openai_files(
             &session,
             &turn_context,
+            &step_context,
             Some(serde_json::json!({
                 "file": "/definitely/missing/file.csv",
             })),

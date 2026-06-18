@@ -1,6 +1,5 @@
 use super::*;
 use crate::agents_md::LoadedAgentsMd;
-use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
@@ -113,7 +112,6 @@ pub struct TurnContext {
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
-    pub(crate) environments: TurnEnvironmentSnapshot,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -205,10 +203,6 @@ impl TurnContext {
             .apps_enabled_for_auth(uses_codex_backend)
     }
 
-    pub(crate) fn tool_environment_mode(&self) -> ToolEnvironmentMode {
-        ToolEnvironmentMode::from_count(self.environments.turn_environments.len())
-    }
-
     pub(crate) async fn with_model(
         &self,
         model: String,
@@ -267,7 +261,6 @@ impl TurnContext {
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
             parent_thread_id: self.parent_thread_id,
-            environments: self.environments.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
@@ -298,13 +291,6 @@ impl TurnContext {
                 self.model_verification_emitted.load(Ordering::Relaxed),
             ),
         }
-    }
-
-    #[deprecated(note = "resolve paths from the selected turn environment cwd instead")]
-    pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
-        #[allow(deprecated)]
-        path.as_ref()
-            .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
     }
 
     pub(crate) fn file_system_sandbox_context(
@@ -490,7 +476,6 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &SharedModelsManager,
         network: Option<NetworkProxy>,
-        environments: TurnEnvironmentSnapshot,
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_snapshot: HostSkillsSnapshot,
@@ -550,7 +535,6 @@ impl Session {
             reasoning_summary,
             session_source,
             parent_thread_id: session_configuration.parent_thread_id,
-            environments,
             #[allow(deprecated)]
             cwd,
             current_date: Some(current_date),
@@ -760,7 +744,6 @@ impl Session {
                     )
                     .then(|| started_proxy.proxy())
                 }),
-            turn_environments,
             cwd,
             sub_id,
             skills_snapshot,
@@ -770,15 +753,10 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
-        let turn_context = Arc::new(turn_context);
-        if turn_context
-            .environments
-            .single_local_environment_cwd()
-            .is_some()
-        {
+        if turn_environments.single_local_environment_cwd().is_some() {
             turn_context.turn_metadata_state.spawn_git_enrichment_task();
         }
-        turn_context
+        Arc::new(turn_context)
     }
 
     pub(crate) async fn maybe_emit_unknown_model_warning_for_turn(&self, tc: &TurnContext) {

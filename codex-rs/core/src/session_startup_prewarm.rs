@@ -243,10 +243,12 @@ async fn schedule_startup_prewarm_inner(
         /*status*/ None,
     );
     let startup_cancellation_token = CancellationToken::new();
+    let step_context = session.prepare_step_for_request().await;
     let built_tools_started_at = Instant::now();
     let startup_router = built_tools(
         session.as_ref(),
         startup_turn_context.as_ref(),
+        step_context,
         &startup_cancellation_token,
     )
     .await?;

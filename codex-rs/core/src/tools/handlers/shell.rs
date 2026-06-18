@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::shell::ShellType;
 use crate::tools::context::FunctionToolOutput;
@@ -52,6 +53,7 @@ struct RunExecLikeArgs {
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::session::session::Session>,
     turn: Arc<TurnContext>,
+    step: Arc<StepContext>,
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
     shell_runtime_backend: ShellRuntimeBackend,
@@ -68,12 +70,13 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         prefix_rule,
         session,
         turn,
+        step,
         tracker,
         call_id,
         shell_runtime_backend,
     } = args;
 
-    let Some(turn_environment) = turn.environments.primary() else {
+    let Some(turn_environment) = step.environments.primary() else {
         return Err(FunctionCallError::RespondToModel(
             "shell is unavailable in this session".to_string(),
         ));
@@ -146,6 +149,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         turn_environment.clone(),
         session.clone(),
         turn.clone(),
+        step.environments.clone(),
         Some(&tracker),
         &call_id,
         tool_name.name.as_str(),
@@ -206,6 +210,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     let tool_ctx = ToolCtx {
         session: session.clone(),
         turn: turn.clone(),
+        environments: step.environments.clone(),
         call_id: call_id.clone(),
         tool_name,
     };

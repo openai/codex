@@ -19,6 +19,7 @@ use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -108,9 +109,11 @@ const MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES: usize = DEFAULT_OUTPUT_BYTES_CAP;
 
 /// Handles the specified tool call and dispatches the appropriate MCP tool-call
 /// item lifecycle events to the `Session`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_mcp_tool_call(
     sess: Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     call_id: String,
     server: String,
     tool_name: String,
@@ -228,6 +231,7 @@ pub(crate) async fn handle_mcp_tool_call(
     if let Some(decision) = maybe_request_mcp_tool_approval(
         &sess,
         turn_context,
+        step_context,
         &call_id,
         &invocation,
         &hook_tool_name,
@@ -243,6 +247,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 return handle_approved_mcp_tool_call(
                     sess.as_ref(),
                     turn_context.as_ref(),
+                    step_context.as_ref(),
                     &call_id,
                     invocation,
                     metadata.as_ref(),
@@ -298,6 +303,7 @@ pub(crate) async fn handle_mcp_tool_call(
     handle_approved_mcp_tool_call(
         sess.as_ref(),
         turn_context.as_ref(),
+        step_context.as_ref(),
         &call_id,
         invocation,
         metadata.as_ref(),
@@ -320,6 +326,7 @@ struct McpToolCallItemMetadata {
 async fn handle_approved_mcp_tool_call(
     sess: &Session,
     turn_context: &TurnContext,
+    step_context: &StepContext,
     call_id: &str,
     invocation: McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
@@ -342,6 +349,7 @@ async fn handle_approved_mcp_tool_call(
     let rewrite = rewrite_mcp_tool_arguments_for_openai_files(
         sess,
         turn_context,
+        step_context,
         arguments_value.clone(),
         metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
     )
@@ -1160,9 +1168,11 @@ fn mcp_tool_approval_prompt_options(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn maybe_request_mcp_tool_approval(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     call_id: &str,
     invocation: &McpInvocation,
     hook_tool_name: &HookToolName,
@@ -1238,6 +1248,7 @@ async fn maybe_request_mcp_tool_approval(
         let decision = review_approval_request(
             sess,
             turn_context,
+            step_context.environments.clone(),
             review_id.clone(),
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
             /*retry_reason*/ None,
@@ -1342,6 +1353,32 @@ async fn maybe_request_mcp_tool_approval(
     )
     .await;
     Some(decision)
+}
+
+#[cfg(test)]
+async fn maybe_request_mcp_tool_approval_for_test(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    call_id: &str,
+    invocation: &McpInvocation,
+    hook_tool_name: &HookToolName,
+    metadata: Option<&McpToolApprovalMetadata>,
+    approval_mode: AppToolApproval,
+) -> Option<McpToolApprovalDecision> {
+    let step_context = Arc::new(StepContext::new(
+        sess.services.turn_environments.snapshot().await,
+    ));
+    maybe_request_mcp_tool_approval(
+        sess,
+        turn_context,
+        &step_context,
+        call_id,
+        invocation,
+        hook_tool_name,
+        metadata,
+        approval_mode,
+    )
+    .await
 }
 
 pub(crate) fn mcp_approvals_reviewer(

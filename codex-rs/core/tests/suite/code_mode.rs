@@ -23,6 +23,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_web_search_extension::install as install_web_search_extension;
+use core_test_support::PathExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::AppsTestToolLoading;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_APP_ONLY_TOOL;
@@ -41,6 +42,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -2259,15 +2261,24 @@ async fn code_mode_background_keeps_running_on_later_turn_without_wait() -> Resu
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
-    let resumed_file = test.workspace_path("code-mode-yield-resumed.txt");
+    let resumed_file_name = "code-mode-yield-resumed.txt";
+    let resumed_file = test.workspace_path(resumed_file_name);
+    let later_workspace = test.workspace_path("later-workspace");
+    fs::create_dir_all(&later_workspace)?;
+    let later_resumed_file = later_workspace.join(resumed_file_name);
+    let later_turn_gate = test.workspace_path("later-turn-started.ready");
+    let wait_for_later_turn = wait_for_file_source(&later_turn_gate)?;
+    let later_turn_gate_quoted = shlex::try_join([later_turn_gate.to_string_lossy().as_ref()])?;
     let resumed_file_quoted = shlex::try_join([resumed_file.to_string_lossy().as_ref()])?;
-    let write_file_command = format!("printf resumed > {resumed_file_quoted}");
-    let wait_for_file_command =
-        format!("while [ ! -f {resumed_file_quoted} ]; do sleep 0.01; done; printf ready");
+    let write_file_command = format!("printf resumed > {resumed_file_name}");
+    let wait_for_file_command = format!(
+        "i=0; while [ \"$i\" -lt 100 ]; do [ -f {resumed_file_quoted} ] && {{ printf ready; exit; }}; i=$((i+1)); sleep 0.01; done; printf missing"
+    );
     let code = format!(
         r#"
 text("before yield");
 yield_control();
+{wait_for_later_turn}
 await tools.exec_command({{ cmd: {write_file_command:?} }});
 text("after yield");
 "#
@@ -2313,10 +2324,25 @@ text("after yield");
                 "call-2",
                 "exec_command",
                 &serde_json::to_string(&serde_json::json!({
-                    "cmd": wait_for_file_command,
+                    "cmd": format!("touch {later_turn_gate_quoted}"),
                 }))?,
             ),
             ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-4"),
+            responses::ev_function_call(
+                "call-3",
+                "exec_command",
+                &serde_json::to_string(&serde_json::json!({
+                    "cmd": wait_for_file_command,
+                }))?,
+            ),
+            ev_completed("resp-4"),
         ]),
     )
     .await;
@@ -2324,20 +2350,25 @@ text("after yield");
         &server,
         sse(vec![
             ev_assistant_message("msg-2", "file appeared"),
-            ev_completed("resp-4"),
+            ev_completed("resp-5"),
         ]),
     )
     .await;
 
-    test.submit_turn("wait for resumed file").await?;
+    test.submit_turn_with_environments(
+        "wait for resumed file",
+        Some(vec![local(later_workspace.as_path().abs())]),
+    )
+    .await?;
 
     let second_request = second_completion.single_request();
     assert!(
         second_request
-            .function_call_output_text("call-2")
+            .function_call_output_text("call-3")
             .is_some_and(|output| output.ends_with("ready"))
     );
     assert_eq!(fs::read_to_string(&resumed_file)?, "resumed");
+    assert!(!later_resumed_file.exists());
 
     Ok(())
 }

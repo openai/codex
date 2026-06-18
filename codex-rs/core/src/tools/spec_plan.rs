@@ -1,5 +1,6 @@
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
@@ -143,6 +144,7 @@ impl PlannedTools {
 #[derive(Clone, Copy)]
 struct CoreToolPlanContext<'a> {
     turn_context: &'a TurnContext,
+    step_context: &'a StepContext,
     mcp_tools: Option<&'a [ToolInfo]>,
     deferred_mcp_tools: Option<&'a [ToolInfo]>,
     tool_suggest_candidates: Option<&'a crate::tools::router::ToolSuggestCandidates>,
@@ -156,17 +158,23 @@ struct CoreToolPlanContext<'a> {
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn build_tool_router(
     turn_context: &TurnContext,
+    step_context: Arc<StepContext>,
     params: ToolRouterParams<'_>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> ToolRouter {
-    let (model_visible_specs, registry) =
-        build_tool_specs_and_registry(turn_context, params, tool_search_handler_cache);
-    ToolRouter::from_parts(registry, model_visible_specs)
+    let (model_visible_specs, registry) = build_tool_specs_and_registry(
+        turn_context,
+        step_context.as_ref(),
+        params,
+        tool_search_handler_cache,
+    );
+    ToolRouter::from_parts(registry, model_visible_specs, step_context)
 }
 
 #[instrument(level = "trace", skip_all)]
 fn build_tool_specs_and_registry(
     turn_context: &TurnContext,
+    step_context: &StepContext,
     params: ToolRouterParams<'_>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> (Vec<ToolSpec>, ToolRegistry) {
@@ -181,6 +189,7 @@ fn build_tool_specs_and_registry(
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let context = CoreToolPlanContext {
         turn_context,
+        step_context,
         mcp_tools: mcp_tools.as_deref(),
         deferred_mcp_tools: deferred_mcp_tools.as_deref(),
         tool_suggest_candidates: tool_suggest_candidates.as_ref(),
@@ -598,7 +607,7 @@ fn standalone_web_search_enabled(turn_context: &TurnContext) -> bool {
 fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     let turn_context = context.turn_context;
     let features = turn_context.config.features.get();
-    let environment_mode = turn_context.tool_environment_mode();
+    let environment_mode = context.step_context.tool_environment_mode();
     if !environment_mode.has_environment() {
         return;
     }
@@ -618,7 +627,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
                 allow_login_shell,
                 exec_permission_approvals_enabled,
                 include_environment_id,
-                include_shell_parameter: unified_exec_should_include_shell_parameter(turn_context),
+                include_shell_parameter: unified_exec_should_include_shell_parameter(context),
             }));
             planned_tools.add(WriteStdinHandler);
 
@@ -635,11 +644,12 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
     }
 }
 
-fn unified_exec_should_include_shell_parameter(turn_context: &TurnContext) -> bool {
+fn unified_exec_should_include_shell_parameter(context: &CoreToolPlanContext<'_>) -> bool {
     !matches!(
-        &turn_context.unified_exec_shell_mode,
+        &context.turn_context.unified_exec_shell_mode,
         UnifiedExecShellMode::ZshFork(_)
-    ) || turn_context
+    ) || context
+        .step_context
         .environments
         .turn_environments
         .iter()
@@ -659,7 +669,7 @@ fn add_mcp_resource_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     let turn_context = context.turn_context;
     let features = turn_context.config.features.get();
-    let environment_mode = turn_context.tool_environment_mode();
+    let environment_mode = context.step_context.tool_environment_mode();
 
     planned_tools.add(PlanHandler);
 

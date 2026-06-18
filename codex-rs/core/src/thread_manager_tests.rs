@@ -225,7 +225,7 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
 #[tokio::test]
 async fn ignores_session_prefix_messages_when_truncating() {
     let (session, turn_context) = make_session_and_context().await;
-    let mut items = session.build_initial_context(&turn_context).await;
+    let mut items = session.build_initial_context_for_test(&turn_context).await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
     items.push(user_msg("second question"));
@@ -603,15 +603,24 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build resumed turn context");
-    assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
+    let resumed_environments = resumed
+        .thread
+        .codex
+        .session
+        .services
+        .turn_environments
+        .snapshot()
+        .await;
+    assert_eq!(resumed_environments.turn_environments.len(), 1);
     assert_eq!(
-        resumed_turn.environments.turn_environments[0].cwd(),
+        resumed_environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
-        resumed_turn.environments.turn_environments[0].cwd(),
+        resumed_environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&selected_cwd)
     );
+    assert_eq!(resumed_turn.config.cwd.as_path(), default_cwd.as_path());
 
     let forked = manager
         .fork_thread(
@@ -630,15 +639,24 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build forked turn context");
-    assert_eq!(forked_turn.environments.turn_environments.len(), 1);
+    let forked_environments = forked
+        .thread
+        .codex
+        .session
+        .services
+        .turn_environments
+        .snapshot()
+        .await;
+    assert_eq!(forked_environments.turn_environments.len(), 1);
     assert_eq!(
-        forked_turn.environments.turn_environments[0].cwd(),
+        forked_environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
-        forked_turn.environments.turn_environments[0].cwd(),
+        forked_environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&selected_cwd)
     );
+    assert_eq!(forked_turn.config.cwd.as_path(), default_cwd.as_path());
 }
 
 #[tokio::test]

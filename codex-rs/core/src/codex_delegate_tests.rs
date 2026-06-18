@@ -39,6 +39,7 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
     let (session, ctx, _rx_evt) = crate::session::tests::make_session_and_context_with_rx().await;
+    let step = crate::session::tests::step_context_for_session(session.as_ref()).await;
     let codex = Arc::new(Codex {
         tx_sub,
         rx_event: rx_events,
@@ -67,6 +68,7 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
         tx_out.clone(),
         session,
         ctx,
+        step.environments.clone(),
         Arc::new(Mutex::new(HashMap::new())),
         cancel.clone(),
     ));
@@ -160,6 +162,8 @@ async fn forward_ops_preserves_submission_trace_context() {
 async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
     let (parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
+    let parent_step =
+        crate::session::tests::step_context_for_session(parent_session.as_ref()).await;
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
 
@@ -171,6 +175,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             Arc::clone(&parent_session.services.models_manager),
             parent_session,
             parent_ctx,
+            parent_step.environments.clone(),
             cancel_token,
             SubAgentSource::Review,
             /*initial_history*/ None,
@@ -184,11 +189,16 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
 
 #[tokio::test]
 async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
-    let (parent_session, mut parent_ctx, rx_events) =
+    let (parent_session, parent_ctx, rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
+    let mut parent_step =
+        crate::session::tests::step_context_for_session(parent_session.as_ref()).await;
     *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-    let parent_ctx_mut = Arc::get_mut(&mut parent_ctx).expect("single turn context ref");
-    parent_ctx_mut.environments.turn_environments[0].environment_id = "remote".to_string();
+    Arc::get_mut(&mut parent_step)
+        .expect("single step context ref")
+        .environments
+        .turn_environments[0]
+        .environment_id = "remote".to_string();
 
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -222,12 +232,14 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         let codex = Arc::clone(&codex);
         let parent_session = Arc::clone(&parent_session);
         let parent_ctx = Arc::clone(&parent_ctx);
+        let parent_step = Arc::clone(&parent_step);
         let cancel_token = cancel_token.clone();
         async move {
             handle_request_permissions(
                 codex.as_ref(),
                 &parent_session,
                 &parent_ctx,
+                &parent_step.environments,
                 RequestPermissionsEvent {
                     call_id: request_call_id,
                     turn_id: "child-turn-1".to_string(),
@@ -307,10 +319,13 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
     });
 
     let cancel_token = CancellationToken::new();
+    let parent_step =
+        crate::session::tests::step_context_for_session(parent_session.as_ref()).await;
     let handle = tokio::spawn({
         let codex = Arc::clone(&codex);
         let parent_session = Arc::clone(&parent_session);
         let parent_ctx = Arc::clone(&parent_ctx);
+        let parent_step = Arc::clone(&parent_step);
         let cancel_token = cancel_token.clone();
         async move {
             handle_exec_approval(
@@ -318,6 +333,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
                 "child-turn-1".to_string(),
                 &parent_session,
                 &parent_ctx,
+                &parent_step.environments,
                 ExecApprovalRequestEvent {
                     call_id: "command-item-1".to_string(),
                     approval_id: Some("callback-approval-1".to_string()),
@@ -419,10 +435,13 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
     )])));
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
+    let parent_step =
+        crate::session::tests::step_context_for_session(parent_session.as_ref()).await;
 
     let response = maybe_auto_review_mcp_request_user_input(
         &parent_session,
         &parent_ctx,
+        &parent_step.environments,
         &pending_mcp_invocations,
         &RequestUserInputEvent {
             call_id: "call-1".to_string(),
@@ -467,6 +486,8 @@ async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
         },
     )])));
     let cancel_token = CancellationToken::new();
+    let parent_step =
+        crate::session::tests::step_context_for_session(parent_session.as_ref()).await;
 
     let event = RequestUserInputEvent {
         call_id: "call-1".to_string(),
@@ -484,6 +505,7 @@ async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
     let response = maybe_auto_review_mcp_request_user_input(
         &parent_session,
         &parent_ctx,
+        &parent_step.environments,
         &pending_mcp_invocations,
         &event,
         &cancel_token,

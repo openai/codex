@@ -102,8 +102,11 @@ impl CodeModeService {
         }
     }
 
-    pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode::CellId) {
-        self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id);
+    pub(crate) fn mark_cell_ready_for_dispatch(
+        &self,
+        cell_id: &codex_code_mode::CellId,
+    ) -> Result<(), String> {
+        self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id)
     }
 
     pub(crate) fn finish_cell_dispatch(&self, cell_id: &CellId) {
@@ -124,14 +127,12 @@ impl CodeModeService {
             return None;
         }
 
-        let exec = ExecContext {
-            session: Arc::clone(session),
-            turn: Arc::clone(turn),
-        };
-        Some(
-            self.dispatch_broker
-                .start_turn_worker(exec, router, tracker),
-        )
+        Some(self.dispatch_broker.start_turn_worker(
+            Arc::clone(session),
+            Arc::clone(turn),
+            router,
+            tracker,
+        ))
     }
 
     fn session(&self) -> Result<&Arc<dyn CodeModeSession>, String> {
@@ -236,7 +237,6 @@ fn truncate_code_mode_result(
 }
 
 async fn call_nested_tool(
-    _exec: ExecContext,
     tool_runtime: ToolCallRuntime,
     invocation: CodeModeNestedToolCall,
     cancellation_token: CancellationToken,

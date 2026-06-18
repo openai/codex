@@ -41,6 +41,7 @@ use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianFollowupReviewReminder;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::Codex;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -73,6 +74,7 @@ pub(crate) enum GuardianReviewSessionOutcome {
 pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
     pub(crate) parent_turn: Arc<TurnContext>,
+    pub(crate) parent_environments: TurnEnvironmentSnapshot,
     pub(crate) spawn_config: Config,
     pub(crate) request: GuardianApprovalRequest,
     pub(crate) retry_reason: Option<String>,
@@ -625,6 +627,7 @@ async fn spawn_guardian_review_session(
         params.parent_session.services.models_manager.clone(),
         Arc::clone(&params.parent_session),
         Arc::clone(&params.parent_turn),
+        params.parent_environments.clone(),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
@@ -749,12 +752,11 @@ async fn run_review_on_session(
         .await
         .unwrap_or_default();
     let guardian_permission_profile = PermissionProfile::read_only();
-    let parent_turn_environments = params.parent_turn.environments.to_selections();
+    let parent_turn_environments = params.parent_environments.to_selections();
     // TODO(anp): Migrate guardian review thread settings to a PathUri fallback cwd so foreign
     // parent environments do not fall back to the host-native config cwd.
     let parent_turn_legacy_fallback_cwd = params
-        .parent_turn
-        .environments
+        .parent_environments
         .primary()
         .and_then(|environment| environment.cwd().to_abs_path().ok())
         .unwrap_or_else(|| params.parent_turn.config.cwd.clone());
@@ -1157,6 +1159,8 @@ mod tests {
 
     async fn test_review_params() -> GuardianReviewSessionParams {
         let (session, turn) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let parent_environments = session.services.turn_environments.snapshot().await;
         let model = turn.model_info.slug.clone();
         let reasoning_effort = turn.reasoning_effort.clone();
         let reasoning_summary = turn.reasoning_summary;
@@ -1172,8 +1176,9 @@ mod tests {
         .expect("guardian config");
 
         GuardianReviewSessionParams {
-            parent_session: Arc::new(session),
+            parent_session: session,
             parent_turn: Arc::new(turn),
+            parent_environments,
             spawn_config,
             request: GuardianApprovalRequest::Shell {
                 id: "shell-1".to_string(),

@@ -29,6 +29,7 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();
+        let step = session.prepare_step_for_request().await;
         let _ = if crate::compact::should_use_remote_compact_task(ctx.provider.info()) {
             if ctx
                 .config
@@ -40,14 +41,14 @@ impl SessionTask for CompactTask {
                     "remote_v2",
                     /*manual*/ true,
                 );
-                crate::compact_remote_v2::run_remote_compact_task(session.clone(), ctx).await
+                crate::compact_remote_v2::run_remote_compact_task(session.clone(), ctx, step).await
             } else {
                 emit_compact_metric(
                     &session.services.session_telemetry,
                     "remote",
                     /*manual*/ true,
                 );
-                crate::compact_remote::run_remote_compact_task(session.clone(), ctx).await
+                crate::compact_remote::run_remote_compact_task(session.clone(), ctx, step).await
             }
         } else {
             emit_compact_metric(
@@ -65,7 +66,7 @@ impl SessionTask for CompactTask {
                 // Compaction prompt is synthesized; no UI element ranges to preserve.
                 text_elements: Vec::new(),
             }];
-            crate::compact::run_compact_task(session.clone(), ctx, input).await
+            crate::compact::run_compact_task(session.clone(), ctx, step, input).await
         };
         None
     }

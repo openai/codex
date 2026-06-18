@@ -47,6 +47,7 @@ impl RequestPermissionsHandler {
         let ToolInvocation {
             session,
             turn,
+            step,
             cancellation_token,
             call_id,
             payload,
@@ -64,7 +65,7 @@ impl RequestPermissionsHandler {
 
         let environment_args: RequestPermissionsEnvironmentArgs = parse_arguments(&arguments)?;
         let Some(turn_environment) =
-            resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?
+            resolve_tool_environment(step.as_ref(), environment_args.environment_id.as_deref())?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "request_permissions requires a primary environment".to_string(),
@@ -92,6 +93,7 @@ impl RequestPermissionsHandler {
         let response = session
             .request_permissions_for_environment(
                 &turn,
+                &step.environments,
                 call_id,
                 args,
                 turn_environment.selection(),

@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::session::TurnInput;
@@ -30,12 +31,14 @@ use codex_protocol::user_input::UserInput;
 use super::SessionTask;
 use super::SessionTaskContext;
 
-#[derive(Clone, Copy)]
-pub(crate) struct ReviewTask;
+#[derive(Clone)]
+pub(crate) struct ReviewTask {
+    environments: TurnEnvironmentSnapshot,
+}
 
 impl ReviewTask {
-    pub(crate) fn new() -> Self {
-        Self
+    pub(crate) fn new(environments: TurnEnvironmentSnapshot) -> Self {
+        Self { environments }
     }
 }
 
@@ -73,6 +76,7 @@ impl SessionTask for ReviewTask {
         let output = match start_review_conversation(
             session.clone(),
             ctx.clone(),
+            self.environments.clone(),
             user_input,
             cancellation_token.clone(),
         )
@@ -95,6 +99,7 @@ impl SessionTask for ReviewTask {
 async fn start_review_conversation(
     session: Arc<SessionTaskContext>,
     ctx: Arc<TurnContext>,
+    environments: TurnEnvironmentSnapshot,
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
 ) -> Option<async_channel::Receiver<Event>> {
@@ -128,6 +133,7 @@ async fn start_review_conversation(
         input,
         session.clone_session(),
         ctx.clone(),
+        environments,
         cancellation_token,
         SubAgentSource::Review,
         /*final_output_json_schema*/ None,

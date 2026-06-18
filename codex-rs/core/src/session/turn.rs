@@ -42,6 +42,7 @@ use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
@@ -145,13 +146,16 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
+    let step_context = sess.prepare_step_for_request().await;
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+    if let Err(err) =
+        run_pre_sampling_compact(&sess, &turn_context, &step_context, &mut client_session).await
+    {
         let error = err.to_codex_protocol_error();
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
@@ -159,11 +163,20 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
-        .await;
+    sess.record_context_updates_and_set_reference_context_item(
+        turn_context.as_ref(),
+        step_context.as_ref(),
+    )
+    .await;
 
-    let (injection_items, explicitly_enabled_connectors) =
-        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await?;
+    let (injection_items, explicitly_enabled_connectors) = build_skills_and_plugins(
+        &sess,
+        turn_context.as_ref(),
+        step_context.as_ref(),
+        &input,
+        &cancellation_token,
+    )
+    .await?;
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
@@ -192,7 +205,7 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
-    let display_roots = turn_diff_display_roots(turn_context.as_ref()).await;
+    let display_roots = turn_diff_display_roots(step_context.as_ref()).await;
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
         TurnDiffTracker::with_environment_display_roots(display_roots),
     ));
@@ -237,6 +250,7 @@ pub(crate) async fn run_turn(
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
+            Arc::clone(&step_context),
             Arc::clone(&turn_extension_data),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
@@ -293,7 +307,7 @@ pub(crate) async fn run_turn(
                 .await;
 
                 let started_new_context_window = sess
-                    .maybe_start_new_context_window(turn_context.as_ref())
+                    .maybe_start_new_context_window(turn_context.as_ref(), step_context.as_ref())
                     .await
                     .is_some();
                 if started_new_context_window && needs_follow_up {
@@ -306,6 +320,7 @@ pub(crate) async fn run_turn(
                     if let Err(err) = run_auto_compact(
                         &sess,
                         &turn_context,
+                        &step_context,
                         &mut client_session,
                         InitialContextInjection::BeforeLastUserMessage,
                         CompactionReason::ContextLimit,
@@ -414,9 +429,9 @@ pub(crate) async fn run_turn(
 }
 
 #[instrument(level = "trace", skip_all)]
-async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
+async fn turn_diff_display_roots(step_context: &StepContext) -> Vec<(String, PathBuf)> {
     let mut display_roots = Vec::new();
-    for turn_environment in &turn_context.environments.turn_environments {
+    for turn_environment in &step_context.environments.turn_environments {
         // TODO(anp): Migrate git-root discovery and diff display roots to PathUri so foreign
         // environment roots can participate without host-native conversion.
         let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
@@ -465,6 +480,7 @@ async fn run_hooks_and_record_inputs(
 async fn build_skills_and_plugins(
     sess: &Arc<Session>,
     turn_context: &TurnContext,
+    step_context: &StepContext,
     input: &[TurnInput],
     cancellation_token: &CancellationToken,
 ) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
@@ -530,9 +546,14 @@ async fn build_skills_and_plugins(
     };
     let skills_outcome = turn_context.turn_skills.snapshot.outcome();
     let connector_slug_counts = build_connector_slug_counts(&available_connectors);
-    let extension_injection_items =
-        build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
-            .await?;
+    let extension_injection_items = build_extension_turn_input_items(
+        sess,
+        turn_context,
+        step_context,
+        &user_input,
+        cancellation_token,
+    )
+    .await?;
     let skill_name_counts_lower =
         build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
     let mentioned_skills = collect_explicit_skill_mentions(
@@ -627,6 +648,7 @@ async fn build_skills_and_plugins(
 async fn build_extension_turn_input_items(
     sess: &Arc<Session>,
     turn_context: &TurnContext,
+    step_context: &StepContext,
     user_input: &[UserInput],
     cancellation_token: &CancellationToken,
 ) -> Option<Vec<ResponseItem>> {
@@ -635,7 +657,7 @@ async fn build_extension_turn_input_items(
         return Some(Vec::new());
     }
 
-    let environments = turn_context
+    let environments = step_context
         .environments
         .turn_environments
         .iter()
@@ -799,15 +821,18 @@ async fn auto_compact_token_status(
 async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     client_session: &mut ModelClientSession,
 ) -> CodexResult<()> {
-    maybe_run_previous_model_inline_compact(sess, turn_context, client_session).await?;
+    maybe_run_previous_model_inline_compact(sess, turn_context, step_context, client_session)
+        .await?;
     let token_status = auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
     // Compact if the configured auto-compaction budget or usable context window is exhausted.
     if token_status.token_limit_reached {
         run_auto_compact(
             sess,
             turn_context,
+            step_context,
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::ContextLimit,
@@ -833,6 +858,7 @@ fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
 async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     client_session: &mut ModelClientSession,
 ) -> CodexResult<()> {
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
@@ -852,6 +878,7 @@ async fn maybe_run_previous_model_inline_compact(
         run_auto_compact(
             sess,
             &previous_model_turn_context,
+            step_context,
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::CompHashChanged,
@@ -889,6 +916,7 @@ async fn maybe_run_previous_model_inline_compact(
         run_auto_compact(
             sess,
             &previous_model_turn_context,
+            step_context,
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::ModelDownshift,
@@ -907,6 +935,7 @@ async fn maybe_run_previous_model_inline_compact(
 async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
@@ -926,6 +955,7 @@ async fn run_auto_compact(
             run_inline_remote_auto_compact_task_v2(
                 Arc::clone(sess),
                 Arc::clone(turn_context),
+                Arc::clone(step_context),
                 client_session,
                 initial_context_injection,
                 reason,
@@ -942,6 +972,7 @@ async fn run_auto_compact(
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
+            Arc::clone(step_context),
             client_session.turn_state(),
             initial_context_injection,
             reason,
@@ -957,6 +988,7 @@ async fn run_auto_compact(
         run_inline_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
+            Arc::clone(step_context),
             initial_context_injection,
             reason,
             phase,
@@ -1049,6 +1081,7 @@ pub(crate) fn build_prompt(
 async fn run_sampling_request(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
@@ -1056,7 +1089,13 @@ async fn run_sampling_request(
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
-    let router = built_tools(sess.as_ref(), turn_context.as_ref(), &cancellation_token).await?;
+    let router = built_tools(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        Arc::clone(&step_context),
+        &cancellation_token,
+    )
+    .await?;
 
     let base_instructions = sess.get_base_instructions().await;
 
@@ -1153,6 +1192,7 @@ async fn run_sampling_request(
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
+    step_context: Arc<StepContext>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
@@ -1270,8 +1310,9 @@ pub(crate) async fn built_tools(
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    Ok(Arc::new(ToolRouter::from_turn_context(
+    Ok(Arc::new(ToolRouter::from_contexts(
         turn_context,
+        step_context,
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,

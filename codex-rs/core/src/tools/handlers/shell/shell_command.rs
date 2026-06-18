@@ -2,6 +2,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_tools::ShellCommandBackendConfig;
 use codex_tools::ToolName;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
@@ -86,15 +87,13 @@ impl ShellCommandHandler {
         params: &ShellCommandToolCallParams,
         session: &crate::session::session::Session,
         turn_context: &TurnContext,
+        cwd: AbsolutePathBuf,
         thread_id: ThreadId,
         allow_login_shell: bool,
     ) -> Result<ExecParams, FunctionCallError> {
         let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
         let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-        #[allow(deprecated)]
-        let cwd = turn_context.resolve_path(params.workdir.clone());
-
         Ok(ExecParams {
             command,
             cwd,
@@ -156,6 +155,7 @@ impl ShellCommandHandler {
         let ToolInvocation {
             session,
             turn,
+            step,
             cancellation_token,
             tracker,
             call_id,
@@ -170,16 +170,13 @@ impl ShellCommandHandler {
             )));
         };
 
-        #[allow(deprecated)]
-        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+        let cwd = resolve_workdir_base_path(&arguments, &step.effective_cwd(turn.as_ref()))?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-        #[allow(deprecated)]
-        let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
             &params.command,
-            &workdir,
+            &cwd,
         )
         .await;
         let prefix_rule = params.prefix_rule.clone();
@@ -187,6 +184,7 @@ impl ShellCommandHandler {
             &params,
             session.as_ref(),
             turn.as_ref(),
+            cwd,
             session.thread_id,
             turn.config.permissions.allow_login_shell,
         )?;
@@ -201,6 +199,7 @@ impl ShellCommandHandler {
             prefix_rule,
             session,
             turn,
+            step,
             tracker,
             call_id,
             shell_runtime_backend: self.shell_runtime_backend(),

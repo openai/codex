@@ -16,6 +16,7 @@ use crate::hook_runtime::run_pre_compact_hooks;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionImplementation;
@@ -44,6 +45,7 @@ const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     turn_state: Arc<OnceLock<String>>,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
@@ -52,6 +54,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &turn_context,
+        &step_context,
         Some(turn_state),
         initial_context_injection,
         CompactionTrigger::Auto,
@@ -65,6 +68,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
 pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
@@ -78,6 +82,7 @@ pub(crate) async fn run_remote_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &turn_context,
+        &step_context,
         /*turn_state*/ None,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
@@ -88,9 +93,11 @@ pub(crate) async fn run_remote_compact_task(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
@@ -135,6 +142,7 @@ async fn run_remote_compact_task_inner(
     let result = run_remote_compact_task_inner_impl(
         sess,
         turn_context,
+        step_context,
         turn_state,
         initial_context_injection,
         compaction_metadata,
@@ -169,6 +177,7 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
@@ -220,6 +229,7 @@ async fn run_remote_compact_task_inner_impl(
     let tool_router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
+        Arc::clone(step_context),
         &CancellationToken::new(),
     )
     .await?;
@@ -262,6 +272,7 @@ async fn run_remote_compact_task_inner_impl(
     new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
+        step_context.as_ref(),
         new_history,
         initial_context_injection,
     )
@@ -295,6 +306,7 @@ async fn run_remote_compact_task_inner_impl(
 pub(crate) async fn process_compacted_history(
     sess: &Session,
     turn_context: &TurnContext,
+    step_context: &StepContext,
     mut compacted_history: Vec<ResponseItem>,
     initial_context_injection: InitialContextInjection,
 ) -> Vec<ResponseItem> {
@@ -305,13 +317,31 @@ pub(crate) async fn process_compacted_history(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        sess.build_initial_context(turn_context).await
+        sess.build_initial_context(turn_context, step_context).await
     } else {
         Vec::new()
     };
 
     compacted_history.retain(should_keep_compacted_history_item);
     insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
+}
+
+#[cfg(test)]
+pub(crate) async fn process_compacted_history_for_test(
+    sess: &Session,
+    turn_context: &TurnContext,
+    compacted_history: Vec<ResponseItem>,
+    initial_context_injection: InitialContextInjection,
+) -> Vec<ResponseItem> {
+    let step_context = StepContext::new(sess.services.turn_environments.snapshot().await);
+    process_compacted_history(
+        sess,
+        turn_context,
+        &step_context,
+        compacted_history,
+        initial_context_injection,
+    )
+    .await
 }
 
 /// Returns whether an item from remote compaction output should be preserved.

@@ -116,6 +116,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    let step_context = Arc::new(StepContext::local_for_test(turn_context.as_ref()));
 
     let requested_permissions = RequestPermissionProfile {
         network: Some(NetworkPermissions {
@@ -123,7 +124,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         }),
         ..RequestPermissionProfile::default()
     };
-    let environment = turn_context
+    let environment = step_context
         .environments
         .primary()
         .expect("primary environment")
@@ -132,6 +133,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         Duration::from_secs(45),
         session.request_permissions_for_environment(
             &turn_context,
+            &step_context.environments,
             "perm-call-1".to_string(),
             RequestPermissionsArgs {
                 environment_id: None,
@@ -213,13 +215,15 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         ..RequestPermissionProfile::default()
     };
     let cancellation_token = CancellationToken::new();
+    let step_context = Arc::new(StepContext::local_for_test(turn_context.as_ref()));
     let request_handle = tokio::spawn({
         let session = Arc::clone(&session);
         let turn_context = Arc::clone(&turn_context);
+        let step_context = Arc::clone(&step_context);
         let requested_permissions = requested_permissions.clone();
         let cancellation_token = cancellation_token.clone();
         async move {
-            let environment = turn_context
+            let environment = step_context
                 .environments
                 .primary()
                 .expect("primary environment")
@@ -227,6 +231,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
             session
                 .request_permissions_for_environment(
                     &turn_context,
+                    &step_context.environments,
                     "perm-call-cancelled".to_string(),
                     RequestPermissionsArgs {
                         environment_id: None,
@@ -322,6 +327,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    let step_context = Arc::new(StepContext::local_for_test(turn_context.as_ref()));
     let expiration_ms: u64 = if cfg!(windows) { 2_500 } else { 1_000 };
 
     let handler = crate::tools::handlers::ShellCommandHandler::from(
@@ -333,6 +339,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step: step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
@@ -427,6 +434,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    let step_context = Arc::new(StepContext::local_for_test(turn_context.as_ref()));
 
     let handler = crate::tools::handlers::ShellCommandHandler::from(
         codex_tools::ShellCommandBackendConfig::Classic,
@@ -437,6 +445,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step: step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "strict-shell-command-call".to_string(),
@@ -477,6 +486,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
         .expect("test setup should allow enabling request permissions");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    let step_context = Arc::new(StepContext::local_for_test(turn_context.as_ref()));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
     let handler = ExecCommandHandler::default();
@@ -484,6 +494,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step: step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
@@ -524,7 +535,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
     turn_context.session_source = guardian_source;
     turn_context.developer_instructions = Some(guardian_policy.clone());
 
-    let refreshed = crate::compact_remote::process_compacted_history(
+    let refreshed = crate::compact_remote::process_compacted_history_for_test(
         &session,
         &turn_context,
         vec![
@@ -600,6 +611,7 @@ async fn shell_command_allows_sticky_turn_permissions_without_inline_request_per
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    let step_context = Arc::new(StepContext::local_for_test(turn_context.as_ref()));
 
     let handler = crate::tools::handlers::ShellCommandHandler::from(
         codex_tools::ShellCommandBackendConfig::Classic,
@@ -610,6 +622,7 @@ async fn shell_command_allows_sticky_turn_permissions_without_inline_request_per
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step: step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "sticky-turn-grant".to_string(),

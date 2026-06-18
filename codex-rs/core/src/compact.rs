@@ -14,6 +14,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
@@ -73,6 +74,7 @@ pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bo
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
@@ -92,6 +94,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     run_compact_task_inner(
         sess,
         turn_context,
+        step_context,
         input,
         initial_context_injection,
         CompactionTrigger::Auto,
@@ -105,6 +108,7 @@ pub(crate) async fn run_inline_auto_compact_task(
 pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     input: Vec<UserInput>,
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
@@ -118,6 +122,7 @@ pub(crate) async fn run_compact_task(
     run_compact_task_inner(
         sess.clone(),
         turn_context,
+        step_context,
         input,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
@@ -128,9 +133,11 @@ pub(crate) async fn run_compact_task(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
@@ -167,6 +174,7 @@ async fn run_compact_task_inner(
     let result = run_compact_task_inner_impl(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
+        Arc::clone(&step_context),
         input,
         initial_context_injection,
         compaction_metadata,
@@ -202,6 +210,7 @@ async fn run_compact_task_inner(
 async fn run_compact_task_inner_impl(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
@@ -308,7 +317,9 @@ async fn run_compact_task_inner_impl(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        let initial_context = sess
+            .build_initial_context(turn_context.as_ref(), step_context.as_ref())
+            .await;
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }

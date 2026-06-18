@@ -499,9 +499,13 @@ impl NetworkApprovalService {
         let use_guardian = routes_approval_to_guardian(&turn_context);
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
+            // V0 uses the latest environment for asynchronous network review. Preserve the
+            // originating environment once blocked proxy requests identify their tool call.
+            let environments = session.services.turn_environments.snapshot().await;
             review_approval_request(
                 &session,
                 &turn_context,
+                environments,
                 review_id,
                 GuardianApprovalRequest::NetworkAccess {
                     id: guardian_approval_id.clone(),

@@ -423,6 +423,8 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
     let provider = CoreShellActionProvider {
         policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
         session: Arc::new(session),
+        environments: crate::session::step_context::StepContext::local_for_test(&turn_context)
+            .environments,
         turn: Arc::new(turn_context),
         call_id: "preapproved-additional-permissions".to_string(),
         environment_id: "local".to_string(),
@@ -559,6 +561,8 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
     let provider = CoreShellActionProvider {
         policy: std::sync::Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
         session: std::sync::Arc::new(session),
+        environments: crate::session::step_context::StepContext::local_for_test(&turn_context)
+            .environments,
         turn: std::sync::Arc::new(turn_context),
         call_id: "execve-hook-call".to_string(),
         environment_id: "local".to_string(),
@@ -770,6 +774,8 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
     let provider = CoreShellActionProvider {
         policy: Arc::new(RwLock::new(policy)),
         session: Arc::new(session),
+        environments: crate::session::step_context::StepContext::local_for_test(&turn_context)
+            .environments,
         turn: Arc::new(turn_context),
         call_id: "deny-read-prefix-allow".to_string(),
         environment_id: "local".to_string(),
@@ -807,6 +813,8 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
     let provider = CoreShellActionProvider {
         policy: Arc::new(RwLock::new(PolicyParser::new().build())),
         session: Arc::new(session),
+        environments: crate::session::step_context::StepContext::local_for_test(&turn_context)
+            .environments,
         turn: Arc::new(turn_context),
         call_id: "deny-read-granular-sandbox-reject".to_string(),
         environment_id: "local".to_string(),

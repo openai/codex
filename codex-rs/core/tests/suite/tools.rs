@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -16,6 +17,9 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
+use core_test_support::PathExt;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -28,11 +32,16 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::local;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use tempfile::TempDir;
+use tokio::sync::oneshot;
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -127,6 +136,117 @@ async fn turn_environment_selection_keeps_environment_backed_tools() -> Result<(
         "environment tool should remain available with selected local environment; got {tools:?}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sampling_request_keeps_one_environment_view_for_context_and_tool_execution() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let (release_tool_call_tx, release_tool_call_rx) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![ev_response_created("resp-1")]),
+            },
+            StreamingSseChunk {
+                gate: Some(release_tool_call_rx),
+                body: sse(vec![
+                    ev_function_call(
+                        "call-1",
+                        "exec_command",
+                        &serde_json::to_string(&json!({
+                            "cmd": "printf frozen > step-context-marker.txt",
+                        }))?,
+                    ),
+                    ev_completed("resp-1"),
+                ]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        }],
+    ])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("unified exec should enable for test");
+    });
+    let test = Arc::new(builder.build_with_streaming_server(&server).await?);
+    let initial_cwd = test.config.cwd.clone();
+    let later_workspace = TempDir::new()?;
+    let later_cwd = later_workspace.path().abs();
+
+    let turn = {
+        let test = Arc::clone(&test);
+        let initial_cwd = initial_cwd.clone();
+        tokio::spawn(async move {
+            test.submit_turn_with_environments(
+                "use the environment captured for this request",
+                Some(vec![local(initial_cwd)]),
+            )
+            .await
+        })
+    };
+    server.wait_for_request_count(1).await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "switch the live selection".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(later_cwd.clone())),
+                ..Default::default()
+            },
+        })
+        .await?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if test.codex.environment_selections().await == vec![local(later_cwd.clone())] {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("live environment selection did not update")?;
+
+    release_tool_call_tx
+        .send(())
+        .map_err(|_| anyhow::anyhow!("tool-call gate closed"))?;
+    turn.await??;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let first_request: Value = serde_json::from_slice(&requests[0])?;
+    assert!(tool_names(&first_request).contains(&"exec_command".to_string()));
+    assert!(
+        first_request["input"]
+            .to_string()
+            .contains(initial_cwd.as_path().to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        fs::read_to_string(initial_cwd.join("step-context-marker.txt"))?,
+        "frozen"
+    );
+    assert!(!later_cwd.join("step-context-marker.txt").exists());
+
+    server.shutdown().await;
     Ok(())
 }
 

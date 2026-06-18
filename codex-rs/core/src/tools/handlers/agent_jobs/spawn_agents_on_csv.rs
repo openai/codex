@@ -1,4 +1,6 @@
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
+use crate::session::step_context::StepContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -36,6 +38,7 @@ impl SpawnAgentsOnCsvHandler {
         let ToolInvocation {
             session,
             turn,
+            step,
             payload,
             ..
         } = invocation;
@@ -49,7 +52,7 @@ impl SpawnAgentsOnCsvHandler {
             }
         };
 
-        handle(session, turn, arguments)
+        handle(session, turn, step, arguments)
             .await
             .map(boxed_tool_output)
     }
@@ -69,6 +72,7 @@ impl CoreToolRuntime for SpawnAgentsOnCsvHandler {
 pub async fn handle(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    step: Arc<StepContext>,
     arguments: String,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: SpawnAgentsOnCsvArgs = parse_arguments(arguments.as_str())?;
@@ -78,7 +82,8 @@ pub async fn handle(
         ));
     }
 
-    let cwd = single_local_environment_cwd(&turn)?;
+    let environments = step.environments.clone();
+    let cwd = single_local_environment_cwd(&environments)?;
     let db = required_state_db(&session)?;
     let input_path = cwd.join(args.csv_path);
     let input_path_display = input_path.display().to_string();
@@ -201,7 +206,7 @@ pub async fn handle(
         })?;
     if let Err(err) = run_agent_job_loop(
         session.clone(),
-        turn.clone(),
+        environments.to_selections(),
         db.clone(),
         job_id.clone(),
         options,
@@ -299,8 +304,10 @@ pub async fn handle(
     Ok(FunctionToolOutput::from_text(content, Some(true)))
 }
 
-fn single_local_environment_cwd(turn: &TurnContext) -> Result<AbsolutePathBuf, FunctionCallError> {
-    let [turn_environment] = turn.environments.turn_environments.as_slice() else {
+fn single_local_environment_cwd(
+    environments: &TurnEnvironmentSnapshot,
+) -> Result<AbsolutePathBuf, FunctionCallError> {
+    let [turn_environment] = environments.turn_environments.as_slice() else {
         return Err(FunctionCallError::RespondToModel(
             "spawn_agents_on_csv requires exactly one local environment".to_string(),
         ));

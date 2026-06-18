@@ -87,6 +87,12 @@ const GUARDIAN_MEMORY_CONTEXT_PROBE: &str = "guardian memory context probe";
 const GUARDIAN_SKILL_NAME: &str = "guardian-context-probe";
 const GUARDIAN_SKILL_BODY_PROBE: &str = "guardian skill body probe";
 
+async fn guardian_test_environments(
+    session: &Session,
+) -> crate::environment_selection::TurnEnvironmentSnapshot {
+    session.services.turn_environments.snapshot().await
+}
+
 // The memories extension depends on codex-core, so this probe verifies the nested Guardian config
 // at request assembly without introducing a circular test dependency.
 struct GuardianMemoryContextEnabled(bool);
@@ -1149,6 +1155,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     let decision = review_approval_request_with_cancel(
         &session,
         &turn,
+        guardian_test_environments(&session).await,
         "review-cancelled-guardian".to_string(),
         GuardianApprovalRequest::ApplyPatch {
             id: "patch-1".to_string(),
@@ -1469,6 +1476,7 @@ async fn guardian_request_model_for_auto_review(
     let (outcome, analytics_result) = run_guardian_review_session_for_test(
         Arc::clone(&session),
         turn,
+        guardian_test_environments(&session).await,
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -1718,6 +1726,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        guardian_test_environments(&session).await,
         request,
         Some("Sandbox denied outbound git push to github.com.".to_string()),
         guardian_output_schema(),
@@ -1910,6 +1919,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        guardian_test_environments(&session).await,
         first_request,
         Some("First retry reason".to_string()),
         guardian_output_schema(),
@@ -1957,6 +1967,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        guardian_test_environments(&session).await,
         second_request,
         Some("Second retry reason".to_string()),
         guardian_output_schema(),
@@ -2000,6 +2011,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let third_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        guardian_test_environments(&session).await,
         third_request,
         Some("Third retry reason".to_string()),
         guardian_output_schema(),
@@ -2185,6 +2197,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
     let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        guardian_test_environments(&session).await,
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -2228,6 +2241,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
     let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        guardian_test_environments(&session).await,
         GuardianApprovalRequest::Shell {
             id: "shell-2".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -2308,6 +2322,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     let decision = review_approval_request(
         &session,
         &turn,
+        guardian_test_environments(&session).await,
         "review-shell-guardian-error".to_string(),
         GuardianApprovalRequest::Shell {
             id: "shell-guardian-error".to_string(),
@@ -2407,6 +2422,7 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
     let (outcome, metadata) = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        guardian_test_environments(&session).await,
         guardian_shell_request("shell-session-retry"),
         /*retry_reason*/ None,
         guardian_output_schema(),
@@ -2448,6 +2464,7 @@ async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::
     let decision = review_approval_request(
         &session,
         &turn,
+        guardian_test_environments(&session).await,
         "review-missing-assessment".to_string(),
         guardian_shell_request("shell-missing-assessment"),
         /*retry_reason*/ None,
@@ -2498,6 +2515,7 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
     let (outcome, metadata) = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        guardian_test_environments(&session).await,
         guardian_shell_request("shell-parse-retry"),
         /*retry_reason*/ None,
         guardian_output_schema(),
@@ -2552,6 +2570,7 @@ async fn guardian_review_exhausts_three_failures_with_one_terminal_event() -> an
     let decision = review_approval_request(
         &session,
         &turn,
+        guardian_test_environments(&session).await,
         "review-exhausted-retry".to_string(),
         guardian_shell_request("shell-exhausted-retry"),
         /*retry_reason*/ None,
@@ -2603,6 +2622,7 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
     let decision = review_approval_request(
         &session,
         &turn,
+        guardian_test_environments(&session).await,
         "review-valid-denial".to_string(),
         guardian_shell_request("shell-valid-denial"),
         /*retry_reason*/ None,
@@ -2706,6 +2726,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
             review_approval_request(
                 &session,
                 &turn,
+                guardian_test_environments(&session).await,
                 "review-shell-guardian-1".to_string(),
                 initial_request,
                 /*retry_reason*/ None
@@ -2760,6 +2781,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
             review_approval_request(
                 &session_for_second,
                 &turn_for_second,
+                guardian_test_environments(&session_for_second).await,
                 "review-shell-guardian-2".to_string(),
                 second_request,
                 Some("trunk follow-up".to_string()),
@@ -2807,6 +2829,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         let third_decision = review_approval_request(
             &session,
             &turn,
+            guardian_test_environments(&session).await,
             "review-shell-guardian-3".to_string(),
             third_request,
             Some("parallel follow-up".to_string()),

@@ -5,6 +5,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
@@ -96,6 +97,7 @@ async fn exec_command_with_tty(
     workdir: Option<PathBuf>,
     tty: bool,
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
+    let step = Arc::new(StepContext::local_for_test(turn.as_ref()));
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
     #[allow(deprecated)]
@@ -112,7 +114,7 @@ async fn exec_command_with_tty(
                 &request,
                 tty,
                 Box::new(NoopSpawnLifecycle),
-                turn.environments
+                step.environments
                     .primary()
                     .expect("turn environment")
                     .environment
@@ -120,8 +122,12 @@ async fn exec_command_with_tty(
             )
             .await?,
     );
-    let context =
-        UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
+    let context = UnifiedExecContext::new(
+        Arc::clone(session),
+        Arc::clone(turn),
+        step.environments.clone(),
+        "call".to_string(),
+    );
     let started_at = Instant::now();
     let process_started_alive = !process.has_exited() && process.exit_code().is_none();
     if process_started_alive {
@@ -894,8 +900,9 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
     };
 
     let remote_test_env = remote_test_env().await?;
-    let (_, mut turn) = make_session_and_context().await;
-    turn.environments.turn_environments[0].environment =
+    let (_, turn) = make_session_and_context().await;
+    let mut step = StepContext::local_for_test(&turn);
+    step.environments.turn_environments[0].environment =
         Arc::new(remote_test_env.environment().clone());
 
     #[allow(deprecated)]
@@ -916,7 +923,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],
             }),
-            turn.environments
+            step.environments
                 .primary()
                 .expect("turn environment")
                 .environment

@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
 use crate::session::tests::make_session_and_context;
+use crate::session::tests::step_context_for_session;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
@@ -27,9 +28,11 @@ async fn invocation_for_payload(
     payload: ToolPayload,
 ) -> ToolInvocation {
     let (session, turn) = make_session_and_context().await;
+    let step = step_context_for_session(&session).await;
     ToolInvocation {
         session: session.into(),
         turn: turn.into(),
+        step,
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: call_id.to_string(),
@@ -236,12 +239,16 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
         arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
+    let step = Arc::new(crate::session::step_context::StepContext::local_for_test(
+        &turn,
+    ));
     let handler = ExecCommandHandler::default();
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            step,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-43".to_string(),
@@ -262,12 +269,16 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
         arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
+    let step = Arc::new(crate::session::step_context::StepContext::local_for_test(
+        &turn,
+    ));
     let handler = WriteStdinHandler;
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            step,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-44".to_string(),

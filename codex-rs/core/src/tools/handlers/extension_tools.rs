@@ -112,8 +112,8 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
-    let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
-    for environment in &invocation.turn.environments.turn_environments {
+    let mut environments = Vec::with_capacity(invocation.step.environments.turn_environments.len());
+    for environment in &invocation.step.environments.turn_environments {
         // TODO(anp): Migrate extension ToolEnvironment and granted-permission lookup to PathUri
         // so extensions can receive foreign environment cwd values.
         let Ok(native_cwd) = environment.cwd().to_abs_path() else {
@@ -272,9 +272,13 @@ mod tests {
     async fn exposes_generic_hook_payloads() {
         let handler = ExtensionToolAdapter::new(Arc::new(StubExtensionExecutor));
         let (session, turn) = crate::session::tests::make_session_and_context().await;
+        let step = Arc::new(crate::session::step_context::StepContext::local_for_test(
+            &turn,
+        ));
         let invocation = ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            step,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "call-extension".to_string(),
@@ -311,12 +315,13 @@ mod tests {
             captured_call: Arc::clone(&captured_call),
         }));
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
+        let step = crate::session::tests::step_context_for_session(session.as_ref()).await;
         let weak_session = Arc::downgrade(&session);
         let weak_turn = Arc::downgrade(&turn);
         let turn_id = turn.sub_id.clone();
         let model = turn.model_info.slug.clone();
         let truncation_policy = turn.model_info.truncation_policy.into();
-        let expected_sandbox_cwds = turn
+        let expected_sandbox_cwds = step
             .environments
             .turn_environments
             .iter()
@@ -342,6 +347,7 @@ mod tests {
         let invocation = ToolInvocation {
             session,
             turn,
+            step,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "call-extension".to_string(),
@@ -535,6 +541,7 @@ mod tests {
     async fn image_generation_publication_is_finalized_by_core() {
         let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor));
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
+        let step = crate::session::tests::step_context_for_session(session.as_ref()).await;
         let expected_path = crate::stream_events_utils::image_generation_artifact_path(
             &turn.config.codex_home,
             &session.thread_id.to_string(),
@@ -543,6 +550,7 @@ mod tests {
         let invocation = ToolInvocation {
             session,
             turn,
+            step,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "call-image".to_string(),

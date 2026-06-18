@@ -81,7 +81,10 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         .user_shell()
         .derive_exec_args(&command, /*use_login_shell*/ true);
     #[allow(deprecated)]
-    let expected_cwd = turn_context.resolve_path(workdir.clone());
+    let expected_cwd = workdir.as_ref().map_or_else(
+        || turn_context.cwd.clone(),
+        |path| turn_context.cwd.join(path),
+    );
     let expected_env = create_env(
         &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
@@ -102,6 +105,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         &params,
         &session,
         &turn_context,
+        expected_cwd.clone(),
         session.thread_id,
         /*allow_login_shell*/ true,
     )
@@ -164,6 +168,8 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         &params,
         &session,
         &turn_context,
+        #[allow(deprecated)]
+        turn_context.cwd.clone(),
         session.thread_id,
         /*allow_login_shell*/ false,
     )
@@ -196,12 +202,16 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
+    let step = Arc::new(crate::session::step_context::StepContext::local_for_test(
+        &turn,
+    ));
     let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            step,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-42".to_string(),
@@ -228,9 +238,13 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     };
     let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
     let (session, turn) = make_session_and_context().await;
+    let step = Arc::new(crate::session::step_context::StepContext::local_for_test(
+        &turn,
+    ));
     let invocation = ToolInvocation {
         session: session.into(),
         turn: turn.into(),
+        step,
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-42".to_string(),

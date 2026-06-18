@@ -2300,7 +2300,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         openai_file_input_params: None,
     };
 
-    let decision = maybe_request_mcp_tool_approval(
+    let decision = maybe_request_mcp_tool_approval_for_test(
         &session,
         &turn_context,
         "call-1",
@@ -2374,7 +2374,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         openai_file_input_params: None,
     };
 
-    let decision = maybe_request_mcp_tool_approval(
+    let decision = maybe_request_mcp_tool_approval_for_test(
         &session,
         &turn_context,
         "call-guardian",
@@ -2431,7 +2431,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         openai_file_input_params: None,
     };
 
-    let decision = maybe_request_mcp_tool_approval(
+    let decision = maybe_request_mcp_tool_approval_for_test(
         &session,
         &turn_context,
         "call-mcp-hook",
@@ -2493,7 +2493,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
         arguments: Some(serde_json::json!({ "entities": [] })),
     };
 
-    let decision = maybe_request_mcp_tool_approval(
+    let decision = maybe_request_mcp_tool_approval_for_test(
         &session,
         &turn_context,
         "call-mcp-hook-no-metadata",
@@ -2573,7 +2573,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
-    let decision = maybe_request_mcp_tool_approval(
+    let decision = maybe_request_mcp_tool_approval_for_test(
         &session,
         &turn_context,
         "call-mcp-remembered",
@@ -2654,7 +2654,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         openai_file_input_params: None,
     };
 
-    let decision = maybe_request_mcp_tool_approval(
+    let decision = maybe_request_mcp_tool_approval_for_test(
         &session,
         &turn_context,
         "call-guardian-deny",
@@ -2712,7 +2712,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         let session = Arc::clone(&session);
         let turn_context = Arc::clone(&turn_context);
         tokio::spawn(async move {
-            maybe_request_mcp_tool_approval(
+            maybe_request_mcp_tool_approval_for_test(
                 &session,
                 &turn_context,
                 "call-prompt",
@@ -2768,7 +2768,7 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
         AppToolApproval::Prompt,
         AppToolApproval::Approve,
     ] {
-        let decision = maybe_request_mcp_tool_approval(
+        let decision = maybe_request_mcp_tool_approval_for_test(
             &session,
             &turn_context,
             "call-2",
@@ -2856,7 +2856,7 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
 
         let session = Arc::new(session);
         let turn_context = Arc::new(turn_context);
-        let decision = maybe_request_mcp_tool_approval(
+        let decision = maybe_request_mcp_tool_approval_for_test(
             &session,
             &turn_context,
             "call-3",

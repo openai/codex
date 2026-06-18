@@ -237,8 +237,9 @@ pub(super) async fn user_input_or_turn_inner(
                     .set_responsesapi_client_metadata(responsesapi_client_metadata);
             }
             current_context.session_telemetry.user_prompt(&items);
+            // Refresh outside the task so cancellation cannot consume it midway.
             sess.refresh_mcp_servers_if_requested(
-                &current_context,
+                current_context.as_ref(),
                 Some(sess.mcp_elicitation_reviewer()),
             )
             .await;
@@ -258,7 +259,7 @@ pub(super) async fn user_input_or_turn_inner(
                 });
             }
             sess.spawn_task(
-                Arc::clone(&current_context),
+                current_context,
                 task_input,
                 crate::tasks::RegularTask::new(),
             )
@@ -310,12 +311,8 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
     }
 
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-    sess.spawn_task(
-        Arc::clone(&turn_context),
-        Vec::new(),
-        UserShellCommandTask::new(command),
-    )
-    .await;
+    sess.spawn_task(turn_context, Vec::new(), UserShellCommandTask::new(command))
+        .await;
 }
 
 pub async fn resolve_elicitation(
@@ -444,8 +441,7 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
-    sess.spawn_task(Arc::clone(&turn_context), Vec::new(), CompactTask)
-        .await;
+    sess.spawn_task(turn_context, Vec::new(), CompactTask).await;
 }
 
 pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
@@ -670,13 +666,15 @@ pub async fn review(
         .await;
     sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;
-    #[allow(deprecated)]
-    match resolve_review_request(review_request, &turn_context.cwd) {
+    let step_context = sess.prepare_step_for_request().await;
+    let review_cwd = step_context.effective_cwd(turn_context.as_ref());
+    match resolve_review_request(review_request, &review_cwd) {
         Ok(resolved) => {
             spawn_review_thread(
                 Arc::clone(sess),
                 Arc::clone(config),
-                turn_context.clone(),
+                turn_context,
+                step_context.environments.clone(),
                 sub_id,
                 resolved,
             )

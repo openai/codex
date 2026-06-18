@@ -240,6 +240,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    use crate::session::step_context::StepContext;
     use crate::tools::context::FunctionToolOutput;
     use crate::tools::context::ToolInvocation;
     use crate::tools::registry::CoreToolRuntime;
@@ -423,9 +424,11 @@ mod tests {
         let handler = Arc::new(ImmediateHandler {
             tool_name: tool_name.clone(),
         }) as Arc<dyn CoreToolRuntime>;
+        let step_context = Arc::new(StepContext::local_for_test(turn_context.as_ref()));
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::from_tools([handler]),
             Vec::new(),
+            step_context,
         ));
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
         let runtime = ToolCallRuntime::new(router, session, turn_context, tracker);
@@ -495,9 +498,11 @@ mod tests {
             cleanup_started: std::sync::Mutex::new(Some(cleanup_started_tx)),
             allow_cleanup: Arc::clone(&allow_cleanup),
         }) as Arc<dyn CoreToolRuntime>;
+        let step_context = Arc::new(StepContext::local_for_test(turn_context.as_ref()));
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::from_tools([handler]),
             Vec::new(),
+            step_context,
         ));
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
         let runtime = ToolCallRuntime::new(router, session, turn_context, tracker);

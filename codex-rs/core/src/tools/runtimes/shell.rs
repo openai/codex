@@ -156,6 +156,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                 return review_approval_request(
                     session,
                     turn,
+                    ctx.environments.clone(),
                     review_id,
                     GuardianApprovalRequest::Shell {
                         id: call_id,

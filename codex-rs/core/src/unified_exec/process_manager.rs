@@ -1108,6 +1108,7 @@ impl UnifiedExecProcessManager {
         let tool_ctx = ToolCtx {
             session: context.session.clone(),
             turn: context.turn.clone(),
+            environments: context.environments.clone(),
             call_id: context.call_id.clone(),
             tool_name: ToolName::plain("exec_command"),
         };

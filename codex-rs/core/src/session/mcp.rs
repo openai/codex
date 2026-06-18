@@ -320,10 +320,10 @@ impl Session {
         let environment_manager = self.services.turn_environments.environment_manager();
         // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
         // values can be used without falling back to the legacy host cwd.
-        let cwd = turn_context
-            .environments
+        let environments = self.services.turn_environments.snapshot().await;
+        let cwd = environments
             .primary()
-            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+            .and_then(|environment| environment.cwd().to_abs_path().ok())
             .map(|cwd| cwd.to_path_buf())
             .unwrap_or_else(|| {
                 #[allow(deprecated)]
@@ -492,9 +492,14 @@ async fn review_guardian_mcp_elicitation(
     };
 
     let review_id = crate::guardian::new_guardian_review_id();
+    // V0 only allows the selected environment to move from starting to attached, so use
+    // its latest snapshot. Bind elicitations to their originating MCP call before
+    // supporting selection changes or detachment during a turn.
+    let environments = session.services.turn_environments.snapshot().await;
     let decision = crate::guardian::review_approval_request(
         &session,
         &turn_context,
+        environments,
         review_id.clone(),
         guardian_request,
         /*retry_reason*/ None,

@@ -12,6 +12,7 @@ use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
@@ -155,7 +156,7 @@ fn normalize_max_runtime_seconds(requested: Option<u64>) -> Result<Option<u64>, 
 
 async fn run_agent_job_loop(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
+    environments: Vec<TurnEnvironmentSelection>,
     db: Arc<codex_state::StateRuntime>,
     job_id: String,
     options: JobRunnerOptions,
@@ -209,7 +210,7 @@ async fn run_agent_job_loop(
                         )))),
                         SpawnAgentOptions {
                             parent_thread_id: Some(session.thread_id),
-                            environments: Some(turn.environments.to_selections()),
+                            environments: Some(environments.clone()),
                             ..Default::default()
                         },
                     )
