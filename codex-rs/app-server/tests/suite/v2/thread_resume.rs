@@ -23,6 +23,7 @@ use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
@@ -729,8 +730,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 .expect("remote resume should include redacted MCP item");
             let ThreadItem::McpToolCall {
                 arguments,
-                connector_id,
-                link_id,
+                app_context,
                 result,
                 error,
                 ..
@@ -739,8 +739,13 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 unreachable!("matched MCP item");
             };
             assert_eq!(arguments, &json!("[redacted]"));
-            assert_eq!(connector_id.as_deref(), Some("calendar"));
-            assert_eq!(link_id.as_deref(), Some("link_calendar"));
+            assert_eq!(
+                app_context,
+                &Some(McpToolCallAppContext {
+                    id: "calendar".to_string(),
+                    link_id: Some("link_calendar".to_string()),
+                })
+            );
             let result = result.as_ref().expect("redacted MCP result");
             assert_eq!(
                 result.content,
@@ -775,7 +780,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
         .expect("normal resume should include MCP item");
     let ThreadItem::McpToolCall {
         arguments,
-        link_id,
+        app_context,
         result,
         ..
     } = normal_mcp_item
@@ -783,7 +788,13 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
         unreachable!("matched MCP item");
     };
     assert_eq!(arguments, &json!({"secret":"argument"}));
-    assert_eq!(link_id.as_deref(), Some("link_calendar"));
+    assert_eq!(
+        app_context,
+        &Some(McpToolCallAppContext {
+            id: "calendar".to_string(),
+            link_id: Some("link_calendar".to_string()),
+        })
+    );
     let result = result.as_ref().expect("normal MCP result");
     assert_eq!(
         result.content,

@@ -2396,6 +2396,23 @@
       ],
       "type": "object"
     },
+    "McpToolCallAppContext": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "linkId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -4066,13 +4083,17 @@
         },
         {
           "properties": {
-            "arguments": true,
-            "connectorId": {
-              "type": [
-                "string",
-                "null"
+            "appContext": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/McpToolCallAppContext"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
+            "arguments": true,
             "durationMs": {
               "description": "The duration of the MCP tool call in milliseconds.",
               "format": "int64",
@@ -4093,12 +4114,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "linkId": {
-              "type": [
-                "string",
-                "null"
-              ]
             },
             "mcpAppResourceUri": {
               "type": [

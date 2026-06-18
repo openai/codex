@@ -552,7 +552,9 @@ impl McpToolCallItem {
                 tool: self.tool.clone(),
                 arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
             },
+            connector_id: self.connector_id.clone(),
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+            link_id: self.link_id.clone(),
             plugin_id: self.plugin_id.clone(),
         })
     }

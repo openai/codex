@@ -290,11 +290,10 @@ pub enum ThreadItem {
         tool: String,
         status: McpToolCallStatus,
         arguments: JsonValue,
-        connector_id: Option<String>,
+        app_context: Option<McpToolCallAppContext>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         mcp_app_resource_uri: Option<String>,
-        link_id: Option<String>,
         plugin_id: Option<String>,
         result: Option<Box<McpToolCallResult>>,
         error: Option<McpToolCallError>,
@@ -384,6 +383,14 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ContextCompaction { id: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct McpToolCallAppContext {
+    pub id: String,
+    pub link_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -879,9 +886,11 @@ impl From<CoreTurnItem> for ThreadItem {
                     tool: mcp.tool,
                     status: McpToolCallStatus::from(mcp.status),
                     arguments: mcp.arguments,
-                    connector_id: mcp.connector_id,
+                    app_context: mcp.connector_id.map(|id| McpToolCallAppContext {
+                        id,
+                        link_id: mcp.link_id,
+                    }),
                     mcp_app_resource_uri: mcp.mcp_app_resource_uri,
-                    link_id: mcp.link_id,
                     plugin_id: mcp.plugin_id,
                     result: mcp.result.map(McpToolCallResult::from).map(Box::new),
                     error: mcp.error.map(McpToolCallError::from),

@@ -243,6 +243,7 @@ export type { McpServerStatusDetail } from "./McpServerStatusDetail";
 export type { McpServerStatusUpdatedNotification } from "./McpServerStatusUpdatedNotification";
 export type { McpServerToolCallParams } from "./McpServerToolCallParams";
 export type { McpServerToolCallResponse } from "./McpServerToolCallResponse";
+export type { McpToolCallAppContext } from "./McpToolCallAppContext";
 export type { McpToolCallError } from "./McpToolCallError";
 export type { McpToolCallProgressNotification } from "./McpToolCallProgressNotification";
 export type { McpToolCallResult } from "./McpToolCallResult";
