@@ -112,9 +112,14 @@ pub async fn start_thread_with_user_shell_override(
     thread_manager: &ThreadManager,
     config: Config,
     user_shell_override: crate::shell::Shell,
+    supports_openai_form_elicitation: bool,
 ) -> codex_protocol::error::Result<crate::NewThread> {
     thread_manager
-        .start_thread_with_user_shell_override_for_tests(config, user_shell_override)
+        .start_thread_with_user_shell_override_for_tests(
+            config,
+            user_shell_override,
+            supports_openai_form_elicitation,
+        )
         .await
 }
 
@@ -124,6 +129,7 @@ pub async fn resume_thread_from_rollout_with_user_shell_override(
     rollout_path: PathBuf,
     auth_manager: Arc<AuthManager>,
     user_shell_override: crate::shell::Shell,
+    supports_openai_form_elicitation: bool,
 ) -> codex_protocol::error::Result<crate::NewThread> {
     thread_manager
         .resume_thread_from_rollout_with_user_shell_override_for_tests(
@@ -131,6 +137,7 @@ pub async fn resume_thread_from_rollout_with_user_shell_override(
             rollout_path,
             auth_manager,
             user_shell_override,
+            supports_openai_form_elicitation,
         )
         .await
 }

@@ -186,6 +186,7 @@ pub struct StartThreadOptions {
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
     pub thread_extension_init: ExtensionDataInit,
+    pub supports_openai_form_elicitation: bool,
 }
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
@@ -604,6 +605,7 @@ impl ThreadManager {
             parent_trace: None,
             environments,
             thread_extension_init: ExtensionDataInit::default(),
+            supports_openai_form_elicitation: false,
         }))
         .await
     }
@@ -644,6 +646,7 @@ impl ThreadManager {
             options.parent_trace,
             options.environments,
             options.thread_extension_init,
+            options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
         ))
         .await
@@ -692,6 +695,7 @@ impl ThreadManager {
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
     ) -> CodexResult<NewThread> {
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
         Box::pin(self.resume_thread_with_history(
@@ -699,6 +703,7 @@ impl ThreadManager {
             initial_history,
             auth_manager,
             parent_trace,
+            supports_openai_form_elicitation,
         ))
         .await
     }
@@ -710,6 +715,7 @@ impl ThreadManager {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let environments = default_thread_environment_selections(
@@ -735,6 +741,7 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
+            supports_openai_form_elicitation,
             /*user_shell_override*/ None,
         ))
         .await
@@ -744,6 +751,7 @@ impl ThreadManager {
         &self,
         config: Config,
         user_shell_override: crate::shell::Shell,
+        supports_openai_form_elicitation: bool,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let environments = default_thread_environment_selections(
@@ -763,6 +771,7 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
+            supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -774,6 +783,7 @@ impl ThreadManager {
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
         user_shell_override: crate::shell::Shell,
+        supports_openai_form_elicitation: bool,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
@@ -800,6 +810,7 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
+            supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -880,8 +891,15 @@ impl ThreadManager {
     {
         let snapshot = snapshot.into();
         let history = self.initial_history_from_rollout_path(path).await?;
-        self.fork_thread_from_history(snapshot, config, history, thread_source, parent_trace)
-            .await
+        self.fork_thread_from_history(
+            snapshot,
+            config,
+            history,
+            thread_source,
+            parent_trace,
+            /*supports_openai_form_elicitation*/ false,
+        )
+        .await
     }
 
     async fn initial_history_from_rollout_path(
@@ -910,6 +928,7 @@ impl ThreadManager {
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
     ) -> CodexResult<NewThread>
     where
         S: Into<ForkSnapshot>,
@@ -920,6 +939,7 @@ impl ThreadManager {
             history,
             thread_source,
             parent_trace,
+            supports_openai_form_elicitation,
         )
         .await
     }
@@ -931,6 +951,7 @@ impl ThreadManager {
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -970,6 +991,7 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
+            supports_openai_form_elicitation,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1230,6 +1252,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
+            /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1267,6 +1290,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
+            /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1305,6 +1329,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
+            /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1326,6 +1351,7 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         thread_extension_init: ExtensionDataInit,
+        supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -1344,6 +1370,7 @@ impl ThreadManagerState {
             parent_trace,
             environments,
             thread_extension_init,
+            supports_openai_form_elicitation,
             user_shell_override,
         ))
         .await
@@ -1367,6 +1394,7 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         thread_extension_init: ExtensionDataInit,
+        supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
@@ -1434,6 +1462,7 @@ impl ThreadManagerState {
             parent_trace,
             environment_selections: environments,
             thread_extension_init,
+            supports_openai_form_elicitation,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),

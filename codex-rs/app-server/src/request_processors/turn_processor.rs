@@ -101,12 +101,14 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        supports_openai_form_elicitation: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.turn_start_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            /*supports_openai_form_elicitation*/ supports_openai_form_elicitation,
         )
         .await
         .map(|response| Some(response.into()))
@@ -384,6 +386,7 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        supports_openai_form_elicitation: bool,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
@@ -410,6 +413,14 @@ impl TurnRequestProcessor {
         .inspect_err(|error| {
             self.track_error_response(&request_id, error, /*error_type*/ None);
         })?;
+        thread
+            .set_openai_form_elicitation_support(supports_openai_form_elicitation)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to update OpenAI form elicitation support: {err}"
+                ))
+            })?;
 
         let environment_selections =
             resolve_turn_environment_selections(self.thread_manager.as_ref(), params.environments)?;
@@ -1164,6 +1175,7 @@ impl TurnRequestProcessor {
                 }),
                 /*thread_source*/ None,
                 self.request_trace_context(request_id).await,
+                /*supports_openai_form_elicitation*/ false,
             )
             .await
             .map_err(|err| {

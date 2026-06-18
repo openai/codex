@@ -830,6 +830,7 @@ async fn resume_conversation(
         path,
         auth_manager,
         /*parent_trace*/ None,
+        /*supports_openai_form_elicitation*/ false,
     ))
     .await
     .expect("resume conversation")

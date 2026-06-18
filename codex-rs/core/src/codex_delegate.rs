@@ -113,6 +113,10 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_trace: None,
         environment_selections: parent_ctx.environments.to_selections(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
+        supports_openai_form_elicitation: parent_session
+            .services
+            .supports_openai_form_elicitation
+            .load(std::sync::atomic::Ordering::Relaxed),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
         attestation_provider: parent_session.services.attestation_provider.clone(),

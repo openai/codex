@@ -47,6 +47,7 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
             InitialHistory::New,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("spawn conversation");
@@ -93,6 +94,7 @@ async fn suppresses_warning_when_configured() {
             InitialHistory::New,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("spawn conversation");

@@ -30,13 +30,15 @@ fn form_request(meta: Option<Meta>) -> ElicitationReviewRequest {
     ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(7),
-        elicitation: CreateElicitationRequestParams::FormElicitationParams {
-            meta,
-            message: "Allow origin?".to_string(),
-            requested_schema: ElicitationSchema::builder()
-                .build()
-                .expect("schema should build"),
-        },
+        elicitation: Elicitation::Mcp(
+            rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                meta,
+                message: "Allow origin?".to_string(),
+                requested_schema: ElicitationSchema::builder()
+                    .build()
+                    .expect("schema should build"),
+            },
+        ),
     }
 }
 
@@ -171,12 +173,14 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
     let url_request = ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(8),
-        elicitation: CreateElicitationRequestParams::UrlElicitationParams {
-            meta: guardian_meta(Some(json!({}))),
-            message: "Open URL".to_string(),
-            url: "https://example.com".to_string(),
-            elicitation_id: "elicit-1".to_string(),
-        },
+        elicitation: Elicitation::Mcp(
+            rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+                meta: guardian_meta(Some(json!({}))),
+                message: "Open URL".to_string(),
+                url: "https://example.com".to_string(),
+                elicitation_id: "elicit-1".to_string(),
+            },
+        ),
     };
     assert!(matches!(
         guardian_elicitation_review_request(&url_request),
@@ -186,14 +190,16 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
     let non_empty_schema_request = ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(9),
-        elicitation: CreateElicitationRequestParams::FormElicitationParams {
-            meta: guardian_meta(Some(json!({}))),
-            message: "Allow origin?".to_string(),
-            requested_schema: ElicitationSchema::builder()
-                .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
-                .build()
-                .expect("schema should build"),
-        },
+        elicitation: Elicitation::Mcp(
+            rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                meta: guardian_meta(Some(json!({}))),
+                message: "Allow origin?".to_string(),
+                requested_schema: ElicitationSchema::builder()
+                    .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
+                    .build()
+                    .expect("schema should build"),
+            },
+        ),
     };
     assert!(matches!(
         guardian_elicitation_review_request(&non_empty_schema_request),

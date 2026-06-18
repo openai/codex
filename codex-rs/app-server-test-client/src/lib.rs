@@ -1668,6 +1668,7 @@ impl CodexClient {
                             .map(|method| (*method).to_string())
                             .collect(),
                     ),
+                    mcp_server_openai_form_elicitation: false,
                 }),
             },
         };

@@ -632,6 +632,15 @@ pub enum McpServerElicitationRequest {
         message: String,
         requested_schema: McpElicitationSchema,
     },
+    #[serde(rename = "openai/form", rename_all = "camelCase")]
+    #[ts(rename = "openai/form", rename_all = "camelCase")]
+    OpenAiForm {
+        #[serde(rename = "_meta")]
+        #[ts(rename = "_meta")]
+        meta: Option<JsonValue>,
+        message: String,
+        requested_schema: JsonValue,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Url {
@@ -657,6 +666,15 @@ impl TryFrom<CoreElicitationRequest> for McpServerElicitationRequest {
                 meta,
                 message,
                 requested_schema: serde_json::from_value(requested_schema)?,
+            }),
+            CoreElicitationRequest::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
+            } => Ok(Self::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
             }),
             CoreElicitationRequest::Url {
                 meta,

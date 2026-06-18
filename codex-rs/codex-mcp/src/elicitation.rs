@@ -22,11 +22,11 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_rmcp_client::Elicitation;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::SendElicitation;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
-use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationAction;
 use rmcp::model::RequestId;
 use tokio::sync::Mutex;
@@ -36,7 +36,7 @@ use tokio::sync::oneshot;
 pub struct ElicitationReviewRequest {
     pub server_name: String,
     pub request_id: RequestId,
-    pub elicitation: CreateElicitationRequestParams,
+    pub elicitation: Elicitation,
 }
 
 pub trait ElicitationReviewer: Send + Sync {
@@ -172,11 +172,13 @@ impl ElicitationRequestManager {
                 }
 
                 let request = match elicitation {
-                    CreateElicitationRequestParams::FormElicitationParams {
-                        meta,
-                        message,
-                        requested_schema,
-                    } => ElicitationRequest::Form {
+                    Elicitation::Mcp(
+                        rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                            meta,
+                            message,
+                            requested_schema,
+                        },
+                    ) => ElicitationRequest::Form {
                         meta: meta
                             .map(serde_json::to_value)
                             .transpose()
@@ -185,12 +187,14 @@ impl ElicitationRequestManager {
                         requested_schema: serde_json::to_value(requested_schema)
                             .context("failed to serialize MCP elicitation schema")?,
                     },
-                    CreateElicitationRequestParams::UrlElicitationParams {
-                        meta,
-                        message,
-                        url,
-                        elicitation_id,
-                    } => ElicitationRequest::Url {
+                    Elicitation::Mcp(
+                        rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+                            meta,
+                            message,
+                            url,
+                            elicitation_id,
+                        },
+                    ) => ElicitationRequest::Url {
                         meta: meta
                             .map(serde_json::to_value)
                             .transpose()
@@ -198,6 +202,15 @@ impl ElicitationRequestManager {
                         message,
                         url,
                         elicitation_id,
+                    },
+                    Elicitation::OpenAiForm {
+                        meta,
+                        message,
+                        requested_schema,
+                    } => ElicitationRequest::OpenAiForm {
+                        meta,
+                        message,
+                        requested_schema,
                     },
                 };
                 let (tx, rx) = oneshot::channel();
@@ -243,14 +256,18 @@ pub(crate) fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval)
 
 type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
 
-fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> bool {
+fn can_auto_accept_elicitation(elicitation: &Elicitation) -> bool {
     match elicitation {
-        CreateElicitationRequestParams::FormElicitationParams {
-            requested_schema, ..
-        } => {
+        Elicitation::Mcp(rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+            requested_schema,
+            ..
+        }) => {
             // Auto-accept confirm/approval elicitations without schema requirements.
             requested_schema.properties.is_empty()
         }
-        CreateElicitationRequestParams::UrlElicitationParams { .. } => false,
+        Elicitation::Mcp(rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+            ..
+        })
+        | Elicitation::OpenAiForm { .. } => false,
     }
 }

@@ -325,6 +325,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("internal thread should start");
@@ -463,6 +464,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: selected_root_init("selected-a", "env-a"),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start first thread");
@@ -477,6 +479,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: selected_root_init("selected-b", "env-b"),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start second thread");
@@ -567,6 +570,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             parent_trace: None,
             environments: environments.clone(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start source thread");
@@ -593,6 +597,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume source thread");
@@ -729,6 +734,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume active source thread");
@@ -792,6 +798,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume stopped source thread");
@@ -842,6 +849,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start source thread");
@@ -868,6 +876,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume source thread");
@@ -947,6 +956,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             }),
             auth_manager.clone(),
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("seed rollout path in store");
@@ -963,6 +973,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume from rollout path");
@@ -1254,6 +1265,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
             ]),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("create source thread from completed history");
@@ -1368,6 +1380,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             ]),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("create source thread from explicit partial history");
@@ -1458,6 +1471,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             ]),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("create source thread from partial history");

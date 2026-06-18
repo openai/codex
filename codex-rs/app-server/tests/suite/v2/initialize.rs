@@ -214,6 +214,7 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
                 experimental_api: true,
                 request_attestation: false,
                 opt_out_notification_methods: Some(vec!["thread/started".to_string()]),
+                mcp_server_openai_form_elicitation: false,
             }),
         ),
     )
