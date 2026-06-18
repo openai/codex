@@ -57,28 +57,20 @@ async fn request_current_time(
     thread_id: ThreadId,
 ) -> Result<DateTime<Utc>> {
     let deadline = Instant::now() + CURRENT_TIME_REQUEST_TIMEOUT;
-    let mut connection_ids = thread_state_manager
-        .current_time_capable_connections_for_thread(thread_id)
-        .await;
-    if connection_ids.is_empty() {
-        // External current time only needs to support a single app-server client for now.
-        // Supporting multiple clients without attachment races would require a capability-aware
-        // wait, adding complexity that is not currently necessary.
-        timeout_at(
-            deadline,
-            thread_state_manager.wait_for_thread_subscriber(thread_id),
+    timeout_at(
+        deadline,
+        thread_state_manager.wait_for_thread_subscriber(thread_id),
+    )
+    .await
+    .map_err(|_| {
+        anyhow!(
+            "timed out waiting for a client to subscribe to the thread after {}s",
+            CURRENT_TIME_REQUEST_TIMEOUT.as_secs()
         )
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "timed out waiting for a client to subscribe to the thread after {}s",
-                CURRENT_TIME_REQUEST_TIMEOUT.as_secs()
-            )
-        })?;
-        connection_ids = thread_state_manager
-            .current_time_capable_connections_for_thread(thread_id)
-            .await;
-    }
+    })?;
+    let connection_ids = thread_state_manager
+        .subscribed_connection_ids(thread_id)
+        .await;
     let connection_id = require_single_current_time_connection(&connection_ids)?;
     let connection_ids = [connection_id];
     let (request_id, rx) = outgoing
@@ -121,7 +113,7 @@ fn require_single_current_time_connection(connection_ids: &[ConnectionId]) -> Re
     match connection_ids {
         [connection_id] => Ok(*connection_id),
         _ => bail!(
-            "expected exactly one current-time capable client subscribed to the thread, found {}",
+            "expected exactly one client subscribed to the thread, found {}",
             connection_ids.len()
         ),
     }
@@ -142,13 +134,13 @@ mod tests {
             require_single_current_time_connection(&[])
                 .unwrap_err()
                 .to_string(),
-            "expected exactly one current-time capable client subscribed to the thread, found 0"
+            "expected exactly one client subscribed to the thread, found 0"
         );
         assert_eq!(
             require_single_current_time_connection(&[ConnectionId(7), ConnectionId(8)])
                 .unwrap_err()
                 .to_string(),
-            "expected exactly one current-time capable client subscribed to the thread, found 2"
+            "expected exactly one client subscribed to the thread, found 2"
         );
     }
 }

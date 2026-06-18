@@ -1,14 +1,10 @@
 use std::path::Path;
 
 use anyhow::Result;
-use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::to_response;
-use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CurrentTimeReadResponse;
-use codex_app_server_protocol::InitializeCapabilities;
-use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
@@ -45,25 +41,7 @@ async fn current_time_read_round_trip_adds_reminder_to_model_input() -> Result<(
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut app_server = TestAppServer::new(codex_home.path()).await?;
-    let initialized = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.initialize_with_capabilities(
-            ClientInfo {
-                name: DEFAULT_CLIENT_NAME.to_string(),
-                title: None,
-                version: "0.1.0".to_string(),
-            },
-            Some(InitializeCapabilities {
-                experimental_api: true,
-                request_current_time: true,
-                ..Default::default()
-            }),
-        ),
-    )
-    .await??;
-    let JSONRPCMessage::Response(_) = initialized else {
-        panic!("expected initialize response, got: {initialized:?}");
-    };
+    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
 
     let thread_request_id = app_server
         .send_thread_start_request(ThreadStartParams::default())

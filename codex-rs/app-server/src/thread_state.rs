@@ -281,7 +281,6 @@ struct ThreadStateManagerInner {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ConnectionCapabilities {
     pub(crate) request_attestation: bool,
-    pub(crate) request_current_time: bool,
 }
 
 #[derive(Clone, Default)]
@@ -328,27 +327,6 @@ impl ThreadStateManager {
                     .then_some(*connection_id)
             })
             .min_by_key(|connection_id| connection_id.0)
-    }
-
-    pub(crate) async fn current_time_capable_connections_for_thread(
-        &self,
-        thread_id: ThreadId,
-    ) -> Vec<ConnectionId> {
-        let state = self.state.lock().await;
-        let Some(thread_entry) = state.threads.get(&thread_id) else {
-            return Vec::new();
-        };
-        thread_entry
-            .connection_ids
-            .iter()
-            .filter_map(|connection_id| {
-                state
-                    .live_connections
-                    .get(connection_id)?
-                    .request_current_time
-                    .then_some(*connection_id)
-            })
-            .collect()
     }
 
     pub(crate) async fn wait_for_thread_subscriber(&self, thread_id: ThreadId) {

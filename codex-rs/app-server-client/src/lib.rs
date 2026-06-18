@@ -371,7 +371,6 @@ impl InProcessClientStartArgs {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
             request_attestation: false,
-            request_current_time: false,
             opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
                 None
             } else {

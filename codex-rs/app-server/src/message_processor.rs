@@ -225,7 +225,6 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) client_version: String,
     pub(crate) request_attestation: bool,
     pub(crate) supports_openai_form_elicitation: bool,
-    pub(crate) request_current_time: bool,
 }
 
 impl Default for ConnectionSessionState {
@@ -282,13 +281,6 @@ impl ConnectionSessionState {
             .get()
             .is_some_and(|session| session.supports_openai_form_elicitation)
     }
-
-    pub(crate) fn request_current_time(&self) -> bool {
-        self.initialized
-            .get()
-            .is_some_and(|session| session.request_current_time)
-    }
-
     pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
         self.initialized.set(session).map_err(|_| ())
     }
@@ -741,14 +733,12 @@ impl MessageProcessor {
         &self,
         connection_id: ConnectionId,
         request_attestation: bool,
-        request_current_time: bool,
     ) {
         self.thread_processor
             .connection_initialized(
                 connection_id,
                 ConnectionCapabilities {
                     request_attestation,
-                    request_current_time,
                 },
             )
             .await;
@@ -863,7 +853,6 @@ impl MessageProcessor {
                         connection_id,
                         ConnectionCapabilities {
                             request_attestation: session.request_attestation(),
-                            request_current_time: session.request_current_time(),
                         },
                     )
                     .await;
