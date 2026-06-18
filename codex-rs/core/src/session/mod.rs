@@ -31,7 +31,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::RecommendedPluginsInstructions;
-use crate::current_time::CurrentTimeProvider;
+use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
@@ -441,7 +441,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
-    pub(crate) external_current_time_provider: Option<Arc<dyn CurrentTimeProvider>>,
+    pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
 }
 
@@ -525,7 +525,7 @@ impl Codex {
             analytics_events_client,
             thread_store,
             attestation_provider,
-            external_current_time_provider,
+            external_time_provider,
             inherited_multi_agent_version,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -673,7 +673,7 @@ impl Codex {
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
-            external_current_time_provider,
+            external_time_provider,
             multi_agent_version,
         ))
         .await

@@ -492,7 +492,7 @@ impl Session {
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
-        external_current_time_provider: Option<Arc<dyn CurrentTimeProvider>>,
+        external_time_provider: Option<Arc<dyn TimeProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -517,9 +517,9 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
-        let current_time_provider = crate::current_time::resolve_current_time_provider(
+        let time_provider = crate::current_time::resolve_time_provider(
             config.current_time_reminder.as_ref(),
-            external_current_time_provider,
+            external_time_provider,
         )?;
         let mcp_thread_init = thread_extension_init.clone();
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
@@ -1027,7 +1027,7 @@ impl Session {
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
-                current_time_provider,
+                time_provider,
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     thread_id,

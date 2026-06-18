@@ -11,32 +11,28 @@ use codex_protocol::ThreadId;
 
 use crate::config::CurrentTimeReminderConfig;
 
-pub type CurrentTimeFuture<'a> = Pin<Box<dyn Future<Output = Result<DateTime<Utc>>> + Send + 'a>>;
+pub type TimeFuture<'a> = Pin<Box<dyn Future<Output = Result<DateTime<Utc>>> + Send + 'a>>;
 
 /// Host integration boundary for obtaining the current time.
-pub trait CurrentTimeProvider: Send + Sync {
-    fn current_time(&self, thread_id: ThreadId) -> CurrentTimeFuture<'_>;
+pub trait TimeProvider: Send + Sync {
+    fn current_time(&self, thread_id: ThreadId) -> TimeFuture<'_>;
 }
 
-struct SystemCurrentTimeProvider;
+pub(crate) struct SystemTimeProvider;
 
-impl CurrentTimeProvider for SystemCurrentTimeProvider {
-    fn current_time(&self, _thread_id: ThreadId) -> CurrentTimeFuture<'_> {
+impl TimeProvider for SystemTimeProvider {
+    fn current_time(&self, _thread_id: ThreadId) -> TimeFuture<'_> {
         Box::pin(async { Ok(Utc::now()) })
     }
 }
 
-pub(crate) fn resolve_current_time_provider(
+pub(crate) fn resolve_time_provider(
     config: Option<&CurrentTimeReminderConfig>,
-    external_provider: Option<Arc<dyn CurrentTimeProvider>>,
-) -> Result<Option<Arc<dyn CurrentTimeProvider>>> {
-    let Some(config) = config else {
-        return Ok(None);
-    };
-
-    match config.clock_source {
-        CurrentTimeSource::System => Ok(Some(Arc::new(SystemCurrentTimeProvider))),
-        CurrentTimeSource::External => external_provider.map(Some).ok_or_else(|| {
+    external_provider: Option<Arc<dyn TimeProvider>>,
+) -> Result<Arc<dyn TimeProvider>> {
+    match config.map(|config| config.clock_source).unwrap_or_default() {
+        CurrentTimeSource::System => Ok(Arc::new(SystemTimeProvider)),
+        CurrentTimeSource::External => external_provider.ok_or_else(|| {
             anyhow!(
                 "features.current_time_reminder.clock_source is external, but no external current-time provider is available"
             )

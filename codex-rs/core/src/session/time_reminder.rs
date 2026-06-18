@@ -43,12 +43,9 @@ pub(super) async fn maybe_record_current_time_reminder(
         return Ok(());
     }
 
-    let provider = sess
+    let current_time = sess
         .services
-        .current_time_provider
-        .as_ref()
-        .ok_or_else(|| CodexErr::Fatal("current-time provider is not configured".to_string()))?;
-    let current_time = provider
+        .time_provider
         .current_time(sess.thread_id)
         .await
         .map_err(|err| CodexErr::Fatal(format!("failed to read current time: {err:#}")))?;

@@ -379,7 +379,7 @@ impl MessageProcessor {
                     outgoing.clone(),
                     thread_state_manager.clone(),
                 )),
-                /*external_current_time_provider*/ None,
+                /*external_time_provider*/ None,
             )
         });
         let models_manager = thread_manager.get_models_manager();

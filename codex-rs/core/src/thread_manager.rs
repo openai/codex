@@ -4,7 +4,7 @@ use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
-use crate::current_time::CurrentTimeProvider;
+use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::mcp::McpManager;
@@ -216,7 +216,7 @@ pub(crate) struct ThreadManagerState {
     user_instructions_provider: Arc<dyn UserInstructionsProvider>,
     thread_store: Arc<dyn ThreadStore>,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
-    external_current_time_provider: Option<Arc<dyn CurrentTimeProvider>>,
+    external_time_provider: Option<Arc<dyn TimeProvider>>,
     session_source: SessionSource,
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
@@ -271,7 +271,7 @@ impl ThreadManager {
         state_db: Option<StateDbHandle>,
         installation_id: String,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
-        external_current_time_provider: Option<Arc<dyn CurrentTimeProvider>>,
+        external_time_provider: Option<Arc<dyn TimeProvider>>,
     ) -> Self {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
@@ -303,7 +303,7 @@ impl ThreadManager {
                 user_instructions_provider,
                 thread_store,
                 attestation_provider,
-                external_current_time_provider,
+                external_time_provider,
                 auth_manager,
                 session_source,
                 installation_id,
@@ -409,7 +409,7 @@ impl ThreadManager {
                 ),
                 thread_store,
                 attestation_provider: None,
-                external_current_time_provider: None,
+                external_time_provider: None,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 installation_id,
@@ -1471,7 +1471,7 @@ impl ThreadManagerState {
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
-            external_current_time_provider: self.external_current_time_provider.clone(),
+            external_time_provider: self.external_time_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
         }))
         .await?;

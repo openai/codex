@@ -78,7 +78,7 @@ impl MessageProcessor {
             state_db.clone(),
             installation_id,
             /*attestation_provider*/ None,
-            /*external_current_time_provider*/ None,
+            /*external_time_provider*/ None,
         ));
         Self {
             outgoing,
