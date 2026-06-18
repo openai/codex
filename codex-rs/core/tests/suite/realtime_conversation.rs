@@ -773,6 +773,132 @@ async fn conversation_webrtc_start_uses_avas_query() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_webrtc_default_v1_ignores_configured_v2_voice() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let capture = RealtimeCallRequestCapture::new();
+    Mock::given(method("POST"))
+        .and(path_regex(".*/realtime/calls$"))
+        .and(capture.clone())
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Location", "/v1/realtime/calls/calls/rtc_voice_default")
+                .set_body_string("v=answer\r\n"),
+        )
+        .mount(&server)
+        .await;
+    let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_webrtc_voice", "instructions": "backend prompt" }
+        })]],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: false,
+    }])
+    .await;
+
+    let realtime_ws_base_url = realtime_server.uri().to_string();
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+        config.realtime.version = RealtimeWsVersion::V2;
+        config.realtime.voice = Some(RealtimeVoice::Cedar);
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_prefix: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: true,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
+            version: None,
+            voice: None,
+        }))
+        .await?;
+
+    let created = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationSdp(created) => Some(Ok(created.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .expect("conversation call create failed");
+    assert_eq!(created.sdp, "v=answer\r\n");
+
+    let request = capture.single_request();
+    let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
+    assert!(body.contains(r#""type":"quicksilver""#));
+    assert!(body.contains(r#""voice":"cove""#));
+    assert!(!body.contains(r#""voice":"cedar""#));
+
+    let session_update = wait_for_websocket_request(
+        &realtime_server,
+        /*connection_index*/ 0,
+        /*request_index*/ 0,
+    )
+    .await?;
+    assert_eq!(
+        session_update.body_json()["session"]["audio"]["output"]["voice"],
+        "cove"
+    );
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_webrtc_default_v1_rejects_explicit_v2_voice() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.realtime.version = RealtimeWsVersion::V2;
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_prefix: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: true,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
+            version: None,
+            voice: Some(RealtimeVoice::Cedar),
+        }))
+        .await?;
+
+    let error = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }) => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(error.contains("realtime voice `cedar` is not supported for v1"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_webrtc_start_uses_configured_call_base_url_for_avas() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

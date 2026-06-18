@@ -725,6 +725,12 @@ struct PreparedRealtimeConversationStart {
     transport: ConversationStartTransport,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ConfiguredRealtimeVoice {
+    Use,
+    Ignore,
+}
+
 async fn prepare_realtime_start(
     sess: &Arc<Session>,
     params: ConversationStartParams,
@@ -760,7 +766,14 @@ async fn prepare_realtime_start(
     if matches!(transport, ConversationStartTransport::Webrtc { .. }) {
         validate_avas_webrtc_start(version, config.realtime.session_type)?;
     }
-    let session_config = build_realtime_session_config(sess, &params, version).await?;
+    let configured_voice = match (&transport, params.version) {
+        (ConversationStartTransport::Webrtc { .. }, None) => ConfiguredRealtimeVoice::Ignore,
+        (ConversationStartTransport::Webrtc { .. } | ConversationStartTransport::Websocket, _) => {
+            ConfiguredRealtimeVoice::Use
+        }
+    };
+    let session_config =
+        build_realtime_session_config(sess, &params, version, configured_voice).await?;
     let requested_realtime_session_id = session_config.session_id.clone();
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
@@ -815,6 +828,7 @@ pub(crate) async fn build_realtime_session_config(
     sess: &Arc<Session>,
     params: &ConversationStartParams,
     version: RealtimeWsVersion,
+    configured_voice: ConfiguredRealtimeVoice,
 ) -> CodexResult<RealtimeSessionConfig> {
     let config = sess.get_config().await;
     let prompt = prepare_realtime_backend_prompt(
@@ -861,9 +875,13 @@ pub(crate) async fn build_realtime_session_config(
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
+    let config_voice = match configured_voice {
+        ConfiguredRealtimeVoice::Use => config.realtime.voice,
+        ConfiguredRealtimeVoice::Ignore => None,
+    };
     let voice = params
         .voice
-        .or(config.realtime.voice)
+        .or(config_voice)
         .unwrap_or_else(|| default_realtime_voice(version));
     validate_realtime_voice(version, voice)?;
     Ok(RealtimeSessionConfig {
