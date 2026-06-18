@@ -36,6 +36,7 @@ use rama_http::Response;
 use rama_http::StatusCode;
 use rama_http::Uri;
 use rama_http::header::HOST;
+use rama_http::header::HeaderName;
 use rama_http::layer::remove_header::RemoveRequestHeaderLayer;
 use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http_backend::server::HttpServer;
@@ -50,6 +51,7 @@ use std::task::Context as TaskContext;
 use std::task::Poll;
 use tracing::info;
 use tracing::warn;
+use url::Url;
 
 /// State needed to terminate a CONNECT tunnel and enforce policy on inner HTTPS requests.
 pub struct MitmState {
@@ -87,6 +89,10 @@ enum MitmPolicyDecision {
 
 const MITM_INSPECT_BODIES: bool = false;
 const MITM_MAX_BODY_BYTES: usize = 4096;
+const CREDENTIAL_ROUTE_CONNECTOR_ID_HEADER: &str =
+    "x-openai-internal-credential-route-connector-id";
+const CREDENTIAL_ROUTE_LINK_ID_HEADER: &str = "x-openai-internal-credential-route-link-id";
+const CREDENTIAL_ROUTE_REQUEST_URL_HEADER: &str = "x-openai-internal-credential-route-request-url";
 
 impl std::fmt::Debug for MitmState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -241,10 +247,27 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
     let (mut parts, body) = req.into_parts();
     apply_mitm_hook_actions(&mut parts.headers, hook_actions.as_ref());
     let authority = authority_header_value(&target_host, target_port);
-    parts.uri = build_https_uri(&authority, &path)?;
-    parts
-        .headers
-        .insert(HOST, HeaderValue::from_str(&authority)?);
+    let original_request_uri = build_https_uri(&authority, &path)?;
+    if let Some(actions) = hook_actions.as_ref()
+        && let Some(credentialed_route_proxy) = actions.credentialed_route_proxy.as_ref()
+    {
+        let (proxy_uri, proxy_authority) =
+            credentialed_route_proxy_request(credentialed_route_proxy)?;
+        apply_credentialed_route_proxy_headers(
+            &mut parts.headers,
+            credentialed_route_proxy,
+            &original_request_uri,
+        )?;
+        parts.uri = proxy_uri;
+        parts
+            .headers
+            .insert(HOST, HeaderValue::from_str(&proxy_authority)?);
+    } else {
+        parts.uri = original_request_uri;
+        parts
+            .headers
+            .insert(HOST, HeaderValue::from_str(&authority)?);
+    }
 
     let inspect = mitm.inspect_enabled();
     let max_body_bytes = mitm.max_body_bytes();
@@ -554,6 +577,48 @@ fn authority_header_value(host: &str, port: u16) -> String {
 fn build_https_uri(authority: &str, path: &str) -> Result<Uri> {
     let target = format!("https://{authority}{path}");
     Ok(target.parse()?)
+}
+
+fn credentialed_route_proxy_request(
+    action: &crate::mitm_hook::CredentialedRouteProxyAction,
+) -> Result<(Uri, String)> {
+    let proxy_url = Url::parse(&action.proxy_url)
+        .with_context(|| format!("invalid credentialed route proxy URL {}", action.proxy_url))?;
+    let proxy_authority = url_authority_header_value(&proxy_url)?;
+    Ok((proxy_url.as_str().parse()?, proxy_authority))
+}
+
+fn apply_credentialed_route_proxy_headers(
+    headers: &mut HeaderMap,
+    action: &crate::mitm_hook::CredentialedRouteProxyAction,
+    request_uri: &Uri,
+) -> Result<()> {
+    for proxy_header in &action.proxy_headers {
+        headers.insert(proxy_header.name.clone(), proxy_header.value.clone());
+    }
+    headers.insert(
+        HeaderName::from_static(CREDENTIAL_ROUTE_CONNECTOR_ID_HEADER),
+        HeaderValue::from_str(&action.connector_id)?,
+    );
+    headers.insert(
+        HeaderName::from_static(CREDENTIAL_ROUTE_LINK_ID_HEADER),
+        HeaderValue::from_str(&action.link_id)?,
+    );
+    headers.insert(
+        HeaderName::from_static(CREDENTIAL_ROUTE_REQUEST_URL_HEADER),
+        HeaderValue::from_str(&request_uri.to_string())?,
+    );
+    Ok(())
+}
+
+fn url_authority_header_value(url: &Url) -> Result<String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("URL must include a host"))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| anyhow!("URL must include a known port"))?;
+    Ok(authority_header_value(host, port))
 }
 
 fn path_and_query(uri: &Uri) -> String {

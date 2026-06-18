@@ -47,6 +47,8 @@ pub struct MitmHookMatchConfig {
 pub struct MitmHookActionsConfig {
     pub strip_request_headers: Vec<String>,
     pub inject_request_headers: Vec<InjectedHeaderConfig>,
+    #[serde(skip)]
+    pub credentialed_route_proxy: Option<CredentialedRouteProxyActionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -94,6 +96,7 @@ pub struct HeaderConstraint {
 pub struct MitmHookActions {
     pub strip_request_headers: Vec<HeaderName>,
     pub inject_request_headers: Vec<ResolvedInjectedHeader>,
+    pub credentialed_route_proxy: Option<CredentialedRouteProxyAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +110,37 @@ pub struct ResolvedInjectedHeader {
 pub enum SecretSource {
     EnvVar(String),
     File(AbsolutePathBuf),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CredentialedRouteProxyActionConfig {
+    pub connector_id: String,
+    pub link_id: String,
+    pub proxy_headers: Vec<CredentialedRouteProxyHeader>,
+    pub proxy_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialedRouteProxyAction {
+    pub connector_id: String,
+    pub link_id: String,
+    pub proxy_headers: Vec<CredentialedRouteProxyHeader>,
+    pub proxy_url: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct CredentialedRouteProxyHeader {
+    pub name: HeaderName,
+    pub value: HeaderValue,
+}
+
+impl std::fmt::Debug for CredentialedRouteProxyHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialedRouteProxyHeader")
+            .field("name", &self.name)
+            .field("value", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -315,6 +349,16 @@ where
                     .with_context(|| format!("failed to compile injected header {}", header.name))
             })
             .collect::<Result<Vec<_>>>()?;
+        let credentialed_route_proxy =
+            hook.actions
+                .credentialed_route_proxy
+                .as_ref()
+                .map(|action| CredentialedRouteProxyAction {
+                    connector_id: action.connector_id.clone(),
+                    link_id: action.link_id.clone(),
+                    proxy_headers: action.proxy_headers.clone(),
+                    proxy_url: action.proxy_url.clone(),
+                });
 
         hooks_by_host
             .entry(host.clone())
@@ -331,6 +375,7 @@ where
                 actions: MitmHookActions {
                     strip_request_headers,
                     inject_request_headers,
+                    credentialed_route_proxy,
                 },
             });
     }
@@ -676,6 +721,7 @@ mod tests {
                     secret_file: None,
                     prefix: Some("Bearer ".to_string()),
                 }],
+                credentialed_route_proxy: None,
             },
         }
     }
