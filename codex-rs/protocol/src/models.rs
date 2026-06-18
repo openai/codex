@@ -1189,28 +1189,6 @@ impl ResponseItem {
         }
     }
 
-    /// Clears IDs whose serialization is controlled by the `item_ids` feature.
-    ///
-    /// Image generation call IDs predate that feature and remain serialized for compatibility.
-    pub fn clear_feature_gated_id(&mut self) {
-        match self {
-            Self::Message { id, .. }
-            | Self::AgentMessage { id, .. }
-            | Self::LocalShellCall { id, .. }
-            | Self::FunctionCall { id, .. }
-            | Self::ToolSearchCall { id, .. }
-            | Self::FunctionCallOutput { id, .. }
-            | Self::CustomToolCall { id, .. }
-            | Self::CustomToolCallOutput { id, .. }
-            | Self::ToolSearchOutput { id, .. }
-            | Self::WebSearchCall { id, .. }
-            | Self::Reasoning { id, .. }
-            | Self::Compaction { id, .. }
-            | Self::ContextCompaction { id, .. } => *id = None,
-            Self::ImageGenerationCall { .. } | Self::CompactionTrigger { .. } | Self::Other => {}
-        }
-    }
-
     /// Returns the non-empty turn ID stamped onto this item, if present.
     pub fn turn_id(&self) -> Option<&str> {
         self.metadata()

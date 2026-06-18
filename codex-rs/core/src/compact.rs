@@ -25,7 +25,6 @@ use codex_analytics::CompactionStatus;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
-use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -239,7 +238,6 @@ async fn run_compact_task_inner_impl(
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,
-            include_item_ids: turn_context.config.features.enabled(Feature::ItemIds),
             base_instructions: sess.get_base_instructions().await,
             ..Default::default()
         };

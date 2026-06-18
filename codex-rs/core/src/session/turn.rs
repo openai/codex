@@ -1026,7 +1026,6 @@ pub(crate) fn build_prompt(
 ) -> Prompt {
     Prompt {
         input,
-        include_item_ids: turn_context.config.features.enabled(Feature::ItemIds),
         tools: router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,

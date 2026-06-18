@@ -19,9 +19,6 @@ pub struct Prompt {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
 
-    /// Whether Responses API item IDs should be included on the wire.
-    pub include_item_ids: bool,
-
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
     pub(crate) tools: Vec<ToolSpec>,
@@ -42,7 +39,6 @@ impl Default for Prompt {
     fn default() -> Self {
         Self {
             input: Vec::new(),
-            include_item_ids: false,
             tools: Vec::new(),
             parallel_tool_calls: false,
             base_instructions: BaseInstructions::default(),

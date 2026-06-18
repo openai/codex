@@ -255,38 +255,6 @@ async fn non_openai_responses_requests_omit_item_turn_metadata() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn response_item_ids_are_omitted_when_feature_is_disabled() -> anyhow::Result<()> {
-    let server = MockServer::start().await;
-    let response_mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_assistant_message("msg_server", "first reply"),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
-    )
-    .await;
-    let test = test_codex().build(&server).await?;
-
-    test.submit_turn("first turn").await?;
-    test.submit_turn("second turn").await?;
-
-    let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
-    for item in requests[1].input() {
-        assert!(
-            item.get("id").is_none(),
-            "input item should omit IDs while the feature is disabled: {item}"
-        );
-    }
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let response_mock = mount_sse_sequence(
@@ -319,9 +287,6 @@ async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> an
     })
     .await;
 
-    builder = builder.with_config(|config| {
-        let _ = config.features.enable(Feature::ItemIds);
-    });
     let resumed = builder.resume(&server, home, rollout_path).await?;
     resumed.submit_turn("after resume").await?;
 
@@ -394,9 +359,6 @@ async fn inter_agent_response_item_ids_persist_across_resume() -> anyhow::Result
     })
     .await;
 
-    builder = builder.with_config(|config| {
-        let _ = config.features.enable(Feature::ItemIds);
-    });
     let resumed = builder.resume(&server, home, rollout_path).await?;
     resumed.submit_turn("after resume").await?;
 
