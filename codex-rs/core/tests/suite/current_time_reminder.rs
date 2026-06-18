@@ -7,9 +7,9 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_core::CurrentTimeFuture;
 use codex_core::CurrentTimeProvider;
-use codex_core::config::VarlatencyConfig;
+use codex_core::config::CurrentTimeReminderConfig;
+use codex_features::CurrentTimeSource;
 use codex_features::Feature;
-use codex_features::VarlatencyClockSource;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
@@ -56,19 +56,19 @@ fn current_time_reminders(request: &ResponsesRequest) -> Vec<String> {
         .collect()
 }
 
-fn enable_varlatency(config: &mut codex_core::config::Config, interval: u64) {
+fn enable_current_time_reminder(config: &mut codex_core::config::Config, interval: u64) {
     config
         .features
-        .enable(Feature::Varlatency)
-        .expect("test config should allow varlatency");
-    config.varlatency = Some(VarlatencyConfig {
+        .enable(Feature::CurrentTimeReminder)
+        .expect("test config should allow current-time reminders");
+    config.current_time_reminder = Some(CurrentTimeReminderConfig {
         reminder_interval_model_requests: interval,
-        clock_source: VarlatencyClockSource::AppServerClient,
+        clock_source: CurrentTimeSource::AppServerClient,
     });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn varlatency_reminders_follow_request_interval_and_persist_in_history() -> Result<()> {
+async fn current_time_reminders_follow_request_interval_and_persist_in_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -82,7 +82,7 @@ async fn varlatency_reminders_follow_request_interval_and_persist_in_history() -
     )
     .await;
     let test = test_codex()
-        .with_config(|config| enable_varlatency(config, /*interval*/ 2))
+        .with_config(|config| enable_current_time_reminder(config, /*interval*/ 2))
         .with_current_time_provider(Arc::new(TestCurrentTimeProvider::default()))
         .build(&server)
         .await?;
@@ -103,7 +103,7 @@ async fn varlatency_reminders_follow_request_interval_and_persist_in_history() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn varlatency_reminder_is_refreshed_after_compaction() -> Result<()> {
+async fn current_time_reminder_is_refreshed_after_compaction() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -127,7 +127,7 @@ async fn varlatency_reminder_is_refreshed_after_compaction() -> Result<()> {
     let test = test_codex()
         .with_config(move |config| {
             config.model_provider = model_provider;
-            enable_varlatency(config, /*interval*/ 50);
+            enable_current_time_reminder(config, /*interval*/ 50);
         })
         .with_current_time_provider(Arc::new(TestCurrentTimeProvider::default()))
         .build(&server)

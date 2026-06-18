@@ -518,7 +518,7 @@ impl Session {
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
         let current_time_provider = crate::current_time::resolve_current_time_provider(
-            config.varlatency.as_ref(),
+            config.current_time_reminder.as_ref(),
             external_current_time_provider,
         )?;
         let mcp_thread_init = thread_extension_init.clone();

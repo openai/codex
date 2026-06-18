@@ -6,10 +6,10 @@ use anyhow::Result;
 use anyhow::anyhow;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_features::VarlatencyClockSource;
+use codex_features::CurrentTimeSource;
 use codex_protocol::ThreadId;
 
-use crate::config::VarlatencyConfig;
+use crate::config::CurrentTimeReminderConfig;
 
 pub type CurrentTimeFuture<'a> = Pin<Box<dyn Future<Output = Result<DateTime<Utc>>> + Send + 'a>>;
 
@@ -27,7 +27,7 @@ impl CurrentTimeProvider for SystemCurrentTimeProvider {
 }
 
 pub(crate) fn resolve_current_time_provider(
-    config: Option<&VarlatencyConfig>,
+    config: Option<&CurrentTimeReminderConfig>,
     external_provider: Option<Arc<dyn CurrentTimeProvider>>,
 ) -> Result<Option<Arc<dyn CurrentTimeProvider>>> {
     let Some(config) = config else {
@@ -35,10 +35,10 @@ pub(crate) fn resolve_current_time_provider(
     };
 
     match config.clock_source {
-        VarlatencyClockSource::System => Ok(Some(Arc::new(SystemCurrentTimeProvider))),
-        VarlatencyClockSource::AppServerClient => external_provider.map(Some).ok_or_else(|| {
+        CurrentTimeSource::System => Ok(Some(Arc::new(SystemCurrentTimeProvider))),
+        CurrentTimeSource::AppServerClient => external_provider.map(Some).ok_or_else(|| {
             anyhow!(
-                "features.varlatency.clock_source is app_server_client, but no external current-time provider is available"
+                "features.current_time_reminder.clock_source is app_server_client, but no external current-time provider is available"
             )
         }),
     }
