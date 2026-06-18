@@ -25,9 +25,9 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::LoadUserInstructionsFuture;
 use codex_extension_api::UserInstructionsProvider;
-use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::CodexAuth;
@@ -1141,9 +1141,20 @@ pub fn test_codex() -> TestCodexBuilder {
         cloud_config_bundle: None,
         user_shell_override: None,
         exec_server_url: None,
-        extensions: empty_extension_registry(),
+        extensions: default_test_extensions(),
         user_instructions_provider: None,
     }
+}
+
+fn default_test_extensions() -> Arc<ExtensionRegistry<Config>> {
+    let mut builder = ExtensionRegistryBuilder::new();
+    codex_skills_extension::install(&mut builder, |config: &Config| {
+        codex_skills_extension::SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            bundled_skills_enabled: config.bundled_skills_enabled(),
+        }
+    });
+    Arc::new(builder.build())
 }
 
 #[cfg(test)]

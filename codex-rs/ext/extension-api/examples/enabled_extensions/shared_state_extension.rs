@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use codex_extension_api::ContextContributionContext;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -19,10 +20,11 @@ struct StyleContributor;
 impl ContextContributor for StyleContributor {
     fn contribute<'a>(
         &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
+        context: ContextContributionContext<'a>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
+            let session_store = context.session_store;
+            let thread_store = context.thread_store;
             contribution_counts(session_store).record_style();
             contribution_counts(thread_store).record_style();
 
@@ -39,10 +41,11 @@ struct UsageContributor;
 impl ContextContributor for UsageContributor {
     fn contribute<'a>(
         &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
+        context: ContextContributionContext<'a>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
+            let session_store = context.session_store;
+            let thread_store = context.thread_store;
             contribution_counts(session_store).record_usage();
             contribution_counts(thread_store).record_usage();
 

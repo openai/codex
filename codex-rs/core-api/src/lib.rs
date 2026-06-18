@@ -99,3 +99,16 @@ pub use codex_protocol::protocol::TurnEnvironmentSelection;
 pub use codex_protocol::protocol::W3cTraceContext;
 pub use codex_protocol::user_input::UserInput;
 pub use codex_utils_absolute_path::AbsolutePathBuf;
+
+/// Builds the default extension registry for simple `ThreadManager` hosts.
+pub fn default_extension_registry() -> std::sync::Arc<codex_extension_api::ExtensionRegistry<Config>>
+{
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    codex_skills_extension::install(&mut builder, |config: &Config| {
+        codex_skills_extension::SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            bundled_skills_enabled: config.bundled_skills_enabled(),
+        }
+    });
+    std::sync::Arc::new(builder.build())
+}

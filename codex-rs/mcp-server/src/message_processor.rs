@@ -1,17 +1,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::StateDbHandle;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
-use codex_extension_api::empty_extension_registry;
+use codex_extension_api::ExtensionEventSink;
+use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use rmcp::model::CallToolRequestParams;
@@ -29,7 +33,6 @@ use rmcp::model::JsonRpcResponse;
 use rmcp::model::RequestId;
 use rmcp::model::ServerCapabilities;
 use serde_json::json;
-use tokio::sync::Mutex;
 use tokio::task;
 
 use crate::codex_tool_config::CodexToolCallParam;
@@ -37,6 +40,7 @@ use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotificationMeta;
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -66,12 +70,16 @@ impl MessageProcessor {
         let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
             config.codex_home.clone(),
         ));
+        let running_requests_id_to_codex_uuid = Arc::new(Mutex::new(HashMap::new()));
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager,
             SessionSource::Mcp,
             environment_manager,
-            empty_extension_registry(),
+            default_extensions(
+                Arc::clone(&outgoing),
+                Arc::clone(&running_requests_id_to_codex_uuid),
+            ),
             user_instructions_provider,
             /*analytics_events_client*/ None,
             codex_core::thread_store_from_config(config.as_ref(), state_db.clone()),
@@ -84,7 +92,7 @@ impl MessageProcessor {
             initialized: false,
             arg0_paths,
             thread_manager,
-            running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
+            running_requests_id_to_codex_uuid,
         }
     }
 
@@ -519,7 +527,10 @@ impl MessageProcessor {
 
         // Obtain the thread id while holding the first lock, then release.
         let thread_id = {
-            let map_guard = self.running_requests_id_to_codex_uuid.lock().await;
+            let map_guard = self
+                .running_requests_id_to_codex_uuid
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             match map_guard.get(&request_id) {
                 Some(id) => *id,
                 None => {
@@ -555,7 +566,7 @@ impl MessageProcessor {
         // unregister the id so we don't keep it in the map
         self.running_requests_id_to_codex_uuid
             .lock()
-            .await
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&request_id);
     }
 
@@ -571,3 +582,56 @@ impl MessageProcessor {
         tracing::info!("notifications/initialized");
     }
 }
+
+fn default_extensions(
+    outgoing: Arc<OutgoingMessageSender>,
+    running_requests: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
+) -> Arc<ExtensionRegistry<Config>> {
+    let event_sink = Arc::new(McpServerExtensionEventSink {
+        outgoing,
+        running_requests,
+    });
+    let mut builder = ExtensionRegistryBuilder::with_event_sink(event_sink);
+    codex_skills_extension::install(&mut builder, |config: &Config| {
+        codex_skills_extension::SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            bundled_skills_enabled: config.bundled_skills_enabled(),
+        }
+    });
+    Arc::new(builder.build())
+}
+
+struct McpServerExtensionEventSink {
+    outgoing: Arc<OutgoingMessageSender>,
+    running_requests: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
+}
+
+impl ExtensionEventSink for McpServerExtensionEventSink {
+    fn emit(&self, thread_id: ThreadId, event: Event) {
+        let request_id = self
+            .running_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find_map(|(request_id, running_thread_id)| {
+                (*running_thread_id == thread_id && request_id.to_string() == event.id)
+                    .then(|| request_id.clone())
+            });
+        let outgoing = Arc::clone(&self.outgoing);
+        tokio::spawn(async move {
+            outgoing
+                .send_event_as_notification(
+                    &event,
+                    Some(OutgoingNotificationMeta {
+                        request_id,
+                        thread_id: Some(thread_id),
+                    }),
+                )
+                .await;
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "message_processor_tests.rs"]
+mod tests;

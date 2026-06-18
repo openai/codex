@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::ContextContributionContext;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
@@ -50,10 +51,10 @@ impl MemoriesExtensionConfig {
 impl ContextContributor for MemoriesExtension {
     fn contribute<'a>(
         &'a self,
-        _session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
+        context: ContextContributionContext<'a>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
+            let thread_store = context.thread_store;
             let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
                 return Vec::new();
             };

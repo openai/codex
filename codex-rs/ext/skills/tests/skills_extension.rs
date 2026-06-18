@@ -9,12 +9,13 @@ use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::SkillMetadata;
-use codex_core_skills::injection::InjectedHostSkillPrompts;
+use codex_extension_api::ContextContributionContext;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnInputContext;
+use codex_protocol::ThreadId;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
@@ -43,16 +44,17 @@ use codex_skills_extension::provider::SkillProviderFuture;
 use codex_skills_extension::provider::SkillReadRequest;
 use codex_skills_extension::provider::SkillSearchRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_string::approx_token_count;
 use pretty_assertions::assert_eq;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
 const DEMO_SKILL_CONTENTS: &str =
-    "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse the demo skill.\n";
+    "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse [$calendar](app://calendar).\n";
 
 #[tokio::test]
-async fn installed_extension_uses_host_service_snapshot() -> TestResult {
+async fn installed_extension_catalog_uses_host_service_snapshot() -> TestResult {
     let codex_home = test_codex_home();
     let skill_path = codex_home.join("skills").join("demo").join("SKILL.md");
     std::fs::create_dir_all(
@@ -99,39 +101,15 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
     let turn_store = ExtensionData::new("turn-1");
     turn_store.insert(HostSkillsSnapshot::new(Arc::clone(&loaded_skills)));
 
-    let fragments = registry.turn_input_contributors()[0]
-        .contribute(
-            TurnInputContext {
-                turn_id: "turn-1".to_string(),
-                user_input: vec![UserInput::Text {
-                    text: "$demo".to_string(),
-                    text_elements: Vec::new(),
-                }],
-                environments: Vec::new(),
-            },
-            &session_store,
-            &thread_store,
-            &turn_store,
-        )
+    let prompt_fragments = registry.context_contributors()[0]
+        .contribute(prompt_context(&session_store, &thread_store, &turn_store))
         .await;
 
     let expected_catalog = format!(
         "{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills\n{SKILLS_INTRO_WITH_ABSOLUTE_PATHS}\n### Available skills\n- demo: Demo skill. (file: {skill_prompt_path})\n### How to use skills\n{SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS}\n{SKILLS_INSTRUCTIONS_CLOSE_TAG}"
     );
-    let expected_skill = format!(
-        "<skill>\n<name>demo</name>\n<path>{skill_prompt_path}</path>\n{DEMO_SKILL_CONTENTS}\n</skill>"
-    );
-    assert_eq!(
-        vec![("developer", expected_catalog), ("user", expected_skill),],
-        fragments
-            .iter()
-            .map(|fragment| (fragment.role(), fragment.render()))
-            .collect::<Vec<_>>()
-    );
-    let injected_host_skill_prompts = turn_store
-        .get::<InjectedHostSkillPrompts>()
-        .ok_or("host skill prompt marker should be set")?;
-    assert!(injected_host_skill_prompts.contains_path(&skill_path_string));
+    assert_eq!(1, prompt_fragments.len());
+    assert_eq!(expected_catalog, prompt_fragments[0].text());
 
     std::fs::remove_dir_all(codex_home)?;
     Ok(())
@@ -141,22 +119,49 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
 async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_input() -> TestResult
 {
     let read_requests = Arc::new(Mutex::new(Vec::new()));
+    let mut executor_entries = vec![test_entry(
+        SkillSourceKind::Executor,
+        "env-1",
+        "executor/lint-fix",
+        "lint-fix/SKILL.md",
+    )];
+    executor_entries.extend((0..20).map(|index| {
+        test_entry(
+            SkillSourceKind::Executor,
+            "env-1",
+            &format!("executor/extra-{index}"),
+            &format!("extra-{index}/SKILL.md"),
+        )
+        .with_short_description(Some("x".repeat(1_000)))
+    }));
     let executor_provider = Arc::new(StaticSkillProvider {
         catalog: SkillCatalog {
-            entries: vec![test_entry(
-                SkillSourceKind::Executor,
-                "env-1",
-                "executor/lint-fix",
-                "lint-fix/SKILL.md",
-            )],
+            entries: executor_entries,
             warnings: Vec::new(),
         },
         read_requests: Arc::clone(&read_requests),
         list_calls: None,
         fail_first_list: false,
     });
-    let providers = SkillProviders::new().with_executor_provider(executor_provider);
-    let mut builder = ExtensionRegistryBuilder::new();
+    let providers = SkillProviders::new()
+        .with_host_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: vec![test_entry(
+                    SkillSourceKind::Host,
+                    "host",
+                    "host/host-demo",
+                    "host-demo/SKILL.md",
+                )],
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: None,
+            fail_first_list: false,
+        }))
+        .with_executor_provider(executor_provider);
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut builder =
+        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
     install_with_providers(&mut builder, providers, skills_extension_config);
     let registry = builder.build();
 
@@ -182,8 +187,30 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         })
         .await;
 
+    let initial_turn_store = ExtensionData::new("initial-turn");
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills.push(SkillMetadata {
+        name: "host-demo".to_string(),
+        description: "x".repeat(40_000),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: AbsolutePathBuf::try_from(
+            std::env::temp_dir().join("host-demo").join("SKILL.md"),
+        )?,
+        scope: SkillScope::User,
+        plugin_id: None,
+    });
+    initial_turn_store.insert(HostSkillsSnapshot::new(Arc::new(outcome)));
     let prompt_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute(ContextContributionContext {
+            thread_id: ThreadId::default(),
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &initial_turn_store,
+            model_context_window: Some(400_000),
+        })
         .await;
     assert_eq!(1, prompt_fragments.len());
     assert!(
@@ -192,16 +219,23 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
             .starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
     );
     assert!(prompt_fragments[0].text().contains("lint-fix"));
+    assert!(prompt_fragments[0].text().contains("host-demo"));
     assert!(
         prompt_fragments[0]
             .text()
             .contains("(environment resource: skill://executor/lint-fix/SKILL.md)")
     );
+    assert!(approx_token_count(prompt_fragments[0].text()) <= 10_000);
+    let EventMsg::Warning(warning) = event_rx.try_recv()?.1.msg else {
+        panic!("expected host budget warning");
+    };
+    assert!(warning.message.contains("2% skills context budget"));
 
     let turn_store = ExtensionData::new("turn-1");
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
             TurnInputContext {
+                thread_id: ThreadId::default(),
                 turn_id: "turn-1".to_string(),
                 user_input: vec![UserInput::Text {
                     text: "$lint-fix please".to_string(),
@@ -228,7 +262,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         read_request_keys(&read_requests)
     );
     let rebuilt_prompt_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute(prompt_context(&session_store, &thread_store, &turn_store))
         .await;
     assert_eq!(1, rebuilt_prompt_fragments.len());
     assert!(rebuilt_prompt_fragments[0].text().contains("lint-fix"));
@@ -237,6 +271,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
     let next_fragments = registry.turn_input_contributors()[0]
         .contribute(
             TurnInputContext {
+                thread_id: ThreadId::default(),
                 turn_id: "turn-2".to_string(),
                 user_input: vec![UserInput::Text {
                     text: "no skill this time".to_string(),
@@ -294,10 +329,14 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         .await;
 
     let initial_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute(prompt_context(
+            &session_store,
+            &thread_store,
+            &ExtensionData::new("initial-turn"),
+        ))
         .await;
     assert!(initial_fragments.is_empty());
-    let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
+    let EventMsg::Warning(warning) = event_rx.try_recv()?.1.msg else {
         panic!("expected warning event");
     };
     assert_eq!(
@@ -309,6 +348,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         let fragments = registry.turn_input_contributors()[0]
             .contribute(
                 TurnInputContext {
+                    thread_id: ThreadId::default(),
                     turn_id: turn_id.to_string(),
                     user_input: vec![UserInput::Text {
                         text: "$first".to_string(),
@@ -388,6 +428,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
             TurnInputContext {
+                thread_id: ThreadId::default(),
                 turn_id: "turn-1".to_string(),
                 user_input: vec![UserInput::Mention {
                     name: "lint-fix".to_string(),
@@ -422,16 +463,16 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         catalog: SkillCatalog {
             entries: vec![
                 test_entry(
-                    SkillSourceKind::Host,
-                    "host",
-                    "host/visible-skill",
-                    "visible-skill/SKILL.md",
+                    SkillSourceKind::Orchestrator,
+                    "codex_apps",
+                    "orchestrator/visible-skill",
+                    "skill://orchestrator/visible-skill/SKILL.md",
                 ),
                 test_entry(
-                    SkillSourceKind::Host,
-                    "host",
-                    "host/hidden-skill",
-                    "hidden-skill/SKILL.md",
+                    SkillSourceKind::Orchestrator,
+                    "codex_apps",
+                    "orchestrator/hidden-skill",
+                    "skill://orchestrator/hidden-skill/SKILL.md",
                 )
                 .hidden_from_prompt(),
             ],
@@ -441,7 +482,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         list_calls: None,
         fail_first_list: false,
     });
-    let providers = SkillProviders::new().with_host_provider(provider);
+    let providers = SkillProviders::new().with_orchestrator_provider(provider);
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers(&mut builder, providers, skills_extension_config);
     let registry = builder.build();
@@ -460,9 +501,21 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         })
         .await;
 
+    let initial_fragments = registry.context_contributors()[0]
+        .contribute(prompt_context(
+            &session_store,
+            &thread_store,
+            &ExtensionData::new("initial-turn"),
+        ))
+        .await;
+    assert_eq!(1, initial_fragments.len());
+    assert!(initial_fragments[0].text().contains("visible-skill"));
+    assert!(!initial_fragments[0].text().contains("hidden-skill"));
+
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
             TurnInputContext {
+                thread_id: ThreadId::default(),
                 turn_id: "turn-1".to_string(),
                 user_input: vec![UserInput::Text {
                     text: "$hidden-skill".to_string(),
@@ -476,15 +529,13 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         )
         .await;
 
-    assert_eq!(2, fragments.len());
-    assert!(fragments[0].render().contains("visible-skill"));
-    assert!(!fragments[0].render().contains("hidden-skill"));
-    assert!(fragments[1].render().contains("<name>hidden-skill</name>"));
+    assert_eq!(1, fragments.len());
+    assert!(fragments[0].render().contains("<name>hidden-skill</name>"));
     assert_eq!(
         vec![(
-            SkillAuthority::new(SkillSourceKind::Host, "host"),
-            SkillPackageId("host/hidden-skill".to_string()),
-            SkillResourceId::new("hidden-skill/SKILL.md"),
+            SkillAuthority::new(SkillSourceKind::Orchestrator, "codex_apps"),
+            SkillPackageId("orchestrator/hidden-skill".to_string()),
+            SkillResourceId::new("skill://orchestrator/hidden-skill/SKILL.md"),
         )],
         read_request_keys(&read_requests)
     );
@@ -500,11 +551,11 @@ struct StaticSkillProvider {
     fail_first_list: bool,
 }
 
-struct ChannelEventSink(std::sync::mpsc::Sender<Event>);
+struct ChannelEventSink(std::sync::mpsc::Sender<(ThreadId, Event)>);
 
 impl ExtensionEventSink for ChannelEventSink {
-    fn emit(&self, event: Event) {
-        let _ = self.0.send(event);
+    fn emit(&self, thread_id: ThreadId, event: Event) {
+        let _ = self.0.send((thread_id, event));
     }
 }
 
@@ -604,4 +655,18 @@ fn read_request_keys(
             )
         })
         .collect()
+}
+
+fn prompt_context<'a>(
+    session_store: &'a ExtensionData,
+    thread_store: &'a ExtensionData,
+    turn_store: &'a ExtensionData,
+) -> ContextContributionContext<'a> {
+    ContextContributionContext {
+        thread_id: ThreadId::default(),
+        session_store,
+        thread_store,
+        turn_store,
+        model_context_window: None,
+    }
 }

@@ -16,7 +16,6 @@ use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
-use crate::build_available_skills;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
@@ -24,14 +23,12 @@ use crate::connectors;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::AppsInstructions;
 use crate::context::AvailablePluginsInstructions;
-use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::RecommendedPluginsInstructions;
-use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
@@ -39,7 +36,6 @@ use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
-use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -56,6 +52,7 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::ContextContributionContext;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::PromptSlot;
@@ -2969,29 +2966,39 @@ impl Session {
                 developer_sections.push(apps_instructions.render());
             }
         }
-        if turn_context.config.include_skill_instructions {
-            let available_skills = build_available_skills(
-                turn_context.turn_skills.snapshot.outcome(),
-                default_skill_metadata_budget(turn_context.model_info.context_window),
-                SkillRenderSideEffects::ThreadStart {
-                    session_telemetry: &self.services.session_telemetry,
-                },
-            );
-            if let Some(available_skills) = available_skills {
-                let warning_message = available_skills.warning_message.clone();
-                let skills_instructions = AvailableSkillsInstructions::from(available_skills);
-                if let Some(warning_message) = warning_message {
-                    self.send_event_raw(Event {
-                        id: String::new(),
-                        msg: EventMsg::Warning(WarningEvent {
-                            message: warning_message,
-                        }),
-                    })
-                    .await;
+        let context_contributors = self.services.extensions.context_contributors().to_vec();
+        let mut extension_developer_policy = Vec::new();
+        let mut extension_developer_capabilities = Vec::new();
+        let mut extension_contextual_user = Vec::new();
+        let mut extension_separate_developer = Vec::new();
+        for contributor in context_contributors {
+            for fragment in contributor
+                .contribute(ContextContributionContext {
+                    thread_id: self.thread_id(),
+                    session_store: &self.services.session_extension_data,
+                    thread_store: &self.services.thread_extension_data,
+                    turn_store: turn_context.extension_data.as_ref(),
+                    model_context_window: turn_context.model_info.context_window,
+                })
+                .await
+            {
+                match fragment.slot() {
+                    PromptSlot::DeveloperPolicy => {
+                        extension_developer_policy.push(fragment.text().to_string());
+                    }
+                    PromptSlot::DeveloperCapabilities => {
+                        extension_developer_capabilities.push(fragment.text().to_string());
+                    }
+                    PromptSlot::ContextualUser => {
+                        extension_contextual_user.push(fragment.text().to_string());
+                    }
+                    PromptSlot::SeparateDeveloper => {
+                        extension_separate_developer.push(fragment.text().to_string());
+                    }
                 }
-                developer_sections.push(skills_instructions.render());
             }
         }
+        developer_sections.extend(extension_developer_capabilities);
         let loaded_plugins = self
             .services
             .plugins_manager
@@ -3025,28 +3032,9 @@ impl Session {
         {
             developer_sections.push(plugin_instructions.render());
         }
-        let context_contributors = self.services.extensions.context_contributors().to_vec();
-        for contributor in context_contributors {
-            for fragment in contributor
-                .contribute(
-                    &self.services.session_extension_data,
-                    &self.services.thread_extension_data,
-                )
-                .await
-            {
-                match fragment.slot() {
-                    PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
-                        developer_sections.push(fragment.text().to_string());
-                    }
-                    PromptSlot::ContextualUser => {
-                        contextual_user_sections.push(fragment.text().to_string());
-                    }
-                    PromptSlot::SeparateDeveloper => {
-                        separate_developer_sections.push(fragment.text().to_string());
-                    }
-                }
-            }
-        }
+        developer_sections.extend(extension_developer_policy);
+        contextual_user_sections.extend(extension_contextual_user);
+        separate_developer_sections.extend(extension_separate_developer);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             contextual_user_sections.push(user_instructions.to_string());
         }

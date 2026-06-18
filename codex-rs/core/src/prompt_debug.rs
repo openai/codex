@@ -19,7 +19,6 @@ use crate::session::turn::built_tools;
 use crate::state_db_bridge::StateDbHandle;
 use crate::thread_manager::ThreadManager;
 use crate::thread_manager::thread_store_from_config;
-use codex_extension_api::empty_extension_registry;
 
 /// Build the model-visible `input` list for a single debug turn.
 #[doc(hidden)]
@@ -28,6 +27,7 @@ pub async fn build_prompt_input(
     input: Vec<UserInput>,
     state_db: Option<StateDbHandle>,
     user_instructions_provider: Arc<dyn UserInstructionsProvider>,
+    extensions: Arc<codex_extension_api::ExtensionRegistry<Config>>,
 ) -> CodexResult<Vec<ResponseItem>> {
     config.ephemeral = true;
 
@@ -53,7 +53,7 @@ pub async fn build_prompt_input(
             .await
             .map_err(|err| CodexErr::Fatal(err.to_string()))?,
         ),
-        empty_extension_registry(),
+        extensions,
         user_instructions_provider,
         /*analytics_events_client*/ None,
         thread_store,

@@ -7,6 +7,7 @@ use std::task::Context;
 use std::task::Poll;
 use std::task::Waker;
 
+use codex_extension_api::ContextContributionContext;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use shared_state_extension::recorded_style_contributions;
@@ -72,9 +73,20 @@ async fn contribute_prompt(
     session_store: &ExtensionData,
     thread_store: &ExtensionData,
 ) -> Vec<codex_extension_api::PromptFragment> {
+    let turn_store = ExtensionData::new("turn");
     let mut fragments = Vec::new();
     for contributor in registry.context_contributors() {
-        fragments.extend(contributor.contribute(session_store, thread_store).await);
+        fragments.extend(
+            contributor
+                .contribute(ContextContributionContext {
+                    thread_id: codex_protocol::ThreadId::new(),
+                    session_store,
+                    thread_store,
+                    turn_store: &turn_store,
+                    model_context_window: None,
+                })
+                .await,
+        );
     }
     fragments
 }

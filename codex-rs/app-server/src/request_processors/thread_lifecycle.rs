@@ -505,6 +505,14 @@ pub(super) async fn handle_thread_listener_command(
         ThreadListenerCommand::EmitThreadGoalSnapshot { state_db } => {
             send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
         }
+        ThreadListenerCommand::EmitWarning { message } => {
+            outgoing
+                .send_server_notification(ServerNotification::Warning(WarningNotification {
+                    thread_id: Some(conversation_id.to_string()),
+                    message,
+                }))
+                .await;
+        }
         ThreadListenerCommand::ResolveServerRequest {
             request_id,
             completion_tx,

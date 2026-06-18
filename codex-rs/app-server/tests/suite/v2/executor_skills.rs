@@ -125,12 +125,13 @@ stream_max_retries = 0
     .await??;
 
     let request = response_mock.single_request();
-    assert!(
-        request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains(SKILL_NAME))
-    );
+    let skills_catalog = request
+        .message_input_texts("developer")
+        .into_iter()
+        .find(|text| text.starts_with("<skills_instructions>"))
+        .expect("skills catalog should be model-visible");
+    assert!(skills_catalog.contains("Colliding local skill."));
+    assert!(skills_catalog.contains("Deploy through the executor."));
     let skill_fragments = request
         .message_input_texts("user")
         .into_iter()

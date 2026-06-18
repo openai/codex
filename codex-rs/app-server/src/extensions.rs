@@ -5,6 +5,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
+use codex_app_server_protocol::WarningNotification;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
@@ -77,11 +78,14 @@ where
     codex_mcp_extension::install_executor_plugins(&mut builder, environment_manager);
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager);
+    // Selected executor roots take precedence over ambient host skills when a
+    // plain-text skill mention has the same name in both authorities.
     let skill_providers = codex_skills_extension::SkillProviders::new()
         .with_executor_provider(executor_skill_provider)
         .with_orchestrator_provider(Arc::new(
             codex_skills_extension::OrchestratorSkillProvider::new(),
-        ));
+        ))
+        .with_host_provider(Arc::new(codex_skills_extension::HostSkillProvider::new()));
     codex_skills_extension::install_with_providers(
         &mut builder,
         skill_providers,
@@ -109,7 +113,7 @@ struct AppServerExtensionEventSink {
 }
 
 impl ExtensionEventSink for AppServerExtensionEventSink {
-    fn emit(&self, event: Event) {
+    fn emit(&self, thread_id: ThreadId, event: Event) {
         match event.msg {
             EventMsg::ThreadGoalUpdated(thread_goal_event) => {
                 let thread_id = thread_goal_event.thread_id;
@@ -143,8 +147,35 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                         .await;
                 });
             }
+            EventMsg::Warning(warning_event) => {
+                if let Some(listener_command_tx) = self
+                    .thread_state_manager
+                    .current_listener_command_tx(thread_id)
+                {
+                    let command = ThreadListenerCommand::EmitWarning {
+                        message: warning_event.message.clone(),
+                    };
+                    if listener_command_tx.send(command).is_ok() {
+                        return;
+                    }
+                    tracing::warn!(
+                        "failed to enqueue extension warning for {thread_id}: listener command channel is closed"
+                    );
+                }
+                let outgoing = Arc::clone(&self.outgoing);
+                tokio::spawn(async move {
+                    outgoing
+                        .send_server_notification(ServerNotification::Warning(
+                            WarningNotification {
+                                thread_id: Some(thread_id.to_string()),
+                                message: warning_event.message,
+                            },
+                        ))
+                        .await;
+                });
+            }
             msg => {
-                tracing::debug!(event_id = %event.id, ?msg, "dropping unsupported extension event");
+                tracing::debug!(%thread_id, event_id = %event.id, ?msg, "dropping unsupported extension event");
             }
         }
     }
@@ -182,7 +213,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn app_server_event_sink_uses_listener_fifo_for_goal_updates_and_clears() {
+    async fn app_server_event_sink_uses_listener_fifo_for_extension_events() {
         let (outgoing_tx, _outgoing_rx) = mpsc::channel(4);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
@@ -195,14 +226,23 @@ mod tests {
         let sink = app_server_extension_event_sink(outgoing, thread_state_manager);
 
         for turn_id in ["turn-1", "turn-2"] {
-            sink.emit(thread_goal_updated_event(thread_id, turn_id));
+            sink.emit(thread_id, thread_goal_updated_event(thread_id, turn_id));
         }
+        sink.emit(
+            thread_id,
+            Event {
+                id: "turn-2".to_string(),
+                msg: EventMsg::Warning(codex_protocol::protocol::WarningEvent {
+                    message: "skill warning".to_string(),
+                }),
+            },
+        );
         listener_command_tx
             .send(ThreadListenerCommand::EmitThreadGoalCleared)
             .expect("listener command channel should be open");
 
         let mut observed = Vec::new();
-        for _ in 0..3 {
+        for _ in 0..4 {
             let command = timeout(Duration::from_secs(1), listener_command_rx.recv())
                 .await
                 .expect("timed out waiting for listener command")
@@ -214,6 +254,7 @@ mod tests {
                 ThreadListenerCommand::EmitThreadGoalCleared => {
                     observed.push("cleared".to_string())
                 }
+                ThreadListenerCommand::EmitWarning { message } => observed.push(message),
                 _ => panic!("unexpected listener command"),
             }
         }
@@ -222,6 +263,7 @@ mod tests {
             vec![
                 "turn-1".to_string(),
                 "turn-2".to_string(),
+                "skill warning".to_string(),
                 "cleared".to_string()
             ],
             observed

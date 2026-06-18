@@ -652,6 +652,7 @@ async fn build_extension_turn_input_items(
         .collect::<Vec<_>>();
 
     let input = TurnInputContext {
+        thread_id: sess.thread_id(),
         turn_id: turn_context.sub_id.to_string(),
         user_input: user_input.to_vec(),
         environments,
