@@ -1,5 +1,7 @@
+use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 use base64::Engine;
@@ -9,8 +11,10 @@ use codex_utils_cache::sha1_digest;
 use image::ColorType;
 use image::DynamicImage;
 use image::GenericImageView;
+use image::ImageDecoder;
 use image::ImageEncoder;
 use image::ImageFormat;
+use image::ImageReader;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::codecs::webp::WebPEncoder;
@@ -25,6 +29,7 @@ pub const MAX_DIMENSION: u32 = 2048;
 /// This is a high sanity guard against pathological inputs, not a protocol
 /// requirement or target upload size.
 pub const MAX_PROMPT_IMAGE_INPUT_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_IMAGE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 pub mod error;
 
@@ -32,7 +37,7 @@ pub use crate::error::ImageProcessingError;
 
 #[derive(Debug, Clone)]
 pub struct EncodedImage {
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<[u8]>,
     pub mime: String,
     pub width: u32,
     pub height: u32,
@@ -40,9 +45,14 @@ pub struct EncodedImage {
 
 impl EncodedImage {
     pub fn into_data_url(self) -> String {
-        let encoded = BASE64_STANDARD.encode(&self.bytes);
-        format!("data:{};base64,{encoded}", self.mime)
+        data_url_from_bytes(&self.mime, &self.bytes)
     }
+}
+
+/// Wraps image bytes in a data URL without decoding or validating them.
+pub fn data_url_from_bytes(mime: &str, bytes: &[u8]) -> String {
+    let encoded = BASE64_STANDARD.encode(bytes);
+    format!("data:{mime};base64,{encoded}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,13 +68,20 @@ pub struct PromptImageResizeLimits {
     pub max_patches: usize,
 }
 
+struct ImageMetadata {
+    icc_profile: Option<Vec<u8>>,
+    exif: Option<Vec<u8>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ImageCacheKey {
     digest: [u8; 20],
     mode: PromptImageMode,
 }
 
-static IMAGE_CACHE: LazyLock<BlockingLruCache<ImageCacheKey, EncodedImage>> =
+type ImageCache = BlockingLruCache<ImageCacheKey, EncodedImage>;
+
+static IMAGE_CACHE: LazyLock<ImageCache> =
     LazyLock::new(|| BlockingLruCache::new(NonZeroUsize::new(32).unwrap_or(NonZeroUsize::MIN)));
 
 pub fn load_for_prompt_bytes(
@@ -79,16 +96,39 @@ pub fn load_for_prompt_bytes(
         mode,
     };
 
-    IMAGE_CACHE.get_or_try_insert_with(key, move || {
-        let format = match image::guess_format(&file_bytes) {
-            Ok(ImageFormat::Png) => Some(ImageFormat::Png),
-            Ok(ImageFormat::Jpeg) => Some(ImageFormat::Jpeg),
-            Ok(ImageFormat::Gif) => Some(ImageFormat::Gif),
-            Ok(ImageFormat::WebP) => Some(ImageFormat::WebP),
+    if let Some(image) = IMAGE_CACHE.get(&key) {
+        return Ok(image);
+    }
+
+    let image = (move || {
+        let guessed_format = image::guess_format(&file_bytes)
+            .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
+        let format = match guessed_format {
+            ImageFormat::Png => Some(ImageFormat::Png),
+            ImageFormat::Jpeg => Some(ImageFormat::Jpeg),
+            ImageFormat::Gif => Some(ImageFormat::Gif),
+            ImageFormat::WebP => Some(ImageFormat::WebP),
             _ => None,
         };
 
-        let dynamic = image::load_from_memory(&file_bytes)
+        let mut decoder = ImageReader::with_format(Cursor::new(&file_bytes), guessed_format)
+            .into_decoder()
+            .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
+        // Preserve the metadata most important for rendering prompt images faithfully: the color
+        // profile and EXIF data, including orientation. Other format-specific metadata is
+        // intentionally not copied.
+        let metadata = ImageMetadata {
+            // Only RGB profiles are safe across every re-encoding path. For example, JPEG decoding
+            // can convert CMYK/YCCK pixels to RGB while retaining the source profile; copying it
+            // would mislabel the output. Bytes 16..20 are the ICC data color space signature.
+            icc_profile: decoder
+                .icc_profile()
+                .ok()
+                .flatten()
+                .filter(|profile| profile.get(16..20) == Some(b"RGB ")),
+            exif: decoder.exif_metadata().ok().flatten(),
+        };
+        let dynamic = DynamicImage::from_decoder(decoder)
             .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
 
         let (width, height) = dynamic.dimensions();
@@ -116,10 +156,10 @@ pub fn load_for_prompt_bytes(
             let target_format = format
                 .filter(|format| can_preserve_source_bytes(*format))
                 .unwrap_or(ImageFormat::Png);
-            let (bytes, output_format) = encode_image(&resized, target_format)?;
+            let (bytes, output_format) = encode_image(&resized, target_format, metadata)?;
             let mime = format_to_mime(output_format);
             EncodedImage {
-                bytes,
+                bytes: bytes.into(),
                 mime,
                 width,
                 height,
@@ -128,16 +168,16 @@ pub fn load_for_prompt_bytes(
             if let Some(format) = format.filter(|format| can_preserve_source_bytes(*format)) {
                 let mime = format_to_mime(format);
                 EncodedImage {
-                    bytes: file_bytes,
+                    bytes: file_bytes.into(),
                     mime,
                     width,
                     height,
                 }
             } else {
-                let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png)?;
+                let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png, metadata)?;
                 let mime = format_to_mime(output_format);
                 EncodedImage {
-                    bytes,
+                    bytes: bytes.into(),
                     mime,
                     width,
                     height,
@@ -146,7 +186,30 @@ pub fn load_for_prompt_bytes(
         };
 
         Ok(encoded)
-    })
+    })()?;
+
+    cache_image(&IMAGE_CACHE, key, image.clone(), MAX_IMAGE_CACHE_BYTES);
+    Ok(image)
+}
+
+fn cache_image(cache: &ImageCache, key: ImageCacheKey, image: EncodedImage, byte_capacity: usize) {
+    if image.bytes.len() > byte_capacity {
+        return;
+    }
+
+    cache.with_mut(|cache| {
+        cache.put(key, image);
+        let mut cached_bytes = cache
+            .iter()
+            .map(|(_, image)| image.bytes.len())
+            .sum::<usize>();
+        while cached_bytes > byte_capacity {
+            let Some((_, evicted)) = cache.pop_lru() else {
+                break;
+            };
+            cached_bytes -= evicted.bytes.len();
+        }
+    });
 }
 
 pub fn load_data_url_for_prompt(
@@ -256,6 +319,7 @@ fn can_preserve_source_bytes(format: ImageFormat) -> bool {
 fn encode_image(
     image: &DynamicImage,
     preferred_format: ImageFormat,
+    metadata: ImageMetadata,
 ) -> Result<(Vec<u8>, ImageFormat), ImageProcessingError> {
     let target_format = match preferred_format {
         ImageFormat::Jpeg => ImageFormat::Jpeg,
@@ -264,11 +328,13 @@ fn encode_image(
     };
 
     let mut buffer = Vec::new();
+    let ImageMetadata { icc_profile, exif } = metadata;
 
     match target_format {
         ImageFormat::Png => {
             let rgba = image.to_rgba8();
-            let encoder = PngEncoder::new(&mut buffer);
+            let mut encoder = PngEncoder::new(&mut buffer);
+            apply_image_metadata(&mut encoder, icc_profile, exif, target_format)?;
             encoder
                 .write_image(
                     rgba.as_raw(),
@@ -283,6 +349,7 @@ fn encode_image(
         }
         ImageFormat::Jpeg => {
             let mut encoder = JpegEncoder::new_with_quality(&mut buffer, 85);
+            apply_image_metadata(&mut encoder, icc_profile, exif, target_format)?;
             encoder
                 .encode_image(image)
                 .map_err(|source| ImageProcessingError::Encode {
@@ -292,7 +359,8 @@ fn encode_image(
         }
         ImageFormat::WebP => {
             let rgba = image.to_rgba8();
-            let encoder = WebPEncoder::new_lossless(&mut buffer);
+            let mut encoder = WebPEncoder::new_lossless(&mut buffer);
+            apply_image_metadata(&mut encoder, icc_profile, exif, target_format)?;
             encoder
                 .write_image(
                     rgba.as_raw(),
@@ -309,6 +377,31 @@ fn encode_image(
     }
 
     Ok((buffer, target_format))
+}
+
+fn apply_image_metadata(
+    encoder: &mut impl ImageEncoder,
+    icc_profile: Option<Vec<u8>>,
+    exif: Option<Vec<u8>>,
+    format: ImageFormat,
+) -> Result<(), ImageProcessingError> {
+    if let Some(icc_profile) = icc_profile {
+        encoder
+            .set_icc_profile(icc_profile)
+            .map_err(|source| ImageProcessingError::Encode {
+                format,
+                source: image::ImageError::Unsupported(source),
+            })?;
+    }
+    if let Some(exif) = exif {
+        encoder
+            .set_exif_metadata(exif)
+            .map_err(|source| ImageProcessingError::Encode {
+                format,
+                source: image::ImageError::Unsupported(source),
+            })?;
+    }
+    Ok(())
 }
 
 fn format_to_mime(format: ImageFormat) -> String {

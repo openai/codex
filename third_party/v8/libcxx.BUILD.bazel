@@ -1,5 +1,5 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@llvm//toolchain/runtimes:cc_runtime_library.bzl", "cc_runtime_stage0_library")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -135,7 +135,6 @@ cc_runtime_stage0_library(
         ],
         "//conditions:default": [],
     }),
-    includes = ["src"],
     implementation_deps = [
         ":headers",
         ":internal_headers",
@@ -155,4 +154,5 @@ cc_runtime_stage0_library(
         ],
         "//conditions:default": [],
     }),
+    includes = ["src"],
 )

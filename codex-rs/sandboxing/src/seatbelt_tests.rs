@@ -12,6 +12,7 @@ use super::seatbelt_regex_for_unreadable_glob;
 use super::unix_socket_dir_params;
 use super::unix_socket_policy;
 use codex_network_proxy::ConfigReloader;
+use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxy;
@@ -81,18 +82,17 @@ fn seatbelt_protected_metadata_name_requirements(root: &Path) -> String {
 
 struct TestConfigReloader;
 
-#[async_trait::async_trait]
 impl ConfigReloader for TestConfigReloader {
     fn source_label(&self) -> String {
         "seatbelt test config".to_string()
     }
 
-    async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
-        Ok(None)
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async { Ok(None) })
     }
 
-    async fn reload_now(&self) -> anyhow::Result<ConfigState> {
-        Err(anyhow::anyhow!("seatbelt test config cannot reload"))
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async { Err(anyhow::anyhow!("seatbelt test config cannot reload")) })
     }
 }
 

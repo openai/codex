@@ -13,7 +13,6 @@ doctest = false
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-git-utils = { workspace = true }
 codex-install-context = { workspace = true }

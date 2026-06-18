@@ -9,9 +9,11 @@ use crate::NetworkProxyConstraints;
 use crate::build_config_state;
 use crate::normalize_host;
 use crate::runtime::ConfigReloader;
+use crate::runtime::ConfigReloaderFuture;
 use crate::runtime::ConfigState;
+use crate::validate_policy_against_constraints;
 use anyhow::Result;
-use async_trait::async_trait;
+use std::cmp::Reverse;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -39,6 +41,14 @@ pub struct CredentialedRoutesConfig {
 }
 
 impl CredentialedRoutesConfig {
+    pub fn route_prefixes(&self) -> Vec<String> {
+        self.routes
+            .iter()
+            .filter_map(|route| parse_route_base_url(route).ok())
+            .map(|url| url.to_string())
+            .collect()
+    }
+
     fn apply_to_network_proxy_config(&self, config: &mut NetworkProxyConfig) {
         let credentialed_route_hooks = self.mitm_hooks();
         let mut allowed_domains = config.network.allowed_domains().unwrap_or_default();
@@ -63,8 +73,10 @@ impl CredentialedRoutesConfig {
             return Vec::new();
         };
 
-        self.routes
-            .iter()
+        let mut routes = self.routes.iter().collect::<Vec<_>>();
+        routes.sort_by_key(|route| Reverse(route.base_url.trim_end_matches('/').len()));
+        routes
+            .into_iter()
             .filter_map(
                 |route| match route_mitm_hook(route, &self.proxy_headers, proxy_url) {
                     Ok(hook) => Some(hook),
@@ -142,40 +154,44 @@ impl CredentialedRoutesReloader {
     }
 }
 
-#[async_trait]
 impl ConfigReloader for CredentialedRoutesReloader {
     fn source_label(&self) -> String {
         "CredentialedRoutesReloader".to_string()
     }
 
-    async fn maybe_reload(&self) -> Result<Option<ConfigState>> {
-        {
-            let mut next_refresh_at = self.next_refresh_at.lock().await;
-            let now = Instant::now();
-            if now < *next_refresh_at {
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async move {
+            {
+                let mut next_refresh_at = self.next_refresh_at.lock().await;
+                let now = Instant::now();
+                if now < *next_refresh_at {
+                    return Ok(None);
+                }
+                *next_refresh_at = now + CREDENTIALED_ROUTE_REFRESH_INTERVAL;
+            }
+            let credentialed_routes = match self.source.load().await {
+                Ok(credentialed_routes) => credentialed_routes,
+                Err(err) => {
+                    warn!(error = %err, "failed to refresh credentialed routes");
+                    return Ok(None);
+                }
+            };
+            let previous_routes = self.credentialed_routes.read().await.clone();
+            if credentialed_routes == previous_routes {
                 return Ok(None);
             }
-            *next_refresh_at = now + CREDENTIALED_ROUTE_REFRESH_INTERVAL;
-        }
-        let credentialed_routes = match self.source.load().await {
-            Ok(credentialed_routes) => credentialed_routes,
-            Err(err) => {
-                warn!(error = %err, "failed to refresh credentialed routes");
-                return Ok(None);
-            }
-        };
-        let previous_routes = self.credentialed_routes.read().await.clone();
-        if credentialed_routes == previous_routes {
-            return Ok(None);
-        }
 
-        *self.credentialed_routes.write().await = credentialed_routes.clone();
-        Ok(Some(self.build_state(&credentialed_routes).await?))
+            let state = self.build_state(&credentialed_routes).await?;
+            *self.credentialed_routes.write().await = credentialed_routes;
+            Ok(Some(state))
+        })
     }
 
-    async fn reload_now(&self) -> Result<ConfigState> {
-        let credentialed_routes = self.credentialed_routes.read().await.clone();
-        self.build_state(&credentialed_routes).await
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async move {
+            let credentialed_routes = self.credentialed_routes.read().await.clone();
+            self.build_state(&credentialed_routes).await
+        })
     }
 }
 
@@ -185,6 +201,7 @@ fn build_config_state_with_credentialed_routes(
     credentialed_routes: &CredentialedRoutesConfig,
 ) -> Result<ConfigState> {
     credentialed_routes.apply_to_network_proxy_config(&mut config);
+    validate_policy_against_constraints(&config, &constraints)?;
     build_config_state(config, constraints)
 }
 
@@ -193,29 +210,24 @@ fn route_mitm_hook(
     proxy_headers: &[CredentialedRouteProxyHeader],
     proxy_url: &str,
 ) -> Result<MitmHookConfig> {
-    let base_url = Url::parse(&route.base_url)?;
-    anyhow::ensure!(
-        base_url.scheme() == "https",
-        "credentialed route must use https"
-    );
+    let base_url = parse_route_base_url(route)?;
     let host = base_url
         .host_str()
-        .ok_or_else(|| anyhow::anyhow!("credentialed route must include a host"))?;
-    anyhow::ensure!(
-        base_url.username().is_empty() && base_url.password().is_none(),
-        "credentialed route must not include user info"
-    );
-    anyhow::ensure!(
-        base_url.fragment().is_none() && base_url.query().is_none(),
-        "credentialed route must not include query or fragment"
-    );
-    let path_prefix = match base_url.path() {
-        "" => "/",
-        path => path,
+        .ok_or_else(|| anyhow::anyhow!("credentialed route must include a host"))?
+        .to_string();
+    let path = base_url.path().trim_end_matches('/');
+    let path_prefixes = if path.is_empty() {
+        vec!["/".to_string()]
+    } else {
+        let escaped_path = globset::escape(path);
+        vec![
+            format!("pattern:{escaped_path}"),
+            format!("pattern:{escaped_path}/**"),
+        ]
     };
 
     Ok(MitmHookConfig {
-        host: host.to_string(),
+        host,
         matcher: MitmHookMatchConfig {
             methods: vec![
                 "DELETE".to_string(),
@@ -225,7 +237,7 @@ fn route_mitm_hook(
                 "POST".to_string(),
                 "PUT".to_string(),
             ],
-            path_prefixes: vec![path_prefix.to_string()],
+            path_prefixes,
             ..MitmHookMatchConfig::default()
         },
         actions: MitmHookActionsConfig {
@@ -240,98 +252,27 @@ fn route_mitm_hook(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::CredentialedRouteProxyHeader;
-    use crate::NetworkDomainPermission;
-    use crate::NetworkProxyConfig;
-    use crate::NetworkProxyConstraints;
-    use crate::build_config_state;
-    use pretty_assertions::assert_eq;
-    use rama_http::HeaderValue;
-    use rama_http::header::AUTHORIZATION;
-
-    #[test]
-    fn credentialed_routes_compile_to_internal_mitm_hooks() {
-        let config = CredentialedRoutesConfig {
-            routes: vec![CredentialedRoute {
-                connector_id: "connector_123".to_string(),
-                link_id: "link_123".to_string(),
-                base_url: "https://api.example.com/v1".to_string(),
-            }],
-            proxy_headers: vec![CredentialedRouteProxyHeader {
-                name: AUTHORIZATION,
-                value: HeaderValue::from_static("Bearer codex-token"),
-            }],
-            proxy_url: Some(
-                "https://chatgpt.com/backend-api/ps/credential_routes/proxy".to_string(),
-            ),
-        };
-
-        let hooks = config.mitm_hooks();
-
-        assert_eq!(hooks.len(), 1);
-        assert_eq!(hooks[0].host, "api.example.com");
-        assert_eq!(hooks[0].matcher.path_prefixes, vec!["/v1".to_string()]);
-        assert_eq!(
-            hooks[0].actions.credentialed_route_proxy,
-            Some(CredentialedRouteProxyActionConfig {
-                connector_id: "connector_123".to_string(),
-                link_id: "link_123".to_string(),
-                proxy_headers: vec![CredentialedRouteProxyHeader {
-                    name: AUTHORIZATION,
-                    value: HeaderValue::from_static("Bearer codex-token"),
-                }],
-                proxy_url: "https://chatgpt.com/backend-api/ps/credential_routes/proxy".to_string(),
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn credentialed_routes_reloader_rebuilds_generated_hooks() {
-        let mut base_config = NetworkProxyConfig::default();
-        base_config.network.enabled = true;
-        base_config.network.upsert_domain_permission(
-            "existing.example.com".to_string(),
-            NetworkDomainPermission::Allow,
-            normalize_host,
-        );
-        let base_state =
-            build_config_state(base_config, NetworkProxyConstraints::default()).unwrap();
-        let updated_routes = CredentialedRoutesConfig {
-            routes: vec![CredentialedRoute {
-                connector_id: "connector_123".to_string(),
-                link_id: "link_123".to_string(),
-                base_url: "https://api.example.com/v1".to_string(),
-            }],
-            proxy_headers: Vec::new(),
-            proxy_url: Some(
-                "https://chatgpt.com/backend-api/ps/credential_routes/proxy".to_string(),
-            ),
-        };
-        let reloader = CredentialedRoutesReloader::new(
-            base_state,
-            CredentialedRoutesConfig::default(),
-            Arc::new({
-                let updated_routes = updated_routes.clone();
-                move || {
-                    let updated_routes = updated_routes.clone();
-                    async move { Ok(updated_routes) }
-                }
-            }),
-        );
-        *reloader.next_refresh_at.lock().await = Instant::now();
-
-        let state = reloader.maybe_reload().await.unwrap().unwrap();
-
-        assert_eq!(
-            state.config.network.allowed_domains().unwrap(),
-            vec![
-                "existing.example.com".to_string(),
-                "api.example.com".to_string()
-            ]
-        );
-        assert_eq!(state.config.network.mitm_hooks.len(), 1);
-    }
+fn parse_route_base_url(route: &CredentialedRoute) -> Result<Url> {
+    let base_url = Url::parse(&route.base_url)?;
+    anyhow::ensure!(
+        base_url.scheme() == "https",
+        "credentialed route must use https"
+    );
+    anyhow::ensure!(
+        base_url.host_str().is_some(),
+        "credentialed route must include a host"
+    );
+    anyhow::ensure!(
+        base_url.username().is_empty() && base_url.password().is_none(),
+        "credentialed route must not include user info"
+    );
+    anyhow::ensure!(
+        base_url.fragment().is_none() && base_url.query().is_none(),
+        "credentialed route must not include query or fragment"
+    );
+    Ok(base_url)
 }
+
+#[cfg(test)]
+#[path = "credentialed_routes_tests.rs"]
+mod tests;

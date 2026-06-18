@@ -597,6 +597,7 @@ mod tests {
                 turn_id: turn_id.to_string(),
                 item_id: call_id.to_string(),
                 questions: Vec::new(),
+                auto_resolution_ms: None,
             },
         }
     }
@@ -614,10 +615,11 @@ mod tests {
                 item_id: call_id.to_string(),
                 started_at_ms: 0,
                 approval_id: approval_id.map(str::to_string),
+                environment_id: None,
                 reason: None,
                 network_approval_context: None,
                 command: Some("echo hi".to_string()),
-                cwd: Some(test_path_buf("/tmp").abs()),
+                cwd: Some(test_path_buf("/tmp").abs().into()),
                 command_actions: None,
                 additional_permissions: None,
                 proposed_execpolicy_amendment: None,

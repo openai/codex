@@ -136,6 +136,7 @@ fn test_model_info(
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
@@ -957,6 +958,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         context_window: Some(large_context_window),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent,
         experimental_supported_tools: Vec::new(),
     };

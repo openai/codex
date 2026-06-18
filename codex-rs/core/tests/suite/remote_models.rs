@@ -1,5 +1,4 @@
 #![cfg(not(target_os = "windows"))]
-#![allow(clippy::expect_used)]
 use anyhow::Result;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -499,6 +498,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     };
@@ -751,6 +751,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     };
@@ -1164,8 +1165,7 @@ async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) -> 
 }
 
 fn bundled_model_slug() -> String {
-    let response = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let response = bundled_models_response().expect("bundled models.json should parse");
     response
         .models
         .first()
@@ -1237,6 +1237,7 @@ fn test_remote_model_with_policy(
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }

@@ -31,10 +31,10 @@ platform(
     visibility = ["//visibility:public"],
 )
 """.format(
-    cpu = cpu,
-    arch = exec_arch,
-    image_sha = image_sha
-))
+        cpu = cpu,
+        arch = exec_arch,
+        image_sha = image_sha,
+    ))
 
 rbe_platform_repository = repository_rule(
     implementation = _rbe_platform_repo_impl,

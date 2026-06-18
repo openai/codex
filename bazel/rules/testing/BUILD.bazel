@@ -1,0 +1,5 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "foreign_platform_binary.bzl",
+])

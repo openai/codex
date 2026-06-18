@@ -12,6 +12,11 @@ pub struct CodeModeConfigToml {
     /// Exact tool namespaces to omit from the code-mode nested tool surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub excluded_tool_namespaces: Option<Vec<String>>,
+    /// Exact tool namespaces to expose only as direct model tools.
+    /// These tools bypass deferral, remain top-level in code-mode-only sessions, and are omitted
+    /// from the nested code-mode tool surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_only_tool_namespaces: Option<Vec<String>>,
 }
 
 impl FeatureConfig for CodeModeConfigToml {
@@ -59,6 +64,65 @@ pub struct MultiAgentV2ConfigToml {
 }
 
 impl FeatureConfig for MultiAgentV2ConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RolloutBudgetConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub limit_tokens: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub reminder_interval_tokens: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub sampling_token_weight: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub prefill_token_weight: Option<f64>,
+}
+
+impl FeatureConfig for RolloutBudgetConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentTimeSource {
+    #[default]
+    System,
+    External,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentTimeReminderConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub reminder_interval_model_requests: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clock_source: Option<CurrentTimeSource>,
+}
+
+impl FeatureConfig for CurrentTimeReminderConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }

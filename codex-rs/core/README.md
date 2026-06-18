@@ -2,6 +2,12 @@
 
 This crate implements the business logic for Codex. It is designed to be used by the various Codex UIs written in Rust.
 
+## Wine-exec integration tests
+
+On x86-64 Linux, run the shared suite against the Windows exec server with
+`bazel test //codex-rs/core:core-all-wine-exec-test`. Temporary blockers use a
+source-local `skip_if_wine_exec!` call and reason.
+
 ## Dependencies
 
 Note that `codex-core` makes some assumptions about certain helper utilities being available in the environment. Currently, this support matrix is:

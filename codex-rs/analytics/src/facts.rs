@@ -137,7 +137,7 @@ impl TurnCodexErrorFact {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum CodexErrKind {
+pub enum CodexErrKind {
     TurnAborted,
     Stream,
     ContextWindowExceeded,
@@ -364,6 +364,7 @@ pub enum CompactionReason {
     UserRequested,
     ContextLimit,
     ModelDownshift,
+    CompHashChanged,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -407,11 +408,13 @@ pub struct CodexCompactionEvent {
     pub phase: CompactionPhase,
     pub strategy: CompactionStrategy,
     pub status: CompactionStatus,
-    pub error: Option<String>,
+    pub codex_error_kind: Option<CodexErrKind>,
+    pub codex_error_http_status_code: Option<u16>,
     pub active_context_tokens_before: i64,
     pub active_context_tokens_after: i64,
     pub retained_image_count: Option<usize>,
     pub compaction_summary_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
     pub started_at: u64,
     pub completed_at: u64,
     pub duration_ms: Option<u64>,
@@ -501,6 +504,9 @@ pub(crate) enum CustomAnalyticsFact {
     HookRun(HookRunInput),
     PluginUsed(PluginUsedInput),
     PluginStateChanged(PluginStateChangedInput),
+    PluginInstallFailed(PluginInstallFailedInput),
+    ExternalAgentConfigImportCompleted(ExternalAgentConfigImportCompletedInput),
+    ExternalAgentConfigImportFailure(ExternalAgentConfigImportFailureInput),
 }
 
 pub(crate) struct SkillInvokedInput {
@@ -537,6 +543,27 @@ pub(crate) struct PluginUsedInput {
 pub(crate) struct PluginStateChangedInput {
     pub plugin: PluginTelemetryMetadata,
     pub state: PluginState,
+}
+
+pub(crate) struct PluginInstallFailedInput {
+    pub plugin: PluginTelemetryMetadata,
+    pub error_type: String,
+}
+
+pub struct ExternalAgentConfigImportCompletedInput {
+    pub import_id: String,
+    pub source: String,
+    pub item_type: String,
+    pub success_count: usize,
+    pub failed_count: usize,
+}
+
+pub struct ExternalAgentConfigImportFailureInput {
+    pub import_id: String,
+    pub source: String,
+    pub item_type: String,
+    pub failure_stage: String,
+    pub error_type: String,
 }
 
 #[derive(Clone, Copy)]

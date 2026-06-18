@@ -268,6 +268,7 @@ async fn handle_socks5_tcp(
         protocol: NetworkProtocol::Socks5Tcp,
         host: host.clone(),
         port,
+        environment_id: None,
         client_addr: client.clone(),
         method: None,
         command: None,
@@ -624,6 +625,7 @@ async fn inspect_socks5_udp(
         protocol: NetworkProtocol::Socks5Udp,
         host: host.clone(),
         port,
+        environment_id: None,
         client_addr: client.clone(),
         method: None,
         command: None,
@@ -714,10 +716,10 @@ mod tests {
     use crate::network_policy::test_support::capture_events;
     use crate::network_policy::test_support::find_event_by_name;
     use crate::runtime::ConfigReloader;
+    use crate::runtime::ConfigReloaderFuture;
     use crate::runtime::ConfigState;
     use crate::state::NetworkProxyConstraints;
     use crate::state::build_config_state;
-    use async_trait::async_trait;
     use pretty_assertions::assert_eq;
     use rama_core::extensions::Extensions;
     use rama_core::extensions::ExtensionsMut;
@@ -738,14 +740,13 @@ mod tests {
         state: ConfigState,
     }
 
-    #[async_trait]
     impl ConfigReloader for StaticReloader {
-        async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
-            Ok(None)
+        fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+            Box::pin(async { Ok(None) })
         }
 
-        async fn reload_now(&self) -> anyhow::Result<ConfigState> {
-            Ok(self.state.clone())
+        fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+            Box::pin(async { Ok(self.state.clone()) })
         }
 
         fn source_label(&self) -> String {

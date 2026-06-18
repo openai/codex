@@ -53,6 +53,30 @@ fn hooks_file_deserializes_existing_json_shape() {
 }
 
 #[test]
+fn hooks_file_rejects_events_outside_hooks_object() {
+    let error = serde_json::from_str::<HooksFile>(
+        r#"{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python3 /tmp/session_start.py"
+        }
+      ]
+    }
+  ]
+}"#,
+    )
+    .expect_err("root-level hook events should be rejected");
+
+    assert!(
+        error.to_string().contains("unknown field `SessionStart`"),
+        "unexpected parse error: {error}"
+    );
+}
+
+#[test]
 fn hook_events_deserialize_from_toml_arrays_of_tables() {
     let parsed: HookEventsToml = toml::from_str(
         r#"

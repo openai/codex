@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -256,6 +254,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }

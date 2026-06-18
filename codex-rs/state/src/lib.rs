@@ -4,6 +4,11 @@
 //! from JSONL rollouts and mirrors it into a local SQLite database. Backfill
 //! orchestration and rollout scanning live in `codex-core`.
 
+const _: () = assert!(
+    libsqlite3_sys::SQLITE_VERSION_NUMBER >= 3_051_003,
+    "bundled SQLite must include the WAL-reset corruption fix",
+);
+
 mod audit;
 mod extract;
 pub mod log_db;
@@ -51,6 +56,10 @@ pub use model::ThreadGoalStatus;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
+pub use runtime::ExternalAgentConfigImportDetailsRecord;
+pub use runtime::ExternalAgentConfigImportFailureRecord;
+pub use runtime::ExternalAgentConfigImportHistoryRecord;
+pub use runtime::ExternalAgentConfigImportSuccessRecord;
 pub use runtime::GoalAccountingMode;
 pub use runtime::GoalAccountingOutcome;
 pub use runtime::GoalStore;

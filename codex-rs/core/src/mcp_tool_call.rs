@@ -33,6 +33,9 @@ use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_connectors::AppToolPolicy;
+use codex_connectors::AppToolPolicyEvaluator;
+use codex_connectors::AppToolPolicyInput;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -78,6 +81,7 @@ use codex_rollout::state_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
@@ -148,24 +152,36 @@ pub(crate) async fn handle_mcp_tool_call(
             .and_then(|metadata| metadata.plugin_id.clone()),
     };
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
-        connectors::app_tool_policy(
-            &turn_context.config,
-            metadata
-                .as_ref()
-                .and_then(|metadata| metadata.connector_id.as_deref()),
-            &tool_name,
-            metadata
-                .as_ref()
-                .and_then(|metadata| metadata.tool_title.as_deref()),
-            metadata
-                .as_ref()
-                .and_then(|metadata| metadata.annotations.as_ref()),
+        let annotations = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.annotations.as_ref());
+        AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack).policy(
+            AppToolPolicyInput {
+                connector_id: metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.connector_id.as_deref()),
+                tool_name: &tool_name,
+                tool_title: metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.tool_title.as_deref()),
+                destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
+                open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
+            },
         )
     } else {
-        connectors::AppToolPolicy::default()
+        AppToolPolicy::default()
     };
     let approval_mode = if server == CODEX_APPS_MCP_SERVER_NAME {
         app_tool_policy.approval
+    } else if let Some(approval_mode) = {
+        // Selected-plugin registrations are absent from config.toml and the legacy plugin manager,
+        // so their resolved catalog entry is the authoritative source for tool approval policy.
+        let manager = sess.services.mcp_connection_manager.load();
+        manager
+            .is_selected_plugin_mcp_server(&server)
+            .then(|| manager.tool_approval_mode(&server, &tool_name))
+    } {
+        approval_mode
     } else {
         custom_mcp_tool_approval_mode(sess.as_ref(), turn_context.as_ref(), &server, &tool_name)
             .await
@@ -611,7 +627,11 @@ async fn maybe_request_codex_apps_auth_elicitation(
         return result;
     }
 
-    if !turn_context.features.enabled(Feature::AuthElicitation) {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::AuthElicitation)
+    {
         return result;
     }
 
@@ -694,10 +714,8 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     server: &str,
     mut meta: Option<serde_json::Value>,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let supports_sandbox_state_meta = sess
-        .services
-        .mcp_connection_manager
-        .load_full()
+    let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
+    let supports_sandbox_state_meta = mcp_connection_manager
         .server_supports_sandbox_state_meta_capability(server)
         .await
         .unwrap_or(false);
@@ -705,13 +723,18 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         return Ok(meta);
     }
 
+    let server_environment_id = mcp_connection_manager
+        .server_environment_id(server)
+        .unwrap_or(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID);
+    let Some(sandbox_cwd) = sandbox_cwd_for_mcp_server(turn_context, server_environment_id) else {
+        return Ok(meta);
+    };
+    let permission_profile = turn_context.permission_profile();
     let sandbox_state = serde_json::to_value(SandboxState {
-        permission_profile: Some(turn_context.permission_profile()),
-        sandbox_policy: turn_context.sandbox_policy(),
-        codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
-        #[allow(deprecated)]
-        sandbox_cwd: turn_context.cwd.to_path_buf(),
-        use_legacy_landlock: turn_context.features.use_legacy_landlock(),
+        permission_profile: Some(permission_profile),
+        codex_linux_sandbox_exe: turn_context.config.codex_linux_sandbox_exe.clone(),
+        sandbox_cwd,
+        use_legacy_landlock: turn_context.config.features.use_legacy_landlock(),
     })?;
 
     match meta.as_mut() {
@@ -733,6 +756,24 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     }
 
     Ok(meta)
+}
+
+fn sandbox_cwd_for_mcp_server(turn_context: &TurnContext, environment_id: &str) -> Option<PathUri> {
+    if let Some(environment) = turn_context
+        .environments
+        .turn_environments
+        .iter()
+        .find(|environment| environment.environment_id == environment_id)
+    {
+        return Some(environment.cwd().clone());
+    }
+
+    if environment_id == codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
+        #[allow(deprecated)]
+        return Some(PathUri::from_abs_path(&turn_context.cwd));
+    }
+
+    None
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(
@@ -1168,8 +1209,16 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
-    let persistent_approval_key =
-        persistent_mcp_tool_approval_key(invocation, metadata, approval_mode);
+    let persistent_approval_key = if sess
+        .services
+        .mcp_connection_manager
+        .load()
+        .is_selected_plugin_mcp_server(&invocation.server)
+    {
+        None
+    } else {
+        persistent_mcp_tool_approval_key(invocation, metadata, approval_mode)
+    };
     if let Some(key) = session_approval_key.as_ref()
         && mcp_tool_approval_is_remembered(sess, key).await
     {
@@ -1297,6 +1346,7 @@ async fn maybe_request_mcp_tool_approval(
 
     let args = RequestUserInputArgs {
         questions: vec![question],
+        auto_resolution_ms: None,
     };
     let response = sess
         .request_user_input(turn_context.as_ref(), call_id.to_string(), args)

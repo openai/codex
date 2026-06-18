@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use codex_connectors::AppToolPolicyEvaluator;
+use codex_connectors::AppToolPolicyInput;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
@@ -70,6 +72,7 @@ fn filter_codex_apps_mcp_tools(
         .iter()
         .map(|connector| connector.id.as_str())
         .collect();
+    let app_tool_policy = AppToolPolicyEvaluator::new(&config.config_layer_stack);
 
     mcp_tools
         .iter()
@@ -83,7 +86,19 @@ fn filter_codex_apps_mcp_tools(
             let Some(connector_id) = tool.connector_id.as_deref() else {
                 return false;
             };
-            allowed.contains(connector_id) && connectors::codex_app_tool_is_enabled(config, tool)
+            let annotations = tool.tool.annotations.as_ref();
+            allowed.contains(connector_id)
+                && app_tool_policy
+                    .policy(AppToolPolicyInput {
+                        connector_id: Some(connector_id),
+                        tool_name: &tool.tool.name,
+                        tool_title: tool.tool.title.as_deref(),
+                        destructive_hint: annotations
+                            .and_then(|annotations| annotations.destructive_hint),
+                        open_world_hint: annotations
+                            .and_then(|annotations| annotations.open_world_hint),
+                    })
+                    .enabled
         })
         .cloned()
         .collect()
