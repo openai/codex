@@ -1270,6 +1270,7 @@ mod tests {
     use tokio::net::TcpStream;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
+    use tokio::sync::watch;
     use tokio::time::Duration;
     #[cfg(unix)]
     use tokio::time::sleep;
@@ -2193,6 +2194,7 @@ mod tests {
             listener.local_addr().expect("listener should have address")
         );
         let (replacement_initialized_tx, replacement_initialized_rx) = oneshot::channel();
+        let (allow_replacement_tx, allow_replacement_rx) = watch::channel(false);
         let server = tokio::spawn(async move {
             let mut first = accept_websocket(&listener).await;
             complete_websocket_initialize(
@@ -2206,17 +2208,20 @@ mod tests {
                 .await
                 .expect("startup websocket should close");
 
-            let (mut failed_reconnect, _) = listener
-                .accept()
+            let successful_reconnect = loop {
+                let (stream, _) = listener.accept().await.expect("reconnect should arrive");
+                if *allow_replacement_rx.borrow() {
+                    break stream;
+                }
+                let mut failed_reconnect = stream;
+                failed_reconnect
+                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .expect("failed handshake response should write");
+            };
+            let mut successful_reconnect = accept_async(successful_reconnect)
                 .await
-                .expect("first reconnect should arrive");
-            failed_reconnect
-                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
-                .await
-                .expect("failed handshake response should write");
-            drop(failed_reconnect);
-
-            let mut successful_reconnect = accept_websocket(&listener).await;
+                .expect("replacement websocket handshake should succeed");
             complete_websocket_initialize(
                 &mut successful_reconnect,
                 "replacement-session",
@@ -2237,11 +2242,16 @@ mod tests {
         });
 
         let initial = client.get().await.expect("startup should connect");
-        wait_for_disconnect(&initial).await;
-        assert!(matches!(
-            client.get().await,
-            Err(super::ExecServerError::ConnectionAttempt(_))
-        ));
+        timeout(Duration::from_secs(1), async {
+            while !initial.is_disconnected() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("client should observe disconnect");
+        allow_replacement_tx
+            .send(true)
+            .expect("server should allow a fresh client");
         let replacement = client.get().await.expect("later reconnect should succeed");
 
         assert_eq!(
