@@ -69,7 +69,8 @@ const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
 const REFRESH_LOCK_DIR: &str = "mcp-oauth-refresh-locks";
 const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(60);
-const LOCK_RETRY_SLEEP: Duration = Duration::from_millis(500);
+const CREDENTIAL_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(500);
+const STORE_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(50);
 const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -814,7 +815,7 @@ impl RefreshCredentialLock {
                 match file.try_lock() {
                     Ok(()) => return Ok(()),
                     Err(std::fs::TryLockError::WouldBlock) => {
-                        sleep(LOCK_RETRY_SLEEP).await;
+                        sleep(CREDENTIAL_LOCK_RETRY_SLEEP).await;
                     }
                     Err(error) => return Err(std::io::Error::from(error)),
                 }
@@ -901,7 +902,7 @@ impl OAuthStoreLock {
                     );
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {
-                    std::thread::sleep(LOCK_RETRY_SLEEP.min(acquire_timeout));
+                    std::thread::sleep(STORE_LOCK_RETRY_SLEEP.min(acquire_timeout));
                 }
                 Err(error) => {
                     return Err(std::io::Error::from(error)).with_context(|| {
