@@ -17,6 +17,8 @@ use toml::Table;
 mod feature_configs;
 mod legacy;
 pub use feature_configs::CodeModeConfigToml;
+pub use feature_configs::CurrentTimeReminderConfigToml;
+pub use feature_configs::CurrentTimeSource;
 pub use feature_configs::MultiAgentV2ConfigToml;
 pub use feature_configs::NetworkProxyConfigToml;
 pub use feature_configs::NetworkProxyDomainPermissionToml;
@@ -206,6 +208,8 @@ pub enum Feature {
     TokenBudget,
     /// Track and report a shared token budget across a session's agent threads.
     RolloutBudget,
+    /// Add current-time reminders to model-visible context.
+    CurrentTimeReminder,
     /// Expose an input-interruptible sleep tool.
     SleepTool,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
@@ -623,6 +627,8 @@ pub struct FeaturesToml {
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollout_budget: Option<FeatureToml<RolloutBudgetConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_time_reminder: Option<FeatureToml<CurrentTimeReminderConfigToml>>,
     #[serde(default, rename = "apps_mcp_path_override", skip_serializing)]
     #[schemars(skip)]
     removed_apps_mcp_path_override: Option<FeatureToml<RemovedAppsMcpPathOverrideConfigToml>>,
@@ -658,6 +664,13 @@ impl FeaturesToml {
         if let Some(enabled) = self.rollout_budget.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::RolloutBudget.key().to_string(), enabled);
         }
+        if let Some(enabled) = self
+            .current_time_reminder
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::CurrentTimeReminder.key().to_string(), enabled);
+        }
         if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
         }
@@ -670,6 +683,7 @@ impl FeaturesToml {
             code_mode,
             multi_agent_v2,
             rollout_budget,
+            current_time_reminder,
             removed_apps_mcp_path_override: _,
             network_proxy,
             entries,
@@ -685,6 +699,8 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
             } else if spec.id == Feature::RolloutBudget {
                 materialize_resolved_feature_enabled(rollout_budget, enabled);
+            } else if spec.id == Feature::CurrentTimeReminder {
+                materialize_resolved_feature_enabled(current_time_reminder, enabled);
             } else if spec.id == Feature::NetworkProxy {
                 materialize_resolved_feature_enabled(network_proxy, enabled);
             } else {
@@ -1181,6 +1197,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RolloutBudget,
         key: "rollout_budget",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CurrentTimeReminder,
+        key: "current_time_reminder",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

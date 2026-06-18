@@ -2832,6 +2832,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
             })]),
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("start thread");
@@ -4278,6 +4279,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         state_db.clone(),
         "11111111-1111-4111-8111-111111111111".to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let parent = manager
