@@ -58,6 +58,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::TempDirExt;
+use crate::TestEnvironment;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cloud_config_bundle;
@@ -179,7 +180,20 @@ pub async fn test_env() -> Result<TestEnv> {
                     /*sandbox*/ None,
                 )
                 .await?;
-            let cwd = cwd_uri.to_abs_path()?;
+            let cwd = if remote_env == TestEnvironment::WineExec {
+                // TODO(anp): Convert `Config::cwd` to `LegacyAppPathString` and remove this
+                // compatibility projection.
+                // `Config::cwd` still requires `AbsolutePathBuf`. Preserve the test harness's
+                // Linux-absolute `/C:/...` compatibility spelling so converting it back to a
+                // `PathUri` recovers the remote Windows convention. Production conversions stay
+                // strict: `PathUri::to_abs_path` intentionally rejects foreign paths.
+                let path = cwd_uri.to_url().to_file_path().map_err(|()| {
+                    anyhow!("remote test cwd URI cannot be projected onto the host: {cwd_uri}")
+                })?;
+                AbsolutePathBuf::try_from(path)?
+            } else {
+                cwd_uri.to_abs_path()?
+            };
             Ok(TestEnv {
                 environment,
                 exec_server_url: Some(websocket_url),
