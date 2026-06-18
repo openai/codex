@@ -2053,7 +2053,7 @@ async fn handle_unauthorized(
     provider: &SharedModelProvider,
 ) -> Result<UnauthorizedRecoveryExecution> {
     let debug = extract_response_debug_context(&transport);
-    if is_chatgpt_ip_workspace_restricted_unauthorized(&transport)
+    if is_chatgpt_ip_workspace_restricted_unauthorized(&transport, &debug)
         && let Some(recovery) = auth_recovery
         && recovery.current_auth_uses_codex_backend()
     {
@@ -2210,12 +2210,18 @@ async fn handle_unauthorized(
     Err(provider.map_api_error(ApiError::Transport(transport)))
 }
 
-fn is_chatgpt_ip_workspace_restricted_unauthorized(transport: &TransportError) -> bool {
+fn is_chatgpt_ip_workspace_restricted_unauthorized(
+    transport: &TransportError,
+    debug: &codex_response_debug_context::ResponseDebugContext,
+) -> bool {
     let TransportError::Http { status, body, .. } = transport else {
         return false;
     };
     if *status != StatusCode::UNAUTHORIZED {
         return false;
+    }
+    if debug.auth_error_code.as_deref() == Some(CHATGPT_IP_WORKSPACE_RESTRICTED_ERROR_CODE) {
+        return true;
     }
     body.as_deref()
         .is_some_and(|body| body_has_error_code(body, CHATGPT_IP_WORKSPACE_RESTRICTED_ERROR_CODE))
