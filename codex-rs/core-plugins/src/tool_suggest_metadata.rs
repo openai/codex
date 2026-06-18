@@ -1,9 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_app_server_protocol::AuthMode;
 use codex_core_skills::config_rules::SkillConfigRules;
-use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
@@ -53,7 +53,7 @@ struct PluginArtifactIdentity {
 struct CachedToolSuggestMetadata {
     summary: PluginCapabilitySummary,
     app_declarations: Vec<AppDeclaration>,
-    resolved_skills: Option<ResolvedPluginSkills>,
+    resolved_skills: Option<Arc<ResolvedPluginSkills>>,
 }
 
 impl CachedToolSuggestMetadata {
@@ -67,10 +67,8 @@ impl CachedToolSuggestMetadata {
             mut app_declarations,
             resolved_skills,
         } = self;
-        if let Some(mut resolved_skills) = resolved_skills {
-            resolved_skills.disabled_skill_paths =
-                resolve_disabled_skill_paths(&resolved_skills.skills, skill_config_rules);
-            summary.has_skills = resolved_skills.has_enabled_skills();
+        if let Some(resolved_skills) = resolved_skills {
+            summary.has_skills = resolved_skills.has_enabled_skills_with_rules(skill_config_rules);
         }
         let Some(auth_mode) = auth_mode else {
             return summary;
@@ -245,6 +243,6 @@ async fn load_plugin_metadata(
             app_connector_ids,
         },
         app_declarations,
-        resolved_skills: Some(resolved_skills),
+        resolved_skills: Some(Arc::new(resolved_skills)),
     })
 }

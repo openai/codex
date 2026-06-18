@@ -777,11 +777,28 @@ pub struct ResolvedPluginSkills {
 
 impl ResolvedPluginSkills {
     pub fn has_enabled_skills(&self) -> bool {
+        self.has_enabled_skills_excluding(&self.disabled_skill_paths)
+    }
+
+    pub(crate) fn has_enabled_skills_with_rules(
+        &self,
+        skill_config_rules: &SkillConfigRules,
+    ) -> bool {
+        self.has_enabled_skills_excluding(&resolve_disabled_skill_paths(
+            &self.skills,
+            skill_config_rules,
+        ))
+    }
+
+    fn has_enabled_skills_excluding(
+        &self,
+        disabled_skill_paths: &HashSet<AbsolutePathBuf>,
+    ) -> bool {
         self.had_errors
             || self
                 .skills
                 .iter()
-                .any(|skill| !self.disabled_skill_paths.contains(&skill.path_to_skills_md))
+                .any(|skill| !disabled_skill_paths.contains(&skill.path_to_skills_md))
     }
 }
 
