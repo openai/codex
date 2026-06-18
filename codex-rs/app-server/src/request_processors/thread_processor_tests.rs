@@ -424,9 +424,9 @@ mod thread_processor_behavior_tests {
             compacted_resume_test_session(thread_id),
             compacted_resume_test_user_event("first user event"),
             RolloutItem::ResponseItem(compacted_resume_test_message("user", "first user response")),
-            compacted_resume_test_compaction("older checkpoint", 1),
+            compacted_resume_test_compaction("older checkpoint", /*window_id*/ 1),
             compacted_resume_test_user_event("middle user event"),
-            compacted_resume_test_compaction("latest checkpoint", 2),
+            compacted_resume_test_compaction("latest checkpoint", /*window_id*/ 2),
             compacted_resume_test_agent_event(&large_tail_message),
         ])?;
         std::fs::write(&path, contents)?;
@@ -469,7 +469,7 @@ mod thread_processor_behavior_tests {
             compacted_resume_test_session(thread_id),
             compacted_resume_test_user_event("first user event"),
             RolloutItem::ResponseItem(compacted_resume_test_message("user", "first user response")),
-            compacted_resume_test_compaction("latest checkpoint", 2),
+            compacted_resume_test_compaction("latest checkpoint", /*window_id*/ 2),
         ])?;
         contents.push_str("{not json}\n");
         std::fs::write(&path, contents)?;

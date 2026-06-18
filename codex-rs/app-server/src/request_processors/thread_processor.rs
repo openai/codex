@@ -4494,7 +4494,7 @@ fn build_recent_not_loaded_turns_page_response(
         /*has_live_in_progress_turn*/ false,
     );
     apply_thread_turns_items_view(&mut turns, TurnItemsView::NotLoaded);
-    let page = paginate_thread_turns(turns, None, limit, SortDirection::Desc)?;
+    let page = paginate_thread_turns(turns, /*cursor*/ None, limit, SortDirection::Desc)?;
     Ok(ThreadTurnsListResponse {
         data: page.turns,
         next_cursor: page.next_cursor,
