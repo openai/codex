@@ -29,6 +29,7 @@ pub use render::SkillRenderReport;
 pub use render::build_available_skills;
 pub use render::default_skill_metadata_budget;
 pub use render::render_available_skills_body;
+pub use render::render_legacy_available_skills_body;
 pub use service::SkillsLoadInput;
 pub use service::SkillsService;
 pub use skill_instructions::SkillInstructions;

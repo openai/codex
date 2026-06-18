@@ -1,5 +1,6 @@
 use codex_core_skills::AvailableSkills;
 use codex_core_skills::render_available_skills_body;
+use codex_core_skills::render_legacy_available_skills_body;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 
@@ -10,6 +11,7 @@ use super::ContextualUserFragment;
 pub struct AvailableSkillsInstructions {
     skill_root_lines: Vec<String>,
     skill_lines: Vec<String>,
+    include_legacy_usage_instructions: bool,
 }
 
 impl AvailableSkillsInstructions {
@@ -18,7 +20,15 @@ impl AvailableSkillsInstructions {
         Self {
             skill_root_lines: Vec::new(),
             skill_lines,
+            include_legacy_usage_instructions: false,
         }
+    }
+
+    /// Retains the client-owned guidance for models that have not migrated it
+    /// into their own instructions yet.
+    pub fn with_legacy_usage_instructions(mut self) -> Self {
+        self.include_legacy_usage_instructions = true;
+        self
     }
 }
 
@@ -27,6 +37,7 @@ impl From<AvailableSkills> for AvailableSkillsInstructions {
         Self {
             skill_root_lines: available_skills.skill_root_lines,
             skill_lines: available_skills.skill_lines,
+            include_legacy_usage_instructions: false,
         }
     }
 }
@@ -45,6 +56,10 @@ impl ContextualUserFragment for AvailableSkillsInstructions {
     }
 
     fn body(&self) -> String {
-        render_available_skills_body(&self.skill_root_lines, &self.skill_lines)
+        if self.include_legacy_usage_instructions {
+            render_legacy_available_skills_body(&self.skill_root_lines, &self.skill_lines)
+        } else {
+            render_available_skills_body(&self.skill_root_lines, &self.skill_lines)
+        }
     }
 }

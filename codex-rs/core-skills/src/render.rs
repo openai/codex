@@ -60,6 +60,27 @@ pub const SKILLS_HOW_TO_USE_WITH_ALIASES: &str = r###"- Discovery: The list abov
 - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."###;
 
 pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[String]) -> String {
+    format_available_skills_body(skill_root_lines, skill_lines, None)
+}
+
+/// Renders the compatibility prompt used by models that do not own their skills guidance yet.
+pub fn render_legacy_available_skills_body(
+    skill_root_lines: &[String],
+    skill_lines: &[String],
+) -> String {
+    let how_to_use = if skill_root_lines.is_empty() {
+        SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS
+    } else {
+        SKILLS_HOW_TO_USE_WITH_ALIASES
+    };
+    format_available_skills_body(skill_root_lines, skill_lines, Some(how_to_use))
+}
+
+fn format_available_skills_body(
+    skill_root_lines: &[String],
+    skill_lines: &[String],
+    how_to_use: Option<&str>,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push("## Skills".to_string());
     if skill_root_lines.is_empty() {
@@ -72,13 +93,10 @@ pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[
     lines.push("### Available skills".to_string());
     lines.extend(skill_lines.iter().cloned());
 
-    lines.push("### How to use skills".to_string());
-    let how_to_use = if skill_root_lines.is_empty() {
-        SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS
-    } else {
-        SKILLS_HOW_TO_USE_WITH_ALIASES
-    };
-    lines.push(how_to_use.to_string());
+    if let Some(how_to_use) = how_to_use {
+        lines.push("### How to use skills".to_string());
+        lines.push(how_to_use.to_string());
+    }
 
     format!("\n{}\n", lines.join("\n"))
 }
@@ -786,8 +804,10 @@ fn aliased_metadata_overhead_cost(
     skill_root_lines: &[String],
 ) -> usize {
     let empty_skill_lines: &[String] = &[];
-    let absolute_body = render_available_skills_body(&[], empty_skill_lines);
-    let aliased_body = render_available_skills_body(skill_root_lines, empty_skill_lines);
+    // Preserve the existing alias-selection accounting while legacy models still
+    // receive path-format-specific usage guidance.
+    let absolute_body = render_legacy_available_skills_body(&[], empty_skill_lines);
+    let aliased_body = render_legacy_available_skills_body(skill_root_lines, empty_skill_lines);
     budget
         .cost(&aliased_body)
         .saturating_sub(budget.cost(&absolute_body))
@@ -1004,6 +1024,29 @@ mod tests {
             ));
             assert!(!instructions.contains("Read only enough to follow the workflow"));
         }
+    }
+
+    #[test]
+    fn available_skills_body_omits_client_owned_usage_guidance() {
+        let body = render_available_skills_body(&[], &["- demo: desc".to_string()]);
+
+        assert!(body.contains("### Available skills"));
+        assert!(body.contains("- demo: desc"));
+        assert!(!body.contains("### How to use skills"));
+    }
+
+    #[test]
+    fn legacy_available_skills_body_includes_matching_usage_guidance() {
+        let absolute = render_legacy_available_skills_body(&[], &["- demo: desc".to_string()]);
+        assert!(absolute.contains("### How to use skills"));
+        assert!(absolute.contains(SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS));
+
+        let aliased = render_legacy_available_skills_body(
+            &["- `r0` = `/tmp/skills`".to_string()],
+            &["- demo: desc".to_string()],
+        );
+        assert!(aliased.contains("### How to use skills"));
+        assert!(aliased.contains(SKILLS_HOW_TO_USE_WITH_ALIASES));
     }
 
     #[test]

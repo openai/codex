@@ -460,6 +460,19 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+// Compatibility list for models through GPT-5.5. Newer models own this guidance.
+const MODELS_REQUIRING_LEGACY_SKILLS_INSTRUCTIONS: &[&str] = &[
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.2",
+    "codex-auto-review",
+];
+
+fn model_requires_legacy_skills_instructions(model: &str) -> bool {
+    MODELS_REQUIRING_LEGACY_SKILLS_INSTRUCTIONS.contains(&model)
+}
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -2980,6 +2993,13 @@ impl Session {
             if let Some(available_skills) = available_skills {
                 let warning_message = available_skills.warning_message.clone();
                 let skills_instructions = AvailableSkillsInstructions::from(available_skills);
+                let skills_instructions = if model_requires_legacy_skills_instructions(
+                    turn_context.model_info.slug.as_str(),
+                ) {
+                    skills_instructions.with_legacy_usage_instructions()
+                } else {
+                    skills_instructions
+                };
                 if let Some(warning_message) = warning_message {
                     self.send_event_raw(Event {
                         id: String::new(),
