@@ -67,12 +67,6 @@ const PERSONAL_MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.js
 const REMOTE_LOADING_TAB_ID_PREFIX: &str = "remote-loading:";
 const REMOTE_EMPTY_TAB_ID_PREFIX: &str = "remote-empty:";
 const REMOTE_ERROR_TAB_ID_PREFIX: &str = "remote-error:";
-const WORKSPACE_SECTION_MARKETPLACE_NAMES: &[&str] = &[REMOTE_WORKSPACE_MARKETPLACE_NAME];
-const SHARED_WITH_ME_SECTION_MARKETPLACE_NAMES: &[&str] = &[
-    REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
-    REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
-    REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
-];
 const WORKSPACE_SECTION_TAB_ORDER: u8 = 0;
 const SHARED_WITH_ME_SECTION_TAB_ORDER: u8 = 1;
 const SHARED_WITH_ME_LINK_SECTION_TAB_ORDER: u8 = 2;
@@ -81,7 +75,6 @@ const OTHER_MARKETPLACE_TAB_ORDER: u8 = 4;
 
 #[derive(Debug, Clone)]
 struct PreferredLocalPluginSource {
-    remote_plugin_id: String,
     marketplace_path: AbsolutePathBuf,
     plugin_name: String,
     installed: bool,
@@ -156,111 +149,91 @@ impl MarketplaceProduct {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum RemoteMarketplaceSection {
-    Workspace,
-    SharedWithMe,
+struct RemoteMarketplaceSection {
+    id: &'static str,
+    label: &'static str,
+    loading_tab_id: &'static str,
+    marketplace_names: &'static [&'static str],
+    empty_item_name: &'static str,
+    empty_item_description: &'static str,
+    tab_order: u8,
 }
 
-impl RemoteMarketplaceSection {
-    const ALL: [Self; 2] = [Self::Workspace, Self::SharedWithMe];
+const REMOTE_MARKETPLACE_SECTIONS: [RemoteMarketplaceSection; 2] = [
+    RemoteMarketplaceSection {
+        id: "workspace",
+        label: "Workspace",
+        loading_tab_id: "workspace-loading",
+        marketplace_names: &[REMOTE_WORKSPACE_MARKETPLACE_NAME],
+        empty_item_name: "No workspace plugins available",
+        empty_item_description: "No workspace directory plugins are available.",
+        tab_order: WORKSPACE_SECTION_TAB_ORDER,
+    },
+    RemoteMarketplaceSection {
+        id: "shared-with-me",
+        label: "Shared with me",
+        loading_tab_id: "shared-with-me-loading",
+        marketplace_names: &[
+            REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+        ],
+        empty_item_name: "No shared plugins available",
+        empty_item_description: "No plugins have been shared with you.",
+        tab_order: SHARED_WITH_ME_SECTION_TAB_ORDER,
+    },
+];
 
+impl RemoteMarketplaceSection {
     fn fallback_tab(
         self,
-        marketplaces: &[&PluginMarketplaceEntry],
+        marketplaces: &[PluginMarketplaceEntry],
         remote_sections_loading: bool,
         remote_sections_loaded: bool,
         section_errors: &[PluginRemoteSectionError],
     ) -> Option<(u8, SelectionTab)> {
-        if self.marketplace_names().iter().any(|marketplace_name| {
-            marketplaces
-                .iter()
-                .any(|marketplace| marketplace.name.as_str() == *marketplace_name)
-        }) {
+        if marketplaces
+            .iter()
+            .any(|marketplace| self.contains_marketplace(&marketplace.name))
+        {
             return None;
         }
 
         let tab = if remote_sections_loading {
-            remote_section_loading_tab(self.loading_tab_id(), self.label())
+            remote_section_loading_tab(self.loading_tab_id, self.label)
         } else if remote_sections_loaded {
-            if let Some(section_error) = plugin_remote_section_error(section_errors, self.id()) {
+            if let Some(section_error) = plugin_remote_section_error(section_errors, self.id) {
                 remote_section_error_tab(section_error)
             } else {
                 remote_section_empty_tab(
-                    self.id(),
-                    self.label(),
-                    self.empty_item_name(),
-                    self.empty_item_description(),
+                    self.id,
+                    self.label,
+                    self.empty_item_name,
+                    self.empty_item_description,
                 )
             }
         } else {
             return None;
         };
 
-        Some((self.tab_order(), tab))
+        Some((self.tab_order, tab))
     }
 
-    fn id(self) -> &'static str {
-        match self {
-            Self::Workspace => "workspace",
-            Self::SharedWithMe => "shared-with-me",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Workspace => "Workspace",
-            Self::SharedWithMe => "Shared with me",
-        }
-    }
-
-    fn marketplace_names(self) -> &'static [&'static str] {
-        match self {
-            Self::Workspace => WORKSPACE_SECTION_MARKETPLACE_NAMES,
-            Self::SharedWithMe => SHARED_WITH_ME_SECTION_MARKETPLACE_NAMES,
-        }
-    }
-
-    fn loading_tab_id(self) -> &'static str {
-        match self {
-            Self::Workspace => "workspace-loading",
-            Self::SharedWithMe => "shared-with-me-loading",
-        }
-    }
-
-    fn empty_item_name(self) -> &'static str {
-        match self {
-            Self::Workspace => "No workspace plugins available",
-            Self::SharedWithMe => "No shared plugins available",
-        }
-    }
-
-    fn empty_item_description(self) -> &'static str {
-        match self {
-            Self::Workspace => "No workspace directory plugins are available.",
-            Self::SharedWithMe => "No plugins have been shared with you.",
-        }
-    }
-
-    fn tab_order(self) -> u8 {
-        match self {
-            Self::Workspace => WORKSPACE_SECTION_TAB_ORDER,
-            Self::SharedWithMe => SHARED_WITH_ME_SECTION_TAB_ORDER,
-        }
+    fn contains_marketplace(self, marketplace_name: &str) -> bool {
+        self.marketplace_names.contains(&marketplace_name)
     }
 
     fn is_fallback_tab_id(self, tab_id: &str) -> bool {
-        tab_id.strip_prefix(REMOTE_LOADING_TAB_ID_PREFIX) == Some(self.loading_tab_id())
-            || tab_id.strip_prefix(REMOTE_EMPTY_TAB_ID_PREFIX) == Some(self.id())
-            || tab_id.strip_prefix(REMOTE_ERROR_TAB_ID_PREFIX) == Some(self.id())
+        tab_id.strip_prefix(REMOTE_LOADING_TAB_ID_PREFIX) == Some(self.loading_tab_id)
+            || tab_id.strip_prefix(REMOTE_EMPTY_TAB_ID_PREFIX) == Some(self.id)
+            || tab_id.strip_prefix(REMOTE_ERROR_TAB_ID_PREFIX) == Some(self.id)
     }
 
     fn contains_tab_id(self, tab_id: &str) -> bool {
         self.is_fallback_tab_id(tab_id)
             || tab_id
                 .strip_prefix(MARKETPLACE_TAB_ID_PREFIX)
-                .is_some_and(|marketplace_name| {
-                    self.marketplace_names().contains(&marketplace_name)
-                })
+                .is_some_and(|marketplace_name| self.contains_marketplace(marketplace_name))
     }
 }
 
@@ -750,10 +723,10 @@ impl ChatWidget {
         active_tab_id: Option<String>,
         initial_selected_idx: Option<usize>,
     ) -> SelectionViewParams {
-        let marketplaces: Vec<&PluginMarketplaceEntry> = response.marketplaces.iter().collect();
-        let preferred_local_sources = preferred_local_plugin_sources(&marketplaces);
+        let marketplaces = &response.marketplaces;
+        let preferred_local_sources = preferred_local_plugin_sources(marketplaces);
 
-        let all_entries = plugin_entries_for_marketplaces(marketplaces.iter().copied());
+        let all_entries = plugin_entries_for_marketplaces(marketplaces);
         let total = all_entries.len();
         let installed = all_entries
             .iter()
@@ -808,12 +781,10 @@ impl ChatWidget {
             ),
         });
 
-        let by_openai_marketplaces = marketplaces
-            .iter()
-            .copied()
-            .filter(|marketplace| marketplace_is_by_openai(marketplace))
-            .collect::<Vec<_>>();
-        let curated_entries = plugin_entries_for_marketplaces(by_openai_marketplaces);
+        let curated_entries =
+            plugin_entries_for_marketplaces(marketplaces.iter().filter(|marketplace| {
+                MarketplaceProduct::from_marketplace(marketplace).is_by_openai()
+            }));
         let curated_total = curated_entries.len();
         let curated_installed = curated_entries
             .iter()
@@ -870,13 +841,12 @@ impl ChatWidget {
 
         let mut additional_marketplaces: Vec<&PluginMarketplaceEntry> = marketplaces
             .iter()
-            .copied()
-            .filter(|marketplace| !marketplace_is_by_openai(marketplace))
+            .filter(|marketplace| !MarketplaceProduct::from_marketplace(marketplace).is_by_openai())
             .collect();
         additional_marketplaces.sort_by_cached_key(|marketplace| {
             let display_name = marketplace_display_name(marketplace);
             (
-                marketplace_product_tab_order(marketplace),
+                MarketplaceProduct::from_marketplace(marketplace).tab_order(),
                 display_name.to_ascii_lowercase(),
                 display_name,
                 marketplace.name.clone(),
@@ -884,12 +854,9 @@ impl ChatWidget {
         });
 
         let mut additional_tabs = Vec::new();
-        for section in [
-            RemoteMarketplaceSection::Workspace,
-            RemoteMarketplaceSection::SharedWithMe,
-        ] {
+        for section in REMOTE_MARKETPLACE_SECTIONS {
             if let Some(fallback_tab) = section.fallback_tab(
-                &additional_marketplaces,
+                marketplaces,
                 self.plugin_remote_sections_loading,
                 self.plugin_remote_sections_loaded,
                 &self.plugin_remote_section_errors,
@@ -940,7 +907,7 @@ impl ChatWidget {
                 )
             };
             additional_tabs.push((
-                marketplace_product_tab_order(marketplace),
+                MarketplaceProduct::from_marketplace(marketplace).tab_order(),
                 SelectionTab {
                     id: tab_id,
                     label: label.clone(),
@@ -1172,7 +1139,7 @@ impl ChatWidget {
     fn plugin_selection_items<'a>(
         &self,
         mut plugin_entries: Vec<(&'a PluginMarketplaceEntry, &'a PluginSummary, String)>,
-        preferred_local_sources: &[PreferredLocalPluginSource],
+        preferred_local_sources: &HashMap<String, PreferredLocalPluginSource>,
         include_marketplace_names: bool,
         empty_name: &str,
         empty_description: &str,
@@ -1363,34 +1330,27 @@ fn plugin_entry_preferred(
 }
 
 fn preferred_local_plugin_sources(
-    marketplaces: &[&PluginMarketplaceEntry],
-) -> Vec<PreferredLocalPluginSource> {
-    let mut sources = Vec::new();
-    let mut seen_remote_plugin_ids = std::collections::HashSet::new();
+    marketplaces: &[PluginMarketplaceEntry],
+) -> HashMap<String, PreferredLocalPluginSource> {
+    let mut sources = HashMap::new();
     for marketplace in marketplaces {
-        let Some(marketplace_path) = marketplace.path.clone() else {
+        let Some(marketplace_path) = marketplace.path.as_ref() else {
             continue;
         };
         for plugin in &marketplace.plugins {
             if matches!(&plugin.source, PluginSource::Remote) {
                 continue;
             }
-            let Some(remote_plugin_id) = plugin
-                .share_context
-                .as_ref()
-                .map(|context| context.remote_plugin_id.clone())
-            else {
+            let Some(share_context) = plugin.share_context.as_ref() else {
                 continue;
             };
-            if !seen_remote_plugin_ids.insert(remote_plugin_id.clone()) {
-                continue;
-            }
-            sources.push(PreferredLocalPluginSource {
-                remote_plugin_id,
-                marketplace_path: marketplace_path.clone(),
-                plugin_name: plugin.name.clone(),
-                installed: plugin.installed,
-            });
+            sources
+                .entry(share_context.remote_plugin_id.clone())
+                .or_insert_with(|| PreferredLocalPluginSource {
+                    marketplace_path: marketplace_path.clone(),
+                    plugin_name: plugin.name.clone(),
+                    installed: plugin.installed,
+                });
         }
     }
     sources
@@ -1456,8 +1416,10 @@ fn plugin_source_summary(plugin: &PluginDetail) -> String {
             None => format!("Git · {url}"),
         },
         PluginSource::Remote => {
-            let marketplace_label = marketplace_product_label_from_name(&plugin.marketplace_name)
-                .unwrap_or(plugin.marketplace_name.as_str());
+            let marketplace_label =
+                MarketplaceProduct::from_marketplace_name(&plugin.marketplace_name)
+                    .label()
+                    .unwrap_or(plugin.marketplace_name.as_str());
             format!("Remote · {marketplace_label}")
         }
     }
@@ -1614,12 +1576,12 @@ fn remote_section_marketplace_tab_id(
     saved_tab_id: &str,
     marketplaces: &[PluginMarketplaceEntry],
 ) -> Option<String> {
-    let section = RemoteMarketplaceSection::ALL
+    let section = REMOTE_MARKETPLACE_SECTIONS
         .into_iter()
         .find(|section| section.is_fallback_tab_id(saved_tab_id))?;
 
     section
-        .marketplace_names()
+        .marketplace_names
         .iter()
         .find_map(|marketplace_name| {
             marketplaces
@@ -1638,7 +1600,7 @@ fn plugin_tab_id_matching_saved_id(saved_tab_id: &str, tabs: &[SelectionTab]) ->
         return Some(tab_id);
     }
 
-    let section = RemoteMarketplaceSection::ALL
+    let section = REMOTE_MARKETPLACE_SECTIONS
         .into_iter()
         .find(|section| section.contains_tab_id(saved_tab_id))?;
 
@@ -1657,46 +1619,20 @@ pub(super) fn merge_remote_marketplaces(
         .collect::<std::collections::HashSet<_>>();
     response.marketplaces.retain(|marketplace| {
         marketplace.path.is_some()
-            || !remote_marketplace_is_remote_section(marketplace)
+            || !REMOTE_MARKETPLACE_SECTIONS
+                .into_iter()
+                .any(|section| section.contains_marketplace(&marketplace.name))
                 && !remote_names.contains(marketplace.name.as_str())
     });
     response.marketplaces.extend(remote_marketplaces);
 }
 
-fn remote_marketplace_is_remote_section(marketplace: &PluginMarketplaceEntry) -> bool {
-    matches!(
-        marketplace.name.as_str(),
-        REMOTE_WORKSPACE_MARKETPLACE_NAME
-            | REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME
-            | REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
-            | REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME
-    )
-}
-
-fn marketplace_product_tab_order(marketplace: &PluginMarketplaceEntry) -> u8 {
-    MarketplaceProduct::from_marketplace(marketplace).tab_order()
-}
-
-fn marketplace_product_label(marketplace: &PluginMarketplaceEntry) -> Option<&'static str> {
-    MarketplaceProduct::from_marketplace(marketplace).label()
-}
-
-fn marketplace_product_label_from_name(marketplace_name: &str) -> Option<&str> {
-    MarketplaceProduct::from_marketplace_name(marketplace_name).label()
-}
-
-fn marketplace_is_by_openai(marketplace: &PluginMarketplaceEntry) -> bool {
-    MarketplaceProduct::from_marketplace(marketplace).is_by_openai()
-}
-
 fn is_personal_marketplace_path(marketplace_path: &AbsolutePathBuf) -> bool {
     dirs::home_dir()
-        .and_then(|home| personal_marketplace_path_from_home(home.as_path()))
+        .and_then(|home| {
+            AbsolutePathBuf::try_from(home.join(PERSONAL_MARKETPLACE_RELATIVE_PATH)).ok()
+        })
         .is_some_and(|personal_path| personal_path.as_path() == marketplace_path.as_path())
-}
-
-fn personal_marketplace_path_from_home(home: &Path) -> Option<AbsolutePathBuf> {
-    AbsolutePathBuf::try_from(home.join(PERSONAL_MARKETPLACE_RELATIVE_PATH)).ok()
 }
 
 fn remote_section_loading_item(label: &str) -> SelectionItem {
@@ -1776,44 +1712,29 @@ fn remote_section_error_tab(section_error: &PluginRemoteSectionError) -> Selecti
 }
 
 fn disambiguate_duplicate_tab_labels(labels: Vec<String>) -> Vec<String> {
-    let mut counts: Vec<(String, usize)> = Vec::new();
+    let mut counts = HashMap::new();
     for label in &labels {
-        if let Some((_, count)) = counts.iter_mut().find(|(existing, _)| existing == label) {
-            *count += 1;
-        } else {
-            counts.push((label.clone(), 1));
-        }
+        *counts.entry(label.clone()).or_insert(0) += 1;
     }
 
-    let mut seen: Vec<(String, usize)> = Vec::new();
+    let mut seen = HashMap::new();
     labels
         .into_iter()
         .map(|label| {
-            let total = counts
-                .iter()
-                .find(|(existing, _)| existing == &label)
-                .map(|(_, count)| *count)
-                .unwrap_or(1);
+            let total = counts[&label];
             if total == 1 {
                 return label;
             }
 
-            let current = if let Some((_, seen_count)) =
-                seen.iter_mut().find(|(existing, _)| existing == &label)
-            {
-                *seen_count += 1;
-                *seen_count
-            } else {
-                seen.push((label.clone(), 1));
-                1
-            };
+            let current = seen.entry(label.clone()).or_insert(0);
+            *current += 1;
             format!("{label} ({current}/{total})")
         })
         .collect()
 }
 
 pub(super) fn marketplace_display_name(marketplace: &PluginMarketplaceEntry) -> String {
-    if let Some(label) = marketplace_product_label(marketplace) {
+    if let Some(label) = MarketplaceProduct::from_marketplace(marketplace).label() {
         return label.to_string();
     }
     marketplace
@@ -1928,13 +1849,12 @@ fn plugin_detail_location(plugin: &PluginDetail) -> Option<PluginLocation> {
 fn plugin_detail_request_for_entry(
     marketplace: &PluginMarketplaceEntry,
     plugin: &PluginSummary,
-    preferred_local_sources: &[PreferredLocalPluginSource],
+    preferred_local_sources: &HashMap<String, PreferredLocalPluginSource>,
 ) -> Option<(PluginLocation, String)> {
     if matches!(&plugin.source, PluginSource::Remote)
         && let Some(remote_plugin_id) = plugin_remote_identity(plugin)
-        && let Some(preferred_source) = preferred_local_sources.iter().find(|source| {
-            source.remote_plugin_id == remote_plugin_id && source.installed == plugin.installed
-        })
+        && let Some(preferred_source) = preferred_local_sources.get(remote_plugin_id)
+        && preferred_source.installed == plugin.installed
     {
         return Some((
             PluginLocation::Local {
@@ -1952,22 +1872,22 @@ fn plugin_request_name(plugin: &PluginSummary) -> String {
     if matches!(&plugin.source, PluginSource::Remote)
         && let Some(remote_plugin_id) = plugin_remote_identity(plugin)
     {
-        return remote_plugin_id;
+        return remote_plugin_id.to_string();
     }
     plugin.name.clone()
 }
 
-pub(super) fn plugin_remote_identity(plugin: &PluginSummary) -> Option<String> {
+fn plugin_remote_identity(plugin: &PluginSummary) -> Option<&str> {
     plugin
         .share_context
         .as_ref()
-        .map(|context| context.remote_plugin_id.clone())
-        .or_else(|| plugin.remote_plugin_id.clone())
+        .map(|context| context.remote_plugin_id.as_str())
+        .or(plugin.remote_plugin_id.as_deref())
 }
 
 fn plugin_uninstall_id(plugin: &PluginSummary) -> Option<String> {
     if matches!(&plugin.source, PluginSource::Remote) {
-        return plugin_remote_identity(plugin);
+        return plugin_remote_identity(plugin).map(str::to_string);
     }
     Some(plugin.id.clone())
 }

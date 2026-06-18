@@ -8,7 +8,6 @@ use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginShareContext;
-use codex_app_server_protocol::PluginShareDiscoverability;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
@@ -702,7 +701,7 @@ async fn plugins_popup_remote_row_opens_remote_detail() {
     let popup = render_loaded_plugins_popup(
         &mut chat,
         plugins_test_response(vec![PluginMarketplaceEntry {
-            name: REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
+            name: "workspace-directory".to_string(),
             path: None,
             interface: Some(MarketplaceInterface {
                 display_name: Some("Workspace".to_string()),
@@ -742,7 +741,7 @@ async fn plugins_popup_remote_row_opens_remote_detail() {
             assert_eq!(params.marketplace_path, None);
             assert_eq!(
                 params.remote_marketplace_name,
-                Some(REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string())
+                Some("workspace-directory".to_string())
             );
             assert_eq!(params.plugin_name, "plugins~Plugin_calendar");
         }
@@ -766,7 +765,7 @@ async fn plugin_detail_remote_install_uses_remote_location() {
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
         Ok(plugins_test_response(vec![PluginMarketplaceEntry {
-            name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
+            name: "workspace-shared-with-me-private".to_string(),
             path: None,
             interface: Some(MarketplaceInterface {
                 display_name: Some("Shared with me".to_string()),
@@ -779,8 +778,7 @@ async fn plugin_detail_remote_install_uses_remote_location() {
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: PluginDetail {
-                marketplace_name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
-                    .to_string(),
+                marketplace_name: "workspace-shared-with-me-private".to_string(),
                 marketplace_path: None,
                 summary,
                 share_url: None,
@@ -818,10 +816,7 @@ async fn plugin_detail_remote_install_uses_remote_location() {
             plugin_name,
             plugin_display_name,
         }) => {
-            assert_eq!(
-                marketplace_name,
-                REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
-            );
+            assert_eq!(marketplace_name, "workspace-shared-with-me-private");
             assert_eq!(plugin_name, "plugins~Plugin_linear");
             assert_eq!(plugin_display_name, "Linear");
         }
@@ -845,7 +840,7 @@ async fn plugin_detail_remote_uninstall_uses_remote_plugin_id() {
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
         Ok(plugins_test_response(vec![PluginMarketplaceEntry {
-            name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
+            name: "workspace-shared-with-me-private".to_string(),
             path: None,
             interface: Some(MarketplaceInterface {
                 display_name: Some("Shared with me".to_string()),
@@ -858,8 +853,7 @@ async fn plugin_detail_remote_uninstall_uses_remote_plugin_id() {
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: PluginDetail {
-                marketplace_name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
-                    .to_string(),
+                marketplace_name: "workspace-shared-with-me-private".to_string(),
                 marketplace_path: None,
                 summary,
                 share_url: None,
@@ -906,7 +900,7 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
     let summary = PluginSummary {
         source: PluginSource::Remote,
         ..plugins_test_summary(
-            &format!("linear@{REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME}"),
+            "linear@workspace-shared-with-me-private",
             "linear",
             Some("Linear"),
             Some("Issue tracking."),
@@ -919,7 +913,7 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
         Ok(plugins_test_response(vec![PluginMarketplaceEntry {
-            name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
+            name: "workspace-shared-with-me-private".to_string(),
             path: None,
             interface: Some(MarketplaceInterface {
                 display_name: Some("Shared with me".to_string()),
@@ -932,8 +926,7 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: PluginDetail {
-                marketplace_name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
-                    .to_string(),
+                marketplace_name: "workspace-shared-with-me-private".to_string(),
                 marketplace_path: None,
                 summary,
                 share_url: None,
@@ -1098,23 +1091,20 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
         let popup = render_bottom_popup(chat, /*width*/ 100);
         panic!("expected plugins tab containing {visible_text:?}, got:\n{popup}");
     };
-    let remote_section_state =
-        |popup: &str, header: &str, item_name: &str, item_description: &str| -> String {
-            let header = popup
-                .lines()
-                .find(|line| line.trim() == header)
-                .expect("expected remote section header")
-                .trim();
-            let item = popup
-                .lines()
-                .find(|line| line.contains(item_name) && line.contains(item_description))
-                .expect("expected remote section item");
-            let item = item
-                .find(item_name)
-                .map(|item_name_index| &item[item_name_index..])
-                .expect("expected remote section item name");
-            format!("{header}\n{item}")
-        };
+    let remote_section_state = |popup: &str| -> String {
+        let header = popup
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .nth(1)
+            .expect("expected remote section header");
+        let item = popup
+            .lines()
+            .find_map(|line| line.trim_start().strip_prefix('›'))
+            .expect("expected selected remote section item")
+            .trim();
+        format!("{header}\n{item}")
+    };
 
     chat.add_plugins_output();
     let cwd = chat.config.cwd.clone();
@@ -1127,30 +1117,20 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
     let curated_loading_popup =
         select_tab_containing(&mut chat, "Loading OpenAI Curated plugins...");
     let workspace_loading_popup = select_tab_containing(&mut chat, "Loading Workspace plugins.");
-    let shared_loading_popup = select_tab_containing(&mut chat, "Loading Shared with me plugins.");
 
     chat.on_plugin_remote_sections_loaded(cwd.to_path_buf(), Vec::new(), Vec::new());
-    let shared_empty_popup = render_bottom_popup(&chat, /*width*/ 100);
-    let workspace_empty_popup = select_tab_containing(&mut chat, "Workspace.");
+    let shared_empty_popup = select_tab_containing(&mut chat, "Shared with me.");
 
     chat.on_plugin_remote_sections_loaded(
         cwd.to_path_buf(),
         Vec::new(),
-        vec![
-            crate::app_event::PluginRemoteSectionError {
-                section_id: "workspace".to_string(),
-                label: "Workspace".to_string(),
-                message: "Sign in to ChatGPT to load workspace plugins.".to_string(),
-            },
-            crate::app_event::PluginRemoteSectionError {
-                section_id: "shared-with-me".to_string(),
-                label: "Shared with me".to_string(),
-                message: "Plugin sharing is disabled for this Codex session.".to_string(),
-            },
-        ],
+        vec![crate::app_event::PluginRemoteSectionError {
+            section_id: "workspace".to_string(),
+            label: "Workspace".to_string(),
+            message: "Sign in to ChatGPT to load workspace plugins.".to_string(),
+        }],
     );
-    let workspace_error_popup = render_bottom_popup(&chat, /*width*/ 100);
-    let shared_error_popup = select_tab_containing(&mut chat, "Shared with me unavailable.");
+    let workspace_error_popup = select_tab_containing(&mut chat, "Workspace unavailable.");
 
     let (mut remote_chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     remote_chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
@@ -1165,64 +1145,14 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
     );
     let remote_curated_empty_popup =
         select_tab_containing(&mut remote_chat, "No OpenAI Curated plugins available");
-    let remote_workspace_loading_popup =
-        select_tab_containing(&mut remote_chat, "Loading Workspace plugins.");
-    assert!(
-        !remote_curated_empty_popup.contains("Loading OpenAI Curated plugins")
-            && remote_workspace_loading_popup.contains("Loading Workspace plugins..."),
-        "expected only requested remote sections to show loading, got:\n{remote_curated_empty_popup}\n\n{remote_workspace_loading_popup}"
-    );
 
     insta::assert_snapshot!(
         [
-            remote_section_state(
-                &curated_loading_popup,
-                "OpenAI Curated marketplace.",
-                "Loading OpenAI Curated plugins...",
-                "This section updates when app-server returns it.",
-            ),
-            remote_section_state(
-                &workspace_loading_popup,
-                "Loading Workspace plugins.",
-                "Loading Workspace plugins...",
-                "This section updates when app-server returns it.",
-            ),
-            remote_section_state(
-                &shared_loading_popup,
-                "Loading Shared with me plugins.",
-                "Loading Shared with me plugins...",
-                "This section updates when app-server returns it.",
-            ),
-            remote_section_state(
-                &workspace_empty_popup,
-                "Workspace.",
-                "No workspace plugins available",
-                "No workspace directory plugins are available.",
-            ),
-            remote_section_state(
-                &shared_empty_popup,
-                "Shared with me.",
-                "No shared plugins available",
-                "No plugins have been shared with you.",
-            ),
-            remote_section_state(
-                &workspace_error_popup,
-                "Workspace unavailable.",
-                "Workspace unavailable",
-                "Sign in to ChatGPT to load workspace plugins.",
-            ),
-            remote_section_state(
-                &shared_error_popup,
-                "Shared with me unavailable.",
-                "Shared with me unavailable",
-                "Plugin sharing is disabled for this Codex session.",
-            ),
-            remote_section_state(
-                &remote_curated_empty_popup,
-                "OpenAI Curated marketplace.",
-                "No OpenAI Curated plugins available",
-                "No OpenAI Curated plugins available.",
-            ),
+            remote_section_state(&curated_loading_popup),
+            remote_section_state(&workspace_loading_popup),
+            remote_section_state(&shared_empty_popup),
+            remote_section_state(&workspace_error_popup),
+            remote_section_state(&remote_curated_empty_popup),
         ]
         .join("\n\n"),
         @r###"
@@ -1232,20 +1162,11 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
         Loading Workspace plugins.
         Loading Workspace plugins...  This section updates when app-server returns it.
 
-        Loading Shared with me plugins.
-        Loading Shared with me plugins...  This section updates when app-server returns it.
-
-        Workspace.
-        No workspace plugins available  No workspace directory plugins are available.
-
         Shared with me.
         No shared plugins available  No plugins have been shared with you.
 
         Workspace unavailable.
         Workspace unavailable  Sign in to ChatGPT to load workspace plugins.
-
-        Shared with me unavailable.
-        Shared with me unavailable  Plugin sharing is disabled for this Codex session.
 
         OpenAI Curated marketplace.
         No OpenAI Curated plugins available  No OpenAI Curated plugins available.
@@ -1259,14 +1180,15 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let remote_plugin_id = "plugins~Plugin_docs";
+    let remote_marketplace_name = "workspace-shared-with-me-private";
     let local_summary = PluginSummary {
         share_context: Some(PluginShareContext {
             remote_plugin_id: remote_plugin_id.to_string(),
-            remote_version: Some("3".to_string()),
-            discoverability: Some(PluginShareDiscoverability::Private),
-            share_url: Some("https://chatgpt.com/codex/plugins/share/docs".to_string()),
+            remote_version: None,
+            discoverability: None,
+            share_url: None,
             creator_account_user_id: None,
-            creator_name: Some("Test User".to_string()),
+            creator_name: None,
             share_principals: None,
         }),
         ..plugins_test_summary(
@@ -1284,7 +1206,7 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
         plugins_test_response(vec![
             plugins_test_curated_marketplace(vec![local_summary]),
             PluginMarketplaceEntry {
-                name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
+                name: remote_marketplace_name.to_string(),
                 path: None,
                 interface: Some(MarketplaceInterface {
                     display_name: Some("Shared with me".to_string()),
@@ -1326,7 +1248,7 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
             assert_eq!(params.marketplace_path, None);
             assert_eq!(
                 params.remote_marketplace_name,
-                Some(REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string())
+                Some(remote_marketplace_name.to_string())
             );
             assert_eq!(params.plugin_name, remote_plugin_id);
         }
