@@ -10,6 +10,7 @@ use crate::protocol::v2::CollabAgentToolCallStatus;
 use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::DynamicToolCallOutputContentItem;
 use crate::protocol::v2::DynamicToolCallStatus;
+use crate::protocol::v2::McpToolCallAppContext;
 use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
 use crate::protocol::v2::McpToolCallStatus;
@@ -765,6 +766,14 @@ impl ThreadHistoryBuilder {
                 .arguments
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
+            app_context: payload
+                .connector_id
+                .clone()
+                .map(|connector_id| McpToolCallAppContext {
+                    connector_id,
+                    link_id: payload.link_id.clone(),
+                    resource_uri: payload.mcp_app_resource_uri.clone(),
+                }),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             plugin_id: payload.plugin_id.clone(),
             result: None,
@@ -807,6 +816,14 @@ impl ThreadHistoryBuilder {
                 .arguments
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
+            app_context: payload
+                .connector_id
+                .clone()
+                .map(|connector_id| McpToolCallAppContext {
+                    connector_id,
+                    link_id: payload.link_id.clone(),
+                    resource_uri: payload.mcp_app_resource_uri.clone(),
+                }),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             plugin_id: payload.plugin_id.clone(),
             result,
@@ -1567,7 +1584,6 @@ mod tests {
     use codex_protocol::protocol::DynamicToolCallResponseEvent;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
-    use codex_protocol::protocol::ItemCompletedEvent;
     use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::McpToolCallEndEvent;
@@ -2397,7 +2413,9 @@ mod tests {
                     tool: "lookup".into(),
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
+                connector_id: None,
                 mcp_app_resource_uri: None,
+                link_id: None,
                 plugin_id: None,
                 duration: Duration::from_millis(8),
                 result: Err("boom".into()),
@@ -2447,6 +2465,7 @@ mod tests {
                 tool: "lookup".into(),
                 status: McpToolCallStatus::Failed,
                 arguments: serde_json::json!({"id":"123"}),
+                app_context: None,
                 mcp_app_resource_uri: None,
                 plugin_id: None,
                 result: None,
@@ -2475,7 +2494,9 @@ mod tests {
                     tool: "lookup".into(),
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
+                connector_id: Some("calendar".into()),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
+                link_id: Some("link_calendar".into()),
                 plugin_id: Some("sample@test".into()),
                 duration: Duration::from_millis(8),
                 result: Ok(CallToolResult {
@@ -2506,6 +2527,11 @@ mod tests {
                 tool: "lookup".into(),
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"id":"123"}),
+                app_context: Some(McpToolCallAppContext {
+                    connector_id: "calendar".into(),
+                    link_id: Some("link_calendar".into()),
+                    resource_uri: Some("ui://widget/lookup.html".into()),
+                }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
                 plugin_id: Some("sample@test".into()),
                 result: Some(Box::new(McpToolCallResult {
