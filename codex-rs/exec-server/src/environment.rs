@@ -11,6 +11,7 @@ use crate::NoiseChannelIdentity;
 use crate::NoiseRendezvousConnectProvider;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::ExecServerTransportParams;
 use crate::environment_provider::DefaultEnvironmentProvider;
 use crate::environment_provider::EnvironmentDefault;
@@ -294,6 +295,21 @@ impl EnvironmentManager {
         environment_id: String,
         exec_server_url: String,
     ) -> Result<(), ExecServerError> {
+        self.upsert_environment_with_connect_timeout(
+            environment_id,
+            exec_server_url,
+            DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+        )
+    }
+
+    /// Adds or replaces a named remote environment with an explicit WebSocket
+    /// connection timeout.
+    pub fn upsert_environment_with_connect_timeout(
+        &self,
+        environment_id: String,
+        exec_server_url: String,
+        connect_timeout: std::time::Duration,
+    ) -> Result<(), ExecServerError> {
         if environment_id.is_empty() {
             return Err(ExecServerError::Protocol(
                 "environment id cannot be empty".to_string(),
@@ -310,8 +326,8 @@ impl EnvironmentManager {
                 "remote environment requires an exec-server url".to_string(),
             ));
         };
-        let environment = Arc::new(Environment::remote_inner(
-            exec_server_url,
+        let environment = Arc::new(Environment::remote_with_transport(
+            ExecServerTransportParams::websocket_url(exec_server_url, connect_timeout),
             self.local_runtime_paths.clone(),
         ));
         environment.start_connecting();
@@ -496,7 +512,10 @@ impl Environment {
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
         Self::remote_with_transport(
-            ExecServerTransportParams::websocket_url(exec_server_url),
+            ExecServerTransportParams::websocket_url(
+                exec_server_url,
+                DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+            ),
             local_runtime_paths,
         )
     }
