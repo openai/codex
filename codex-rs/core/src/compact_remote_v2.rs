@@ -231,10 +231,7 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await?;
     let mut input = prompt_input.clone();
-    input.push(ResponseItem::CompactionTrigger {
-        id: None,
-        metadata: None,
-    });
+    input.push(ResponseItem::CompactionTrigger { metadata: None });
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),

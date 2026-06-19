@@ -42,6 +42,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -196,6 +197,27 @@ fn user_message(text: &str) -> ResponseItem {
         phase: None,
         metadata: None,
     }
+}
+
+#[test]
+fn assign_missing_response_item_ids_skips_agent_messages() {
+    let mut items = Cow::Owned(vec![
+        ResponseItem::AgentMessage {
+            id: None,
+            author: "worker".to_string(),
+            recipient: "root".to_string(),
+            content: vec![AgentMessageInputContent::InputText {
+                text: "done".to_string(),
+            }],
+            metadata: None,
+        },
+        user_message("hello"),
+    ]);
+
+    Session::assign_missing_response_item_ids(&mut items);
+
+    assert_eq!(items[0].id(), None);
+    assert!(items[1].id().is_some_and(|id| id.starts_with("msg_")));
 }
 
 fn assistant_message(text: &str) -> ResponseItem {
@@ -438,6 +460,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
     )
     .new_session()
@@ -1670,6 +1693,7 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
         Vec::new(),
         |config| {
             let _ = config.features.enable(Feature::ResizeAllImages);
+            let _ = config.features.enable(Feature::ItemIds);
         },
     )
     .await;
@@ -1699,8 +1723,18 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
         .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&item))
         .await;
 
+    let history = session.state.lock().await.clone_history();
+    let id = history.raw_items()[0]
+        .id()
+        .expect("history item should have an ID")
+        .to_string();
+    let uuid = id
+        .strip_prefix("fco_")
+        .expect("function call output ID should have the Responses API prefix");
+    let parsed_id = Uuid::parse_str(uuid).expect("history item should have a UUID ID");
+    assert_eq!(parsed_id.get_version(), Some(uuid::Version::SortRand));
     let expected = vec![ResponseItem::FunctionCallOutput {
-        id: None,
+        id: Some(id),
         call_id: "call-1".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
@@ -1719,10 +1753,7 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
         },
         metadata: None,
     }];
-    assert_eq!(
-        session.state.lock().await.clone_history().raw_items(),
-        expected.as_slice()
-    );
+    assert_eq!(history.raw_items(), expected.as_slice());
 }
 
 #[tokio::test]
@@ -5059,6 +5090,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
@@ -7113,6 +7145,7 @@ where
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
