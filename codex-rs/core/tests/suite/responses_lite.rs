@@ -162,6 +162,53 @@ async fn responses_lite_uses_standalone_web_search_and_image_generation() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_hides_image_generation_when_feature_is_disabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let extensions = responses_extensions(&auth);
+
+    let mut builder = test_codex()
+        .with_auth(auth)
+        .with_extensions(extensions)
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+            configure_image_capable_model(model_info);
+        })
+        .with_config(|config| {
+            configure_responses_tools(config);
+            assert!(config.features.enable(Feature::ImageGenExt).is_ok());
+            assert!(config.features.disable(Feature::ImageGeneration).is_ok());
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("Use standalone tools").await?;
+
+    let request = response_mock.single_request();
+    request
+        .tool_by_name("web", "run")
+        .context("disabling image generation should not hide standalone web search")?;
+    assert!(request.tool_by_name("image_gen", "imagegen").is_none());
+    let body = request.body_json();
+    let tools = body["tools"]
+        .as_array()
+        .context("Responses request tools should be an array")?;
+    assert!(!has_hosted_tool(tools, "image_generation"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_lite_compact_request_uses_lite_transport_contract() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -286,6 +333,47 @@ async fn non_lite_uses_hosted_tools_when_standalone_features_are_disabled() -> R
         .context("Responses request tools should be an array")?;
     assert!(has_hosted_tool(tools, "web_search"));
     assert!(has_hosted_tool(tools, "image_generation"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_lite_uses_standalone_image_generation_when_features_are_enabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let extensions = responses_extensions(&auth);
+    let mut builder = test_codex()
+        .with_auth(auth)
+        .with_extensions(extensions)
+        .with_model_info_override("gpt-5.4", configure_image_capable_model)
+        .with_config(|config| {
+            configure_responses_tools(config);
+            assert!(config.features.enable(Feature::ImageGenExt).is_ok());
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("Use standalone image generation").await?;
+
+    let request = response_mock.single_request();
+    request
+        .tool_by_name("image_gen", "imagegen")
+        .context("enabled image generation features should expose the standalone tool")?;
+    let body = request.body_json();
+    let tools = body["tools"]
+        .as_array()
+        .context("Responses request tools should be an array")?;
+    assert!(!has_hosted_tool(tools, "image_generation"));
 
     Ok(())
 }

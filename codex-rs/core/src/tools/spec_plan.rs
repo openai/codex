@@ -395,7 +395,7 @@ fn image_generation_runtime_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn standalone_image_generation_model_visible(turn_context: &TurnContext) -> bool {
-    if !image_generation_runtime_enabled(turn_context) || !namespace_tools_enabled(turn_context) {
+    if !image_generation_tool_enabled(turn_context) || !namespace_tools_enabled(turn_context) {
         return false;
     }
 
