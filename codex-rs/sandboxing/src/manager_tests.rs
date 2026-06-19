@@ -280,7 +280,7 @@ fn managed_mitm_ca_files_are_scoped_for_restricted_sandbox() {
 
     let permission_profile = with_managed_mitm_ca_paths(
         permission_profile,
-        &managed_bundle_path,
+        Some(&managed_bundle_path),
         &managed_private_key_path,
         cwd.as_path(),
     );
@@ -314,16 +314,13 @@ fn managed_mitm_ca_private_key_is_denied_for_unrestricted_profile() {
     let cwd = TempDir::new().expect("create cwd");
     let cwd = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");
     let managed_bundle_dir = TempDir::new().expect("create managed bundle dir");
-    let managed_bundle_path =
-        AbsolutePathBuf::from_absolute_path(managed_bundle_dir.path().join("ca-bundle.pem"))
-            .expect("absolute managed bundle path");
     let managed_private_key_path =
         AbsolutePathBuf::from_absolute_path(managed_bundle_dir.path().join("ca.key"))
             .expect("absolute managed private key path");
 
     let permission_profile = with_managed_mitm_ca_paths(
         PermissionProfile::Disabled,
-        &managed_bundle_path,
+        None,
         &managed_private_key_path,
         cwd.as_path(),
     );

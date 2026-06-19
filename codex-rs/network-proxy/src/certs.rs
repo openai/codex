@@ -134,8 +134,9 @@ fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
     ))
 }
 
-pub(crate) fn managed_ca_private_key_path(trust_bundle: &ManagedMitmCaTrustBundle) -> PathBuf {
-    trust_bundle.path.with_file_name(MANAGED_MITM_CA_KEY)
+pub(crate) fn managed_ca_private_key_path() -> Result<PathBuf> {
+    let (_, private_key_path) = managed_ca_paths()?;
+    Ok(private_key_path)
 }
 
 pub(crate) fn managed_ca_trust_bundle(

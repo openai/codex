@@ -82,16 +82,13 @@ pub fn with_managed_mitm_ca_access(
     network: &NetworkProxy,
     sandbox_policy_cwd: &Path,
 ) -> PermissionProfile {
-    let Some(managed_mitm_ca_trust_bundle_path) = network.managed_mitm_ca_trust_bundle_path()
-    else {
-        return permission_profile;
-    };
     let Some(managed_mitm_ca_private_key_path) = network.managed_mitm_ca_private_key_path() else {
         return permission_profile;
     };
+    let managed_mitm_ca_trust_bundle_path = network.managed_mitm_ca_trust_bundle_path();
     with_managed_mitm_ca_paths(
         permission_profile,
-        &managed_mitm_ca_trust_bundle_path,
+        managed_mitm_ca_trust_bundle_path.as_ref(),
         &managed_mitm_ca_private_key_path,
         sandbox_policy_cwd,
     )
@@ -99,7 +96,7 @@ pub fn with_managed_mitm_ca_access(
 
 fn with_managed_mitm_ca_paths(
     permission_profile: PermissionProfile,
-    managed_mitm_ca_trust_bundle_path: &AbsolutePathBuf,
+    managed_mitm_ca_trust_bundle_path: Option<&AbsolutePathBuf>,
     managed_mitm_ca_private_key_path: &AbsolutePathBuf,
     sandbox_policy_cwd: &Path,
 ) -> PermissionProfile {
@@ -116,11 +113,13 @@ fn with_managed_mitm_ca_paths(
             }])
         }
         FileSystemSandboxKind::ExternalSandbox => return permission_profile,
+    };
+    if let Some(managed_mitm_ca_trust_bundle_path) = managed_mitm_ca_trust_bundle_path {
+        file_system_sandbox_policy = file_system_sandbox_policy.with_additional_readable_roots(
+            sandbox_policy_cwd,
+            std::slice::from_ref(managed_mitm_ca_trust_bundle_path),
+        );
     }
-    .with_additional_readable_roots(
-        sandbox_policy_cwd,
-        std::slice::from_ref(managed_mitm_ca_trust_bundle_path),
-    );
     let private_key_deny = FileSystemSandboxEntry {
         path: FileSystemPath::Path {
             path: managed_mitm_ca_private_key_path.clone(),

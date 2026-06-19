@@ -642,14 +642,13 @@ impl NetworkProxy {
 
     /// Returns the managed MITM CA private key path child sandboxes must hide.
     pub fn managed_mitm_ca_private_key_path(&self) -> Option<AbsolutePathBuf> {
-        self.runtime_settings()
-            .mitm_ca_trust_bundle
-            .and_then(|bundle| {
-                let path = crate::certs::managed_ca_private_key_path(&bundle);
+        crate::certs::managed_ca_private_key_path()
+            .and_then(|path| {
                 AbsolutePathBuf::from_absolute_path(path)
-                    .map_err(|err| warn!("managed MITM CA private key path is invalid: {err}"))
-                    .ok()
+                    .context("managed MITM CA private key path is invalid")
             })
+            .map_err(|err| warn!("failed to resolve managed MITM CA private key path: {err}"))
+            .ok()
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
