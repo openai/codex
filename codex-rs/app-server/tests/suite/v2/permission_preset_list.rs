@@ -109,11 +109,9 @@ async fn permission_preset_list_uses_runtime_guardian_enablement() -> Result<()>
 
     let enablement = BTreeMap::from([("guardian_approval".to_string(), false)]);
     let request_id = mcp
-        .send_experimental_feature_enablement_set_request(
-            ExperimentalFeatureEnablementSetParams {
-                enablement: enablement.clone(),
-            },
-        )
+        .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {
+            enablement: enablement.clone(),
+        })
         .await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
