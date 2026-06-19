@@ -10,6 +10,11 @@ const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
 pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
+#[tracing::instrument(
+    level = "trace",
+    skip_all,
+    fields(catalog_entry_count = catalog.entries.len())
+)]
 pub(crate) fn available_skills_fragment(
     catalog: &SkillCatalog,
 ) -> Option<AvailableSkillsInstructions> {
