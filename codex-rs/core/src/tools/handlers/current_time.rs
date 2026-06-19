@@ -15,8 +15,8 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
-const NAMESPACE: &str = "rollout";
-const TOOL_NAME: &str = "current_time";
+const NAMESPACE: &str = "clock";
+const TOOL_NAME: &str = "curr_time";
 
 pub struct CurrentTimeHandler;
 
@@ -28,7 +28,7 @@ impl ToolExecutor<ToolInvocation> for CurrentTimeHandler {
     fn spec(&self) -> ToolSpec {
         ToolSpec::Namespace(ResponsesApiNamespace {
             name: NAMESPACE.to_string(),
-            description: "Tools for inspecting the current rollout state.".to_string(),
+            description: "Tools for reading the current time.".to_string(),
             tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                 name: TOOL_NAME.to_string(),
                 description: "Return the current time in UTC.".to_string(),

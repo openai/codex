@@ -286,7 +286,7 @@ async fn current_time_tool_returns_the_latest_time() -> Result<()> {
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call_with_namespace(CALL_ID, "rollout", "current_time", "{}"),
+                ev_function_call_with_namespace(CALL_ID, "clock", "curr_time", "{}"),
                 ev_completed("resp-1"),
             ]),
             sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
