@@ -150,6 +150,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            sandbox: None,
         })
         .await?;
     assert_eq!(

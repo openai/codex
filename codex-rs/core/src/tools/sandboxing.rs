@@ -11,6 +11,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::SessionServices;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -450,6 +451,53 @@ impl<'a> SandboxAttempt<'a> {
             options,
             self.workspace_roots.to_vec(),
         ))
+    }
+
+    pub fn env_for_exec_server(
+        &self,
+        command: SandboxCommand,
+        options: ExecOptions,
+        network: Option<&NetworkProxy>,
+    ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
+        let request = self
+            .manager
+            .transform(SandboxTransformRequest {
+                command,
+                permissions: self.permissions,
+                // The exec-server chooses and applies its native platform sandbox.
+                sandbox: SandboxType::None,
+                enforce_managed_network: self.enforce_managed_network,
+                environment_id: None,
+                network,
+                sandbox_policy_cwd: self.sandbox_cwd,
+                codex_linux_sandbox_exe: None,
+                use_legacy_landlock: self.use_legacy_landlock,
+                windows_sandbox_level: self.windows_sandbox_level,
+                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            })
+            .map_err(CodexErr::from)?;
+        let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+            request,
+            options,
+            self.workspace_roots.to_vec(),
+        );
+        if self.sandbox != SandboxType::None {
+            exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {
+                permissions: exec_request.permission_profile.clone().into(),
+                cwd: Some(exec_request.windows_sandbox_policy_cwd.clone()),
+                workspace_roots: self
+                    .workspace_roots
+                    .iter()
+                    .map(PathUri::from_abs_path)
+                    .collect(),
+                windows_sandbox_level: self.windows_sandbox_level,
+                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+                use_legacy_landlock: self.use_legacy_landlock,
+            });
+            // Preserve denial classification while leaving argv native to the executor.
+            exec_request.sandbox = self.sandbox;
+        }
+        Ok(exec_request)
     }
 }
 

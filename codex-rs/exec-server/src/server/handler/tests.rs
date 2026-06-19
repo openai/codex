@@ -33,6 +33,7 @@ fn exec_params_with_argv(process_id: &str, argv: Vec<String>) -> ExecParams {
         tty: false,
         pipe_stdin: false,
         arg0: None,
+        sandbox: None,
     }
 }
 
