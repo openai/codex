@@ -20,7 +20,6 @@ enum FirstCloseOutcome {
 #[derive(Debug, PartialEq)]
 enum NotificationEvent {
     Started,
-    Cancelled,
     Closed(CellId),
 }
 
@@ -113,9 +112,7 @@ impl SessionRuntimeDelegate for BlockingNotificationDelegate {
             .send(NotificationEvent::Started)
             .map_err(|_| "test did not receive notification start".to_string())?;
         cancellation_token.cancelled().await;
-        self.events_tx
-            .send(NotificationEvent::Cancelled)
-            .map_err(|_| "test did not receive notification cancellation".to_string())
+        Ok(())
     }
 
     async fn cell_closed(&self, cell_id: &CellId) -> Result<(), String> {
@@ -506,12 +503,6 @@ async fn drop_cancels_notifications_during_natural_completion_when_registry_is_l
     drop(runtime);
     drop(cells);
 
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(/*secs*/ 1), events_rx.recv())
-            .await
-            .unwrap(),
-        Some(NotificationEvent::Cancelled)
-    );
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(/*secs*/ 1), events_rx.recv())
             .await

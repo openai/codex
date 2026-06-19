@@ -112,8 +112,10 @@ pub struct NestedToolCall {
 
 /// Host callbacks used by cells owned by a [`super::SessionRuntime`].
 ///
-/// Implementations must honor cancellation tokens and must not return from
-/// `cell_closed` until downstream routing can no longer target the cell.
+/// Implementations should forward callback cancellation tokens to downstream
+/// work. The runtime stops awaiting callbacks once cancellation begins.
+/// Implementations must not return from `cell_closed` until downstream routing
+/// can no longer target the cell.
 pub trait SessionRuntimeDelegate: Send + Sync + 'static {
     fn invoke_tool(
         &self,
