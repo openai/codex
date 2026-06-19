@@ -26,8 +26,6 @@ use tokio::task::JoinHandle;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
-use crate::connection::JsonRpcWireMessage;
-use crate::connection::MAX_RPC_BATCH_REQUESTS;
 
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
 
@@ -39,13 +37,6 @@ pub(crate) enum RpcCallError {
     Json(serde_json::Error),
     /// The executor returned a JSON-RPC error response for this call.
     Server(JSONRPCErrorError),
-    /// The caller attempted to construct a batch that cannot be represented safely.
-    InvalidBatch(String),
-}
-
-pub(crate) struct RpcBatchCall {
-    pub(crate) method: String,
-    pub(crate) params: Value,
 }
 
 type PendingRequest = oneshot::Sender<Result<Value, RpcCallError>>;
@@ -73,7 +64,6 @@ pub(crate) enum RpcServerOutboundMessage {
         error: JSONRPCErrorError,
     },
     Notification(JSONRPCNotification),
-    Batch(Vec<RpcServerOutboundMessage>),
 }
 
 #[derive(Clone)]
@@ -117,7 +107,7 @@ impl RpcNotificationSender {
 
 pub(crate) struct RpcRouter<S> {
     request_routes: HashMap<&'static str, RequestRoute<S>>,
-    batchable_request_methods: HashSet<&'static str>,
+    concurrent_request_methods: HashSet<&'static str>,
     notification_routes: HashMap<&'static str, NotificationRoute<S>>,
 }
 
@@ -125,7 +115,7 @@ impl<S> Default for RpcRouter<S> {
     fn default() -> Self {
         Self {
             request_routes: HashMap::new(),
-            batchable_request_methods: HashSet::new(),
+            concurrent_request_methods: HashSet::new(),
             notification_routes: HashMap::new(),
         }
     }
@@ -146,7 +136,7 @@ where
         F: Fn(Arc<S>, P) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
     {
-        self.batchable_request_methods.remove(method);
+        self.concurrent_request_methods.remove(method);
         self.request_routes.insert(
             method,
             Box::new(move |state, request| {
@@ -176,7 +166,7 @@ where
         );
     }
 
-    pub(crate) fn batchable_request<P, R, F, Fut>(&mut self, method: &'static str, handler: F)
+    pub(crate) fn concurrent_request<P, R, F, Fut>(&mut self, method: &'static str, handler: F)
     where
         P: DeserializeOwned + Send + 'static,
         R: Serialize + Send + 'static,
@@ -184,7 +174,7 @@ where
         Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
     {
         self.request(method, handler);
-        self.batchable_request_methods.insert(method);
+        self.concurrent_request_methods.insert(method);
     }
 
     pub(crate) fn request_with_id<P, F, Fut>(&mut self, method: &'static str, handler: F)
@@ -193,7 +183,7 @@ where
         F: Fn(Arc<S>, RequestId, P) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<(), JSONRPCErrorError>> + Send + 'static,
     {
-        self.batchable_request_methods.remove(method);
+        self.concurrent_request_methods.remove(method);
         self.request_routes.insert(
             method,
             Box::new(move |state, request| {
@@ -242,8 +232,8 @@ where
         self.request_routes.get(method)
     }
 
-    pub(crate) fn is_request_batchable(&self, method: &str) -> bool {
-        self.batchable_request_methods.contains(method)
+    pub(crate) fn is_request_concurrent(&self, method: &str) -> bool {
+        self.concurrent_request_methods.contains(method)
     }
 
     pub(crate) fn notification_route(&self, method: &str) -> Option<&NotificationRoute<S>> {
@@ -252,7 +242,7 @@ where
 }
 
 pub(crate) struct RpcClient {
-    write_tx: mpsc::Sender<JsonRpcWireMessage>,
+    write_tx: mpsc::Sender<JSONRPCMessage>,
     pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
     // Shared transport state from `JsonRpcConnection`. Calls use this to fail
     // immediately when the socket closes, even if no JSON-RPC error response
@@ -282,7 +272,7 @@ impl RpcClient {
         let closed_for_reader = Arc::clone(&closed);
         let transport_for_reader = transport.clone();
         let reader_task = tokio::spawn(async move {
-            let disconnect_reason = 'reader: loop {
+            let disconnect_reason = loop {
                 let Some(event) = incoming_rx.recv().await else {
                     break None;
                 };
@@ -293,16 +283,6 @@ impl RpcClient {
                         {
                             let _ = err;
                             break None;
-                        }
-                    }
-                    JsonRpcConnectionEvent::Batch(messages) => {
-                        for message in messages {
-                            if let Err(err) =
-                                handle_server_message(&pending_for_reader, &event_tx, message).await
-                            {
-                                let _ = err;
-                                break 'reader None;
-                            }
                         }
                     }
                     JsonRpcConnectionEvent::MalformedMessage { reason } => {
@@ -350,13 +330,10 @@ impl RpcClient {
             return Err(RpcCallError::Closed);
         }
         self.write_tx
-            .send(
-                JSONRPCMessage::Notification(JSONRPCNotification {
-                    method: method.to_string(),
-                    params: Some(params),
-                })
-                .into(),
-            )
+            .send(JSONRPCMessage::Notification(JSONRPCNotification {
+                method: method.to_string(),
+                params: Some(params),
+            }))
             .await
             .map_err(|_| RpcCallError::Closed)
     }
@@ -401,15 +378,12 @@ impl RpcClient {
         };
         if self
             .write_tx
-            .send(
-                JSONRPCMessage::Request(JSONRPCRequest {
-                    id: request_id.clone(),
-                    method: method.to_string(),
-                    params: Some(params),
-                    trace: None,
-                })
-                .into(),
-            )
+            .send(JSONRPCMessage::Request(JSONRPCRequest {
+                id: request_id.clone(),
+                method: method.to_string(),
+                params: Some(params),
+                trace: None,
+            }))
             .await
             .is_err()
         {
@@ -432,64 +406,6 @@ impl RpcClient {
         serde_json::from_value(response).map_err(RpcCallError::Json)
     }
 
-    pub(crate) async fn call_batch(
-        &self,
-        calls: Vec<RpcBatchCall>,
-    ) -> Result<Vec<Result<Value, RpcCallError>>, RpcCallError> {
-        if calls.is_empty() {
-            return Ok(Vec::new());
-        }
-        if calls.len() > MAX_RPC_BATCH_REQUESTS {
-            return Err(RpcCallError::InvalidBatch(format!(
-                "JSON-RPC batch contains {} requests; maximum is {MAX_RPC_BATCH_REQUESTS}",
-                calls.len()
-            )));
-        }
-
-        let mut request_ids = Vec::with_capacity(calls.len());
-        let mut requests = Vec::with_capacity(calls.len());
-        let mut response_receivers = Vec::with_capacity(calls.len());
-        {
-            let mut pending = self.pending.lock().await;
-            if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
-                return Err(RpcCallError::Closed);
-            }
-            for RpcBatchCall { method, params } in calls {
-                let request_id =
-                    RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
-                let (response_tx, response_rx) = oneshot::channel();
-                pending.insert(request_id.clone(), response_tx);
-                request_ids.push(request_id.clone());
-                requests.push(JSONRPCMessage::Request(JSONRPCRequest {
-                    id: request_id,
-                    method,
-                    params: Some(params),
-                    trace: None,
-                }));
-                response_receivers.push(response_rx);
-            }
-        }
-
-        if self
-            .write_tx
-            .send(JsonRpcWireMessage::Batch(requests))
-            .await
-            .is_err()
-        {
-            let mut pending = self.pending.lock().await;
-            for request_id in request_ids {
-                pending.remove(&request_id);
-            }
-            return Err(RpcCallError::Closed);
-        }
-
-        let mut results = Vec::with_capacity(response_receivers.len());
-        for response_rx in response_receivers {
-            results.push(response_rx.await.map_err(|_| RpcCallError::Closed)?);
-        }
-        Ok(results)
-    }
-
     #[cfg(test)]
     pub(crate) async fn pending_request_count(&self) -> usize {
         self.pending.lock().await.len()
@@ -508,34 +424,22 @@ impl Drop for RpcClient {
 
 pub(crate) fn encode_server_message(
     message: RpcServerOutboundMessage,
-) -> Result<JsonRpcWireMessage, serde_json::Error> {
+) -> Result<JSONRPCMessage, serde_json::Error> {
     match message {
         RpcServerOutboundMessage::Response { request_id, result } => {
             Ok(JSONRPCMessage::Response(JSONRPCResponse {
                 id: request_id,
                 result,
-            })
-            .into())
+            }))
         }
         RpcServerOutboundMessage::Error { request_id, error } => {
             Ok(JSONRPCMessage::Error(JSONRPCError {
                 id: request_id,
                 error,
-            })
-            .into())
+            }))
         }
         RpcServerOutboundMessage::Notification(notification) => {
-            Ok(JSONRPCMessage::Notification(notification).into())
-        }
-        RpcServerOutboundMessage::Batch(messages) => {
-            let mut encoded = Vec::with_capacity(messages.len());
-            for message in messages {
-                match encode_server_message(message)? {
-                    JsonRpcWireMessage::Single(message) => encoded.push(message),
-                    JsonRpcWireMessage::Batch(messages) => encoded.extend(messages),
-                }
-            }
-            Ok(JsonRpcWireMessage::Batch(encoded))
+            Ok(JSONRPCMessage::Notification(notification))
         }
     }
 }
