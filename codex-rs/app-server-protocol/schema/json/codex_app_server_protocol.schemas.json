@@ -13359,7 +13359,7 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "cwds": {
-            "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
+            "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered. Cannot be combined with `threadId`.",
             "items": {
               "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
@@ -13379,7 +13379,7 @@
             ]
           },
           "threadId": {
-            "description": "Optional loaded thread id used to evaluate plugins from that thread's config.",
+            "description": "Optional loaded thread id used to evaluate plugins from that thread's cwd and config. Cannot be combined with `cwds`.",
             "type": [
               "string",
               "null"
@@ -16415,7 +16415,7 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "cwds": {
-            "description": "When empty, defaults to the current session working directory.",
+            "description": "Working directories used to list skills. Must be empty when `threadId` is provided. When empty, defaults to the loaded thread's cwd or the app-server default cwd.",
             "items": {
               "type": "string"
             },
@@ -16426,7 +16426,7 @@
             "type": "boolean"
           },
           "threadId": {
-            "description": "Optional loaded thread id used to evaluate skills from that thread's config.",
+            "description": "Optional loaded thread id used to evaluate skills from that thread's cwd and config. Cannot be combined with `cwds`.",
             "type": [
               "string",
               "null"

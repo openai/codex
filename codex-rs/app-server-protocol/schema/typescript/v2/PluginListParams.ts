@@ -7,11 +7,13 @@ import type { PluginListMarketplaceKind } from "./PluginListMarketplaceKind";
 export type PluginListParams = {
 /**
  * Optional working directories used to discover repo marketplaces. When omitted,
- * only home-scoped marketplaces and the official curated marketplace are considered.
+ * only home-scoped marketplaces and the official curated marketplace are considered. Cannot
+ * be combined with `threadId`.
  */
 cwds?: Array<AbsolutePathBuf> | null,
 /**
- * Optional loaded thread id used to evaluate plugins from that thread's config.
+ * Optional loaded thread id used to evaluate plugins from that thread's cwd and config. Cannot
+ * be combined with `cwds`.
  */
 threadId?: string | null,
 /**

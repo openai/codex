@@ -504,6 +504,10 @@ impl CatalogRequestProcessor {
             thread_id,
             force_reload,
         } = params;
+        let thread_scoped = thread_id.is_some();
+        if thread_scoped && !cwds.is_empty() {
+            return Err(invalid_request("`threadId` cannot be combined with `cwds`"));
+        }
         let config = match thread_id.as_deref() {
             Some(thread_id) => {
                 let thread_id = ThreadId::from_string(thread_id)
@@ -532,6 +536,9 @@ impl CatalogRequestProcessor {
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await;
         let skills_service = self.thread_manager.skills_service();
+        if thread_scoped && force_reload {
+            skills_service.clear_cache();
+        }
         let plugins_manager = self.thread_manager.plugins_manager();
         let fs = self
             .thread_manager
@@ -545,21 +552,25 @@ impl CatalogRequestProcessor {
                 let plugins_manager = &plugins_manager;
                 let skills_service = &skills_service;
                 async move {
-                    let (cwd_abs, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
-                        Ok(resolved) => resolved,
-                        Err(message) => {
-                            let error_path = cwd.clone();
-                            return (
-                                index,
-                                codex_app_server_protocol::SkillsListEntry {
-                                    cwd,
-                                    skills: Vec::new(),
-                                    errors: vec![codex_app_server_protocol::SkillErrorInfo {
-                                        path: error_path,
-                                        message,
-                                    }],
-                                },
-                            );
+                    let (cwd_abs, config_layer_stack) = if thread_scoped {
+                        (config.cwd.clone(), config.config_layer_stack.clone())
+                    } else {
+                        match self.resolve_cwd_config(&cwd).await {
+                            Ok(resolved) => resolved,
+                            Err(message) => {
+                                let error_path = cwd.clone();
+                                return (
+                                    index,
+                                    codex_app_server_protocol::SkillsListEntry {
+                                        cwd,
+                                        skills: Vec::new(),
+                                        errors: vec![codex_app_server_protocol::SkillErrorInfo {
+                                            path: error_path,
+                                            message,
+                                        }],
+                                    },
+                                );
+                            }
                         }
                     };
                     let effective_skill_roots = if workspace_codex_plugins_enabled {
@@ -579,9 +590,13 @@ impl CatalogRequestProcessor {
                         config_layer_stack,
                         config.bundled_skills_enabled(),
                     );
-                    let snapshot = skills_service
-                        .snapshot_for_cwd(&skills_input, force_reload, fs)
-                        .await;
+                    let snapshot = if thread_scoped {
+                        skills_service.snapshot_for_config(&skills_input, fs).await
+                    } else {
+                        skills_service
+                            .snapshot_for_cwd(&skills_input, force_reload, fs)
+                            .await
+                    };
                     let outcome = snapshot.outcome();
                     let errors = errors_to_info(&outcome.errors);
                     let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);

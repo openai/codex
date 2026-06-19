@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -18,10 +19,12 @@ use codex_app_server_protocol::SkillsExtraRootsSetResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::Mock;
@@ -152,6 +155,83 @@ fn write_cached_remote_plugin_with_skill(
         "---\nname: triage-issues\ndescription: Triage Linear issues\n---\n\n# Body\n",
     )?;
     Ok(skill_path)
+}
+
+#[tokio::test]
+async fn skills_list_with_thread_id_uses_thread_config() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    write_skill(&codex_home, "demo")?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[(CODEX_EXEC_SERVER_URL_ENV_VAR, None)])
+            .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let warm_request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            thread_id: None,
+            force_reload: true,
+        })
+        .await?;
+    let warm_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(warm_request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(warm_response)?;
+    let demo = data[0]
+        .skills
+        .iter()
+        .find(|skill| skill.name == "demo")
+        .context("demo skill should be present")?;
+    assert!(demo.enabled);
+
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(cwd.path().display().to_string()),
+            config: Some(HashMap::from([(
+                "skills.config".to_string(),
+                json!([{"name": "demo", "enabled": false}]),
+            )])),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
+
+    let request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: Vec::new(),
+            thread_id: Some(thread.id),
+            force_reload: false,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(response)?;
+    let demo = data[0]
+        .skills
+        .iter()
+        .find(|skill| skill.name == "demo")
+        .context("demo skill should be present")?;
+    assert!(!demo.enabled);
+
+    Ok(())
 }
 
 #[tokio::test]

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
     "cwds": {
-      "description": "When empty, defaults to the current session working directory.",
+      "description": "Working directories used to list skills. Must be empty when `threadId` is provided. When empty, defaults to the loaded thread's cwd or the app-server default cwd.",
       "items": {
         "type": "string"
       },
@@ -13,7 +13,7 @@
       "type": "boolean"
     },
     "threadId": {
-      "description": "Optional loaded thread id used to evaluate skills from that thread's config.",
+      "description": "Optional loaded thread id used to evaluate skills from that thread's cwd and config. Cannot be combined with `cwds`.",
       "type": [
         "string",
         "null"

@@ -532,6 +532,9 @@ impl PluginRequestProcessor {
             thread_id,
             marketplace_kinds,
         } = params;
+        if thread_id.is_some() && cwds.is_some() {
+            return Err(invalid_request("`threadId` cannot be combined with `cwds`"));
+        }
         let explicit_marketplace_kinds = marketplace_kinds.is_some();
         let marketplace_kinds =
             marketplace_kinds.unwrap_or_else(|| vec![PluginListMarketplaceKind::Local]);

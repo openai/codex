@@ -824,6 +824,7 @@ pub(super) async fn fetch_skills_list(
             request_id,
             params: SkillsListParams {
                 cwds: vec![cwd],
+                thread_id: None,
                 force_reload: true,
             },
         })
@@ -1009,6 +1010,7 @@ async fn request_plugin_list_with_marketplace_kinds(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
+                thread_id: None,
                 marketplace_kinds,
             },
         })
