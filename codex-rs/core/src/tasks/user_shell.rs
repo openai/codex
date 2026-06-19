@@ -224,6 +224,8 @@ pub(crate) async fn execute_user_shell_command(
         network_sandbox_policy: permission_profile.network_sandbox_policy(),
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
+        exec_server_sandbox: None,
+        exec_server_enforce_managed_network: false,
     };
 
     let stdout_stream = Some(StdoutStream {

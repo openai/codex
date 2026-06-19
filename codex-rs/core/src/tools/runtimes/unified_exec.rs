@@ -394,14 +394,22 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 error @ ToolError::Codex(_) => error,
             })?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
-            let mut exec_env = attempt
-                .env_for(
+            let mut exec_env = if req.turn_environment.environment.is_remote() {
+                attempt.env_for_exec_server(
                     command,
                     options,
                     managed_network,
                     Some(&req.turn_environment.environment_id),
                 )
-                .map_err(ToolError::Codex)?;
+            } else {
+                attempt.env_for(
+                    command,
+                    options,
+                    managed_network,
+                    Some(&req.turn_environment.environment_id),
+                )
+            }
+            .map_err(ToolError::Codex)?;
             exec_env.exec_server_env_config = req.exec_server_env_config.clone();
             match zsh_fork_backend::maybe_prepare_unified_exec(
                 req,
@@ -459,14 +467,22 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             error @ ToolError::Codex(_) => error,
         })?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
-        let mut exec_env = attempt
-            .env_for(
+        let mut exec_env = if req.turn_environment.environment.is_remote() {
+            attempt.env_for_exec_server(
                 command,
                 options,
                 managed_network,
                 Some(&req.turn_environment.environment_id),
             )
-            .map_err(ToolError::Codex)?;
+        } else {
+            attempt.env_for(
+                command,
+                options,
+                managed_network,
+                Some(&req.turn_environment.environment_id),
+            )
+        }
+        .map_err(ToolError::Codex)?;
         exec_env.exec_server_env_config = req.exec_server_env_config.clone();
         self.manager
             .open_session_with_exec_env(

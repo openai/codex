@@ -103,6 +103,13 @@ pub struct ExecParams {
     /// Optional process-visible argv0 override. Values such as `codex-linux-sandbox` are command
     /// names rather than paths, so this is not a [`PathUri`].
     pub arg0: Option<String>,
+    /// Sandbox policy for this launch. The exec-server resolves this into its own platform
+    /// sandbox wrapper so clients never send host-local helper paths in argv.
+    #[serde(default)]
+    pub sandbox: Option<FileSystemSandboxContext>,
+    /// Whether this launch must keep networking restricted to the managed proxy.
+    #[serde(default)]
+    pub enforce_managed_network: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
