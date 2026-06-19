@@ -388,7 +388,7 @@ impl TurnContext {
                 &self.config.multi_agent_v2,
                 &self.session_source,
                 self.multi_agent_mode,
-                self.features.enabled(Feature::MultiAgentMode),
+                self.config.features.enabled(Feature::MultiAgentMode),
             ),
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort.clone(),

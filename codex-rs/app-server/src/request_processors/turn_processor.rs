@@ -729,7 +729,7 @@ impl TurnRequestProcessor {
                     effort: params.effort,
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
-                    multi_agent_mode: None,
+                    multi_agent_mode: params.multi_agent_mode,
                     personality: params.personality,
                 },
             )

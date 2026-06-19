@@ -30,6 +30,7 @@ fn thread_settings_for_test(
                     developer_instructions: None,
                 },
             },
+            multi_agent_mode: Default::default(),
             personality: Some(Personality::Pragmatic),
         },
     }

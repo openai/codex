@@ -311,6 +311,7 @@ impl MemoryStartupContext {
                 thread_source: Some(ThreadSource::MemoryConsolidation),
                 dynamic_tools: Vec::new(),
                 metrics_service_name: None,
+                multi_agent_mode: None,
                 parent_trace: None,
                 environments,
                 thread_extension_init: Default::default(),
