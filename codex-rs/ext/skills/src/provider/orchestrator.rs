@@ -308,12 +308,20 @@ fn normalized_label(value: &str, max_chars: usize) -> Option<String> {
 }
 
 fn normalized_description(value: &str) -> Option<String> {
-    normalized_single_line(value, MAX_SKILL_DESCRIPTION_CHARS).map(|value| {
+    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if value.chars().any(char::is_control) {
+        return None;
+    }
+
+    Some(
         value
+            .chars()
+            .take(MAX_SKILL_DESCRIPTION_CHARS)
+            .collect::<String>()
             .replace('&', "&amp;")
             .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    })
+            .replace('>', "&gt;"),
+    )
 }
 
 fn normalized_single_line(value: &str, max_chars: usize) -> Option<String> {

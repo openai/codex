@@ -698,12 +698,22 @@ async fn parse_skill_file(
         .as_deref()
         .map(sanitize_single_line)
         .unwrap_or_default();
+    let description = description
+        .chars()
+        .take(MAX_DESCRIPTION_LEN)
+        .collect::<String>();
     let short_description = parsed
         .metadata
         .short_description
         .as_deref()
         .map(sanitize_single_line)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .chars()
+                .take(MAX_SHORT_DESCRIPTION_LEN)
+                .collect::<String>()
+        });
     let LoadedSkillMetadata {
         interface,
         dependencies,
