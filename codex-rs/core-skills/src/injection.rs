@@ -55,6 +55,11 @@ impl InjectedHostSkillPrompts {
     }
 }
 
+#[tracing::instrument(
+    level = "trace",
+    skip_all,
+    fields(mentioned_skill_count = mentioned_skills.len())
+)]
 pub async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
     loaded_skills: Option<&SkillLoadOutcome>,

@@ -1233,6 +1233,11 @@ impl Session {
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
+    #[tracing::instrument(
+        level = "trace",
+        skip_all,
+        fields(connector_count = connector_ids.len())
+    )]
     pub(crate) async fn merge_connector_selection(
         &self,
         connector_ids: HashSet<String>,
@@ -1426,6 +1431,7 @@ impl Session {
         state.previous_turn_settings()
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(crate) async fn set_previous_turn_settings(
         &self,
         previous_turn_settings: Option<PreviousTurnSettings>,
@@ -2736,6 +2742,7 @@ impl Session {
         ))
     }
 
+    #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
     pub(crate) async fn record_conversation_items(
         &self,
         turn_context: &TurnContext,
@@ -2929,6 +2936,7 @@ impl Session {
         self.set_multi_agent_version_if_unset(selected)
     }
 
+    #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
@@ -3280,6 +3288,7 @@ impl Session {
         items
     }
 
+    #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         if let Some(live_thread) = self.live_thread()
             && let Err(e) = live_thread.append_items(items).await

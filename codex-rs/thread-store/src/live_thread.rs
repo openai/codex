@@ -133,6 +133,11 @@ impl LiveThread {
         })
     }
 
+    #[tracing::instrument(
+        level = "trace",
+        skip_all,
+        fields(item_count = items.len())
+    )]
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
         let canonical_items = persisted_rollout_items(items);
         if items.is_empty() {
