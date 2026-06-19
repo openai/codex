@@ -201,7 +201,7 @@ fn user_message(text: &str) -> ResponseItem {
 
 #[test]
 fn assign_missing_response_item_ids_skips_agent_messages() {
-    let mut items = Cow::Owned(vec![
+    let items = Cow::Owned(vec![
         ResponseItem::AgentMessage {
             id: None,
             author: "worker".to_string(),
@@ -214,7 +214,7 @@ fn assign_missing_response_item_ids_skips_agent_messages() {
         user_message("hello"),
     ]);
 
-    Session::assign_missing_response_item_ids(&mut items);
+    let items = Session::assign_missing_response_item_ids(items);
 
     assert_eq!(items[0].id(), None);
     assert!(items[1].id().is_some_and(|id| id.starts_with("msg_")));
