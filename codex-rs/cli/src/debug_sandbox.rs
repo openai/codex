@@ -282,9 +282,11 @@ async fn run_command_under_sandbox(
                 network_sandbox_policy,
                 sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
                 enforce_managed_network,
+                environment_id: None,
                 network: network.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,
-            });
+            })
+            .map_err(|err| anyhow::anyhow!(err))?;
             spawn_debug_sandbox_child(
                 PathBuf::from("/usr/bin/sandbox-exec"),
                 args,

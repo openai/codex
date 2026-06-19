@@ -74,6 +74,7 @@ mod model_visible_layout;
 mod models_cache_ttl;
 mod models_etag_responses;
 mod multi_agent_mode;
+mod network_approval;
 mod openai_file_mcp;
 mod otel;
 mod override_updates;

@@ -53,6 +53,7 @@ use codex_tools::UnifiedExecShellMode;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::io;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
@@ -283,6 +284,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 tty: Some(req.tty),
             },
             command: req.hook_command.clone(),
+            environment_id: req.turn_environment.environment_id.clone(),
         })
     }
 
@@ -321,7 +323,17 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         );
         let mut env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
         if let Some(network) = managed_network {
-            network.apply_to_env(&mut env);
+            network
+                .apply_to_env_for_optional_environment(
+                    &mut env,
+                    Some(&req.turn_environment.environment_id),
+                )
+                .map_err(|err| {
+                    ToolError::Codex(CodexErr::Io(io::Error::other(format!(
+                        "failed to prepare network proxy for environment `{}`: {err}",
+                        req.turn_environment.environment_id
+                    ))))
+                })?;
         }
         let explicit_env_overrides = req.explicit_env_overrides.clone();
         #[cfg(unix)]
@@ -383,7 +395,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             })?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
-                .env_for(command, options, managed_network)
+                .env_for(
+                    command,
+                    options,
+                    managed_network,
+                    Some(&req.turn_environment.environment_id),
+                )
                 .map_err(ToolError::Codex)?;
             exec_env.exec_server_env_config = req.exec_server_env_config.clone();
             match zsh_fork_backend::maybe_prepare_unified_exec(
@@ -443,7 +460,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         })?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
-            .env_for(command, options, managed_network)
+            .env_for(
+                command,
+                options,
+                managed_network,
+                Some(&req.turn_environment.environment_id),
+            )
             .map_err(ToolError::Codex)?;
         exec_env.exec_server_env_config = req.exec_server_env_config.clone();
         self.manager
