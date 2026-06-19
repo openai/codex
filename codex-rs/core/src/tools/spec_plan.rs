@@ -1,5 +1,6 @@
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
+use crate::config::DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
@@ -773,8 +774,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
                 ToolExposure::Direct
             };
             let tool_namespace = namespace_tools_enabled(turn_context)
-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
-                .flatten();
+                .then_some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE);
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             planned_tools.add_arc(override_tool_exposure(

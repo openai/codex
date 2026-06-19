@@ -9968,7 +9968,6 @@ usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
-tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 non_code_mode_only = true
 "#,
@@ -10004,10 +10003,6 @@ non_code_mode_only = true
     assert_eq!(
         config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
         Some("Subagent guidance.")
-    );
-    assert_eq!(
-        config.multi_agent_v2.tool_namespace.as_deref(),
-        Some("agents")
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(config.multi_agent_v2.non_code_mode_only);
@@ -10349,42 +10344,6 @@ default_wait_timeout_ms = 2500
         err.to_string(),
         "features.multi_agent_v2.default_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms"
     );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn multi_agent_v2_rejects_invalid_tool_namespace() -> std::io::Result<()> {
-    for (namespace, expected_message) in [
-        (
-            "bad namespace",
-            "features.multi_agent_v2.tool_namespace must match ^[a-zA-Z0-9_-]+$",
-        ),
-        (
-            "functions",
-            "features.multi_agent_v2.tool_namespace uses a reserved namespace: functions",
-        ),
-    ] {
-        let codex_home = TempDir::new()?;
-        std::fs::write(
-            codex_home.path().join(CONFIG_TOML_FILE),
-            format!(
-                r#"[features.multi_agent_v2]
-enabled = true
-tool_namespace = "{namespace}"
-"#
-            ),
-        )?;
-
-        let err = ConfigBuilder::without_managed_config_for_tests()
-            .codex_home(codex_home.path().to_path_buf())
-            .fallback_cwd(Some(codex_home.path().to_path_buf()))
-            .build()
-            .await
-            .expect_err("invalid multi_agent_v2 tool namespace should fail");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        assert_eq!(err.to_string(), expected_message);
-    }
 
     Ok(())
 }

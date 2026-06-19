@@ -1314,73 +1314,14 @@ async fn v1_multi_agent_tools_defer_when_tool_search_available() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_can_use_configured_tool_namespace() {
-    let namespaced = probe(|turn| {
-        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
-        update_config(turn, |config| {
-            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
-        });
-    })
-    .await;
-
-    namespaced.assert_visible_contains(&["agents"]);
-    namespaced.assert_visible_lacks(&["assign_task"]);
-    assert!(
-        !namespaced
-            .registered_names
-            .contains(&ToolName::namespaced("agents", "assign_task").to_string()),
-        "expected no namespaced runtime for assign_task"
-    );
-    assert!(
-        !namespaced
-            .namespace_function_names("agents")
-            .iter()
-            .any(|name| name == "assign_task"),
-        "expected assign_task to be absent from agents namespace"
-    );
-    for tool_name in [
-        "spawn_agent",
-        "send_message",
-        "followup_task",
-        "wait_agent",
-        "interrupt_agent",
-        "list_agents",
-    ] {
-        namespaced.assert_visible_lacks(&[tool_name]);
-        assert!(
-            namespaced
-                .registered_names
-                .contains(&ToolName::namespaced("agents", tool_name).to_string()),
-            "expected namespaced runtime for {tool_name}"
-        );
-        assert!(
-            !namespaced
-                .registered_names
-                .contains(&ToolName::plain(tool_name).to_string()),
-            "expected no plain runtime for {tool_name}"
-        );
-        assert!(
-            namespaced
-                .namespace_function_names("agents")
-                .iter()
-                .any(|name| name == tool_name),
-            "expected {tool_name} in agents namespace"
-        );
-    }
-}
-
-#[tokio::test]
 async fn multi_agent_v2_namespace_is_supported_by_bedrock_provider() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
-        update_config(turn, |config| {
-            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
-        });
         use_bedrock_provider(turn);
     })
     .await;
 
-    plan.assert_visible_contains(&["agents"]);
+    plan.assert_visible_contains(&[MULTI_AGENT_V2_NAMESPACE]);
     plan.assert_visible_lacks(&["spawn_agent", "send_message", "list_agents"]);
     assert!(
         !plan
@@ -1389,7 +1330,7 @@ async fn multi_agent_v2_namespace_is_supported_by_bedrock_provider() {
     );
     assert!(
         plan.registered_names
-            .contains(&ToolName::namespaced("agents", "spawn_agent").to_string())
+            .contains(&ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, "spawn_agent").to_string())
     );
 }
 
@@ -1406,7 +1347,6 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
         );
         update_config(turn, |config| {
             config.multi_agent_v2.non_code_mode_only = true;
-            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
         });
     })
     .await;
@@ -1417,17 +1357,17 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
             "exec",
             "wait",
             "request_user_input",
-            "agents",
+            MULTI_AGENT_V2_NAMESPACE,
             // Hosted Responses tools.
             "web_search",
         ]
     );
     assert!(
         !plan
-            .namespace_function_names("agents")
+            .namespace_function_names(MULTI_AGENT_V2_NAMESPACE)
             .iter()
             .any(|name| name == "assign_task"),
-        "expected assign_task to be absent from agents namespace"
+        "expected assign_task to be absent from {MULTI_AGENT_V2_NAMESPACE} namespace"
     );
     for tool_name in [
         "spawn_agent",
@@ -1438,10 +1378,10 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
         "list_agents",
     ] {
         assert!(
-            plan.namespace_function_names("agents")
+            plan.namespace_function_names(MULTI_AGENT_V2_NAMESPACE)
                 .iter()
                 .any(|name| name == tool_name),
-            "expected {tool_name} in agents namespace"
+            "expected {tool_name} in {MULTI_AGENT_V2_NAMESPACE} namespace"
         );
     }
 }
