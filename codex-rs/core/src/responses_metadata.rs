@@ -22,6 +22,8 @@ use crate::client::X_CODEX_PARENT_THREAD_ID_HEADER;
 use crate::client::X_CODEX_TURN_METADATA_HEADER;
 use crate::client::X_CODEX_WINDOW_ID_HEADER;
 use crate::client::X_OPENAI_SUBAGENT_HEADER;
+use crate::tool_timing::TOOL_TIMING_KEY;
+use crate::tool_timing::ToolTimingReport;
 
 pub(crate) const INSTALLATION_ID_KEY: &str = "installation_id";
 pub(crate) const SESSION_ID_KEY: &str = "session_id";
@@ -61,6 +63,7 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
     THREAD_SOURCE_KEY,
     SANDBOX_KEY,
     WORKSPACES_KEY,
+    TOOL_TIMING_KEY,
 ];
 
 /// Metadata attached to model requests whose purpose is conversation compaction.
@@ -150,6 +153,7 @@ pub struct CodexResponsesMetadata {
     pub(crate) sandbox: Option<String>,
     pub(crate) workspaces: BTreeMap<String, TurnMetadataWorkspace>,
     pub(crate) turn_started_at_unix_ms: Option<i64>,
+    pub(crate) tool_timing: Option<ToolTimingReport>,
     pub(crate) extra: BTreeMap<String, String>,
 }
 
@@ -175,6 +179,7 @@ impl CodexResponsesMetadata {
             sandbox: None,
             workspaces: BTreeMap::new(),
             turn_started_at_unix_ms: None,
+            tool_timing: None,
             extra: BTreeMap::new(),
         }
     }
@@ -277,6 +282,7 @@ impl CodexResponsesMetadata {
             sandbox: self.sandbox.as_deref(),
             workspaces: non_empty_workspaces(&self.workspaces),
             turn_started_at_unix_ms: self.turn_started_at_unix_ms,
+            tool_timing: self.tool_timing.as_ref(),
             compaction,
             // responsesapi_client_metadata enriches the Codex turn metadata blob, not literal
             // top-level Responses client_metadata. Reserved Codex-owned keys are filtered when
@@ -367,6 +373,8 @@ struct CodexTurnMetadataPayload<'a> {
     workspaces: Option<&'a BTreeMap<String, TurnMetadataWorkspace>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_started_at_unix_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_timing: Option<&'a ToolTimingReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     compaction: Option<CompactionTurnMetadata>,
     #[serde(flatten)]

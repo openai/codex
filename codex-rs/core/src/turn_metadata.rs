@@ -16,6 +16,9 @@ use crate::responses_metadata::filter_extra_metadata;
 use crate::responses_metadata::subagent_header_value;
 use crate::responses_metadata::subagent_metadata_kind;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
+use crate::tool_timing::ToolTimingCall;
+use crate::tool_timing::ToolTimingGuard;
+use crate::tool_timing::ToolTimingState;
 use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_has_changes;
@@ -98,6 +101,7 @@ pub(crate) struct TurnMetadataState {
     enriched_workspaces: Arc<RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>>,
     turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
     responsesapi_client_metadata: Arc<RwLock<BTreeMap<String, String>>>,
+    tool_timing_state: ToolTimingState,
     user_input_requested_during_turn: Arc<AtomicBool>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -141,6 +145,7 @@ impl TurnMetadataState {
             enriched_workspaces: Arc::new(RwLock::new(None)),
             turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
             responsesapi_client_metadata: Arc::new(RwLock::new(BTreeMap::new())),
+            tool_timing_state: ToolTimingState::default(),
             user_input_requested_during_turn: Arc::new(AtomicBool::new(false)),
             enrichment_task: Arc::new(Mutex::new(None)),
         }
@@ -190,12 +195,22 @@ impl TurnMetadataState {
         window_id: String,
         request_kind: CodexResponsesRequestKind,
     ) -> CodexResponsesMetadata {
+        let tool_timing = matches!(
+            request_kind,
+            CodexResponsesRequestKind::Turn | CodexResponsesRequestKind::Compaction(_)
+        )
+        .then(|| self.tool_timing_state.take_report());
         CodexResponsesMetadata {
             installation_id,
             window_id,
             request_kind: Some(request_kind),
+            tool_timing,
             ..self.responses_metadata_template()
         }
+    }
+
+    pub(crate) fn start_tool_timing(&self, call: ToolTimingCall) -> ToolTimingGuard {
+        self.tool_timing_state.start_call(call)
     }
 
     pub(crate) fn mark_user_input_requested_during_turn(&self) {

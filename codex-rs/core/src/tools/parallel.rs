@@ -15,6 +15,8 @@ use tracing::trace_span;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::tool_timing::ToolTimingCall;
+use crate::tool_timing::ToolTimingSource;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
@@ -96,6 +98,22 @@ impl ToolCallRuntime {
         let invocation_cancellation_token = cancellation_token.clone();
         let wait_for_runtime_cancellation = self.router.tool_waits_for_runtime_cancellation(&call);
         let started = Instant::now();
+        let tool_timing_source = match &source {
+            ToolCallSource::Direct => ToolTimingSource::Direct,
+            ToolCallSource::CodeMode {
+                cell_id,
+                runtime_tool_call_id,
+            } => ToolTimingSource::CodeMode {
+                cell_id: cell_id.clone(),
+                runtime_tool_call_id: runtime_tool_call_id.clone(),
+            },
+        };
+        let tool_timing_guard = turn.turn_metadata_state.start_tool_timing(ToolTimingCall {
+            call_id: call.call_id.clone(),
+            tool_name: call.tool_name.to_string(),
+            source: tool_timing_source,
+        });
+        let tool_timing_marker = tool_timing_guard.marker();
         let abort_session = Arc::clone(&session);
         let abort_source = source.clone();
         let abort_turn = Arc::clone(&turn);
@@ -119,6 +137,7 @@ impl ToolCallRuntime {
                 } else {
                     Either::Right(lock.write().await)
                 };
+                tool_timing_marker.mark_execution_started();
 
                 router
                     .dispatch_tool_call_with_terminal_outcome(
@@ -135,6 +154,7 @@ impl ToolCallRuntime {
             }));
 
         async move {
+            let _tool_timing_guard = tool_timing_guard;
             tokio::select! {
                 res = &mut handle => res.map_err(Self::tool_task_join_error)?,
                 _ = cancellation_token.cancelled() => {
