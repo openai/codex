@@ -202,7 +202,7 @@ fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
 }
 
 #[test]
-fn exec_server_env_keeps_command_native() {
+fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current dir")
         .try_into()
@@ -214,9 +214,10 @@ fn exec_server_env_keeps_command_native() {
     );
     let manager = SandboxManager::new();
     let attempt = SandboxAttempt {
-        sandbox: SandboxType::MacosSeatbelt,
+        sandbox: SandboxType::None,
+        sandbox_requested: true,
         permissions: &permissions,
-        enforce_managed_network: false,
+        enforce_managed_network: true,
         manager: &manager,
         sandbox_cwd: &cwd_uri,
         workspace_roots: std::slice::from_ref(&cwd),
@@ -252,4 +253,16 @@ fn exec_server_env_keeps_command_native() {
     );
     assert_eq!(request.arg0, None);
     assert_eq!(request.sandbox, SandboxType::None);
+    assert_eq!(
+        request.exec_server_sandbox,
+        Some(codex_exec_server::FileSystemSandboxContext {
+            permissions: request.permission_profile.clone().into(),
+            cwd: Some(cwd_uri),
+            workspace_roots: Vec::new(),
+            windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            use_legacy_landlock: false,
+        })
+    );
+    assert!(request.exec_server_enforce_managed_network);
 }

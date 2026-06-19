@@ -11,6 +11,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::SessionServices;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use codex_file_system::FileSystemSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -408,6 +409,8 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: SandboxType,
+    /// Whether policy requested sandboxing, independent of this host's concrete wrapper.
+    pub sandbox_requested: bool,
     pub permissions: &'a codex_protocol::models::PermissionProfile,
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
@@ -477,11 +480,23 @@ impl<'a> SandboxAttempt<'a> {
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
             .map_err(CodexErr::from)?;
-        Ok(crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+        let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
             request,
             options,
             self.workspace_roots.to_vec(),
-        ))
+        );
+        if self.sandbox_requested {
+            exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {
+                permissions: exec_request.permission_profile.clone().into(),
+                cwd: Some(exec_request.windows_sandbox_policy_cwd.clone()),
+                workspace_roots: Vec::new(),
+                windows_sandbox_level: self.windows_sandbox_level,
+                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+                use_legacy_landlock: self.use_legacy_landlock,
+            });
+            exec_request.exec_server_enforce_managed_network = self.enforce_managed_network;
+        }
+        Ok(exec_request)
     }
 }
 
