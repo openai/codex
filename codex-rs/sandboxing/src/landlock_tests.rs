@@ -1,4 +1,11 @@
 use super::*;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -51,6 +58,42 @@ fn proxy_flag_takes_precedence_over_legacy_landlock() {
         args.contains(&"--allow-network-for-proxy".to_string()),
         true
     );
+    assert_eq!(args.contains(&"--use-legacy-landlock".to_string()), false);
+}
+
+#[test]
+fn direct_enforcement_profile_takes_precedence_over_legacy_landlock() {
+    let command = vec!["/bin/true".to_string()];
+    let command_cwd = Path::new("/tmp/link");
+    let cwd = Path::new("/tmp");
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::from_absolute_path("/tmp/ca.key")
+                        .expect("absolute path"),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let args = create_linux_sandbox_command_args_for_permission_profile(
+        command,
+        command_cwd,
+        &permission_profile,
+        cwd,
+        /*use_legacy_landlock*/ true,
+        /*allow_network_for_proxy*/ false,
+    );
+
     assert_eq!(args.contains(&"--use-legacy-landlock".to_string()), false);
 }
 

@@ -5,6 +5,7 @@ use crate::bwrap::is_wsl1;
 use crate::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_permission_profile;
+use crate::landlock::permission_profile_supports_legacy_landlock;
 use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
 #[cfg(target_os = "windows")]
@@ -413,6 +414,11 @@ impl SandboxManager {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
+                let use_legacy_landlock = use_legacy_landlock
+                    && permission_profile_supports_legacy_landlock(
+                        &pending.effective_permission_profile,
+                        pending.native_sandbox_policy_cwd.as_path(),
+                    );
                 #[cfg(target_os = "linux")]
                 ensure_linux_bubblewrap_is_supported(
                     &pending.effective_file_system_policy,
