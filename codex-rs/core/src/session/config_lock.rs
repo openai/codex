@@ -1,7 +1,7 @@
 use anyhow::Context;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
-use codex_config::config_toml::OrchestratorSkillsToml;
+use codex_config::config_toml::OrchestratorFeatureToml;
 use codex_config::config_toml::OrchestratorToml;
 use codex_config::types::MemoriesToml;
 use codex_features::Feature;
@@ -182,7 +182,7 @@ fn save_config_resolved_fields(
         .orchestrator
         .get_or_insert_with(OrchestratorToml::default)
         .skills
-        .get_or_insert_with(OrchestratorSkillsToml::default)
+        .get_or_insert_with(OrchestratorFeatureToml::default)
         .enabled = Some(config.orchestrator_skills_enabled);
     lock_config
         .orchestrator

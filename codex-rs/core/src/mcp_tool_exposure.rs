@@ -68,10 +68,6 @@ fn filter_codex_apps_mcp_tools(
     connectors: &[connectors::AppInfo],
     config: &Config,
 ) -> Vec<McpToolInfo> {
-    if !config.orchestrator_mcp_enabled {
-        return Vec::new();
-    }
-
     let allowed: HashSet<&str> = connectors
         .iter()
         .map(|connector| connector.id.as_str())

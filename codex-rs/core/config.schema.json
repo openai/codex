@@ -2044,19 +2044,9 @@
         }
       ]
     },
-    "OrchestratorMcpToml": {
+    "OrchestratorFeatureToml": {
       "additionalProperties": false,
-      "description": "Settings for MCP tools owned by the orchestrator.",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "OrchestratorSkillsToml": {
-      "additionalProperties": false,
-      "description": "Settings for skills owned by the orchestrator.",
+      "description": "Settings for a feature owned by the orchestrator.",
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -2069,10 +2059,10 @@
       "description": "Orchestrator-owned feature settings.",
       "properties": {
         "mcp": {
-          "$ref": "#/definitions/OrchestratorMcpToml"
+          "$ref": "#/definitions/OrchestratorFeatureToml"
         },
         "skills": {
-          "$ref": "#/definitions/OrchestratorSkillsToml"
+          "$ref": "#/definitions/OrchestratorFeatureToml"
         }
       },
       "type": "object"

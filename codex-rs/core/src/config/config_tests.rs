@@ -13,9 +13,6 @@ use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ExperimentalRequestUserInput;
-use codex_config::config_toml::OrchestratorMcpToml;
-use codex_config::config_toml::OrchestratorSkillsToml;
-use codex_config::config_toml::OrchestratorToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeArchitecture;
 use codex_config::config_toml::RealtimeConfig;
@@ -332,32 +329,6 @@ enabled = false
             bundled: Some(BundledSkillsConfig { enabled: false }),
             include_instructions: Some(false),
             config: Vec::new(),
-        })
-    );
-}
-
-#[test]
-fn parses_orchestrator_skills_config() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[orchestrator.skills]
-enabled = false
-
-[orchestrator.mcp]
-enabled = false
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.orchestrator,
-        Some(OrchestratorToml {
-            skills: Some(OrchestratorSkillsToml {
-                enabled: Some(false),
-            }),
-            mcp: Some(OrchestratorMcpToml {
-                enabled: Some(false),
-            }),
         })
     );
 }
@@ -9048,7 +9019,7 @@ apps_mcp_product_sku = "tpp"
 }
 
 #[tokio::test]
-async fn config_loads_orchestrator_skills_enabled_from_toml() -> std::io::Result<()> {
+async fn config_loads_orchestrator_settings_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg: ConfigToml = toml::from_str(
         r#"
@@ -9056,33 +9027,12 @@ model = "gpt-5.4"
 
 [orchestrator.skills]
 enabled = false
-"#,
-    )
-    .expect("TOML deserialization should succeed for orchestrator skills");
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert!(!config.orchestrator_skills_enabled);
-    Ok(())
-}
-
-#[tokio::test]
-async fn config_loads_orchestrator_mcp_enabled_from_toml() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-model = "gpt-5.4"
 
 [orchestrator.mcp]
 enabled = false
 "#,
     )
-    .expect("TOML deserialization should succeed for orchestrator MCP");
+    .expect("TOML deserialization should succeed for orchestrator settings");
 
     let config = Config::load_from_base_config_with_overrides(
         cfg,
@@ -9091,29 +9041,13 @@ enabled = false
     )
     .await?;
 
-    assert!(!config.orchestrator_mcp_enabled);
-    Ok(())
-}
-
-#[tokio::test]
-async fn config_defaults_orchestrator_features_to_enabled() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-model = "gpt-5.4"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert!(config.orchestrator_skills_enabled);
-    assert!(config.orchestrator_mcp_enabled);
+    assert_eq!(
+        (
+            config.orchestrator_skills_enabled,
+            config.orchestrator_mcp_enabled
+        ),
+        (false, false)
+    );
     Ok(())
 }
 

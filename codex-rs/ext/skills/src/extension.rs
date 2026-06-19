@@ -56,7 +56,6 @@ where
 {
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            let config = (self.config_from_host)(input.config);
             let selected_roots = input
                 .thread_store
                 .get::<Vec<SelectedCapabilityRoot>>()
@@ -67,7 +66,7 @@ where
                 .iter()
                 .any(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID);
             input.thread_store.insert(SkillsThreadState::new(
-                config,
+                (self.config_from_host)(input.config),
                 selected_roots,
                 orchestrator_skills_available,
             ));

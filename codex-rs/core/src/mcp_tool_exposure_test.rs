@@ -237,42 +237,6 @@ enabled = true
 }
 
 #[tokio::test]
-async fn excludes_codex_apps_tools_when_orchestrator_mcp_is_disabled() {
-    let mut config = test_config().await;
-    config.orchestrator_mcp_enabled = false;
-    let regular_tool = make_mcp_tool(
-        "rmcp",
-        "lookup",
-        "mcp__rmcp",
-        "lookup",
-        /*connector_id*/ None,
-        /*connector_name*/ None,
-    );
-    let codex_apps_tool = make_mcp_tool(
-        CODEX_APPS_MCP_SERVER_NAME,
-        "events/create",
-        "mcp__codex_apps__calendar",
-        "create",
-        Some("calendar"),
-        Some("Calendar"),
-    );
-    let connectors = vec![make_connector("calendar", "Calendar")];
-
-    let exposure = build_mcp_tool_exposure(
-        &[regular_tool.clone(), codex_apps_tool],
-        Some(connectors.as_slice()),
-        &config,
-        /*search_tool_enabled*/ false,
-    );
-
-    assert_eq!(
-        tool_names(&exposure.direct_tools),
-        tool_names(&[regular_tool])
-    );
-    assert!(exposure.deferred_tools.is_none());
-}
-
-#[tokio::test]
 async fn searches_large_effective_tool_sets() {
     let config = test_config().await;
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);

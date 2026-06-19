@@ -2414,22 +2414,10 @@ fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> 
         .is_none_or(|config| config.enabled)
 }
 
-fn resolve_orchestrator_skills_enabled(config_toml: &ConfigToml) -> bool {
-    config_toml
-        .orchestrator
-        .as_ref()
-        .and_then(|orchestrator| orchestrator.skills.as_ref())
-        .and_then(|skills| skills.enabled)
-        .unwrap_or(true)
-}
-
-fn resolve_orchestrator_mcp_enabled(config_toml: &ConfigToml) -> bool {
-    config_toml
-        .orchestrator
-        .as_ref()
-        .and_then(|orchestrator| orchestrator.mcp.as_ref())
-        .and_then(|mcp| mcp.enabled)
-        .unwrap_or(true)
+fn resolve_orchestrator_feature_enabled(
+    feature: Option<&codex_config::config_toml::OrchestratorFeatureToml>,
+) -> bool {
+    feature.and_then(|feature| feature.enabled).unwrap_or(true)
 }
 
 fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
@@ -2782,8 +2770,11 @@ impl Config {
 
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
-        let orchestrator_skills_enabled = resolve_orchestrator_skills_enabled(&cfg);
-        let orchestrator_mcp_enabled = resolve_orchestrator_mcp_enabled(&cfg);
+        let orchestrator = cfg.orchestrator.as_ref();
+        let orchestrator_skills_enabled =
+            resolve_orchestrator_feature_enabled(orchestrator.and_then(|value| value.skills.as_ref()));
+        let orchestrator_mcp_enabled =
+            resolve_orchestrator_feature_enabled(orchestrator.and_then(|value| value.mcp.as_ref()));
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {

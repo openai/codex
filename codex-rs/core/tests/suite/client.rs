@@ -57,6 +57,7 @@ use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
@@ -1547,9 +1548,31 @@ async fn omits_apps_guidance_when_orchestrator_mcp_is_disabled() {
         .expect("mount apps MCP mock");
     let apps_base_url = apps_server.chatgpt_base_url.clone();
 
-    let resp_mock = mount_sse_once(
+    let list_call_id = "list-resources";
+    let read_call_id = "read-resource";
+    let resp_mock = mount_sse_sequence(
         &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+        vec![
+            sse(vec![
+                ev_response_created("resp1"),
+                ev_function_call(list_call_id, "list_mcp_resources", "{}"),
+                ev_completed("resp1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp2"),
+                ev_function_call(
+                    read_call_id,
+                    "read_mcp_resource",
+                    &json!({
+                        "server": "codex_apps",
+                        "uri": "skill://demo/SKILL.md",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp2"),
+            ]),
+            sse(vec![ev_response_created("resp3"), ev_completed("resp3")]),
+        ],
     )
     .await;
 
@@ -1585,9 +1608,11 @@ async fn omits_apps_guidance_when_orchestrator_mcp_is_disabled() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let request = resp_mock.single_request();
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let request = &requests[0];
     assert!(
-        !message_input_text_contains(&request, "developer", "<apps_instructions>"),
+        !message_input_text_contains(request, "developer", "<apps_instructions>"),
         "did not expect apps instructions when orchestrator MCP is disabled, got {:?}",
         request.body_json()["input"]
     );
@@ -1595,6 +1620,39 @@ async fn omits_apps_guidance_when_orchestrator_mcp_is_disabled() {
         !request.body_contains_text("mcp__codex_apps"),
         "did not expect codex_apps MCP tools when orchestrator MCP is disabled, got {:?}",
         request.body_json()["tools"]
+    );
+    let list_output = requests[1]
+        .function_call_output_text(list_call_id)
+        .expect("resource list output should be sent to the model");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&list_output)
+            .expect("parse resource list output"),
+        json!({"resources": []})
+    );
+    let read_output = requests[2]
+        .function_call_output_text(read_call_id)
+        .expect("resource read output should be sent to the model");
+    assert!(
+        read_output.contains("disabled by `orchestrator.mcp.enabled`"),
+        "unexpected resource read output: {read_output}"
+    );
+
+    let resource_methods = server
+        .received_requests()
+        .await
+        .expect("read recorded requests")
+        .into_iter()
+        .filter_map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).ok())
+        .filter_map(|body| {
+            body.get("method")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|method| method.starts_with("resources/"))
+        .collect::<Vec<_>>();
+    assert!(
+        resource_methods.is_empty(),
+        "did not expect codex_apps resource calls: {resource_methods:?}"
     );
 }
 
