@@ -483,6 +483,7 @@ mod tests {
         let item = RolloutItem::Compacted(CompactedItem {
             message: "compacted".to_string(),
             replacement_history: None,
+            window_number: None,
             window_id: None,
         });
 

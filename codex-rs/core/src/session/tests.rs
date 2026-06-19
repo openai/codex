@@ -168,6 +168,7 @@ use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use uuid::Uuid;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
@@ -1592,7 +1593,13 @@ async fn reconstruct_history_matches_live_compactions() {
         .await;
 
     assert_eq!(expected, reconstructed.history);
-    assert_eq!(2, reconstructed.window_id);
+    assert_eq!(2, reconstructed.window_number);
+    assert_eq!(
+        reconstructed
+            .window_id
+            .map(|window_id| window_id.get_version_num()),
+        Some(7)
+    );
 }
 
 #[tokio::test]
@@ -1622,10 +1629,12 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             metadata: None,
         },
     ];
+    let window_id = Uuid::now_v7();
     let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
         message: String::new(),
         replacement_history: Some(replacement_history.clone()),
-        window_id: Some(42),
+        window_number: Some(42),
+        window_id: Some(window_id.to_string()),
     })];
 
     let reconstructed = session
@@ -1633,7 +1642,8 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         .await;
 
     assert_eq!(reconstructed.history, replacement_history);
-    assert_eq!(42, reconstructed.window_id);
+    assert_eq!(42, reconstructed.window_number);
+    assert_eq!(Some(window_id), reconstructed.window_id);
 }
 
 #[tokio::test]
@@ -3014,6 +3024,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         user_message("turn 1 user"),
         user_message("summary after compaction"),
     ];
+    let compacted_window_id = Uuid::now_v7();
 
     sess.persist_rollout_items(&[
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -3055,7 +3066,8 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::Compacted(CompactedItem {
             message: "summary after compaction".to_string(),
             replacement_history: Some(compacted_history.clone()),
-            window_id: Some(7),
+            window_number: Some(7),
+            window_id: Some(compacted_window_id.to_string()),
         }),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: compact_turn_id,
@@ -3105,7 +3117,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
     .await;
     {
         let mut state = sess.state.lock().await;
-        state.set_auto_compact_window_id(/*window_id*/ 99);
+        state.restore_auto_compact_window(/*window_number*/ 99, Uuid::now_v7());
     }
 
     handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
@@ -3114,6 +3126,10 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
 
     assert_eq!(sess.clone_history().await.raw_items(), compacted_history);
     assert!(sess.reference_context_item().await.is_none());
+    assert_eq!(
+        sess.state.lock().await.auto_compact_window_id(),
+        compacted_window_id
+    );
     assert!(sess.current_window_id().await.ends_with(":7"));
 }
 
@@ -9846,10 +9862,12 @@ async fn sample_rollout(
     let user_messages1 = collect_user_messages(&snapshot1);
     let rebuilt1 = compact::build_compacted_history(Vec::new(), &user_messages1, summary1);
     live_history.replace(rebuilt1);
+    let (window_number, window_id) = session.advance_auto_compact_window().await;
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary1.to_string(),
         replacement_history: None,
-        window_id: None,
+        window_number: Some(window_number),
+        window_id: Some(window_id),
     }));
 
     let user2 = ResponseItem::Message {
@@ -9889,10 +9907,12 @@ async fn sample_rollout(
     let user_messages2 = collect_user_messages(&snapshot2);
     let rebuilt2 = compact::build_compacted_history(Vec::new(), &user_messages2, summary2);
     live_history.replace(rebuilt2);
+    let (window_number, window_id) = session.advance_auto_compact_window().await;
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary2.to_string(),
         replacement_history: None,
-        window_id: None,
+        window_number: Some(window_number),
+        window_id: Some(window_id),
     }));
 
     let user3 = ResponseItem::Message {

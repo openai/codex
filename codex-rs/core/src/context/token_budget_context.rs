@@ -1,15 +1,16 @@
 use super::ContextualUserFragment;
 use codex_protocol::ThreadId;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TokenBudgetContext {
     thread_id: ThreadId,
-    window_id: u64,
+    window_id: Uuid,
     tokens_left: i64,
 }
 
 impl TokenBudgetContext {
-    pub(crate) fn new(thread_id: ThreadId, window_id: u64, tokens_left: i64) -> Self {
+    pub(crate) fn new(thread_id: ThreadId, window_id: Uuid, tokens_left: i64) -> Self {
         Self {
             thread_id,
             window_id,
@@ -36,7 +37,7 @@ impl ContextualUserFragment for TokenBudgetContext {
         let window_id = self.window_id;
         let tokens_left = self.tokens_left;
         format!(
-            "Thread id {thread_id}.\nCurrent context window {window_id}.\nYou have {tokens_left} tokens left in this context window."
+            "Thread id {thread_id}.\nCurrent context window id {window_id}.\nYou have {tokens_left} tokens left in this context window."
         )
     }
 }
