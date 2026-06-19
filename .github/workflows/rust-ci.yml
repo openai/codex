@@ -173,11 +173,8 @@ jobs:
             runner: macos-15-xlarge
             timeout_minutes: 30
           - name: Windows
-            runner: windows-x64
+            runner: windows-2022
             timeout_minutes: 30
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
     steps:
       - name: Check whether argument comment lint should run
         id: argument_comment_lint_gate
