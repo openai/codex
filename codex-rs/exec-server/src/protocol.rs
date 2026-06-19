@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use std::collections::HashMap;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -212,6 +213,12 @@ pub struct FsReadFileParams {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadFileResponse {
     pub data_base64: String,
+}
+
+impl FsReadFileResponse {
+    pub fn into_bytes(self) -> Result<Vec<u8>, base64::DecodeError> {
+        BASE64_STANDARD.decode(self.data_base64)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
