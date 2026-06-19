@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Component;
@@ -21,6 +22,7 @@ const APPROX_BYTES_PER_TOKEN: usize = 4;
 pub const SKILL_DESCRIPTION_TRUNCATED_WARNING: &str = "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
 pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_WITH_PERCENT: &str = "Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
 const MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS: usize = 1024;
+const TRUNCATED_SKILL_DESCRIPTION_SUFFIX: &str = "...";
 pub const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
     "Exceeded skills context budget. All skill descriptions were removed and";
 pub const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `environment resource` locators are owned by an execution environment, `orchestrator resource` locators are opaque non-filesystem resources, and `custom resource` locators use their provider's access mechanism.";
@@ -447,7 +449,7 @@ impl SkillRenderReport {
 
 struct SkillLine<'a> {
     name: &'a str,
-    description: &'a str,
+    description: Cow<'a, str>,
     path: String,
 }
 
@@ -487,10 +489,23 @@ impl<'a> SkillLine<'a> {
 
     fn with_path(skill: &'a SkillMetadata, path: String) -> Self {
         let description = skill.description.as_str();
-        let description = description
+        let description = if description
             .char_indices()
             .nth(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS)
-            .map_or(description, |(index, _)| &description[..index]);
+            .is_some()
+        {
+            let prefix_chars = MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS
+                .saturating_sub(TRUNCATED_SKILL_DESCRIPTION_SUFFIX.chars().count());
+            let prefix_end = description
+                .char_indices()
+                .nth(prefix_chars)
+                .map_or(description.len(), |(index, _)| index);
+            let mut truncated = description[..prefix_end].to_string();
+            truncated.push_str(TRUNCATED_SKILL_DESCRIPTION_SUFFIX);
+            Cow::Owned(truncated)
+        } else {
+            Cow::Borrowed(description)
+        };
         Self {
             name: skill.name.as_str(),
             description,
@@ -511,7 +526,7 @@ impl<'a> SkillLine<'a> {
     }
 
     fn render_full(&self) -> String {
-        self.render_with_description(self.description)
+        self.render_with_description(self.description.as_ref())
     }
 
     fn render_minimum(&self) -> String {
@@ -530,7 +545,7 @@ impl<'a> SkillLine<'a> {
             format!("- {}: (file: {})", self.name, self.path)
         } else {
             let end = self.rendered_description_prefix_len(description_chars);
-            let description = &self.description[..end];
+            let description = &self.description.as_ref()[..end];
             format!("- {}: {} (file: {})", self.name, description, self.path)
         }
     }
@@ -1040,7 +1055,10 @@ mod tests {
     fn rendering_caps_model_visible_descriptions_without_mutating_metadata() {
         let description = "\u{1F4A1}".repeat(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS + 1);
         let skill = make_skill_with_description("long-skill", SkillScope::Repo, &description);
-        let expected_description = "\u{1F4A1}".repeat(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS);
+        let expected_description = "\u{1F4A1}".repeat(
+            MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS
+                - TRUNCATED_SKILL_DESCRIPTION_SUFFIX.chars().count(),
+        ) + TRUNCATED_SKILL_DESCRIPTION_SUFFIX;
 
         let rendered = build_available_skills_from_metadata(
             std::slice::from_ref(&skill),

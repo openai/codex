@@ -298,7 +298,8 @@ async fn model_context_truncates_catalog_descriptions() -> TestResult {
         .await;
     assert_eq!(1, fragments.len());
     let rendered = fragments[0].text();
-    assert!(rendered.contains(&"x".repeat(1_024)));
+    assert!(rendered.contains(&("x".repeat(1_021) + "...")));
+    assert!(!rendered.contains(&"x".repeat(1_024)));
     assert!(!rendered.contains(&description));
 
     Ok(())
