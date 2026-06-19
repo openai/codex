@@ -164,6 +164,8 @@ pub enum Feature {
     ToolSuggest,
     /// Enable plugins.
     Plugins,
+    /// Make skills bundled by app-backed connector plugins available to the model.
+    ConnectorSkills,
     /// Removed compatibility flag for plugin-bundled lifecycle hooks.
     PluginHooks,
     /// Allow the in-app browser pane in desktop apps.
@@ -1084,6 +1086,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Plugins,
         key: "plugins",
         stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ConnectorSkills,
+        key: "connector_skills",
+        stage: Stage::UnderDevelopment,
         default_enabled: true,
     },
     FeatureSpec {

@@ -3127,6 +3127,10 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config.plugins_config_input())
             .await;
+        let model_visible_plugins = crate::plugins::apply_connector_skills_feature(
+            turn_context.config.as_ref(),
+            loaded_plugins.clone(),
+        );
         let recommended_plugin_candidates =
             if crate::tools::spec_plan::tool_suggest_enabled(turn_context) {
                 let auth = self.services.auth_manager.auth().await;
@@ -3151,7 +3155,7 @@ impl Session {
             contextual_user_sections.push(recommended_plugins.render());
         }
         if let Some(plugin_instructions) =
-            AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
+            AvailablePluginsInstructions::from_plugins(model_visible_plugins.capability_summaries())
         {
             developer_sections.push(plugin_instructions.render());
         }

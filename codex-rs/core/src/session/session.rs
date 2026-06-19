@@ -450,6 +450,8 @@ async fn warm_plugins_and_skills_for_session_init(
     let fs = turn_environments.primary_filesystem();
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+    let plugin_outcome =
+        crate::plugins::apply_connector_skills_feature(config.as_ref(), plugin_outcome);
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let plugin_skill_snapshots = plugins_manager.plugin_skill_snapshots_for_config(&plugins_input);
     let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots)
