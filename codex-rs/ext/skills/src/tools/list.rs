@@ -8,7 +8,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::catalog::SkillCatalogEntry;
-use crate::render::truncate_model_visible_skill_description;
 use crate::render::truncate_utf8_to_bytes;
 
 use super::MAX_HANDLE_BYTES;
@@ -96,7 +95,7 @@ fn listed_skill(entry: SkillCatalogEntry) -> Option<ListedSkill> {
         authority,
         package: entry.id.0,
         name: entry.name,
-        description: truncate_model_visible_skill_description(&entry.description).into_owned(),
+        description: entry.description,
         main_resource: entry.main_prompt.as_str().to_string(),
     })
 }

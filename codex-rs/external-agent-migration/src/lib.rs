@@ -1162,7 +1162,6 @@ fn command_source_name(source_commands: &Path, source_file: &Path) -> String {
 
 fn render_command_skill(body: &str, name: &str, description: &str, source_name: &str) -> String {
     let body = rewrite_external_agent_terms(body.trim());
-    let description = rewrite_external_agent_terms(description);
     let template_body = if body.is_empty() {
         "No command template body was found.".to_string()
     } else {
@@ -1171,7 +1170,7 @@ fn render_command_skill(body: &str, name: &str, description: &str, source_name: 
     format!(
         "---\nname: {}\ndescription: {}\n---\n\n# {name}\n\nUse this skill when the user asks to run the migrated source command `{source_name}`.\n\n## Command Template\n\n{template_body}\n",
         yaml_string(name),
-        yaml_string(&description),
+        yaml_string(&rewrite_external_agent_terms(description)),
     )
 }
 

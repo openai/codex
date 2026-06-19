@@ -6,7 +6,6 @@ use std::path::Path;
 
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
-use crate::model_visible::truncate_skill_description;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC;
 use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
@@ -18,6 +17,8 @@ use codex_utils_output_truncation::approx_token_count;
 
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
+const MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS: usize = 1_024;
+const TRUNCATED_SKILL_DESCRIPTION_SUFFIX: &str = "...";
 const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 100;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 pub const SKILL_DESCRIPTION_TRUNCATED_WARNING: &str = "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
@@ -487,7 +488,7 @@ impl<'a> SkillLine<'a> {
     }
 
     fn with_path(skill: &'a SkillMetadata, path: String) -> Self {
-        let description = truncate_skill_description(skill.description.as_str());
+        let description = truncate_default_context_skill_description(skill.description.as_str());
         Self {
             name: skill.name.as_str(),
             description,
@@ -539,6 +540,26 @@ impl<'a> SkillLine<'a> {
             format!("- {}: {} (file: {})", self.name, description, self.path)
         }
     }
+}
+
+fn truncate_default_context_skill_description(description: &str) -> Cow<'_, str> {
+    if description
+        .char_indices()
+        .nth(MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS)
+        .is_none()
+    {
+        return Cow::Borrowed(description);
+    }
+
+    let prefix_chars = MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS
+        .saturating_sub(TRUNCATED_SKILL_DESCRIPTION_SUFFIX.chars().count());
+    let prefix_end = description
+        .char_indices()
+        .nth(prefix_chars)
+        .map_or(description.len(), |(index, _)| index);
+    let mut truncated = description[..prefix_end].to_string();
+    truncated.push_str(TRUNCATED_SKILL_DESCRIPTION_SUFFIX);
+    Cow::Owned(truncated)
 }
 
 impl<'a> DescriptionBudgetLine<'a> {
@@ -908,8 +929,6 @@ fn prompt_scope_rank(scope: SkillScope) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_visible::MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS;
-    use crate::model_visible::TRUNCATED_SKILL_DESCRIPTION_SUFFIX;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -1036,11 +1055,11 @@ mod tests {
     }
 
     #[test]
-    fn rendering_caps_model_visible_descriptions_without_mutating_metadata() {
-        let description = "\u{1F4A1}".repeat(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS + 1);
+    fn default_context_caps_descriptions_without_mutating_metadata() {
+        let description = "\u{1F4A1}".repeat(MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS + 1);
         let skill = make_skill_with_description("long-skill", SkillScope::Repo, &description);
         let expected_description = "\u{1F4A1}".repeat(
-            MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS
+            MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS
                 - TRUNCATED_SKILL_DESCRIPTION_SUFFIX.chars().count(),
         ) + TRUNCATED_SKILL_DESCRIPTION_SUFFIX;
 
