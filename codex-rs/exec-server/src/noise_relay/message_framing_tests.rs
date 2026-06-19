@@ -7,6 +7,7 @@ use super::MAX_NOISE_JSONRPC_MESSAGE_LEN;
 use super::NOISE_RECORD_PLAINTEXT_LEN;
 use super::frame_jsonrpc_message;
 use crate::ExecServerError;
+use crate::connection::JsonRpcWireMessage;
 
 #[test]
 fn fragments_and_reassembles_large_jsonrpc_message() {
@@ -16,7 +17,7 @@ fn fragments_and_reassembles_large_jsonrpc_message() {
             "data": "x".repeat(128 * 1024),
         })),
     });
-    let framed = frame_jsonrpc_message(&message).unwrap();
+    let framed = frame_jsonrpc_message(&message.clone().into()).unwrap();
     assert!(framed.len() > 128 * 1024);
 
     let mut decoder = JsonRpcMessageDecoder::default();
@@ -25,7 +26,7 @@ fn fragments_and_reassembles_large_jsonrpc_message() {
         decoded.extend(decoder.push(record).unwrap());
     }
 
-    assert_eq!(decoded, vec![message]);
+    assert_eq!(decoded, vec![JsonRpcWireMessage::Single(message)]);
 }
 
 #[test]

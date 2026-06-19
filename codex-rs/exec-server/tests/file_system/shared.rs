@@ -4,8 +4,6 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::FILE_READ_CHUNK_SIZE;
 use codex_exec_server::FileMetadata;
-use codex_exec_server::FileSystemOperation;
-use codex_exec_server::FileSystemOperationOutput;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -194,55 +192,6 @@ async fn file_system_read_file_returns_bytes(
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"hello from trait");
-
-    Ok(())
-}
-
-#[test_case(FileSystemImplementation::Local ; "local")]
-#[test_case(FileSystemImplementation::Remote ; "remote")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_batch_preserves_operation_order(
-    implementation: FileSystemImplementation,
-) -> Result<()> {
-    let context = create_file_system_context(implementation).await?;
-    let file_system = context.file_system;
-
-    let tmp = TempDir::new()?;
-    let first_path = tmp.path().join("first.txt");
-    let second_path = tmp.path().join("second.txt");
-    std::fs::write(&first_path, "first")?;
-    std::fs::write(&second_path, "second")?;
-    let first_uri = PathUri::from_path(&first_path)?;
-    let second_uri = PathUri::from_path(&second_path)?;
-
-    let outputs = file_system
-        .execute_batch(
-            vec![
-                FileSystemOperation::ReadFile {
-                    path: first_uri.clone(),
-                },
-                FileSystemOperation::Canonicalize {
-                    path: second_uri.clone(),
-                },
-                FileSystemOperation::ReadFile { path: second_uri },
-            ],
-            /*sandbox*/ None,
-        )
-        .await
-        .with_context(|| format!("mode={implementation}"))?
-        .into_iter()
-        .collect::<std::io::Result<Vec<_>>>()?;
-
-    assert_eq!(
-        outputs,
-        vec![
-            FileSystemOperationOutput::ReadFile(b"first".to_vec()),
-            FileSystemOperationOutput::Canonicalize(PathUri::from_path(std::fs::canonicalize(
-                second_path
-            )?)?),
-            FileSystemOperationOutput::ReadFile(b"second".to_vec()),
-        ]
-    );
 
     Ok(())
 }

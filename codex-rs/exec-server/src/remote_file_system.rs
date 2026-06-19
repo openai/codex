@@ -9,6 +9,8 @@ use crate::CreateDirectoryOptions;
 use crate::ExecServerError;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
+use crate::ExecutorRpcBatchCall;
+use crate::ExecutorRpcBatchResult;
 use crate::FileMetadata;
 use crate::FileSystemReadStream;
 use crate::FileSystemResult;
@@ -16,6 +18,7 @@ use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 use crate::client::LazyRemoteExecServerClient;
+use crate::connection::MAX_RPC_BATCH_REQUESTS;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
@@ -24,6 +27,7 @@ use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsWriteFileParams;
+use crate::rpc::RpcBatchCall;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const NOT_FOUND_ERROR_CODE: i64 = -32004;
@@ -223,6 +227,43 @@ impl RemoteFileSystem {
             .map_err(map_remote_error)?;
         Ok(())
     }
+
+    async fn execute_rpc_batch(
+        &self,
+        calls: Vec<ExecutorRpcBatchCall>,
+    ) -> FileSystemResult<Vec<ExecutorRpcBatchResult>> {
+        if calls.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let mut decoded = Vec::with_capacity(calls.len());
+        let mut calls = calls.into_iter();
+        loop {
+            let call_chunk = calls
+                .by_ref()
+                .take(MAX_RPC_BATCH_REQUESTS)
+                .map(|call| RpcBatchCall {
+                    method: call.method,
+                    params: call.params,
+                })
+                .collect::<Vec<_>>();
+            if call_chunk.is_empty() {
+                break;
+            }
+
+            let results = client
+                .call_batch(call_chunk)
+                .await
+                .map_err(map_remote_error)?;
+            decoded.extend(
+                results
+                    .into_iter()
+                    .map(|result| result.map_err(map_remote_error)),
+            );
+        }
+        Ok(decoded)
+    }
 }
 
 impl ExecutorFileSystem for RemoteFileSystem {
@@ -309,6 +350,13 @@ impl ExecutorFileSystem for RemoteFileSystem {
             options,
             sandbox,
         ))
+    }
+
+    fn execute_rpc_batch<'a>(
+        &'a self,
+        calls: Vec<ExecutorRpcBatchCall>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ExecutorRpcBatchResult>> {
+        Box::pin(RemoteFileSystem::execute_rpc_batch(self, calls))
     }
 }
 
