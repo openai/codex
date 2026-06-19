@@ -17,7 +17,12 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -72,20 +77,62 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     }
 }
 
-pub fn with_managed_mitm_ca_readable_root(
+pub fn with_managed_mitm_ca_access(
     permission_profile: PermissionProfile,
-    managed_mitm_ca_trust_bundle_path: Option<&AbsolutePathBuf>,
+    network: &NetworkProxy,
     sandbox_policy_cwd: &Path,
 ) -> PermissionProfile {
-    let Some(managed_mitm_ca_trust_bundle_path) = managed_mitm_ca_trust_bundle_path else {
+    let Some(managed_mitm_ca_trust_bundle_path) = network.managed_mitm_ca_trust_bundle_path()
+    else {
         return permission_profile;
     };
+    let Some(managed_mitm_ca_private_key_path) = network.managed_mitm_ca_private_key_path() else {
+        return permission_profile;
+    };
+    with_managed_mitm_ca_paths(
+        permission_profile,
+        &managed_mitm_ca_trust_bundle_path,
+        &managed_mitm_ca_private_key_path,
+        sandbox_policy_cwd,
+    )
+}
+
+fn with_managed_mitm_ca_paths(
+    permission_profile: PermissionProfile,
+    managed_mitm_ca_trust_bundle_path: &AbsolutePathBuf,
+    managed_mitm_ca_private_key_path: &AbsolutePathBuf,
+    sandbox_policy_cwd: &Path,
+) -> PermissionProfile {
     let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
-    let file_system_sandbox_policy = file_system_sandbox_policy.with_additional_readable_roots(
+    let mut file_system_sandbox_policy = match file_system_sandbox_policy.kind {
+        FileSystemSandboxKind::Restricted => file_system_sandbox_policy,
+        FileSystemSandboxKind::Unrestricted => {
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            }])
+        }
+        FileSystemSandboxKind::ExternalSandbox => return permission_profile,
+    }
+    .with_additional_readable_roots(
         sandbox_policy_cwd,
         std::slice::from_ref(managed_mitm_ca_trust_bundle_path),
     );
+    let private_key_deny = FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: managed_mitm_ca_private_key_path.clone(),
+        },
+        access: FileSystemAccessMode::Deny,
+    };
+    if !file_system_sandbox_policy
+        .entries
+        .contains(&private_key_deny)
+    {
+        file_system_sandbox_policy.entries.push(private_key_deny);
+    }
     PermissionProfile::from_runtime_permissions_with_enforcement(
         permission_profile.enforcement(),
         &file_system_sandbox_policy,
@@ -166,7 +213,7 @@ impl PendingSandboxedExecRequest {
         command_cwd: &PathUri,
         sandbox_policy_cwd: &PathUri,
         effective_permission_profile: PermissionProfile,
-        managed_mitm_ca_trust_bundle_path: Option<&AbsolutePathBuf>,
+        network: Option<&NetworkProxy>,
     ) -> Result<Self, SandboxTransformError> {
         // TODO(anp): Move PathUri conversion into the platform sandbox implementations.
         let native_command_cwd = command_cwd.to_abs_path().map_err(|source| {
@@ -181,11 +228,14 @@ impl PendingSandboxedExecRequest {
                 source,
             }
         })?;
-        let effective_permission_profile = with_managed_mitm_ca_readable_root(
-            effective_permission_profile,
-            managed_mitm_ca_trust_bundle_path,
-            native_sandbox_policy_cwd.as_path(),
-        );
+        let effective_permission_profile =
+            network.map_or(effective_permission_profile.clone(), |network| {
+                with_managed_mitm_ca_access(
+                    effective_permission_profile,
+                    network,
+                    native_sandbox_policy_cwd.as_path(),
+                )
+            });
         let (effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
         Ok(Self {
@@ -316,15 +366,13 @@ impl SandboxManager {
             windows_sandbox_private_desktop,
         } = request;
         let additional_permissions = command.additional_permissions.take();
-        let managed_mitm_ca_trust_bundle_path =
-            network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
         let base_effective_permission_profile =
             effective_permission_profile(permissions, additional_permissions.as_ref());
         let pending_sandboxed_request = PendingSandboxedExecRequest::new(
             &command.cwd,
             sandbox_policy_cwd,
             base_effective_permission_profile.clone(),
-            managed_mitm_ca_trust_bundle_path.as_ref(),
+            network,
         );
         let (base_file_system_policy, base_network_policy) =
             base_effective_permission_profile.to_runtime_permissions();

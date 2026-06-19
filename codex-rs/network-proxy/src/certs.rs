@@ -134,6 +134,10 @@ fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
     ))
 }
 
+pub(crate) fn managed_ca_private_key_path(trust_bundle: &ManagedMitmCaTrustBundle) -> PathBuf {
+    trust_bundle.path.with_file_name(MANAGED_MITM_CA_KEY)
+}
+
 pub(crate) fn managed_ca_trust_bundle(
     env: &HashMap<&'static str, String>,
 ) -> Result<ManagedMitmCaTrustBundle> {
