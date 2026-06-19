@@ -308,6 +308,7 @@ impl NetworkProxyRuntimeSettings {
         let mitm_ca_trust_bundle = if config.network.mitm {
             let env = crate::certs::CUSTOM_CA_ENV_KEYS
                 .into_iter()
+                .chain([crate::certs::SSL_CERT_DIR_ENV_KEY])
                 .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
                 .collect();
             Some(crate::certs::managed_ca_trust_bundle(&env)?)

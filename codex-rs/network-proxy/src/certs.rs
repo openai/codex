@@ -23,6 +23,7 @@ use rama_tls_rustls::server::TlsAcceptorData;
 use sha2::Digest as _;
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -101,6 +102,7 @@ const MANAGED_MITM_CA_DIR: &str = "proxy";
 const MANAGED_MITM_CA_CERT: &str = "ca.pem";
 const MANAGED_MITM_CA_KEY: &str = "ca.key";
 const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
+pub(crate) const SSL_CERT_DIR_ENV_KEY: &str = "SSL_CERT_DIR";
 
 // Best-effort compatibility set for common child toolchains that accept a CA bundle path.
 // This is intentionally curated rather than pretending to cover every TLS client.
@@ -154,7 +156,12 @@ fn managed_ca_trust_bundle_for_cert_path(
                 .map(|value| (key, value.clone()))
         })
         .collect();
-    let trust_bundle = build_managed_ca_trust_bundle(cert_path)?;
+    let startup_cert_dir = env
+        .get(SSL_CERT_DIR_ENV_KEY)
+        .filter(|value| !value.is_empty())
+        .map(String::as_str);
+    let trust_bundle =
+        build_managed_ca_trust_bundle(cert_path, &startup_env_values, startup_cert_dir)?;
     let path = persist_managed_ca_trust_bundle(cert_path, &trust_bundle)?;
 
     Ok(ManagedMitmCaTrustBundle {
@@ -163,10 +170,14 @@ fn managed_ca_trust_bundle_for_cert_path(
     })
 }
 
-fn build_managed_ca_trust_bundle(managed_ca_cert_path: &Path) -> Result<String> {
+fn build_managed_ca_trust_bundle(
+    managed_ca_cert_path: &Path,
+    startup_env_values: &HashMap<&'static str, String>,
+    startup_cert_dir: Option<&str>,
+) -> Result<String> {
     let mut trust_bundle = String::new();
     let rustls_native_certs::CertificateResult { certs, errors, .. } =
-        rustls_native_certs::load_native_certs();
+        crate::native_certs::load_platform_native_certs();
     if !errors.is_empty() {
         warn!(
             native_root_error_count = errors.len(),
@@ -176,8 +187,103 @@ fn build_managed_ca_trust_bundle(managed_ca_cert_path: &Path) -> Result<String> 
     for cert in certs {
         push_certificate_pem(&mut trust_bundle, cert.as_ref());
     }
+    let mut appended_startup_paths = HashSet::new();
+    for path in CUSTOM_CA_ENV_KEYS
+        .into_iter()
+        .filter_map(|key| startup_env_values.get(key))
+        .map(PathBuf::from)
+    {
+        if path != managed_ca_cert_path
+            && !is_current_generated_trust_bundle_path(&path, managed_ca_cert_path)
+            && appended_startup_paths.insert(path.clone())
+        {
+            append_ca_certificates(&mut trust_bundle, &path)?;
+        }
+    }
+    if let Some(startup_cert_dir) = startup_cert_dir {
+        for path in std::env::split_paths(startup_cert_dir) {
+            if appended_startup_paths.insert(path.clone()) {
+                append_ca_directory_certificates(&mut trust_bundle, &path);
+            }
+        }
+    }
     append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
     Ok(trust_bundle)
+}
+
+fn append_ca_certificates(bundle: &mut String, path: &Path) -> Result<()> {
+    let pem = fs::read(path)
+        .with_context(|| format!("failed to read startup CA bundle: {}", path.display()))?;
+    let pem = String::from_utf8_lossy(&pem);
+    let contains_trusted_certificates = pem.contains("TRUSTED CERTIFICATE");
+    let normalized_pem = pem
+        .replace("BEGIN TRUSTED CERTIFICATE", "BEGIN CERTIFICATE")
+        .replace("END TRUSTED CERTIFICATE", "END CERTIFICATE");
+    let certs = CertificateDer::pem_slice_iter(normalized_pem.as_bytes())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to parse startup CA bundle: {}", path.display()))?;
+    if certs.is_empty() {
+        return Err(anyhow!(
+            "startup CA bundle contained no certificates: {}",
+            path.display()
+        ));
+    }
+    for cert in certs {
+        let cert = if contains_trusted_certificates {
+            first_der_item(cert.as_ref()).ok_or_else(|| {
+                anyhow!(
+                    "startup CA bundle contained an invalid trusted certificate: {}",
+                    path.display()
+                )
+            })?
+        } else {
+            cert.as_ref()
+        };
+        push_certificate_pem(bundle, cert);
+    }
+    Ok(())
+}
+
+fn append_ca_directory_certificates(bundle: &mut String, path: &Path) {
+    let rustls_native_certs::CertificateResult { certs, errors, .. } =
+        rustls_native_certs::load_certs_from_paths(None, Some(path));
+    if !errors.is_empty() {
+        warn!(
+            ca_path = %path.display(),
+            ca_error_count = errors.len(),
+            "encountered errors while loading startup CA directory"
+        );
+    }
+    for cert in certs {
+        push_certificate_pem(bundle, cert.as_ref());
+    }
+}
+
+fn first_der_item(der: &[u8]) -> Option<&[u8]> {
+    der_item_length(der).map(|length| &der[..length])
+}
+
+fn der_item_length(der: &[u8]) -> Option<usize> {
+    let &length_octet = der.get(1)?;
+    if length_octet & 0x80 == 0 {
+        return Some(2 + usize::from(length_octet)).filter(|length| *length <= der.len());
+    }
+
+    let length_octets = usize::from(length_octet & 0x7f);
+    if length_octets == 0 {
+        return None;
+    }
+
+    let length_end = 2usize.checked_add(length_octets)?;
+    let mut content_length = 0usize;
+    for &byte in der.get(2..length_end)? {
+        content_length = content_length
+            .checked_mul(256)?
+            .checked_add(usize::from(byte))?;
+    }
+    length_end
+        .checked_add(content_length)
+        .filter(|length| *length <= der.len())
 }
 
 fn is_current_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Path) -> bool {
@@ -508,17 +614,80 @@ mod tests {
     }
 
     #[test]
-    fn managed_ca_trust_bundle_records_startup_ca_env_values() {
+    fn managed_ca_trust_bundle_appends_startup_file_and_directory_certificates() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
-        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
-        let env = HashMap::from([("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string())]);
+        let startup_ca_bundle_path = dir.path().join("startup-ca.pem");
+        let startup_ca_dir = dir.path().join("startup-certs");
+        let (managed_ca_cert, _) = generate_ca().unwrap();
+        let (startup_ca_cert, startup_ca_key) = generate_ca().unwrap();
+        let (directory_ca_cert, _) = generate_ca().unwrap();
+        let mut trusted_ca_der = CertificateDer::from_pem_slice(startup_ca_cert.as_bytes())
+            .unwrap()
+            .as_ref()
+            .to_vec();
+        trusted_ca_der.extend_from_slice(&[0x30, 0x00]);
+        let mut trusted_ca_cert = String::new();
+        push_certificate_pem(&mut trusted_ca_cert, &trusted_ca_der);
+        let trusted_ca_cert = trusted_ca_cert.replace("CERTIFICATE", "TRUSTED CERTIFICATE");
+        fs::write(&managed_ca_cert_path, &managed_ca_cert).unwrap();
+        fs::write(
+            &startup_ca_bundle_path,
+            format!("{trusted_ca_cert}{startup_ca_key}"),
+        )
+        .unwrap();
+        fs::create_dir(&startup_ca_dir).unwrap();
+        fs::write(startup_ca_dir.join("directory-ca.pem"), &directory_ca_cert).unwrap();
+        let startup_ca_bundle_path = startup_ca_bundle_path.display().to_string();
+        let env = HashMap::from([
+            ("SSL_CERT_FILE", startup_ca_bundle_path.clone()),
+            (SSL_CERT_DIR_ENV_KEY, startup_ca_dir.display().to_string()),
+        ]);
+
         let trust_bundle =
             managed_ca_trust_bundle_for_cert_path(&managed_ca_cert_path, &env).unwrap();
         assert_eq!(
             trust_bundle.startup_env_values,
-            HashMap::from([("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string())])
+            HashMap::from([("SSL_CERT_FILE", startup_ca_bundle_path)])
         );
+        let baseline_bundle = fs::read_to_string(&trust_bundle.path).unwrap();
+        let baseline_certs = CertificateDer::pem_slice_iter(baseline_bundle.as_bytes())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        let expected_certs = [&startup_ca_cert, &directory_ca_cert, &managed_ca_cert]
+            .map(|cert| CertificateDer::from_pem_slice(cert.as_bytes()).unwrap());
+
+        assert!(
+            expected_certs
+                .iter()
+                .all(|cert| baseline_certs.contains(cert))
+        );
+        assert!(!baseline_bundle.contains(&startup_ca_key));
+        assert!(!baseline_bundle.contains("TRUSTED CERTIFICATE"));
+    }
+
+    #[test]
+    fn managed_ca_trust_bundle_skips_inherited_current_bundle() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        let inherited_bundle_path = dir.path().join("ca-bundle-parent.pem");
+        let (managed_ca_cert, _) = generate_ca().unwrap();
+        fs::write(&managed_ca_cert_path, &managed_ca_cert).unwrap();
+        fs::write(
+            &inherited_bundle_path,
+            format!("parent roots\n{managed_ca_cert}"),
+        )
+        .unwrap();
+        let env = HashMap::from([(
+            "REQUESTS_CA_BUNDLE",
+            inherited_bundle_path.display().to_string(),
+        )]);
+
+        let trust_bundle =
+            managed_ca_trust_bundle_for_cert_path(&managed_ca_cert_path, &env).unwrap();
+        let baseline_bundle = fs::read_to_string(&trust_bundle.path).unwrap();
+
+        assert_eq!(baseline_bundle.matches(&managed_ca_cert).count(), 1);
     }
 
     #[cfg(unix)]
