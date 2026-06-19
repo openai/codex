@@ -41,8 +41,22 @@ pub fn permission_profile_catalog(
         .map_err(std::io::Error::other)?;
     let requirements_toml = config_layer_stack.requirements_toml();
     let permissions = merge_managed_permission_profiles(permissions.as_ref(), requirements_toml)?;
-    validate_user_permission_profile_names(permissions.as_ref())?;
-    validate_required_permission_profile_catalog(requirements_toml, permissions.as_ref())?;
+
+    permission_profile_catalog_from_permissions(
+        config_layer_stack,
+        policy_cwd,
+        permissions.as_ref(),
+    )
+}
+
+pub(super) fn permission_profile_catalog_from_permissions(
+    config_layer_stack: &ConfigLayerStack,
+    policy_cwd: &Path,
+    permissions: Option<&PermissionsToml>,
+) -> std::io::Result<Vec<PermissionProfileCatalogEntry>> {
+    let requirements_toml = config_layer_stack.requirements_toml();
+    validate_user_permission_profile_names(permissions)?;
+    validate_required_permission_profile_catalog(requirements_toml, permissions)?;
 
     let mut catalog = [
         (BUILT_IN_READ_ONLY_PROFILE, PermissionProfile::read_only()),
@@ -63,7 +77,7 @@ pub fn permission_profile_catalog(
     })
     .collect::<Vec<_>>();
 
-    if let Some(permissions) = permissions.as_ref() {
+    if let Some(permissions) = permissions {
         catalog.extend(permissions.entries.iter().map(|(id, profile)| {
             let mut warnings = Vec::new();
             let allowed = compile_permission_profile_selection(
