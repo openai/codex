@@ -85,6 +85,10 @@ fn execute_request_with_id(cell_id: &str, source: &str) -> ExecuteRequest {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test holds the registry lock to observe terminal routing before removal"
+)]
 async fn terminal_cells_are_unrouted_before_they_are_unregistered() {
     let runtime = Arc::new(SessionRuntime::new(Arc::new(RecordingDelegate)));
     let cell_id = CellId::new("1");
@@ -123,6 +127,10 @@ async fn terminal_cells_are_unrouted_before_they_are_unregistered() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test holds the registry lock to force admission ahead of shutdown"
+)]
 async fn shutdown_rejects_cell_admission_queued_before_the_registry_lock() {
     let runtime = Arc::new(SessionRuntime::new(Arc::new(RecordingDelegate)));
     let cells = runtime.inner.cells.lock().await;
@@ -159,6 +167,10 @@ async fn shutdown_rejects_cell_admission_queued_before_the_registry_lock() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test holds the registry lock to force shutdown ahead of admission"
+)]
 async fn shutdown_rejects_cell_admission_queued_after_the_registry_lock() {
     let runtime = Arc::new(SessionRuntime::new(Arc::new(RecordingDelegate)));
     let cells = runtime.inner.cells.lock().await;
@@ -193,6 +205,10 @@ async fn shutdown_rejects_cell_admission_queued_after_the_registry_lock() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test holds the registry lock while cancelling a blocked shutdown future"
+)]
 async fn cancelling_shutdown_while_waiting_for_the_registry_lock_keeps_the_session_closed() {
     let runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
     let cells = runtime.inner.cells.lock().await;

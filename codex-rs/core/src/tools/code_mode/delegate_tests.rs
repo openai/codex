@@ -16,6 +16,10 @@ use crate::tools::router::ToolRouter;
 use crate::turn_diff_tracker::TurnDiffTracker;
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test holds turn state to keep notification delivery blocked until cancellation"
+)]
 async fn cancelled_notification_does_not_keep_the_turn_worker_alive() {
     let (session, turn) = make_session_and_context().await;
     let session = Arc::new(session);
