@@ -51,7 +51,7 @@ async fn processor_exit_reports_closed_virtual_stream() -> Result<()> {
         id: RequestId::Integer(1),
         result: serde_json::Value::Null,
     });
-    let ciphertext = harness_transport.encrypt(&frame_jsonrpc_message(&message)?)?;
+    let ciphertext = harness_transport.encrypt(&frame_jsonrpc_message(&message.clone().into())?)?;
     stream.receive_data(RelayData {
         seq: 0,
         segment_index: 0,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
 use tokio::sync::mpsc;
-use tokio::task::JoinSet;
 use tracing::debug;
 use tracing::warn;
 
@@ -9,7 +9,7 @@ use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
-use crate::protocol::INITIALIZED_METHOD;
+use crate::connection::MAX_RPC_BATCH_REQUESTS;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcRouter;
 use crate::rpc::RpcServerOutboundMessage;
@@ -20,7 +20,7 @@ use crate::server::ExecServerHandler;
 use crate::server::registry::build_router;
 use crate::server::session_registry::SessionRegistry;
 
-const MAX_CONCURRENT_READ_ONLY_REQUESTS: usize = 32;
+const MAX_RPC_BATCH_CONCURRENCY: usize = 32;
 
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
@@ -67,8 +67,6 @@ async fn run_connection(
         notifications,
         runtime_paths,
     ));
-    let mut read_only_tasks = JoinSet::new();
-    let mut read_only_requests_enabled = false;
 
     let outbound_task = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
@@ -85,33 +83,13 @@ async fn run_connection(
         }
     });
 
-    // Process inbound events sequentially to preserve initialize/initialized ordering.
-    loop {
+    while let Some(event) = incoming_rx.recv().await {
         if !handler.is_session_attached() {
             debug!("exec-server connection evicted after session resume");
             break;
         }
-        let event = tokio::select! {
-            result = read_only_tasks.join_next(), if !read_only_tasks.is_empty() => {
-                if !send_finished_request(result, &outgoing_tx).await {
-                    break;
-                }
-                continue;
-            }
-            event = incoming_rx.recv() => {
-                let Some(event) = event else {
-                    break;
-                };
-                event
-            }
-        };
         match event {
             JsonRpcConnectionEvent::MalformedMessage { reason } => {
-                if !drain_read_only_tasks(&mut read_only_tasks, &outgoing_tx, &mut disconnected_rx)
-                    .await
-                {
-                    break;
-                }
                 warn!("ignoring malformed exec-server message: {reason}");
                 if outgoing_tx
                     .send(RpcServerOutboundMessage::Error {
@@ -126,36 +104,6 @@ async fn run_connection(
             }
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_app_server_protocol::JSONRPCMessage::Request(request) => {
-                    if read_only_requests_enabled
-                        && router.is_request_concurrent(request.method.as_str())
-                    {
-                        if !limit_read_only_tasks(
-                            &mut read_only_tasks,
-                            &outgoing_tx,
-                            &mut disconnected_rx,
-                        )
-                        .await
-                        {
-                            break;
-                        }
-                        spawn_read_only_request(
-                            &mut read_only_tasks,
-                            Arc::clone(&router),
-                            Arc::clone(&handler),
-                            request,
-                        );
-                        continue;
-                    }
-
-                    if !drain_read_only_tasks(
-                        &mut read_only_tasks,
-                        &outgoing_tx,
-                        &mut disconnected_rx,
-                    )
-                    .await
-                    {
-                        break;
-                    }
                     let message = tokio::select! {
                         message = dispatch_request(
                             Arc::clone(&router),
@@ -174,15 +122,6 @@ async fn run_connection(
                     }
                 }
                 codex_app_server_protocol::JSONRPCMessage::Notification(notification) => {
-                    if !drain_read_only_tasks(
-                        &mut read_only_tasks,
-                        &outgoing_tx,
-                        &mut disconnected_rx,
-                    )
-                    .await
-                    {
-                        break;
-                    }
                     let Some(route) = router.notification_route(notification.method.as_str())
                     else {
                         warn!(
@@ -191,7 +130,6 @@ async fn run_connection(
                         );
                         break;
                     };
-                    let enables_read_only_requests = notification.method == INITIALIZED_METHOD;
                     let result = tokio::select! {
                         result = route(Arc::clone(&handler), notification) => result,
                         _ = disconnected_rx.changed() => {
@@ -205,20 +143,8 @@ async fn run_connection(
                         warn!("closing exec-server connection after protocol error: {err}");
                         break;
                     }
-                    if enables_read_only_requests {
-                        read_only_requests_enabled = true;
-                    }
                 }
                 codex_app_server_protocol::JSONRPCMessage::Response(response) => {
-                    if !drain_read_only_tasks(
-                        &mut read_only_tasks,
-                        &outgoing_tx,
-                        &mut disconnected_rx,
-                    )
-                    .await
-                    {
-                        break;
-                    }
                     warn!(
                         "closing exec-server connection after unexpected client response: {:?}",
                         response.id
@@ -226,15 +152,6 @@ async fn run_connection(
                     break;
                 }
                 codex_app_server_protocol::JSONRPCMessage::Error(error) => {
-                    if !drain_read_only_tasks(
-                        &mut read_only_tasks,
-                        &outgoing_tx,
-                        &mut disconnected_rx,
-                    )
-                    .await
-                    {
-                        break;
-                    }
                     warn!(
                         "closing exec-server connection after unexpected client error: {:?}",
                         error.id
@@ -242,6 +159,88 @@ async fn run_connection(
                     break;
                 }
             },
+            JsonRpcConnectionEvent::Batch(messages) => {
+                if messages.is_empty() || messages.len() > MAX_RPC_BATCH_REQUESTS {
+                    let message = if messages.is_empty() {
+                        "JSON-RPC batch must not be empty".to_string()
+                    } else {
+                        format!(
+                            "JSON-RPC batch contains {} requests; maximum is {MAX_RPC_BATCH_REQUESTS}",
+                            messages.len()
+                        )
+                    };
+                    if outgoing_tx
+                        .send(RpcServerOutboundMessage::Error {
+                            request_id: codex_app_server_protocol::RequestId::Integer(-1),
+                            error: invalid_request(message),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+
+                let batch = futures::stream::iter(messages)
+                    .map(|message| {
+                        let router = Arc::clone(&router);
+                        let handler = Arc::clone(&handler);
+                        async move {
+                            match message {
+                                codex_app_server_protocol::JSONRPCMessage::Request(request) => {
+                                    dispatch_request(router, handler, request).await
+                                }
+                                codex_app_server_protocol::JSONRPCMessage::Notification(_) => {
+                                    Some(RpcServerOutboundMessage::Error {
+                                        request_id: codex_app_server_protocol::RequestId::Integer(
+                                            -1,
+                                        ),
+                                        error: invalid_request(
+                                            "notifications cannot be sent in a JSON-RPC batch"
+                                                .to_string(),
+                                        ),
+                                    })
+                                }
+                                codex_app_server_protocol::JSONRPCMessage::Response(response) => {
+                                    Some(RpcServerOutboundMessage::Error {
+                                        request_id: response.id,
+                                        error: invalid_request(
+                                            "client responses cannot be sent in a JSON-RPC batch"
+                                                .to_string(),
+                                        ),
+                                    })
+                                }
+                                codex_app_server_protocol::JSONRPCMessage::Error(error) => {
+                                    Some(RpcServerOutboundMessage::Error {
+                                        request_id: error.id,
+                                        error: invalid_request(
+                                            "client errors cannot be sent in a JSON-RPC batch"
+                                                .to_string(),
+                                        ),
+                                    })
+                                }
+                            }
+                        }
+                    })
+                    .buffered(MAX_RPC_BATCH_CONCURRENCY)
+                    .filter_map(std::future::ready)
+                    .collect::<Vec<_>>();
+                let messages = tokio::select! {
+                    messages = batch => messages,
+                    _ = disconnected_rx.changed() => {
+                        debug!("exec-server transport disconnected while handling batch");
+                        break;
+                    }
+                };
+                if outgoing_tx
+                    .send(RpcServerOutboundMessage::Batch(messages))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             JsonRpcConnectionEvent::Disconnected { reason } => {
                 if let Some(reason) = reason {
                     debug!("exec-server connection disconnected: {reason}");
@@ -251,7 +250,6 @@ async fn run_connection(
         }
     }
 
-    read_only_tasks.abort_all();
     handler.shutdown().await;
     drop(handler);
     drop(outgoing_tx);
@@ -260,70 +258,6 @@ async fn run_connection(
         let _ = task.await;
     }
     let _ = outbound_task.await;
-}
-
-async fn limit_read_only_tasks(
-    tasks: &mut JoinSet<Option<RpcServerOutboundMessage>>,
-    outgoing_tx: &mpsc::Sender<RpcServerOutboundMessage>,
-    disconnected_rx: &mut tokio::sync::watch::Receiver<bool>,
-) -> bool {
-    while tasks.len() >= MAX_CONCURRENT_READ_ONLY_REQUESTS {
-        if !drain_one_read_only_task(tasks, outgoing_tx, disconnected_rx).await {
-            return false;
-        }
-    }
-    true
-}
-
-async fn drain_read_only_tasks(
-    tasks: &mut JoinSet<Option<RpcServerOutboundMessage>>,
-    outgoing_tx: &mpsc::Sender<RpcServerOutboundMessage>,
-    disconnected_rx: &mut tokio::sync::watch::Receiver<bool>,
-) -> bool {
-    while !tasks.is_empty() {
-        if !drain_one_read_only_task(tasks, outgoing_tx, disconnected_rx).await {
-            return false;
-        }
-    }
-    true
-}
-
-async fn drain_one_read_only_task(
-    tasks: &mut JoinSet<Option<RpcServerOutboundMessage>>,
-    outgoing_tx: &mpsc::Sender<RpcServerOutboundMessage>,
-    disconnected_rx: &mut tokio::sync::watch::Receiver<bool>,
-) -> bool {
-    let result = tokio::select! {
-        result = tasks.join_next() => result,
-        _ = disconnected_rx.changed() => {
-            debug!("exec-server transport disconnected while handling read-only request");
-            return false;
-        }
-    };
-    send_finished_request(result, outgoing_tx).await
-}
-
-async fn send_finished_request(
-    result: Option<Result<Option<RpcServerOutboundMessage>, tokio::task::JoinError>>,
-    outgoing_tx: &mpsc::Sender<RpcServerOutboundMessage>,
-) -> bool {
-    match result {
-        Some(Ok(Some(message))) => outgoing_tx.send(message).await.is_ok(),
-        Some(Ok(None)) | None => true,
-        Some(Err(err)) => {
-            warn!("read-only exec-server request task failed: {err}");
-            true
-        }
-    }
-}
-
-fn spawn_read_only_request(
-    tasks: &mut JoinSet<Option<RpcServerOutboundMessage>>,
-    router: Arc<RpcRouter<ExecServerHandler>>,
-    handler: Arc<ExecServerHandler>,
-    request: codex_app_server_protocol::JSONRPCRequest,
-) {
-    tasks.spawn(dispatch_request(router, handler, request));
 }
 
 async fn dispatch_request(
@@ -370,11 +304,16 @@ mod tests {
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
+    use crate::protocol::ENVIRONMENT_INFO_METHOD;
     use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
     use crate::protocol::EXEC_TERMINATE_METHOD;
+    use crate::protocol::EnvironmentInfo;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
+    use crate::protocol::FS_READ_DIRECTORY_METHOD;
+    use crate::protocol::FsReadDirectoryParams;
+    use crate::protocol::FsReadDirectoryResponse;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeParams;
@@ -383,6 +322,81 @@ mod tests {
     use crate::protocol::TerminateParams;
     use crate::protocol::TerminateResponse;
     use crate::server::session_registry::SessionRegistry;
+
+    #[tokio::test]
+    async fn json_rpc_batch_dispatches_generic_requests() {
+        let registry = SessionRegistry::new();
+        let (mut writer, mut lines, task) = spawn_test_connection(registry, "batch");
+
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        let cwd = PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI");
+        write_batch(
+            &mut writer,
+            &[
+                JSONRPCMessage::Request(JSONRPCRequest {
+                    id: RequestId::Integer(2),
+                    method: ENVIRONMENT_INFO_METHOD.to_string(),
+                    params: Some(serde_json::to_value(()).expect("serialize params")),
+                    trace: None,
+                }),
+                JSONRPCMessage::Request(JSONRPCRequest {
+                    id: RequestId::Integer(3),
+                    method: FS_READ_DIRECTORY_METHOD.to_string(),
+                    params: Some(
+                        serde_json::to_value(FsReadDirectoryParams {
+                            path: cwd,
+                            sandbox: None,
+                        })
+                        .expect("serialize fs/readDirectory params"),
+                    ),
+                    trace: None,
+                }),
+            ],
+        )
+        .await;
+
+        let messages = read_batch(&mut lines).await;
+        let mut responses = HashMap::new();
+        for message in messages {
+            match message {
+                JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
+                    responses.insert(id, result);
+                }
+                JSONRPCMessage::Error(error) => panic!("unexpected JSON-RPC error: {error:?}"),
+                other => panic!("expected JSON-RPC response, got {other:?}"),
+            }
+        }
+        let environment_info = responses
+            .remove(&RequestId::Integer(2))
+            .expect("environment/info response");
+        let _: EnvironmentInfo =
+            serde_json::from_value(environment_info).expect("decode environment/info response");
+        let read_directory = responses
+            .remove(&RequestId::Integer(3))
+            .expect("fs/readDirectory response");
+        let _: FsReadDirectoryResponse =
+            serde_json::from_value(read_directory).expect("decode fs/readDirectory response");
+        assert!(responses.is_empty());
+
+        drop(writer);
+        drop(lines);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+    }
 
     #[tokio::test]
     async fn transport_disconnect_detaches_session_during_in_flight_read() {
@@ -529,6 +543,12 @@ mod tests {
         writer.write_all(b"\n").await.expect("write newline");
     }
 
+    async fn write_batch(writer: &mut DuplexStream, messages: &[JSONRPCMessage]) {
+        let encoded = serde_json::to_vec(messages).expect("serialize JSON-RPC batch");
+        writer.write_all(&encoded).await.expect("write batch");
+        writer.write_all(b"\n").await.expect("write newline");
+    }
+
     async fn read_response<T: DeserializeOwned>(
         lines: &mut Lines<BufReader<DuplexStream>>,
         expected_id: i64,
@@ -546,6 +566,15 @@ mod tests {
             JSONRPCMessage::Error(error) => panic!("unexpected JSON-RPC error: {error:?}"),
             other => panic!("expected JSON-RPC response, got {other:?}"),
         }
+    }
+
+    async fn read_batch(lines: &mut Lines<BufReader<DuplexStream>>) -> Vec<JSONRPCMessage> {
+        let line = lines
+            .next_line()
+            .await
+            .expect("read batch")
+            .expect("batch line");
+        serde_json::from_str(&line).expect("decode JSON-RPC batch")
     }
 
     fn exec_params(process_id: ProcessId) -> ExecParams {

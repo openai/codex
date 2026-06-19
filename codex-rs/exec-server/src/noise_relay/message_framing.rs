@@ -1,6 +1,5 @@
-use codex_app_server_protocol::JSONRPCMessage;
-
 use crate::ExecServerError;
+use crate::connection::JsonRpcWireMessage;
 
 const LENGTH_PREFIX_BYTES: usize = size_of::<u32>();
 const MAX_NOISE_JSONRPC_MESSAGE_LEN: usize = 64 * 1024 * 1024;
@@ -12,7 +11,9 @@ pub(crate) const NOISE_RECORD_PLAINTEXT_LEN: usize = 60 * 1024;
 /// exec-server responses can be much larger. A four-byte authenticated length
 /// prefix lets the caller split this byte stream into bounded Noise records and
 /// lets the receiver reconstruct exact JSON-RPC message boundaries.
-pub(crate) fn frame_jsonrpc_message(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
+pub(crate) fn frame_jsonrpc_message(
+    message: &JsonRpcWireMessage,
+) -> Result<Vec<u8>, ExecServerError> {
     let mut framed = vec![0; LENGTH_PREFIX_BYTES];
     serde_json::to_writer(&mut framed, message)?;
     let message_len = framed.len() - LENGTH_PREFIX_BYTES;
@@ -39,7 +40,7 @@ impl JsonRpcMessageDecoder {
     pub(crate) fn push(
         &mut self,
         plaintext_record: &[u8],
-    ) -> Result<Vec<JSONRPCMessage>, ExecServerError> {
+    ) -> Result<Vec<JsonRpcWireMessage>, ExecServerError> {
         if plaintext_record.len() > NOISE_RECORD_PLAINTEXT_LEN {
             return Err(ExecServerError::Protocol(
                 "Noise relay plaintext record exceeds maximum length".to_string(),

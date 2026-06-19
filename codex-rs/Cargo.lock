@@ -3049,6 +3049,7 @@ dependencies = [
  "codex-utils-path-uri",
  "futures",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
