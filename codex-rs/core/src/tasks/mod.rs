@@ -424,24 +424,9 @@ impl Session {
                     .await;
                 }
                 if !task_cancellation_token.is_cancelled() {
-                    match task_result {
-                        Ok(last_agent_message) => {
-                            // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                            sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
-                                .await;
-                        }
-                        Err(CodexErr::TurnAborted) => {
-                            sess.on_task_aborted().await;
-                        }
-                        Err(err) => {
-                            warn!(%err, "session task returned an unexpected error");
-                            sess.on_task_finished(
-                                Arc::clone(&ctx_for_finish),
-                                /*last_agent_message*/ None,
-                            )
-                            .await;
-                        }
-                    }
+                    // Finish uniformly from the spawn site so all tasks share the same lifecycle.
+                    sess.on_task_finished(Arc::clone(&ctx_for_finish), task_result)
+                        .await;
                 }
                 done_clone.notify_waiters();
             }
@@ -575,32 +560,19 @@ impl Session {
         true
     }
 
-    async fn on_task_aborted(self: &Arc<Self>) {
-        let Some(mut active_turn) = self.take_active_turn().await else {
-            return;
-        };
-        let Some(task) = active_turn.task.take() else {
-            return;
-        };
-
-        task.turn_context
-            .turn_metadata_state
-            .cancel_git_enrichment_task();
-        // The task is finalizing itself, so dropping this handle must not abort it.
-        task.handle.detach();
-
-        let reason = TurnAbortReason::Interrupted;
-        self.send_turn_aborted_event(task.turn_context.as_ref(), reason.clone())
-            .await;
-        self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
-            .await;
-    }
-
     pub async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-        last_agent_message: Option<String>,
+        task_result: SessionTaskResult,
     ) {
+        let (last_agent_message, abort_reason) = match task_result {
+            Ok(last_agent_message) => (last_agent_message, None),
+            Err(CodexErr::TurnAborted) => (None, Some(TurnAbortReason::Interrupted)),
+            Err(err) => {
+                warn!(%err, "session task returned an unexpected error");
+                (None, None)
+            }
+        };
         turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
@@ -772,25 +744,36 @@ impl Session {
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
-        let time_to_first_token_ms = turn_context
-            .turn_timing_state
-            .time_to_first_token_ms()
-            .await;
         self.services
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
                 turn_id: turn_context.sub_id.clone(),
                 profile: turn_context.turn_timing_state.complete_profile(),
             });
-        self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
-            .await;
-        let event = EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: turn_context.sub_id.clone(),
-            last_agent_message,
-            completed_at,
-            duration_ms,
-            time_to_first_token_ms,
-        });
+        let event = if let Some(reason) = abort_reason {
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
+                .await;
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(turn_context.sub_id.clone()),
+                reason,
+                completed_at,
+                duration_ms,
+            })
+        } else {
+            let time_to_first_token_ms = turn_context
+                .turn_timing_state
+                .time_to_first_token_ms()
+                .await;
+            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
+                .await;
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_context.sub_id.clone(),
+                last_agent_message,
+                completed_at,
+                duration_ms,
+                time_to_first_token_ms,
+            })
+        };
         self.send_event(turn_context.as_ref(), event).await;
         self.services
             .guardian_rejection_circuit_breaker
@@ -890,33 +873,29 @@ impl Session {
             }
         }
 
-        self.send_turn_aborted_event(task.turn_context.as_ref(), reason)
-            .await;
-    }
-
-    async fn send_turn_aborted_event(&self, turn_context: &TurnContext, reason: TurnAbortReason) {
-        let (completed_at, duration_ms) = turn_context
+        let (completed_at, duration_ms) = task
+            .turn_context
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
         self.services
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
-                turn_id: turn_context.sub_id.clone(),
-                profile: turn_context.turn_timing_state.complete_profile(),
+                turn_id: task.turn_context.sub_id.clone(),
+                profile: task.turn_context.turn_timing_state.complete_profile(),
             });
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: Some(turn_context.sub_id.clone()),
+            turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
             completed_at,
             duration_ms,
         });
-        self.send_event(turn_context, event).await;
+        self.send_event(task.turn_context.as_ref(), event).await;
         self.services
             .guardian_rejection_circuit_breaker
             .lock()
             .await
-            .clear_turn(&turn_context.sub_id);
+            .clear_turn(&task.turn_context.sub_id);
     }
 }
 
