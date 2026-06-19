@@ -277,6 +277,7 @@ fn resolved_local_environments<const N: usize>(
                 )
             })
             .collect(),
+        starting: Vec::new(),
     }
 }
 

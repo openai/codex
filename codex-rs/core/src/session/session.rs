@@ -826,6 +826,7 @@ impl Session {
                 default_shell.clone(),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
+                config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;

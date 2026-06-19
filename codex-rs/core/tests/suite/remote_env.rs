@@ -55,6 +55,7 @@ use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tempfile::TempDir;
@@ -296,6 +297,39 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
         "remote shell command should exit successfully",
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_executor_reaches_model_before_remote_environment_is_ready() -> Result<()> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
+        .with_config(|config| {
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        });
+
+    let test = tokio::time::timeout(Duration::from_secs(5), builder.build(&server))
+        .await
+        .context("thread startup should not wait for the remote environment")??;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        test.submit_turn("respond before the environment is ready"),
+    )
+    .await
+    .context("turn should reach the model before the remote environment is ready")??;
+
+    response_mock.single_request();
     Ok(())
 }
 
