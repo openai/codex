@@ -108,6 +108,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         sandbox: SandboxType::None,
         sandbox_requested: false,
         permissions: &permissions,
+        exec_server_permissions: &permissions,
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &sandbox_policy_cwd,
