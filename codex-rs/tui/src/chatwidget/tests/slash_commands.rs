@@ -2293,8 +2293,9 @@ async fn slash_memory_update_reports_stubbed_feature() {
 }
 
 #[tokio::test]
-async fn slash_resume_opens_picker() {
+async fn slash_resume_opens_picker_while_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
 
     chat.dispatch_command(SlashCommand::Resume);
 
@@ -2350,8 +2351,9 @@ async fn slash_delete_confirmation_requests_current_thread_delete() {
 }
 
 #[tokio::test]
-async fn slash_resume_with_arg_requests_named_session() {
+async fn slash_resume_with_arg_requests_named_session_while_task_running() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
 
     chat.bottom_pane.set_composer_text(
         "/resume my-saved-thread".to_string(),
