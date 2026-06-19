@@ -14,6 +14,8 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL: usize = 10_000;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ExecuteRequest {
+    /// A client-generated nonce, unique within the owning code-mode session.
+    pub cell_id: CellId,
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,

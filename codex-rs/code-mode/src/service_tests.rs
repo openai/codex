@@ -57,12 +57,11 @@ impl CodeModeSessionDelegate for ReleasableToolDelegate {
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
     }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 fn execute_request(source: &str) -> ExecuteRequest {
     ExecuteRequest {
+        cell_id: cell_id("1"),
         tool_call_id: "call_1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
@@ -87,13 +86,7 @@ fn echo_tool() -> ToolDefinition {
 }
 
 async fn execute(service: &CodeModeService, request: ExecuteRequest) -> RuntimeResponse {
-    service
-        .execute(request)
-        .await
-        .unwrap()
-        .initial_response()
-        .await
-        .unwrap()
+    service.execute(request).await.unwrap()
 }
 
 #[tokio::test]
@@ -140,6 +133,7 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
     let same_session = execute(
         &first_session,
         ExecuteRequest {
+            cell_id: cell_id("2"),
             source: r#"text(String(load("key")));"#.to_string(),
             yield_time_ms: None,
             ..execute_request("")
@@ -190,7 +184,7 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
 async fn shutdown_interrupts_cpu_bound_cells() {
     let service = CodeModeService::new();
 
-    let cell = service
+    let response = service
         .execute(ExecuteRequest {
             source: "while (true) {}".to_string(),
             ..execute_request("")
@@ -198,7 +192,7 @@ async fn shutdown_interrupts_cpu_bound_cells() {
         .await
         .unwrap();
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        response,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),

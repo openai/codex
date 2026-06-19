@@ -5,6 +5,8 @@ mod types;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
@@ -64,7 +66,14 @@ impl CellActor {
             PendingRuntimeMode::PauseUntilResumed,
         )?;
         let cancellation_token = session_shutdown_token.child_token();
-        let handle = CellHandle::new(command_tx);
+        let termination_token = CancellationToken::new();
+        let accepting_requests = Arc::new(AtomicBool::new(true));
+        let handle = CellHandle::new(
+            command_tx,
+            cancellation_token.clone(),
+            termination_token.clone(),
+            Arc::clone(&accepting_requests),
+        );
         let task = run_cell(
             host,
             CellContext {
@@ -72,6 +81,8 @@ impl CellActor {
                 runtime_control_tx,
                 runtime_terminate_handle,
                 cancellation_token,
+                termination_token,
+                accepting_requests,
                 session_shutdown_token,
             },
             event_rx,
@@ -92,6 +103,8 @@ struct CellContext {
     runtime_control_tx: std::sync::mpsc::Sender<RuntimeControlCommand>,
     runtime_terminate_handle: v8::IsolateHandle,
     cancellation_token: CancellationToken,
+    termination_token: CancellationToken,
+    accepting_requests: Arc<AtomicBool>,
     session_shutdown_token: CancellationToken,
 }
 
@@ -116,6 +129,8 @@ async fn run_cell<H: CellHost>(
         runtime_control_tx,
         runtime_terminate_handle,
         cancellation_token,
+        termination_token,
+        accepting_requests,
         session_shutdown_token,
     } = context;
     let mut content_items = Vec::new();
@@ -174,6 +189,7 @@ async fn run_cell<H: CellHost>(
                 match command {
                     CellCommand::Observe { mode, response_tx } => {
                         if let Some(event) = completed_event.take() {
+                            accepting_requests.store(false, Ordering::Release);
                             let _ = response_tx.send(Ok(event));
                             break;
                         }
@@ -199,6 +215,7 @@ async fn run_cell<H: CellHost>(
                     }
                     CellCommand::Terminate { response_tx } => {
                         if let Some(event) = completed_event.take() {
+                            accepting_requests.store(false, Ordering::Release);
                             if let Some(response_tx) = response_tx {
                                 let _ = response_tx.send(Ok(event));
                             }
@@ -226,6 +243,7 @@ async fn run_cell<H: CellHost>(
                                 CallbackCompletion::Cancel,
                             ).await;
                             send_termination_events(
+                                &accepting_requests,
                                 observer.take(),
                                 termination.take(),
                                 CellEvent::Terminated {
@@ -261,7 +279,7 @@ async fn run_cell<H: CellHost>(
             }, if !yield_deadline_elapsed => {
                 let Some(event) = maybe_event else {
                     runtime_closed = true;
-                    if termination.is_some() {
+                    if termination.is_some() || session_shutdown_token.is_cancelled() {
                         finish_callbacks(
                             &cancellation_token,
                             &mut notification_tasks,
@@ -269,6 +287,7 @@ async fn run_cell<H: CellHost>(
                             CallbackCompletion::Cancel,
                         ).await;
                         send_termination_events(
+                            &accepting_requests,
                             observer.take(),
                             termination.take(),
                             CellEvent::Terminated {
@@ -283,7 +302,32 @@ async fn run_cell<H: CellHost>(
                             &mut notification_tasks,
                             &mut tool_tasks,
                             CallbackCompletion::DrainNotifications,
-                        ).await;
+                        )
+                        .await;
+                        if termination_token.is_cancelled() {
+                            let termination =
+                                receive_queued_termination(&mut command_rx).await;
+                            send_termination_events(
+                                &accepting_requests,
+                                observer.take(),
+                                termination,
+                                CellEvent::Terminated {
+                                    content_items: std::mem::take(&mut content_items),
+                                },
+                            );
+                            break;
+                        }
+                        if session_shutdown_token.is_cancelled() {
+                            send_termination_events(
+                                &accepting_requests,
+                                observer.take(),
+                                None,
+                                CellEvent::Terminated {
+                                    content_items: std::mem::take(&mut content_items),
+                                },
+                            );
+                            break;
+                        }
                         let event = CellEvent::Completed {
                             content_items: std::mem::take(&mut content_items),
                             error_text: Some("exec runtime ended unexpectedly".to_string()),
@@ -292,6 +336,7 @@ async fn run_cell<H: CellHost>(
                             event,
                             &mut observer,
                             &mut completed_event,
+                            &accepting_requests,
                         ) {
                             break;
                         }
@@ -369,7 +414,7 @@ async fn run_cell<H: CellHost>(
                     RuntimeEvent::Result { stored_value_writes, error_text } => {
                         runtime_closed = true;
                         yield_timer = None;
-                        if termination.is_some() {
+                        if termination.is_some() || session_shutdown_token.is_cancelled() {
                             finish_callbacks(
                                 &cancellation_token,
                                 &mut notification_tasks,
@@ -377,6 +422,7 @@ async fn run_cell<H: CellHost>(
                                 CallbackCompletion::Cancel,
                             ).await;
                             send_termination_events(
+                                &accepting_requests,
                                 observer.take(),
                                 termination.take(),
                                 CellEvent::Terminated {
@@ -390,8 +436,54 @@ async fn run_cell<H: CellHost>(
                             &mut notification_tasks,
                             &mut tool_tasks,
                             CallbackCompletion::DrainNotifications,
-                        ).await;
-                        host.commit_stored_values(stored_value_writes).await;
+                        )
+                        .await;
+                        if termination_token.is_cancelled() {
+                            let termination =
+                                receive_queued_termination(&mut command_rx).await;
+                            send_termination_events(
+                                &accepting_requests,
+                                observer.take(),
+                                termination,
+                                CellEvent::Terminated {
+                                    content_items: std::mem::take(&mut content_items),
+                                },
+                            );
+                            break;
+                        }
+                        if session_shutdown_token.is_cancelled() {
+                            send_termination_events(
+                                &accepting_requests,
+                                observer.take(),
+                                None,
+                                CellEvent::Terminated {
+                                    content_items: std::mem::take(&mut content_items),
+                                },
+                            );
+                            break;
+                        }
+                        let committed = tokio::select! {
+                            biased;
+                            _ = termination_token.cancelled() => false,
+                            _ = session_shutdown_token.cancelled() => false,
+                            _ = host.commit_stored_values(stored_value_writes) => true,
+                        };
+                        if !committed || session_shutdown_token.is_cancelled() {
+                            let termination = if termination_token.is_cancelled() {
+                                receive_queued_termination(&mut command_rx).await
+                            } else {
+                                None
+                            };
+                            send_termination_events(
+                                &accepting_requests,
+                                observer.take(),
+                                termination,
+                                CellEvent::Terminated {
+                                    content_items: std::mem::take(&mut content_items),
+                                },
+                            );
+                            break;
+                        }
                         let event = CellEvent::Completed {
                             content_items: std::mem::take(&mut content_items),
                             error_text,
@@ -400,6 +492,7 @@ async fn run_cell<H: CellHost>(
                             event,
                             &mut observer,
                             &mut completed_event,
+                            &accepting_requests,
                         ) {
                             break;
                         }
@@ -415,6 +508,7 @@ async fn run_cell<H: CellHost>(
         }
     }
     // Reject requests that arrive while asynchronous terminal cleanup runs.
+    accepting_requests.store(false, Ordering::Release);
     drop(command_rx.take());
     begin_termination(
         &runtime_tx,
@@ -432,12 +526,30 @@ async fn run_cell<H: CellHost>(
     host.closed().await;
 }
 
+async fn receive_queued_termination(
+    command_rx: &mut Option<mpsc::UnboundedReceiver<CellCommand>>,
+) -> Option<Termination> {
+    loop {
+        let command = command_rx.as_mut()?.recv().await?;
+        match command {
+            CellCommand::Observe { response_tx, .. } => {
+                let _ = response_tx.send(Err(CellError::Busy));
+            }
+            CellCommand::Terminate { response_tx } => {
+                return Some(Termination { response_tx });
+            }
+        }
+    }
+}
+
 fn send_or_buffer_completion(
     event: CellEvent,
     observer: &mut Option<Observer>,
     completed_event: &mut Option<CellEvent>,
+    accepting_requests: &AtomicBool,
 ) -> bool {
     if observer.is_some() {
+        accepting_requests.store(false, Ordering::Release);
         send_observer_event(observer.take(), event);
         true
     } else {
@@ -453,10 +565,12 @@ fn send_observer_event(observer: Option<Observer>, event: CellEvent) {
 }
 
 fn send_termination_events(
+    accepting_requests: &AtomicBool,
     observer: Option<Observer>,
     termination: Option<Termination>,
     event: CellEvent,
 ) {
+    accepting_requests.store(false, Ordering::Release);
     send_observer_event(observer, event.clone());
     if let Some(response_tx) = termination.and_then(|termination| termination.response_tx) {
         let _ = response_tx.send(Ok(event));

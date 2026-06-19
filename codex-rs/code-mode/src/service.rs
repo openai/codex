@@ -16,14 +16,12 @@ use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
 use codex_code_mode_protocol::NotificationFuture;
 use codex_code_mode_protocol::RuntimeResponse;
-use codex_code_mode_protocol::StartedCell;
 use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::WaitToPendingOutcome;
 use codex_code_mode_protocol::WaitToPendingRequest;
 use serde_json::Value as JsonValue;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::SessionRuntime;
@@ -52,8 +50,6 @@ impl CodeModeSessionDelegate for NoopCodeModeSessionDelegate {
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
     }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 #[derive(Default)]
@@ -87,9 +83,10 @@ impl CodeModeService {
         }
     }
 
-    pub async fn execute(&self, request: ExecuteRequest) -> Result<StartedCell, String> {
+    pub async fn execute(&self, request: ExecuteRequest) -> Result<RuntimeResponse, String> {
         let yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
-        let started = self
+        let cell_id = request.cell_id.clone();
+        let event = self
             .runtime
             .execute(
                 runtime_request(request),
@@ -97,35 +94,20 @@ impl CodeModeService {
             )
             .await
             .map_err(|error| error.to_string())?;
-        let cell_id = protocol_cell_id(&started.cell_id);
-        let response_cell_id = cell_id.clone();
-        let (response_tx, response_rx) = oneshot::channel();
-        tokio::spawn(async move {
-            let response = started
-                .initial_event()
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|event| runtime_response(&response_cell_id, event));
-            let _ = response_tx.send(response);
-        });
-        Ok(StartedCell::from_result_receiver(cell_id, response_rx))
+        runtime_response(&cell_id, event)
     }
 
     pub async fn execute_to_pending(
         &self,
         request: ExecuteRequest,
     ) -> Result<ExecuteToPendingOutcome, String> {
-        let started = self
+        let cell_id = request.cell_id.clone();
+        let event = self
             .runtime
             .execute(
                 runtime_request(request),
                 runtime::ObserveMode::PendingFrontier,
             )
-            .await
-            .map_err(|error| error.to_string())?;
-        let cell_id = protocol_cell_id(&started.cell_id);
-        let event = started
-            .initial_event()
             .await
             .map_err(|error| error.to_string())?;
         pending_outcome(&cell_id, event)
@@ -221,7 +203,7 @@ impl CodeModeSession for CodeModeService {
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,
-    ) -> CodeModeSessionResultFuture<'a, StartedCell> {
+    ) -> CodeModeSessionResultFuture<'a, RuntimeResponse> {
         Box::pin(CodeModeService::execute(self, request))
     }
 
@@ -284,15 +266,11 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
             )
             .await
     }
-
-    async fn cell_closed(&self, cell_id: &runtime::CellId) -> Result<(), String> {
-        self.delegate.cell_closed(&protocol_cell_id(cell_id));
-        Ok(())
-    }
 }
 
 fn runtime_request(request: ExecuteRequest) -> runtime::ExecuteRequest {
     runtime::ExecuteRequest {
+        cell_id: runtime_cell_id(&request.cell_id),
         tool_call_id: request.tool_call_id,
         enabled_tools: request
             .enabled_tools

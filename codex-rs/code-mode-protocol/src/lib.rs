@@ -38,7 +38,6 @@ pub use session::CodeModeSessionProvider;
 pub use session::CodeModeSessionProviderFuture;
 pub use session::CodeModeSessionResultFuture;
 pub use session::NotificationFuture;
-pub use session::StartedCell;
 pub use session::ToolInvocationFuture;
 
 pub const PUBLIC_TOOL_NAME: &str = "exec";

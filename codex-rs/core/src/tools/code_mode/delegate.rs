@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
@@ -11,7 +9,6 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::ExecContext;
@@ -24,7 +21,6 @@ use crate::tools::parallel::ToolCallRuntime;
 pub(super) struct CodeModeDispatchBroker {
     dispatch_tx: async_channel::Sender<DispatchMessage>,
     dispatch_rx: async_channel::Receiver<DispatchMessage>,
-    dispatch_gates: Arc<Mutex<HashMap<CellId, watch::Sender<bool>>>>,
 }
 
 impl CodeModeDispatchBroker {
@@ -33,16 +29,7 @@ impl CodeModeDispatchBroker {
         Self {
             dispatch_tx,
             dispatch_rx,
-            dispatch_gates: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    pub(super) fn mark_cell_ready_for_dispatch(&self, cell_id: &CellId) {
-        dispatch_gate(&self.dispatch_gates, cell_id).send_replace(true);
-    }
-
-    pub(super) fn close_cell(&self, cell_id: &CellId) {
-        remove_dispatch_gate(&self.dispatch_gates, cell_id);
     }
 
     pub(super) fn start_turn_worker(
@@ -59,7 +46,6 @@ impl CodeModeDispatchBroker {
         );
         let host = Arc::new(CoreTurnHost { exec, tool_runtime });
         let dispatch_rx = self.dispatch_rx.clone();
-        let dispatch_gates = Arc::clone(&self.dispatch_gates);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         tokio::spawn(async move {
             loop {
@@ -78,17 +64,12 @@ impl CodeModeDispatchBroker {
                         cancellation_token,
                         response_tx,
                     } => {
-                        let response = if wait_until_cell_ready_for_dispatch(
-                            &dispatch_gates,
-                            &cell_id,
-                            &cancellation_token,
-                        )
-                        .await
-                        {
-                            host.notify(call_id, cell_id, text).await
-                        } else {
-                            remove_dispatch_gate(&dispatch_gates, &cell_id);
-                            Err("code mode notification cancelled".to_string())
+                        let response = tokio::select! {
+                            biased;
+                            _ = cancellation_token.cancelled() => {
+                                Err("code mode notification cancelled".to_string())
+                            }
+                            response = host.notify(call_id, cell_id, text) => response,
                         };
                         let _ = response_tx.send(response);
                     }
@@ -97,17 +78,6 @@ impl CodeModeDispatchBroker {
                         cancellation_token,
                         response_tx,
                     } => {
-                        let cell_id = invocation.cell_id.clone();
-                        if !wait_until_cell_ready_for_dispatch(
-                            &dispatch_gates,
-                            &cell_id,
-                            &cancellation_token,
-                        )
-                        .await
-                        {
-                            remove_dispatch_gate(&dispatch_gates, &cell_id);
-                            continue;
-                        }
                         let host = Arc::clone(&host);
                         tokio::spawn(async move {
                             let response = tokio::select! {
@@ -125,55 +95,6 @@ impl CodeModeDispatchBroker {
         });
         CodeModeDispatchWorker {
             shutdown_tx: Some(shutdown_tx),
-        }
-    }
-}
-
-fn dispatch_gate(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
-    cell_id: &CellId,
-) -> watch::Sender<bool> {
-    let mut dispatch_gates = match dispatch_gates.lock() {
-        Ok(dispatch_gates) => dispatch_gates,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    dispatch_gates
-        .entry(cell_id.clone())
-        .or_insert_with(|| watch::channel(false).0)
-        .clone()
-}
-
-fn remove_dispatch_gate(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
-    cell_id: &CellId,
-) {
-    let mut dispatch_gates = match dispatch_gates.lock() {
-        Ok(dispatch_gates) => dispatch_gates,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    dispatch_gates.remove(cell_id);
-}
-
-async fn wait_until_cell_ready_for_dispatch(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
-    cell_id: &CellId,
-    cancellation_token: &CancellationToken,
-) -> bool {
-    if cancellation_token.is_cancelled() {
-        return false;
-    }
-    let mut ready_rx = dispatch_gate(dispatch_gates, cell_id).subscribe();
-    loop {
-        if *ready_rx.borrow_and_update() {
-            return true;
-        }
-        tokio::select! {
-            changed = ready_rx.changed() => {
-                if changed.is_err() {
-                    return false;
-                }
-            }
-            _ = cancellation_token.cancelled() => return false,
         }
     }
 }
@@ -237,10 +158,6 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
                 }
             }
         })
-    }
-
-    fn cell_closed(&self, cell_id: &CellId) {
-        self.close_cell(cell_id);
     }
 }
 
@@ -310,3 +227,7 @@ impl CoreTurnHost {
             })
     }
 }
+
+#[cfg(test)]
+#[path = "delegate_tests.rs"]
+mod tests;

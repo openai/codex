@@ -63,18 +63,32 @@ pub(crate) trait CellHost: Send + Sync + 'static {
 #[derive(Clone)]
 pub(crate) struct CellHandle {
     command_tx: mpsc::UnboundedSender<CellCommand>,
+    cancellation_token: CancellationToken,
+    termination_token: CancellationToken,
     termination_requested: Arc<AtomicBool>,
+    accepting_requests: Arc<AtomicBool>,
 }
 
 impl CellHandle {
-    pub(super) fn new(command_tx: mpsc::UnboundedSender<CellCommand>) -> Self {
+    pub(super) fn new(
+        command_tx: mpsc::UnboundedSender<CellCommand>,
+        cancellation_token: CancellationToken,
+        termination_token: CancellationToken,
+        accepting_requests: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             command_tx,
+            cancellation_token,
+            termination_token,
             termination_requested: Arc::new(AtomicBool::new(false)),
+            accepting_requests,
         }
     }
 
     pub(crate) fn observe(&self, mode: ObserveMode) -> CellEventFuture {
+        if !self.accepting_requests.load(Ordering::Acquire) {
+            return closed_event();
+        }
         let (response_tx, response_rx) = oneshot::channel();
         if self
             .command_tx
@@ -87,6 +101,9 @@ impl CellHandle {
     }
 
     pub(crate) fn terminate(&self) -> CellEventFuture {
+        if !self.accepting_requests.load(Ordering::Acquire) {
+            return closed_event();
+        }
         if self
             .termination_requested
             .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
@@ -105,6 +122,9 @@ impl CellHandle {
             self.termination_requested.store(false, Ordering::Relaxed);
             return closed_event();
         }
+        // The command carries the terminal response; these tokens interrupt in-flight cleanup.
+        self.termination_token.cancel();
+        self.cancellation_token.cancel();
         response_event(response_rx)
     }
 }

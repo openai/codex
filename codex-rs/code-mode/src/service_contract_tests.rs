@@ -4,6 +4,7 @@ use std::time::Duration;
 use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -16,7 +17,6 @@ enum DelegateEvent {
     NotificationStarted,
     NotificationFinished,
     ToolStarted,
-    CellClosed(CellId),
 }
 
 struct BlockingDelegate {
@@ -30,7 +30,7 @@ struct NeverResolvingNotificationDelegate {
 
 struct ReleasableNotificationDelegate {
     events_tx: mpsc::UnboundedSender<DelegateEvent>,
-    notification_release: Notify,
+    notification_release: Semaphore,
 }
 
 struct NeverResolvingToolDelegate {
@@ -50,14 +50,14 @@ impl ReleasableNotificationDelegate {
         (
             Arc::new(Self {
                 events_tx,
-                notification_release: Notify::new(),
+                notification_release: Semaphore::new(/* permits */ 0),
             }),
             events_rx,
         )
     }
 
     fn release_notification(&self) {
-        self.notification_release.notify_one();
+        self.notification_release.add_permits(/* permits */ 1);
     }
 }
 
@@ -89,12 +89,6 @@ impl CodeModeSessionDelegate for NeverResolvingNotificationDelegate {
             std::future::pending().await
         })
     }
-
-    fn cell_closed(&self, cell_id: &CellId) {
-        let _ = self
-            .events_tx
-            .send(DelegateEvent::CellClosed(cell_id.clone()));
-    }
 }
 
 impl CodeModeSessionDelegate for ReleasableNotificationDelegate {
@@ -119,7 +113,7 @@ impl CodeModeSessionDelegate for ReleasableNotificationDelegate {
         Box::pin(async move {
             let _ = self.events_tx.send(DelegateEvent::NotificationStarted);
             tokio::select! {
-                _ = self.notification_release.notified() => {
+                _ = self.notification_release.acquire() => {
                     let _ = self.events_tx.send(DelegateEvent::NotificationFinished);
                     Ok(())
                 }
@@ -128,12 +122,6 @@ impl CodeModeSessionDelegate for ReleasableNotificationDelegate {
                 }
             }
         })
-    }
-
-    fn cell_closed(&self, cell_id: &CellId) {
-        let _ = self
-            .events_tx
-            .send(DelegateEvent::CellClosed(cell_id.clone()));
     }
 }
 
@@ -157,12 +145,6 @@ impl CodeModeSessionDelegate for NeverResolvingToolDelegate {
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
-    }
-
-    fn cell_closed(&self, cell_id: &CellId) {
-        let _ = self
-            .events_tx
-            .send(DelegateEvent::CellClosed(cell_id.clone()));
     }
 }
 
@@ -215,12 +197,6 @@ impl CodeModeSessionDelegate for BlockingDelegate {
             Err("cancelled".to_string())
         })
     }
-
-    fn cell_closed(&self, cell_id: &CellId) {
-        let _ = self
-            .events_tx
-            .send(DelegateEvent::CellClosed(cell_id.clone()));
-    }
 }
 
 fn cell_id(value: &str) -> CellId {
@@ -229,6 +205,7 @@ fn cell_id(value: &str) -> CellId {
 
 fn execute_request(source: &str) -> ExecuteRequest {
     ExecuteRequest {
+        cell_id: cell_id("1"),
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
@@ -260,7 +237,13 @@ async fn yields_and_resumes() {
     let service = CodeModeService::new();
     let cell = service
         .execute(ExecuteRequest {
-            source: r#"text("before"); yield_control(); text("after");"#.to_string(),
+            source: r#"
+text("before");
+yield_control();
+store("finished", true);
+text("after");
+"#
+            .to_string(),
             yield_time_ms: Some(60_000),
             ..execute_request("")
         })
@@ -268,7 +251,7 @@ async fn yields_and_resumes() {
         .unwrap();
 
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
@@ -276,6 +259,30 @@ async fn yields_and_resumes() {
             }],
         }
     );
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), async {
+        for cell_number in 2.. {
+            let response = service
+                .execute(ExecuteRequest {
+                    cell_id: cell_id(&cell_number.to_string()),
+                    ..execute_request(r#"text(String(load("finished")));"#)
+                })
+                .await
+                .unwrap();
+            let RuntimeResponse::Result { content_items, .. } = response else {
+                panic!("expected stored-value probe to complete");
+            };
+            if content_items
+                == vec![FunctionCallOutputContentItem::InputText {
+                    text: "true".to_string(),
+                }]
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(
         service
             .wait(WaitRequest {
@@ -290,6 +297,20 @@ async fn yields_and_resumes() {
                 text: "after".to_string(),
             }],
             error_text: None,
+        })
+    );
+    assert_eq!(
+        service
+            .wait(WaitRequest {
+                cell_id: cell_id("1"),
+                yield_time_ms: 60_000,
+            })
+            .await
+            .unwrap(),
+        WaitOutcome::MissingCell(RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+            error_text: Some("exec cell 1 not found".to_string()),
         })
     );
 }
@@ -353,19 +374,19 @@ async fn observed_natural_completion_wins_over_termination() {
         .unwrap();
 
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         }
     );
     tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
+        for cell_number in 2.. {
             let response = service
-                .execute(execute_request(r#"text(String(load("finished")));"#))
-                .await
-                .unwrap()
-                .initial_response()
+                .execute(ExecuteRequest {
+                    cell_id: cell_id(&cell_number.to_string()),
+                    ..execute_request(r#"text(String(load("finished")));"#)
+                })
                 .await
                 .unwrap();
             let RuntimeResponse::Result { content_items, .. } = response else {
@@ -411,7 +432,7 @@ async fn termination_discards_pending_callbacks_before_responding() {
         DelegateEvent::NotificationStarted
     );
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
@@ -424,10 +445,6 @@ async fn termination_discards_pending_callbacks_before_responding() {
             content_items: Vec::new(),
         })
     );
-    assert_eq!(
-        next_event(&mut events_rx).await,
-        DelegateEvent::CellClosed(cell_id("1"))
-    );
 }
 
 #[tokio::test]
@@ -435,7 +452,7 @@ async fn shutdown_does_not_await_notifications_during_natural_completion() {
     let (delegate, mut events_rx) = NeverResolvingNotificationDelegate::new();
     let service = Arc::new(CodeModeService::with_delegate(delegate));
     service
-        .execute(execute_request(r#"notify("pending");"#))
+        .execute(execute_request(r#"yield_control(); notify("pending");"#))
         .await
         .unwrap();
 
@@ -451,9 +468,33 @@ async fn shutdown_does_not_await_notifications_during_natural_completion() {
     .await
     .expect("shutdown should not await a non-cooperative notification")
     .unwrap();
+}
+
+#[tokio::test]
+async fn termination_does_not_await_notifications_during_natural_completion() {
+    let (delegate, mut events_rx) = NeverResolvingNotificationDelegate::new();
+    let service = CodeModeService::with_delegate(delegate);
+    service
+        .execute(execute_request(r#"yield_control(); notify("pending");"#))
+        .await
+        .unwrap();
+
     assert_eq!(
         next_event(&mut events_rx).await,
-        DelegateEvent::CellClosed(cell_id("1"))
+        DelegateEvent::NotificationStarted
+    );
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_millis(/*millis*/ 100),
+            service.terminate(cell_id("1")),
+        )
+        .await
+        .expect("termination should not await a non-cooperative notification")
+        .unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+        })
     );
 }
 
@@ -461,11 +502,14 @@ async fn shutdown_does_not_await_notifications_during_natural_completion() {
 async fn natural_completion_waits_for_notifications_before_responding() {
     let (delegate, mut events_rx) = ReleasableNotificationDelegate::new();
     let service = CodeModeService::with_delegate(delegate.clone());
-    let cell = service
-        .execute(execute_request(r#"notify("pending");"#))
-        .await
-        .unwrap();
-    let mut initial_response = Box::pin(cell.initial_response());
+    let mut initial_response = Box::pin(service.execute(execute_request(r#"notify("pending");"#)));
+    std::future::poll_fn(|context| match initial_response.as_mut().poll(context) {
+        std::task::Poll::Pending => std::task::Poll::Ready(()),
+        std::task::Poll::Ready(result) => {
+            panic!("execute returned before the notification was released: {result:?}")
+        }
+    })
+    .await;
 
     assert_eq!(
         next_event(&mut events_rx).await,
@@ -491,10 +535,6 @@ async fn natural_completion_waits_for_notifications_before_responding() {
         next_event(&mut events_rx).await,
         DelegateEvent::NotificationFinished
     );
-    assert_eq!(
-        next_event(&mut events_rx).await,
-        DelegateEvent::CellClosed(cell_id("1"))
-    );
 }
 
 #[tokio::test]
@@ -512,7 +552,7 @@ async fn termination_discards_pending_tools_before_responding() {
 
     assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
@@ -525,10 +565,6 @@ async fn termination_discards_pending_tools_before_responding() {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
-    );
-    assert_eq!(
-        next_event(&mut events_rx).await,
-        DelegateEvent::CellClosed(cell_id("1"))
     );
 }
 
@@ -549,10 +585,6 @@ async fn shutdown_discards_pending_tools_before_returning() {
 
     let shutdown_service = Arc::clone(&service);
     assert_eq!(shutdown_service.shutdown().await, Ok(()));
-    assert_eq!(
-        next_event(&mut events_rx).await,
-        DelegateEvent::CellClosed(cell_id("1"))
-    );
 }
 
 #[tokio::test]
@@ -577,10 +609,6 @@ async fn shutdown_completes_when_a_nested_tool_ignores_cancellation() {
     .await
     .expect("shutdown should not await a non-cooperative nested tool")
     .unwrap();
-    assert_eq!(
-        next_event(&mut events_rx).await,
-        DelegateEvent::CellClosed(cell_id("1"))
-    );
 }
 
 #[tokio::test]
@@ -592,7 +620,7 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
         .unwrap();
 
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
@@ -641,7 +669,7 @@ async fn dropping_a_wait_allows_a_later_wait_to_observe_the_cell() {
         .unwrap();
 
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),

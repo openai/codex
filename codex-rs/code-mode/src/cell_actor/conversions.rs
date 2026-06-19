@@ -12,6 +12,7 @@ use crate::session_runtime::OutputItem as CellOutputItem;
 
 pub(super) fn runtime_request(request: CellRequest) -> ExecuteRequest {
     ExecuteRequest {
+        cell_id: codex_code_mode_protocol::CellId::new(request.cell_id.as_str().to_string()),
         tool_call_id: request.tool_call_id,
         enabled_tools: request
             .enabled_tools

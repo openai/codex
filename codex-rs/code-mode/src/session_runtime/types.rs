@@ -74,6 +74,7 @@ pub enum ImageDetail {
 
 /// Transport-neutral input for starting a cell.
 pub struct ExecuteRequest {
+    pub cell_id: CellId,
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,
@@ -114,8 +115,6 @@ pub struct NestedToolCall {
 ///
 /// Implementations should forward callback cancellation tokens to downstream
 /// work. The runtime stops awaiting callbacks once cancellation begins.
-/// Implementations must not return from `cell_closed` until downstream routing
-/// can no longer target the cell.
 pub trait SessionRuntimeDelegate: Send + Sync + 'static {
     fn invoke_tool(
         &self,
@@ -130,8 +129,6 @@ pub trait SessionRuntimeDelegate: Send + Sync + 'static {
         text: String,
         cancellation_token: CancellationToken,
     ) -> impl Future<Output = Result<(), String>> + Send;
-
-    fn cell_closed(&self, cell_id: &CellId) -> impl Future<Output = Result<(), String>> + Send;
 }
 
 /// A failure reported by a session runtime operation.

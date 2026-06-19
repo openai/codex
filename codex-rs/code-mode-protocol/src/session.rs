@@ -6,7 +6,6 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::CodeModeNestedToolCall;
@@ -48,42 +47,6 @@ impl fmt::Display for CellId {
     }
 }
 
-pub struct StartedCell {
-    pub cell_id: CellId,
-    initial_response: CodeModeSessionResultFuture<'static, RuntimeResponse>,
-}
-
-impl StartedCell {
-    pub fn new(cell_id: CellId, initial_response_rx: oneshot::Receiver<RuntimeResponse>) -> Self {
-        Self {
-            cell_id,
-            initial_response: Box::pin(async move {
-                initial_response_rx
-                    .await
-                    .map_err(|_| "exec runtime ended unexpectedly".to_string())
-            }),
-        }
-    }
-
-    pub fn from_result_receiver(
-        cell_id: CellId,
-        initial_response_rx: oneshot::Receiver<Result<RuntimeResponse, String>>,
-    ) -> Self {
-        Self {
-            cell_id,
-            initial_response: Box::pin(async move {
-                initial_response_rx
-                    .await
-                    .map_err(|_| "exec runtime ended unexpectedly".to_string())?
-            }),
-        }
-    }
-
-    pub async fn initial_response(self) -> Result<RuntimeResponse, String> {
-        self.initial_response.await
-    }
-}
-
 /// Host callbacks used by a code-mode session while cells are executing.
 pub trait CodeModeSessionDelegate: Send + Sync {
     fn invoke_tool<'a>(
@@ -99,9 +62,6 @@ pub trait CodeModeSessionDelegate: Send + Sync {
         text: String,
         cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a>;
-
-    /// Releases delegate state associated with a cell after it reaches a terminal state.
-    fn cell_closed(&self, cell_id: &CellId);
 }
 
 /// A durable code-mode session owned by one Codex thread.
@@ -119,7 +79,7 @@ pub trait CodeModeSession: Send + Sync {
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,
-    ) -> CodeModeSessionResultFuture<'a, StartedCell>;
+    ) -> CodeModeSessionResultFuture<'a, RuntimeResponse>;
 
     fn wait<'a>(&'a self, request: WaitRequest) -> CodeModeSessionResultFuture<'a, WaitOutcome>;
 
@@ -138,7 +98,3 @@ pub trait CodeModeSessionProvider: Send + Sync {
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a>;
 }
-
-#[cfg(test)]
-#[path = "session_tests.rs"]
-mod tests;

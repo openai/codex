@@ -4,14 +4,11 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
 
 pub use self::types::CellEvent;
 pub use self::types::CellId;
@@ -41,16 +38,10 @@ pub struct SessionRuntime<D: SessionRuntimeDelegate> {
 
 struct Inner<D: SessionRuntimeDelegate> {
     stored_values: Mutex<HashMap<String, JsonValue>>,
-    cells: Mutex<HashMap<CellId, CellState>>,
+    cells: Mutex<HashMap<CellId, CellHandle>>,
     cell_count_tx: watch::Sender<usize>,
     shutdown_token: CancellationToken,
     delegate: Arc<D>,
-    next_cell_id: AtomicU64,
-}
-
-enum CellState {
-    Live(CellHandle),
-    Closing,
 }
 
 impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
@@ -63,7 +54,6 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
                 cell_count_tx,
                 shutdown_token: CancellationToken::new(),
                 delegate,
-                next_cell_id: AtomicU64::new(1),
             }),
         }
     }
@@ -76,18 +66,11 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         &self,
         request: ExecuteRequest,
         initial_observe_mode: ObserveMode,
-    ) -> Result<StartedCell, Error> {
+    ) -> Result<CellEvent, Error> {
         if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
-        let cell_id = self.allocate_cell_id();
-        let initial_event = self
-            .start_cell(cell_id.clone(), request, initial_observe_mode)
-            .await?;
-        Ok(StartedCell {
-            cell_id,
-            initial_event,
-        })
+        self.start_cell(request, initial_observe_mode).await?.await
     }
 
     pub async fn observe(&self, cell_id: &CellId, mode: ObserveMode) -> Result<CellEvent, Error> {
@@ -101,7 +84,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     ) -> Result<PendingEvent, Error> {
         let handle = {
             let cells = self.inner.cells.lock().await;
-            let Some(CellState::Live(handle)) = cells.get(cell_id) else {
+            let Some(handle) = cells.get(cell_id) else {
                 return Err(Error::MissingCell(cell_id.clone()));
             };
             handle.clone()
@@ -114,7 +97,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     pub async fn terminate(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
         let handle = {
             let cells = self.inner.cells.lock().await;
-            let Some(CellState::Live(handle)) = cells.get(cell_id) else {
+            let Some(handle) = cells.get(cell_id) else {
                 return Err(Error::MissingCell(cell_id.clone()));
             };
             handle.clone()
@@ -139,21 +122,12 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         Ok(())
     }
 
-    fn allocate_cell_id(&self) -> CellId {
-        CellId::new(
-            self.inner
-                .next_cell_id
-                .fetch_add(1, Ordering::Relaxed)
-                .to_string(),
-        )
-    }
-
     async fn start_cell(
         &self,
-        cell_id: CellId,
         request: ExecuteRequest,
         initial_observe_mode: ObserveMode,
     ) -> Result<RuntimeEventFuture, Error> {
+        let cell_id = request.cell_id.clone();
         let stored_values = self.inner.stored_values.lock().await.clone();
         let host = Arc::new(RuntimeCellHost {
             cell_id: cell_id.clone(),
@@ -174,7 +148,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             self.inner.shutdown_token.clone(),
         )
         .map_err(Error::Runtime)?;
-        cells.insert(cell_id.clone(), CellState::Live(handle));
+        cells.insert(cell_id.clone(), handle);
         self.inner.cell_count_tx.send_replace(cells.len());
         drop(cells);
         tokio::spawn(task);
@@ -192,12 +166,6 @@ impl<D: SessionRuntimeDelegate> Drop for SessionRuntime<D> {
     }
 }
 
-/// A cell admitted by [`SessionRuntime::execute`].
-pub struct StartedCell {
-    pub cell_id: CellId,
-    initial_event: RuntimeEventFuture,
-}
-
 /// An admitted observation that has not reached its requested frontier yet.
 pub struct PendingEvent {
     event: RuntimeEventFuture,
@@ -206,12 +174,6 @@ pub struct PendingEvent {
 impl PendingEvent {
     pub async fn event(self) -> Result<CellEvent, Error> {
         self.event.await
-    }
-}
-
-impl StartedCell {
-    pub async fn initial_event(self) -> Result<CellEvent, Error> {
-        self.initial_event.await
     }
 }
 
@@ -262,17 +224,6 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
     }
 
     async fn closed(&self) {
-        self.inner
-            .cells
-            .lock()
-            .await
-            .insert(self.cell_id.clone(), CellState::Closing);
-        if let Err(err) = self.inner.delegate.cell_closed(&self.cell_id).await {
-            warn!(
-                "failed to close code mode delegate state for cell {}: {err}",
-                self.cell_id
-            );
-        }
         let mut cells = self.inner.cells.lock().await;
         if cells.remove(&self.cell_id).is_some() {
             self.inner.cell_count_tx.send_replace(cells.len());
