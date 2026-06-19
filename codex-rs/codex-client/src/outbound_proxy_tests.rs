@@ -33,7 +33,7 @@ fn proxy_env_value_matches_reqwest_casing_precedence() {
         proxy_env_value(&env, "HTTP_PROXY"),
         Some("lower-only".to_string())
     );
-    assert_eq!(proxy_env_value(&env, "ALL_PROXY"), Some(String::new()));
+    assert_eq!(proxy_env_value(&env, "ALL_PROXY"), None);
 }
 
 #[test]
