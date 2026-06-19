@@ -320,7 +320,11 @@ async fn skills_for_config_with_stack(
         bundled_skills_enabled_from_stack(config_layer_stack),
     );
     skills_service
-        .snapshot_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&LOCAL_FS)),
+            /*refresh_filesystem*/ false,
+        )
         .await
         .outcome()
         .clone()
@@ -393,7 +397,11 @@ async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() 
     let file_system: Arc<dyn ExecutorFileSystem> = counting_file_system.clone();
 
     skills_service
-        .snapshot_for_config(&skills_input, Some(Arc::clone(&file_system)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&file_system)),
+            /*refresh_filesystem*/ false,
+        )
         .await;
     let operations_after_cache_miss = counting_file_system.operation_count();
     let content_scans_after_cache_miss = counting_file_system.content_scan_operation_count();
@@ -401,7 +409,11 @@ async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() 
     assert!(content_scans_after_cache_miss > 0);
 
     skills_service
-        .snapshot_for_config(&skills_input, Some(Arc::clone(&file_system)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&file_system)),
+            /*refresh_filesystem*/ false,
+        )
         .await;
     assert_eq!(
         counting_file_system.operation_count(),
@@ -413,7 +425,11 @@ async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() 
     );
 
     skills_service
-        .refresh_snapshot_for_config(&skills_input, Some(Arc::clone(&file_system)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&file_system)),
+            /*refresh_filesystem*/ true,
+        )
         .await;
     let operations_after_refresh = counting_file_system.operation_count();
     assert!(operations_after_refresh > operations_after_cache_miss);
@@ -432,6 +448,7 @@ async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() 
         .snapshot_for_config(
             &unrelated_session_flag_input,
             Some(Arc::clone(&file_system)),
+            /*refresh_filesystem*/ false,
         )
         .await;
     assert_eq!(
@@ -441,14 +458,18 @@ async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() 
 
     skills_service.clear_cache();
     skills_service
-        .snapshot_for_config(&skills_input, Some(file_system))
+        .snapshot_for_config(
+            &skills_input,
+            Some(file_system),
+            /*refresh_filesystem*/ false,
+        )
         .await;
     assert!(counting_file_system.operation_count() > operations_after_refresh);
     assert!(counting_file_system.content_scan_operation_count() > content_scans_after_cache_miss);
 }
 
 #[tokio::test]
-async fn refresh_snapshot_for_config_discovers_new_repo_skill_root() {
+async fn snapshot_for_config_refresh_discovers_new_repo_skill_root() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     fs::create_dir(cwd.path().join(".git")).expect("create project marker");
@@ -465,7 +486,11 @@ async fn refresh_snapshot_for_config_discovers_new_repo_skill_root() {
     );
 
     let initial_snapshot = skills_service
-        .snapshot_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&LOCAL_FS)),
+            /*refresh_filesystem*/ false,
+        )
         .await;
     assert!(
         initial_snapshot
@@ -483,7 +508,11 @@ async fn refresh_snapshot_for_config_discovers_new_repo_skill_root() {
     );
 
     let cached_snapshot = skills_service
-        .snapshot_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&LOCAL_FS)),
+            /*refresh_filesystem*/ false,
+        )
         .await;
     assert!(
         cached_snapshot
@@ -494,7 +523,11 @@ async fn refresh_snapshot_for_config_discovers_new_repo_skill_root() {
     );
 
     let refreshed_snapshot = skills_service
-        .refresh_snapshot_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&LOCAL_FS)),
+            /*refresh_filesystem*/ true,
+        )
         .await;
     assert!(
         refreshed_snapshot

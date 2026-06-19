@@ -120,46 +120,24 @@ impl SkillsService {
     ///
     /// This path uses a cache keyed by the effective skill-relevant config state rather than just
     /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
-    /// to share a directory.
-    pub async fn snapshot_for_config(
-        &self,
-        input: &SkillsLoadInput,
-        fs: Option<Arc<dyn ExecutorFileSystem>>,
-    ) -> HostSkillsSnapshot {
-        self.snapshot_for_config_with_lookup(input, fs, ConfigSnapshotLookup::ReuseCached)
-            .await
-    }
-
-    /// Revalidates filesystem-derived roots and skill configuration rules before returning the
-    /// cached snapshot. If they are unchanged, the existing snapshot is reused without rescanning
-    /// skill contents.
-    pub async fn refresh_snapshot_for_config(
-        &self,
-        input: &SkillsLoadInput,
-        fs: Option<Arc<dyn ExecutorFileSystem>>,
-    ) -> HostSkillsSnapshot {
-        self.snapshot_for_config_with_lookup(input, fs, ConfigSnapshotLookup::RefreshFilesystem)
-            .await
-    }
-
+    /// to share a directory. When `refresh_filesystem` is true, filesystem-derived roots and skill
+    /// configuration rules are revalidated before reusing the cached snapshot.
     #[instrument(
         name = "skills_for_config",
         level = "info",
         skip_all,
         fields(otel.name = "skills_for_config")
     )]
-    async fn snapshot_for_config_with_lookup(
+    pub async fn snapshot_for_config(
         &self,
         input: &SkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
-        lookup: ConfigSnapshotLookup,
+        refresh_filesystem: bool,
     ) -> HostSkillsSnapshot {
         let extra_roots = self.extra_roots();
         let cache_key = config_skills_cache_key(input, &extra_roots, fs.as_ref());
         let cached = self.cached_snapshot_for_config(&cache_key);
-        if lookup == ConfigSnapshotLookup::ReuseCached
-            && let Some(cached) = &cached
-        {
+        if !refresh_filesystem && let Some(cached) = &cached {
             return cached.snapshot.clone();
         }
 
@@ -321,12 +299,6 @@ impl SkillsService {
             Err(err) => err.into_inner().clone(),
         }
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ConfigSnapshotLookup {
-    ReuseCached,
-    RefreshFilesystem,
 }
 
 #[derive(Clone)]

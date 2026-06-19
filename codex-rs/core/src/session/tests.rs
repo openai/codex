@@ -5113,7 +5113,11 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let skill_fs = environment.get_filesystem();
     let skills_snapshot = services
         .skills_service
-        .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&skill_fs)),
+            /*refresh_filesystem*/ false,
+        )
         .await;
     let turn_context = Session::make_turn_context(
         thread_id,
@@ -7168,7 +7172,11 @@ where
     let skill_fs = environment.get_filesystem();
     let skills_snapshot = services
         .skills_service
-        .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&skill_fs)),
+            /*refresh_filesystem*/ false,
+        )
         .await;
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,

@@ -428,6 +428,7 @@ enabled = false
         .snapshot_for_config(
             &skills_input,
             Some(Arc::clone(&codex_exec_server::LOCAL_FS)),
+            /*refresh_filesystem*/ false,
         )
         .await;
     let outcome = snapshot.outcome();

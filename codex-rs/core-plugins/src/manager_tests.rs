@@ -2078,7 +2078,11 @@ async fn skills_service_reuses_skills_parsed_during_plugin_load() {
     .with_plugin_skill_snapshots(plugin_skill_snapshots);
     let skills_service = SkillsService::new(codex_home_abs, /*bundled_skills_enabled*/ false);
     let cached = skills_service
-        .snapshot_for_config(&skills_input, /*fs*/ None)
+        .snapshot_for_config(
+            &skills_input,
+            /*fs*/ None,
+            /*refresh_filesystem*/ false,
+        )
         .await;
 
     assert_eq!(

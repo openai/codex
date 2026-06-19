@@ -740,7 +740,7 @@ impl Session {
         let skills_snapshot = self
             .services
             .skills_service
-            .snapshot_for_config(&skills_input, fs)
+            .snapshot_for_config(&skills_input, fs, /*refresh_filesystem*/ false)
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.thread_id(),
