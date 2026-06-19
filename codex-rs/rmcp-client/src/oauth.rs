@@ -142,6 +142,41 @@ fn load_oauth_tokens_with_keyring_store<K: KeyringStore + Clone + 'static>(
     }
 }
 
+fn load_oauth_tokens_for_refresh_with_keyring_store<K: KeyringStore + Clone + 'static>(
+    keyring_store: &K,
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<Option<StoredOAuthTokens>> {
+    if store_mode != OAuthCredentialsStoreMode::Auto {
+        return load_oauth_tokens_with_keyring_store(
+            keyring_store,
+            server_name,
+            url,
+            store_mode,
+            keyring_backend_kind,
+        );
+    }
+
+    match load_oauth_tokens_from_keyring(keyring_store, keyring_backend_kind, server_name, url) {
+        Ok(Some(tokens)) => Ok(Some(tokens)),
+        Ok(None) => load_oauth_tokens_from_file(server_name, url),
+        Err(keyring_error) => {
+            warn!("failed to reread OAuth tokens from keyring: {keyring_error}");
+            match load_oauth_tokens_from_file(server_name, url) {
+                Ok(Some(tokens)) => Ok(Some(tokens)),
+                Ok(None) => Err(keyring_error).context(
+                    "failed to reread OAuth tokens from keyring and no fallback credential was found",
+                ),
+                Err(fallback_error) => Err(fallback_error).with_context(|| {
+                    format!("failed to reread OAuth tokens from keyring: {keyring_error}")
+                }),
+            }
+        }
+    }
+}
+
 pub(crate) fn oauth_token_status(
     server_name: &str,
     url: &str,
@@ -684,7 +719,7 @@ impl OAuthPersistor {
         let _lock =
             RefreshCredentialLock::acquire_for_server(&self.inner.server_name, &self.inner.url)
                 .await?;
-        let latest = load_oauth_tokens_with_keyring_store(
+        let latest = load_oauth_tokens_for_refresh_with_keyring_store(
             keyring_store,
             &self.inner.server_name,
             &self.inner.url,
@@ -1630,6 +1665,46 @@ mod tests {
         )?;
 
         assert!(loaded.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_transaction_preserves_credentials_when_auto_keyring_reread_fails() -> Result<()>
+    {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        mount_oauth_metadata(&server).await;
+        let store = MockKeyringStore::default();
+        let initial_tokens = expired_sample_tokens(&format!("{}/mcp", server.uri()));
+        let key = super::compute_store_key(&initial_tokens.server_name, &initial_tokens.url)?;
+        store.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+
+        let manager = authorization_manager_for(&initial_tokens).await?;
+        let persistor = OAuthPersistor::new(
+            initial_tokens.server_name.clone(),
+            initial_tokens.url.clone(),
+            manager.clone(),
+            OAuthCredentialsStoreMode::Auto,
+            AuthKeyringBackendKind::Direct,
+            Some(initial_tokens.clone()),
+        );
+
+        let error = persistor
+            .refresh_if_needed_with_keyring_store(&store)
+            .await
+            .expect_err("keyring reread failure should abort refresh");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to reread OAuth tokens from keyring"),
+            "unexpected error: {error:#}"
+        );
+        let manager_tokens = tokens_from_manager(&manager).await?;
+        assert_eq!(
+            manager_tokens.token_response,
+            WrappedOAuthTokenResponse(request_oauth_token_response(&initial_tokens))
+        );
         Ok(())
     }
 
