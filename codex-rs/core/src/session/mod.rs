@@ -27,6 +27,7 @@ use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
+use crate::context::MultiAgentModeInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
@@ -92,6 +93,7 @@ use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -210,7 +212,7 @@ mod handlers;
 mod inject;
 mod input_queue;
 mod mcp;
-mod multi_agents;
+pub(crate) mod multi_agents;
 mod review;
 mod rollout_budget;
 mod rollout_reconstruction;
@@ -443,6 +445,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
+    pub(crate) initial_multi_agent_mode: Option<MultiAgentMode>,
 }
 
 pub(crate) fn resolve_multi_agent_version(
@@ -527,6 +530,7 @@ impl Codex {
             attestation_provider,
             external_time_provider,
             inherited_multi_agent_version,
+            initial_multi_agent_mode,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -581,6 +585,7 @@ impl Codex {
             .await;
         let multi_agent_version =
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
+        let multi_agent_mode = initial_multi_agent_mode;
         config
             .validate_multi_agent_v2_config()
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
@@ -614,6 +619,7 @@ impl Codex {
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
+            multi_agent_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
@@ -2673,15 +2679,17 @@ impl Session {
             prepare_response_items(items.to_mut());
         }
         if turn_context.config.features.enabled(Feature::ItemIds) {
-            Self::assign_missing_response_item_ids(&mut items);
+            Self::assign_missing_response_item_ids(items)
+        } else {
+            items
         }
-        items
     }
 
-    fn assign_missing_response_item_ids(items: &mut Cow<'_, [ResponseItem]>) {
+    fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
         if items.iter().all(|item| item.id().is_some()) {
-            return;
+            return items;
         }
+        let mut items = items;
         for item in items.to_mut() {
             if item.id().is_some() {
                 continue;
@@ -2705,6 +2713,7 @@ impl Session {
             };
             item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
         }
+        items
     }
 
     pub(crate) fn response_item_from_user_input(
@@ -2840,10 +2849,20 @@ impl Session {
 
     pub(crate) async fn replace_compacted_history(
         &self,
+        turn_context: &TurnContext,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         compacted_item: CompactedItem,
     ) {
+        let items = if turn_context.config.features.enabled(Feature::ItemIds) {
+            Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned()
+        } else {
+            items
+        };
+        let compacted_item = CompactedItem {
+            replacement_history: Some(items.clone()),
+            ..compacted_item
+        };
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
@@ -3227,6 +3246,20 @@ impl Session {
         {
             items.push(usage_hint_message);
         }
+        if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(
+            turn_context.multi_agent_version,
+            &turn_context.config.multi_agent_v2,
+            &session_source,
+            turn_context.multi_agent_mode,
+            turn_context
+                .config
+                .features
+                .enabled(Feature::MultiAgentMode),
+        ) {
+            items.push(ContextualUserFragment::into(
+                MultiAgentModeInstructions::new(multi_agent_mode),
+            ));
+        }
         if let Some(contextual_user_message) =
             crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
         {
@@ -3377,17 +3410,19 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
-    ) {
-        self.record_token_usage_info(turn_context, token_usage)
+    ) -> CodexResult<()> {
+        let result = self
+            .record_token_usage_info(turn_context, token_usage)
             .await;
         self.send_token_count_event(turn_context).await;
+        result
     }
 
     pub(crate) async fn record_token_usage_info(
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
-    ) {
+    ) -> CodexResult<()> {
         if let Some(token_usage) = token_usage {
             let token_info = {
                 let mut state = self.state.lock().await;
@@ -3401,7 +3436,7 @@ impl Session {
                 }
                 state.token_info()
             };
-            self.record_rollout_budget_usage(token_usage);
+            let budget_result = self.record_rollout_budget_usage(token_usage);
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
                     contributor
@@ -3414,7 +3449,9 @@ impl Session {
                         .await;
                 }
             }
+            budget_result?;
         }
+        Ok(())
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {

@@ -479,6 +479,9 @@
             "default_mode_request_user_input": {
               "type": "boolean"
             },
+            "deferred_executor": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -552,6 +555,9 @@
               "type": "boolean"
             },
             "multi_agent": {
+              "type": "boolean"
+            },
+            "multi_agent_mode": {
               "type": "boolean"
             },
             "multi_agent_v2": {
@@ -4712,6 +4718,9 @@
         "default_mode_request_user_input": {
           "type": "boolean"
         },
+        "deferred_executor": {
+          "type": "boolean"
+        },
         "elevated_windows_sandbox": {
           "type": "boolean"
         },
@@ -4785,6 +4794,9 @@
           "type": "boolean"
         },
         "multi_agent": {
+          "type": "boolean"
+        },
+        "multi_agent_mode": {
           "type": "boolean"
         },
         "multi_agent_v2": {

@@ -70,6 +70,7 @@ use crate::state::ActiveTurn;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::SessionTaskResult;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::execute_user_shell_command;
 use crate::tools::ToolRouter;
@@ -201,7 +202,7 @@ fn user_message(text: &str) -> ResponseItem {
 
 #[test]
 fn assign_missing_response_item_ids_skips_agent_messages() {
-    let mut items = Cow::Owned(vec![
+    let items = Cow::Owned(vec![
         ResponseItem::AgentMessage {
             id: None,
             author: "worker".to_string(),
@@ -214,7 +215,7 @@ fn assign_missing_response_item_ids_skips_agent_messages() {
         user_message("hello"),
     ]);
 
-    Session::assign_missing_response_item_ids(&mut items);
+    let items = Session::assign_missing_response_item_ids(items);
 
     assert_eq!(items[0].id(), None);
     assert!(items[1].id().is_some_and(|id| id.starts_with("msg_")));
@@ -2150,10 +2151,12 @@ async fn record_token_usage_info_notifies_extension_contributors() {
 
     session
         .record_token_usage_info(&turn_context, Some(&first_usage))
-        .await;
+        .await
+        .expect("first usage should be recorded");
     session
         .record_token_usage_info(&turn_context, Some(&second_usage))
-        .await;
+        .await
+        .expect("second usage should be recorded");
 
     let mut expected_total_usage = first_usage.clone();
     expected_total_usage.add_assign(&second_usage);
@@ -2732,6 +2735,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -3349,6 +3353,7 @@ async fn set_rate_limits_retains_previous_credits() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -3455,6 +3460,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -3982,6 +3988,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -4101,6 +4108,7 @@ async fn resolved_environments_for_configuration(
         default_user_shell(),
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
+        /*non_blocking_snapshots*/ false,
     );
     turn_environments.update_selections(session_configuration.environment_selections());
     (environment_manager, turn_environments.snapshot().await)
@@ -4847,6 +4855,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -4959,6 +4968,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -5010,6 +5020,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         default_user_shell(),
         ShellSnapshot::disabled(),
         resolved_environments,
+        /*non_blocking_snapshots*/ false,
     ));
     let environment = Arc::clone(
         &resolved_turn_environments
@@ -5203,6 +5214,7 @@ async fn make_session_with_config_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -5309,6 +5321,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -6464,13 +6477,13 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
             _ctx: Arc<TurnContext>,
             _input: Vec<TurnInput>,
             _cancellation_token: CancellationToken,
-        ) -> Option<String> {
+        ) -> SessionTaskResult {
             let mut trace = self
                 .captured_trace
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *trace = current_span_w3c_trace_context();
-            None
+            Ok(None)
         }
     }
 
@@ -7015,6 +7028,7 @@ where
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -7065,6 +7079,7 @@ where
         default_user_shell(),
         ShellSnapshot::disabled(),
         resolved_turn_environments.clone(),
+        /*non_blocking_snapshots*/ false,
     ));
     let environment = Arc::clone(
         &resolved_turn_environments
@@ -8664,8 +8679,8 @@ impl SessionTask for CompletingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         _cancellation_token: CancellationToken,
-    ) -> Option<String> {
-        None
+    ) -> SessionTaskResult {
+        Ok(None)
     }
 }
 
@@ -8690,10 +8705,10 @@ impl SessionTask for NeverEndingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> SessionTaskResult {
         if self.listen_to_cancellation_token {
             cancellation_token.cancelled().await;
-            return None;
+            return Ok(None);
         }
         loop {
             sleep(Duration::from_secs(60)).await;
@@ -8719,14 +8734,14 @@ impl SessionTask for GuardianDeniedApprovalTask {
         ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> SessionTaskResult {
         let session = session.clone_session();
         for _ in 0..3 {
             crate::guardian::record_guardian_denial_for_test(&session, &ctx, &ctx.sub_id).await;
         }
 
         cancellation_token.cancelled().await;
-        None
+        Ok(None)
     }
 }
 
@@ -8949,7 +8964,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     .await
     .expect("steer pending input into active turn");
 
-    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+    sess.on_task_finished(Arc::clone(&tc), /*task_result*/ Ok(None))
         .await;
 
     let history = sess.clone_history().await;

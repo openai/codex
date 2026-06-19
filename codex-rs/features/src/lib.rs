@@ -124,6 +124,8 @@ pub enum Feature {
     UseLegacyLandlock,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Allow turns to start while selected executors are still starting.
+    DeferredExecutor,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
     /// Enable startup memory extraction and file-backed memory consolidation.
@@ -142,6 +144,8 @@ pub enum Feature {
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
+    /// Enable per-turn multi-agent mode selection.
+    MultiAgentMode,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
     /// Enable apps.
@@ -817,6 +821,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::DeferredExecutor,
+        key: "deferred_executor",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::JsRepl,
         key: "js_repl",
         stage: Stage::Removed,
@@ -1007,6 +1017,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MultiAgentV2,
         key: "multi_agent_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MultiAgentMode,
+        key: "multi_agent_mode",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

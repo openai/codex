@@ -300,6 +300,63 @@ async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> an
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn response_item_ids_are_sent_for_all_remote_v2_compaction_requests() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
+                    }
+                }),
+                ev_completed("resp-compact"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::ItemIds);
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("before compaction").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("after compaction").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    for (request_index, request) in requests.iter().enumerate() {
+        let input = request.input();
+        assert!(!input.is_empty(), "request {request_index} input is empty");
+        for item in input {
+            if item.get("type").and_then(serde_json::Value::as_str) == Some("compaction_trigger") {
+                continue;
+            }
+            assert!(
+                item.get("id").and_then(serde_json::Value::as_str).is_some(),
+                "request {request_index} item should have an ID: {item:#?}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
 /// Returns the fake JWT string written to `tokens.id_token`.
 #[expect(clippy::unwrap_used)]

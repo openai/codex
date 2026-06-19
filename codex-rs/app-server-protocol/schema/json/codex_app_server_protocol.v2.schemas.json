@@ -9061,6 +9061,14 @@
       "title": "ModelVerificationNotification",
       "type": "object"
     },
+    "MultiAgentMode": {
+      "description": "Controls whether the model should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help.",
+      "enum": [
+        "explicitRequestOnly",
+        "proactive"
+      ],
+      "type": "string"
+    },
     "NetworkAccess": {
       "enum": [
         "restricted",
