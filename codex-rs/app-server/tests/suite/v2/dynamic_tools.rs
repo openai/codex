@@ -281,6 +281,46 @@ async fn thread_start_rejects_dynamic_tools_not_supported_by_responses() -> Resu
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_start_rejects_overlong_flat_dynamic_tool_name() -> Result<()> {
+    let server = MockServer::start().await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let dynamic_tool = DynamicToolSpec {
+        namespace: Some("a".repeat(64)),
+        name: "b".repeat(128),
+        description: "Overlong flat dynamic tool".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+        }),
+        defer_loading: false,
+    };
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            dynamic_tools: Some(vec![dynamic_tool]),
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("canonical flat name"));
+    assert!(error.error.message.contains("at most 128"));
+
+    Ok(())
+}
+
 /// Exercises the full dynamic tool call path (server request, client response, model output).
 #[tokio::test]
 async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Result<()> {

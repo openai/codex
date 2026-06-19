@@ -148,6 +148,27 @@ mod thread_processor_behavior_tests {
     use std::sync::Arc;
     use tempfile::TempDir;
 
+    fn deferred_dynamic_tool(namespace: String, name: String) -> ApiDynamicToolSpec {
+        ApiDynamicToolSpec {
+            namespace: Some(namespace),
+            name,
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }
+    }
+
+    fn canonical_flat_name_collision_tools() -> Vec<ApiDynamicToolSpec> {
+        vec![
+            deferred_dynamic_tool("a".to_string(), "b__c".to_string()),
+            deferred_dynamic_tool("a__b".to_string(), "c".to_string()),
+        ]
+    }
+
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
         let tools = vec![ApiDynamicToolSpec {
@@ -157,7 +178,8 @@ mod thread_processor_behavior_tests {
             input_schema: json!({"type": "null"}),
             defer_loading: false,
         }];
-        let err = validate_dynamic_tools(&tools).expect_err("invalid schema");
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true)
+            .expect_err("invalid schema");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
     }
 
@@ -171,7 +193,7 @@ mod thread_processor_behavior_tests {
             input_schema: json!({"properties": {}}),
             defer_loading: false,
         }];
-        validate_dynamic_tools(&tools).expect("valid schema");
+        validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true).expect("valid schema");
     }
 
     #[test]
@@ -190,7 +212,7 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: false,
         }];
-        validate_dynamic_tools(&tools).expect("valid schema");
+        validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true).expect("valid schema");
     }
 
     #[test]
@@ -219,37 +241,60 @@ mod thread_processor_behavior_tests {
                 defer_loading: true,
             },
         ];
-        validate_dynamic_tools(&tools).expect("valid schema");
+        validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true).expect("valid schema");
     }
 
     #[test]
     fn validate_dynamic_tools_rejects_duplicate_canonical_flat_name() {
-        let tools = vec![
-            ApiDynamicToolSpec {
-                namespace: Some("a".to_string()),
-                name: "b__c".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-                defer_loading: true,
-            },
-            ApiDynamicToolSpec {
-                namespace: Some("a__b".to_string()),
-                name: "c".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-                defer_loading: true,
-            },
-        ];
-        let err = validate_dynamic_tools(&tools).expect_err("duplicate canonical flat name");
+        let err = validate_dynamic_tools(
+            &canonical_flat_name_collision_tools(),
+            /*namespace_tools_enabled*/ false,
+        )
+        .expect_err("duplicate canonical flat name");
         assert!(err.contains("a__b__c"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_accepts_duplicate_canonical_flat_name_with_namespace_tools() {
+        validate_dynamic_tools(
+            &canonical_flat_name_collision_tools(),
+            /*namespace_tools_enabled*/ true,
+        )
+        .expect("valid schema");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_overlong_canonical_flat_name_when_flattened() {
+        let long_namespace = "a".repeat(64);
+        let long_name = "b".repeat(128);
+        let tools = vec![deferred_dynamic_tool(
+            long_namespace.clone(),
+            long_name.clone(),
+        )];
+
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ false)
+            .expect_err("canonical flat name too long");
+        assert!(
+            err.contains("dynamic tool canonical flat name"),
+            "unexpected error: {err}"
+        );
+        assert!(err.contains("at most 128"), "unexpected error: {err}");
+        assert!(err.contains(&long_namespace), "unexpected error: {err}");
+        assert!(err.contains(&long_name), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_accepts_canonical_flat_name_at_responses_limit() {
+        let tools = vec![deferred_dynamic_tool("a".repeat(64), "b".repeat(62))];
+
+        validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ false).expect("valid schema");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_accepts_overlong_canonical_flat_name_with_namespace_tools() {
+        let tools = vec![deferred_dynamic_tool("a".repeat(64), "b".repeat(128))];
+
+        validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true).expect("valid schema");
     }
 
     #[test]
@@ -265,7 +310,7 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: true,
         }];
-        validate_dynamic_tools(&tools).expect("valid schema");
+        validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true).expect("valid schema");
     }
 
     #[test]
@@ -294,7 +339,8 @@ mod thread_processor_behavior_tests {
                 defer_loading: true,
             },
         ];
-        let err = validate_dynamic_tools(&tools).expect_err("duplicate name");
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true)
+            .expect_err("duplicate name");
         assert!(err.contains("codex_app"), "unexpected error: {err}");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
     }
@@ -352,7 +398,8 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: false,
         }];
-        let err = validate_dynamic_tools(&tools).expect_err("empty namespace");
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true)
+            .expect_err("empty namespace");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
         assert!(err.contains("namespace"), "unexpected error: {err}");
     }
@@ -370,7 +417,8 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: false,
         }];
-        let err = validate_dynamic_tools(&tools).expect_err("reserved namespace");
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true)
+            .expect_err("reserved namespace");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
         assert!(err.contains("reserved"), "unexpected error: {err}");
     }
@@ -388,7 +436,8 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: false,
         }];
-        let err = validate_dynamic_tools(&tools).expect_err("invalid name");
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true)
+            .expect_err("invalid name");
         assert!(err.contains("lookup.ticket"), "unexpected error: {err}");
         assert!(
             err.contains("Responses API") && err.contains("^[a-zA-Z0-9_-]+$"),
@@ -409,7 +458,8 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: true,
         }];
-        let err = validate_dynamic_tools(&tools).expect_err("invalid namespace");
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true)
+            .expect_err("invalid namespace");
         assert!(err.contains("codex.app"), "unexpected error: {err}");
         assert!(
             err.contains("Responses API") && err.contains("^[a-zA-Z0-9_-]+$"),
@@ -431,7 +481,8 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: false,
         }];
-        let err = validate_dynamic_tools(&tools).expect_err("name too long");
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true)
+            .expect_err("name too long");
         assert!(err.contains("at most 128"), "unexpected error: {err}");
         assert!(err.contains(&long_name), "unexpected error: {err}");
     }
@@ -450,7 +501,8 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: true,
         }];
-        let err = validate_dynamic_tools(&tools).expect_err("namespace too long");
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true)
+            .expect_err("namespace too long");
         assert!(err.contains("at most 64"), "unexpected error: {err}");
         assert!(err.contains(&long_namespace), "unexpected error: {err}");
     }
@@ -468,7 +520,8 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: true,
         }];
-        let err = validate_dynamic_tools(&tools).expect_err("reserved Responses namespace");
+        let err = validate_dynamic_tools(&tools, /*namespace_tools_enabled*/ true)
+            .expect_err("reserved Responses namespace");
         assert!(err.contains("functions"), "unexpected error: {err}");
         assert!(err.contains("Responses API"), "unexpected error: {err}");
     }

@@ -195,7 +195,10 @@ fn has_model_resume_override(
             .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
 }
 
-fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
+fn validate_dynamic_tools(
+    tools: &[ApiDynamicToolSpec],
+    namespace_tools_enabled: bool,
+) -> Result<(), String> {
     const DYNAMIC_TOOL_NAME_MAX_LEN: usize = 128;
     const DYNAMIC_TOOL_NAMESPACE_MAX_LEN: usize = 64;
     const DYNAMIC_TOOL_IDENTIFIER_PATTERN: &str = "^[a-zA-Z0-9_-]+$";
@@ -298,13 +301,20 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
             }
             return Err(format!("duplicate dynamic tool name: {name}"));
         }
-        let tool_name = codex_tools::ToolName::new(namespace.map(str::to_string), name);
-        let canonical_flat_name = tool_name.canonical_flat_name().into_owned();
-        if !seen_canonical_flat_names.insert(canonical_flat_name.clone()) {
-            return Err(format!(
-                "duplicate dynamic tool canonical flat name: {}",
-                escape_identifier_for_error(&canonical_flat_name),
-            ));
+        if !namespace_tools_enabled {
+            let tool_name = codex_tools::ToolName::new(namespace.map(str::to_string), name);
+            let canonical_flat_name = tool_name.canonical_flat_name().into_owned();
+            validate_dynamic_tool_identifier(
+                &canonical_flat_name,
+                "dynamic tool canonical flat name",
+                DYNAMIC_TOOL_NAME_MAX_LEN,
+            )?;
+            if !seen_canonical_flat_names.insert(canonical_flat_name.clone()) {
+                return Err(format!(
+                    "duplicate dynamic tool canonical flat name: {}",
+                    escape_identifier_for_error(&canonical_flat_name),
+                ));
+            }
         }
         if tool.defer_loading && namespace.is_none() {
             return Err(format!(
@@ -1089,7 +1099,12 @@ impl ThreadRequestProcessor {
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
-            validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
+            let namespace_tools_enabled =
+                create_model_provider(config.model_provider.clone(), /*auth_manager*/ None)
+                    .capabilities()
+                    .namespace_tools;
+            validate_dynamic_tools(&dynamic_tools, namespace_tools_enabled)
+                .map_err(invalid_request)?;
             dynamic_tools
                 .into_iter()
                 .map(|tool| CoreDynamicToolSpec {
