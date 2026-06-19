@@ -126,9 +126,10 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     }
 
     pub async fn shutdown(&self) -> Result<(), Error> {
+        self.begin_shutdown();
+        // Serialize with cell admission before taking the count snapshot.
         let cells = self.inner.cells.lock().await;
         let mut cell_count = self.inner.cell_count_tx.subscribe();
-        self.begin_shutdown();
         drop(cells);
         while *cell_count.borrow_and_update() != 0 {
             if cell_count.changed().await.is_err() {

@@ -339,9 +339,9 @@ async fn concurrent_shutdowns_wait_for_the_same_cell_cleanup() {
 }
 
 #[tokio::test]
-async fn shutdown_waits_for_cell_admission_already_queued_for_the_registry_lock() {
-    let (delegate, mut close_started_rx) = BlockingCloseDelegate::new(FirstCloseOutcome::Succeeds);
-    let runtime = Arc::new(SessionRuntime::new(Arc::clone(&delegate)));
+async fn shutdown_rejects_cell_admission_queued_before_the_registry_lock() {
+    let (delegate, _) = BlockingCloseDelegate::new(FirstCloseOutcome::Succeeds);
+    let runtime = Arc::new(SessionRuntime::new(delegate));
     let cells = runtime.inner.cells.lock().await;
 
     let execution = runtime.execute(
@@ -369,26 +369,75 @@ async fn shutdown_waits_for_cell_admission_already_queued_for_the_registry_lock(
     })
     .await;
 
+    assert!(!runtime.is_alive());
+    drop(cells);
+    assert!(matches!(execution.await, Err(Error::ShuttingDown)));
+    assert_eq!(shutdown.await, Ok(()));
+}
+
+#[tokio::test]
+async fn shutdown_rejects_cell_admission_queued_after_the_registry_lock() {
+    let (delegate, _) = BlockingCloseDelegate::new(FirstCloseOutcome::Succeeds);
+    let runtime = Arc::new(SessionRuntime::new(delegate));
+    let cells = runtime.inner.cells.lock().await;
+
+    let shutdown = runtime.shutdown();
+    tokio::pin!(shutdown);
+    std::future::poll_fn(|context| match shutdown.as_mut().poll(context) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(Ok(())) => panic!("shutdown completed before acquiring the registry lock"),
+        Poll::Ready(Err(error)) => {
+            panic!("shutdown failed before acquiring the registry lock: {error}")
+        }
+    })
+    .await;
+
+    let execution = runtime.execute(
+        execute_request("text('late');"),
+        ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
+    );
+    tokio::pin!(execution);
+    std::future::poll_fn(|context| match execution.as_mut().poll(context) {
+        Poll::Pending => panic!("execution waited after shutdown cancellation"),
+        Poll::Ready(Ok(_)) => panic!("execution started after shutdown cancellation"),
+        Poll::Ready(Err(Error::ShuttingDown)) => Poll::Ready(()),
+        Poll::Ready(Err(error)) => panic!("execution failed with an unexpected error: {error}"),
+    })
+    .await;
+
     drop(cells);
 
-    let started = execution.await.unwrap();
-    let cell_id = started.cell_id;
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(/*secs*/ 1), async {
-            tokio::select! {
-                close_started = close_started_rx.recv() => close_started,
-                result = &mut shutdown => {
-                    panic!("shutdown completed before cell delegate cleanup: {result:?}");
-                }
-            }
-        })
-        .await
-        .unwrap(),
-        Some(cell_id)
-    );
-
-    delegate.close_release.add_permits(/*n*/ 1);
     assert_eq!(shutdown.await, Ok(()));
+}
+
+#[tokio::test]
+async fn cancelling_shutdown_while_waiting_for_the_registry_lock_keeps_the_session_closed() {
+    let (delegate, _) = BlockingCloseDelegate::new(FirstCloseOutcome::Succeeds);
+    let runtime = SessionRuntime::new(delegate);
+    let cells = runtime.inner.cells.lock().await;
+
+    let mut shutdown = Box::pin(runtime.shutdown());
+    std::future::poll_fn(|context| match shutdown.as_mut().poll(context) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(Ok(())) => panic!("shutdown completed before acquiring the registry lock"),
+        Poll::Ready(Err(error)) => {
+            panic!("shutdown failed before acquiring the registry lock: {error}")
+        }
+    })
+    .await;
+    assert!(!runtime.is_alive());
+    drop(shutdown);
+
+    assert!(matches!(
+        runtime
+            .execute(
+                execute_request("text('late');"),
+                ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
+            )
+            .await,
+        Err(Error::ShuttingDown)
+    ));
+    drop(cells);
 }
 
 #[tokio::test]
