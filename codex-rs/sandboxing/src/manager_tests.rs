@@ -321,7 +321,7 @@ fn managed_mitm_ca_private_key_is_denied_for_unrestricted_profile() {
 
     let permission_profile = with_managed_mitm_ca_paths(
         PermissionProfile::Disabled,
-        None,
+        /*managed_mitm_ca_trust_bundle_path*/ None,
         &managed_private_key_path,
         cwd.as_path(),
     );
