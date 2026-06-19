@@ -10,12 +10,12 @@ use codex_protocol::models::PermissionProfile;
 
 use super::ConstraintError;
 use super::ConstraintResult;
+use super::is_permission_allowed;
 use super::merge_managed_permission_profiles;
 use super::permissions::BUILT_IN_DANGER_FULL_ACCESS_PROFILE;
 use super::permissions::BUILT_IN_READ_ONLY_PROFILE;
 use super::permissions::BUILT_IN_WORKSPACE_PROFILE;
 use super::permissions::compile_permission_profile_selection;
-use super::permissions::is_builtin_permission_profile_name;
 use super::permissions::validate_user_permission_profile_names;
 use super::validate_required_permission_profile_catalog;
 
@@ -95,12 +95,11 @@ pub(super) fn permission_profile_is_allowed(
     profile_id: &str,
     permission_profile: &PermissionProfile,
 ) -> bool {
-    let allowed_by_id = is_builtin_permission_profile_name(profile_id)
-        || config_layer_stack
-            .requirements_toml()
-            .allowed_permissions
-            .as_ref()
-            .is_none_or(|allowed| allowed.iter().any(|allowed_id| allowed_id == profile_id));
+    let allowed_by_id = config_layer_stack
+        .requirements_toml()
+        .allowed_permission_profiles
+        .as_ref()
+        .is_none_or(|allowed| is_permission_allowed(allowed, profile_id));
     let allowed_by_sandbox_mode = config_layer_stack
         .requirements()
         .permission_profile

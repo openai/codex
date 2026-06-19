@@ -1746,7 +1746,10 @@ async fn permission_profile_catalog_marks_profiles_disallowed_by_requirements() 
         &requirements_path,
         r#"
 allowed_sandbox_modes = ["read-only", "workspace-write"]
-allowed_permissions = ["managed-standard"]
+default_permissions = "managed-standard"
+
+[allowed_permission_profiles]
+managed-standard = true
 
 [permissions.managed-standard]
 extends = ":workspace"
@@ -1773,12 +1776,12 @@ extends = ":workspace"
             PermissionProfileCatalogEntry {
                 id: ":read-only".to_string(),
                 description: None,
-                allowed: true,
+                allowed: false,
             },
             PermissionProfileCatalogEntry {
                 id: ":workspace".to_string(),
                 description: None,
-                allowed: true,
+                allowed: false,
             },
             PermissionProfileCatalogEntry {
                 id: ":danger-full-access".to_string(),
