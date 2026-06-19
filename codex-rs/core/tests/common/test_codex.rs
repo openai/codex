@@ -639,6 +639,7 @@ impl TestCodexBuilder {
                         initial_history: InitialHistory::New,
                         session_source: None,
                         thread_source: None,
+                        originator_override: None,
                         dynamic_tools: Vec::new(),
                         metrics_service_name: None,
                         parent_trace: None,

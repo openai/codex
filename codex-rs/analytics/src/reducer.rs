@@ -82,6 +82,7 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadOriginatorResolvedInput;
 use crate::facts::TurnCodexError;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
@@ -148,6 +149,7 @@ pub(crate) struct AnalyticsReducer {
     turns: HashMap<String, TurnState>,
     connections: HashMap<u64, ConnectionState>,
     threads: HashMap<String, ThreadAnalyticsState>,
+    thread_originators: HashMap<String, String>,
     tool_items_started_at_ms: HashMap<ToolItemKey, u64>,
     pending_reviews: HashMap<RequestId, PendingReviewState>,
     item_review_summaries: HashMap<ToolItemKey, ItemReviewSummary>,
@@ -282,6 +284,7 @@ struct ItemReviewSummary {
 struct ThreadMetadataState {
     session_id: String,
     thread_source: Option<ThreadSource>,
+    originator: String,
     initialization_mode: ThreadInitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
@@ -292,6 +295,7 @@ impl ThreadMetadataState {
         session_id: String,
         session_source: &SessionSource,
         thread_source: Option<ThreadSource>,
+        originator: String,
         parent_thread_id: Option<String>,
         initialization_mode: ThreadInitializationMode,
     ) -> Self {
@@ -308,11 +312,21 @@ impl ThreadMetadataState {
         Self {
             session_id,
             thread_source,
+            originator,
             initialization_mode,
             subagent_source,
             parent_thread_id,
         }
     }
+}
+
+fn app_server_client_for_thread(
+    connection_state: &ConnectionState,
+    thread_metadata: &ThreadMetadataState,
+) -> CodexAppServerClientMetadata {
+    let mut app_server_client = connection_state.app_server_client.clone();
+    app_server_client.product_client_id = thread_metadata.originator.clone();
+    app_server_client
 }
 
 enum RequestState {
@@ -478,6 +492,9 @@ impl AnalyticsReducer {
                 self.ingest_server_request_aborted(completed_at_ms, request_id, out);
             }
             AnalyticsFact::Custom(input) => match input {
+                CustomAnalyticsFact::ThreadOriginatorResolved(input) => {
+                    self.ingest_thread_originator_resolved(input);
+                }
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_thread_started(input, out);
                 }
@@ -568,12 +585,19 @@ impl AnalyticsReducer {
             .as_ref()
             .and_then(|parent_thread_id| self.threads.get(parent_thread_id))
             .and_then(|thread| thread.connection_id);
+        let originator = parent_thread_id
+            .as_ref()
+            .and_then(|parent_thread_id| self.threads.get(parent_thread_id))
+            .and_then(|thread| thread.metadata.as_ref())
+            .map(|metadata| metadata.originator.clone())
+            .unwrap_or_else(|| originator().value);
         let thread_state = self.threads.entry(input.thread_id.clone()).or_default();
         thread_state
             .metadata
             .get_or_insert_with(|| ThreadMetadataState {
                 session_id: input.session_id.clone(),
                 thread_source: Some(ThreadSource::Subagent),
+                originator,
                 initialization_mode: ThreadInitializationMode::New,
                 subagent_source: Some(subagent_source_name(&input.subagent_source)),
                 parent_thread_id,
@@ -584,6 +608,25 @@ impl AnalyticsReducer {
         out.push(TrackEventRequest::ThreadInitialized(
             subagent_thread_started_event_request(input),
         ));
+    }
+
+    fn ingest_thread_originator_resolved(&mut self, input: ThreadOriginatorResolvedInput) {
+        let ThreadOriginatorResolvedInput {
+            thread_id,
+            originator,
+        } = input;
+        if originator.is_empty() {
+            return;
+        }
+        if let Some(metadata) = self
+            .threads
+            .get_mut(&thread_id)
+            .and_then(|thread| thread.metadata.as_mut())
+        {
+            metadata.originator = originator;
+            return;
+        }
+        self.thread_originators.insert(thread_id, originator);
     }
 
     fn ingest_guardian_review(
@@ -601,7 +644,10 @@ impl AnalyticsReducer {
                 event_type: "codex_guardian_review",
                 event_params: GuardianReviewEventPayload {
                     session_id: thread_metadata.session_id.clone(),
-                    app_server_client: connection_state.app_server_client.clone(),
+                    app_server_client: app_server_client_for_thread(
+                        connection_state,
+                        thread_metadata,
+                    ),
                     runtime: connection_state.runtime.clone(),
                     guardian_review: input,
                 },
@@ -729,7 +775,7 @@ impl AnalyticsReducer {
                         turn_id: Some(tracking.turn_id.clone()),
                         invoke_type: Some(invocation.invocation_type),
                         model_slug: Some(tracking.model_slug.clone()),
-                        product_client_id: Some(originator().value),
+                        product_client_id: Some(tracking.product_client_id.clone()),
                         repo_url,
                         skill_scope: Some(skill_scope.to_string()),
                         plugin_id: invocation.plugin_id,
@@ -783,7 +829,7 @@ impl AnalyticsReducer {
         let PluginStateChangedInput { plugin, state } = input;
         let event = CodexPluginEventRequest {
             event_type: plugin_state_event_type(state),
-            event_params: codex_plugin_metadata(plugin),
+            event_params: codex_plugin_metadata(plugin, Some(originator().value)),
         };
         out.push(match state {
             PluginState::Installed => TrackEventRequest::PluginInstalled(event),
@@ -803,7 +849,7 @@ impl AnalyticsReducer {
             CodexPluginInstallFailedEventRequest {
                 event_type: "codex_plugin_install_failed",
                 event_params: CodexPluginInstallFailedMetadata {
-                    plugin: codex_plugin_metadata(plugin),
+                    plugin: codex_plugin_metadata(plugin, Some(originator().value)),
                     error_type,
                 },
             },
@@ -1306,10 +1352,15 @@ impl AnalyticsReducer {
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
+        let originator = self
+            .thread_originators
+            .remove(&thread_id)
+            .unwrap_or_else(|| connection_state.app_server_client.product_client_id.clone());
         let thread_metadata = ThreadMetadataState::from_thread_metadata(
             session_id.clone(),
             &session_source,
             thread.thread_source.map(Into::into),
+            originator,
             parent_thread_id,
             initialization_mode,
         );
@@ -1326,7 +1377,10 @@ impl AnalyticsReducer {
                 event_params: ThreadInitializedEventParams {
                     thread_id,
                     session_id,
-                    app_server_client: connection_state.app_server_client.clone(),
+                    app_server_client: app_server_client_for_thread(
+                        connection_state,
+                        &thread_metadata,
+                    ),
                     runtime: connection_state.runtime.clone(),
                     model,
                     ephemeral: thread.ephemeral,
@@ -1353,7 +1407,7 @@ impl AnalyticsReducer {
                 event_params: codex_compaction_event_params(
                     input,
                     thread_metadata.session_id.clone(),
-                    connection_state.app_server_client.clone(),
+                    app_server_client_for_thread(connection_state, thread_metadata),
                     connection_state.runtime.clone(),
                     thread_metadata.thread_source.clone(),
                     thread_metadata.subagent_source.clone(),
@@ -1374,7 +1428,7 @@ impl AnalyticsReducer {
             event_params: codex_goal_event_params(
                 input,
                 thread_metadata.session_id.clone(),
-                connection_state.app_server_client.clone(),
+                app_server_client_for_thread(connection_state, thread_metadata),
                 connection_state.runtime.clone(),
                 thread_metadata.thread_source.clone(),
                 thread_metadata.subagent_source.clone(),
@@ -1478,7 +1532,7 @@ impl AnalyticsReducer {
                 session_id: thread_metadata.session_id.clone(),
                 expected_turn_id: Some(pending_request.expected_turn_id),
                 accepted_turn_id,
-                app_server_client: connection_state.app_server_client.clone(),
+                app_server_client: app_server_client_for_thread(connection_state, thread_metadata),
                 runtime: connection_state.runtime.clone(),
                 thread_source: thread_metadata.thread_source.clone(),
                 subagent_source: thread_metadata.subagent_source.clone(),
@@ -1521,7 +1575,7 @@ impl AnalyticsReducer {
                 turn_id: pending_review.turn_id,
                 item_id: pending_review.item_id,
                 review_id: pending_review.review_id,
-                app_server_client: connection_state.app_server_client.clone(),
+                app_server_client: app_server_client_for_thread(connection_state, thread_metadata),
                 runtime: connection_state.runtime.clone(),
                 thread_source: thread_metadata.thread_source.clone(),
                 subagent_source: thread_metadata.subagent_source.clone(),
@@ -1601,7 +1655,7 @@ impl AnalyticsReducer {
         let turn_event = TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
             event_type: "codex_turn_event",
             event_params: codex_turn_event_params(
-                connection_state.app_server_client.clone(),
+                app_server_client_for_thread(connection_state, thread_metadata),
                 connection_state.runtime.clone(),
                 turn_id.to_string(),
                 turn_state,
@@ -2098,7 +2152,7 @@ fn tool_item_base(
         thread_id: thread_id.to_string(),
         turn_id: turn_id.to_string(),
         item_id,
-        app_server_client: context.connection_state.app_server_client.clone(),
+        app_server_client: app_server_client_for_thread(context.connection_state, thread_metadata),
         runtime: context.connection_state.runtime.clone(),
         thread_source: thread_metadata.thread_source.clone(),
         subagent_source: thread_metadata.subagent_source.clone(),

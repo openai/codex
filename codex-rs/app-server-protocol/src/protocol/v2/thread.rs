@@ -100,6 +100,9 @@ pub struct ThreadStartParams {
     /// Optional client-supplied analytics source classification for this thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,
+    /// Optional originator to use for this thread's Responses requests and analytics events.
+    #[ts(optional = nullable)]
+    pub originator_override: Option<String>,
     /// Optional sticky environments for this thread.
     ///
     /// Omitted selects the default environment when environment access is

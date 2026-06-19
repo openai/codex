@@ -4296,6 +4296,13 @@
             "null"
           ]
         },
+        "originatorOverride": {
+          "description": "Optional originator to use for this thread's Responses requests and analytics events.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "personality": {
           "anyOf": [
             {

@@ -173,6 +173,7 @@ struct ModelClientState {
     provider: SharedModelProvider,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
+    originator: String,
     model_verbosity: Option<VerbosityConfig>,
     enable_request_compression: bool,
     include_timing_metrics: bool,
@@ -374,6 +375,7 @@ impl ModelClient {
         thread_id: ThreadId,
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
+        originator: String,
         model_verbosity: Option<VerbosityConfig>,
         enable_request_compression: bool,
         include_timing_metrics: bool,
@@ -395,6 +397,7 @@ impl ModelClient {
                 provider: model_provider,
                 auth_env_telemetry,
                 session_source,
+                originator,
                 model_verbosity,
                 enable_request_compression,
                 include_timing_metrics,
@@ -961,6 +964,7 @@ impl ModelClient {
             self.state.beta_features_header.as_deref(),
             /*turn_state*/ None,
         );
+        add_originator_header(&mut headers, self.state.originator.as_str());
         if let Ok(header_value) = HeaderValue::from_str(&responses_metadata.thread_id) {
             headers.insert("x-client-request-id", header_value);
         }
@@ -1028,6 +1032,7 @@ impl ModelClientSession {
                     self.client.state.beta_features_header.as_deref(),
                     Some(&self.turn_state),
                 );
+                add_originator_header(&mut headers, self.client.state.originator.as_str());
                 headers.extend(
                     self.client
                         .build_responses_compatibility_headers(responses_metadata),
@@ -1749,6 +1754,15 @@ fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: boo
             X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
             HeaderValue::from_static("true"),
         );
+    }
+}
+
+fn add_originator_header(headers: &mut ApiHeaderMap, originator: &str) {
+    match HeaderValue::from_str(originator) {
+        Ok(header_value) => {
+            headers.insert("originator", header_value);
+        }
+        Err(error) => warn!("ignoring invalid thread originator header {originator}: {error}"),
     }
 }
 

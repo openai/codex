@@ -45,7 +45,6 @@ use super::list::parse_timestamp_uuid_from_filename;
 use super::metadata;
 use super::session_index::find_thread_names_by_ids;
 use crate::config::RolloutConfigView;
-use crate::default_client::originator;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_git_utils::collect_git_info;
@@ -86,6 +85,7 @@ pub enum RolloutRecorderParams {
         parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
+        originator: String,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         multi_agent_version: Option<MultiAgentVersion>,
@@ -163,6 +163,7 @@ impl RolloutRecorderParams {
         parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
+        originator: String,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> Self {
@@ -172,6 +173,7 @@ impl RolloutRecorderParams {
             parent_thread_id,
             source,
             thread_source,
+            originator,
             base_instructions,
             dynamic_tools,
             multi_agent_version: None,
@@ -701,6 +703,7 @@ impl RolloutRecorder {
                 parent_thread_id,
                 source,
                 thread_source,
+                originator,
                 base_instructions,
                 dynamic_tools,
                 multi_agent_version,
@@ -724,7 +727,7 @@ impl RolloutRecorder {
                     parent_thread_id,
                     timestamp,
                     cwd: config.cwd().to_path_buf(),
-                    originator: originator().value,
+                    originator,
                     cli_version: env!("CARGO_PKG_VERSION").to_string(),
                     agent_nickname: source.get_nickname(),
                     agent_role: source.get_agent_role(),

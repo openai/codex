@@ -320,6 +320,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
                 InternalSessionSource::MemoryConsolidation,
             )),
             thread_source: None,
+            originator_override: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -460,6 +461,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            originator_override: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -475,6 +477,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            originator_override: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -561,12 +564,14 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let default_cwd = config.cwd.clone();
     let mut source_config = config.clone();
     source_config.cwd = selected_cwd.clone();
+    let thread_originator = "flora_desktop_local";
     let source = manager
         .start_thread_with_options(StartThreadOptions {
             config: source_config,
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            originator_override: Some(thread_originator.to_string()),
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -611,6 +616,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .await
         .expect("build resumed turn context");
     assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
+    assert_eq!(resumed_turn.originator, thread_originator);
     assert_eq!(
         resumed_turn.environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&default_cwd)
@@ -638,6 +644,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .await
         .expect("build forked turn context");
     assert_eq!(forked_turn.environments.turn_environments.len(), 1);
+    assert_eq!(forked_turn.originator, thread_originator);
     assert_eq!(
         forked_turn.environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&default_cwd)
@@ -850,6 +857,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: Some(ThreadSource::User),
+            originator_override: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,

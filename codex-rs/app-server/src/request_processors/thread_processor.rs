@@ -1,5 +1,6 @@
 use super::*;
 use crate::error_code::method_not_found;
+use axum::http::HeaderValue;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -905,11 +906,19 @@ impl ThreadRequestProcessor {
             ephemeral,
             session_start_source,
             thread_source,
+            originator_override,
             environments,
         } = params;
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",
+            ));
+        }
+        if originator_override.as_deref().is_some_and(|originator| {
+            originator.is_empty() || HeaderValue::from_str(originator).is_err()
+        }) {
+            return Err(invalid_request(
+                "`originatorOverride` must be a non-empty valid HTTP header value",
             ));
         }
         let environment_selections =
@@ -959,6 +968,7 @@ impl ThreadRequestProcessor {
                 selected_capability_roots.unwrap_or_default(),
                 session_start_source,
                 thread_source.map(Into::into),
+                originator_override,
                 environment_selections,
                 service_name,
                 experimental_raw_events,
@@ -1033,6 +1043,7 @@ impl ThreadRequestProcessor {
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
+        originator_override: Option<String>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -1150,6 +1161,7 @@ impl ThreadRequestProcessor {
                 },
                 session_source: None,
                 thread_source,
+                originator_override,
                 dynamic_tools,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
@@ -1243,6 +1255,9 @@ impl ThreadRequestProcessor {
         let cwd = config_snapshot.cwd().clone();
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
+        listener_task_context
+            .outgoing
+            .track_thread_originator_resolved(&thread_id, config_snapshot.originator.clone());
 
         let response = ThreadStartResponse {
             thread: thread.clone(),
@@ -2791,6 +2806,8 @@ impl ThreadRequestProcessor {
                 };
 
                 let connection_id = request_id.connection_id;
+                self.outgoing
+                    .track_thread_originator_resolved(&thread_id, config_snapshot.originator);
                 self.outgoing.send_response(request_id, response).await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
@@ -3513,6 +3530,8 @@ impl ThreadRequestProcessor {
         let notif = thread_started_notification(thread);
         let connection_id = request_id.connection_id;
         let token_usage_thread = include_turns.then(|| response.thread.clone());
+        self.outgoing
+            .track_thread_originator_resolved(&thread_id, config_snapshot.originator);
         self.outgoing.send_response(request_id, response).await;
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.

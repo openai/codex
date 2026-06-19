@@ -628,6 +628,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     }
 
     let config_snapshot = pending.config_snapshot;
+    let originator = config_snapshot.originator.clone();
     let cwd = config_snapshot.cwd().clone();
     let ThreadConfigSnapshot {
         model,
@@ -663,6 +664,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         reasoning_effort,
         initial_turns_page,
     };
+    outgoing.track_thread_originator_resolved(&conversation_id, originator);
     outgoing.send_response(request_id, response).await;
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.

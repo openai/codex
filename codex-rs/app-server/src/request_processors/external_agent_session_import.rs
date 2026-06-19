@@ -11,6 +11,7 @@ use codex_external_agent_sessions::ImportedExternalAgentSession;
 use codex_external_agent_sessions::PendingSessionImport;
 use codex_external_agent_sessions::prepare_validated_session_import;
 use codex_external_agent_sessions::record_completed_session_imports;
+use codex_login::default_client::originator;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
@@ -206,6 +207,7 @@ impl ExternalAgentSessionImporter {
             parent_thread_id: None,
             source: source.clone(),
             thread_source: None,
+            originator: originator().value,
             base_instructions: BaseInstructions {
                 text: config
                     .base_instructions

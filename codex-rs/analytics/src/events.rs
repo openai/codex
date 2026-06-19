@@ -25,7 +25,6 @@ use crate::facts::TurnSubmissionType;
 use crate::now_unix_millis;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CommandExecutionSource;
-use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -1028,13 +1027,16 @@ pub(crate) fn codex_app_metadata(
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         app_name: app.app_name,
-        product_client_id: Some(originator().value),
+        product_client_id: Some(tracking.product_client_id.clone()),
         invoke_type: app.invocation_type,
         model_slug: Some(tracking.model_slug.clone()),
     }
 }
 
-pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata {
+pub(crate) fn codex_plugin_metadata(
+    plugin: PluginTelemetryMetadata,
+    product_client_id: Option<String>,
+) -> CodexPluginMetadata {
     let PluginTelemetryMetadata {
         plugin_id,
         remote_plugin_id,
@@ -1058,7 +1060,7 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
                 .map(|connector_id| connector_id.0)
                 .collect()
         }),
-        product_client_id: Some(originator().value),
+        product_client_id,
     }
 }
 
@@ -1135,7 +1137,7 @@ pub(crate) fn codex_plugin_used_metadata(
         .as_ref()
         .map(|summary| summary.mcp_server_names.clone());
     CodexPluginUsedMetadata {
-        plugin: codex_plugin_metadata(plugin),
+        plugin: codex_plugin_metadata(plugin, Some(tracking.product_client_id.clone())),
         mcp_server_names,
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),

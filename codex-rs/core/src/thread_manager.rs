@@ -29,6 +29,7 @@ use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::originator;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
@@ -182,12 +183,23 @@ pub struct StartThreadOptions {
     pub initial_history: InitialHistory,
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
+    /// Optional originator to use for this thread's Responses requests and analytics events.
+    pub originator_override: Option<String>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
     pub thread_extension_init: ExtensionDataInit,
     pub supports_openai_form_elicitation: bool,
+}
+
+fn effective_originator(
+    initial_history: &InitialHistory,
+    originator_override: Option<String>,
+) -> String {
+    originator_override
+        .or_else(|| initial_history.get_session_originator())
+        .unwrap_or_else(|| originator().value)
 }
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
@@ -605,6 +617,7 @@ impl ThreadManager {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            originator_override: None,
             dynamic_tools,
             metrics_service_name: None,
             parent_trace: None,
@@ -635,6 +648,8 @@ impl ThreadManager {
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
         let session_source = options.session_source.unwrap_or(resumed_session_source);
         let thread_source = options.thread_source.or(resumed_thread_source);
+        let originator =
+            effective_originator(&options.initial_history, options.originator_override);
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             options.initial_history,
@@ -644,6 +659,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
+            originator,
             options.dynamic_tools,
             options.metrics_service_name,
             /*inherited_environments*/ None,
@@ -730,6 +746,7 @@ impl ThreadManager {
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
+        let originator = effective_originator(&initial_history, None);
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
@@ -739,6 +756,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
+            originator,
             Vec::new(),
             /*metrics_service_name*/ None,
             /*inherited_environments*/ None,
@@ -771,6 +789,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
+            originator().value,
             Vec::new(),
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
@@ -799,6 +818,7 @@ impl ThreadManager {
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
+        let originator = effective_originator(&initial_history, None);
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
@@ -808,6 +828,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
+            originator,
             Vec::new(),
             /*metrics_service_name*/ None,
             /*inherited_environments*/ None,
@@ -983,6 +1004,7 @@ impl ThreadManager {
             &config.cwd,
         );
         let agent_control = self.agent_control_for_config(&config);
+        let originator = effective_originator(&history, None);
         Box::pin(self.state.spawn_thread(
             config,
             history,
@@ -991,6 +1013,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
+            originator,
             Vec::new(),
             /*metrics_service_name*/ None,
             parent_trace,
@@ -1250,6 +1273,7 @@ impl ThreadManagerState {
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
+            originator().value,
             Vec::new(),
             metrics_service_name,
             inherited_environments,
@@ -1279,6 +1303,7 @@ impl ThreadManagerState {
         let environments =
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
         let thread_source = initial_history.get_resumed_thread_source();
+        let originator = effective_originator(&initial_history, None);
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
@@ -1288,6 +1313,7 @@ impl ThreadManagerState {
             parent_thread_id,
             /*forked_from_thread_id*/ None,
             thread_source,
+            originator,
             Vec::new(),
             /*metrics_service_name*/ None,
             inherited_environments,
@@ -1318,6 +1344,7 @@ impl ThreadManagerState {
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
         });
+        let originator = effective_originator(&initial_history, None);
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
@@ -1327,6 +1354,7 @@ impl ThreadManagerState {
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
+            originator,
             Vec::new(),
             /*metrics_service_name*/ None,
             inherited_environments,
@@ -1351,6 +1379,7 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
+        originator: String,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
@@ -1368,6 +1397,7 @@ impl ThreadManagerState {
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
+            originator,
             dynamic_tools,
             metrics_service_name,
             /*inherited_environments*/ None,
@@ -1392,6 +1422,7 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
+        originator: String,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
@@ -1457,6 +1488,7 @@ impl ThreadManagerState {
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
+            originator,
             agent_control,
             dynamic_tools,
             metrics_service_name,

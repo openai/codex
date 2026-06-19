@@ -256,6 +256,15 @@ impl OutgoingMessageSender {
         }
     }
 
+    pub(crate) fn track_thread_originator_resolved(
+        &self,
+        thread_id: &ThreadId,
+        originator: String,
+    ) {
+        self.analytics_events_client
+            .track_thread_originator_resolved(thread_id.to_string(), originator);
+    }
+
     async fn take_request_context(
         &self,
         request_id: &ConnectionRequestId,
