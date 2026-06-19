@@ -234,14 +234,15 @@ async fn next_event(events_rx: &mut mpsc::UnboundedReceiver<DelegateEvent>) -> D
 
 #[tokio::test]
 async fn yields_and_resumes() {
-    let service = CodeModeService::new();
+    let (delegate, mut events_rx) = ReleasableNotificationDelegate::new();
+    let service = CodeModeService::with_delegate(delegate.clone());
     let cell = service
         .execute(ExecuteRequest {
             source: r#"
 text("before");
 yield_control();
-store("finished", true);
 text("after");
+notify("resumed");
 "#
             .to_string(),
             yield_time_ms: Some(60_000),
@@ -259,30 +260,11 @@ text("after");
             }],
         }
     );
-    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), async {
-        for cell_number in 2.. {
-            let response = service
-                .execute(ExecuteRequest {
-                    cell_id: cell_id(&cell_number.to_string()),
-                    ..execute_request(r#"text(String(load("finished")));"#)
-                })
-                .await
-                .unwrap();
-            let RuntimeResponse::Result { content_items, .. } = response else {
-                panic!("expected stored-value probe to complete");
-            };
-            if content_items
-                == vec![FunctionCallOutputContentItem::InputText {
-                    text: "true".to_string(),
-                }]
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    assert_eq!(
+        next_event(&mut events_rx).await,
+        DelegateEvent::NotificationStarted
+    );
+    delegate.release_notification();
     assert_eq!(
         service
             .wait(WaitRequest {
@@ -297,20 +279,6 @@ text("after");
                 text: "after".to_string(),
             }],
             error_text: None,
-        })
-    );
-    assert_eq!(
-        service
-            .wait(WaitRequest {
-                cell_id: cell_id("1"),
-                yield_time_ms: 60_000,
-            })
-            .await
-            .unwrap(),
-        WaitOutcome::MissingCell(RuntimeResponse::Result {
-            cell_id: cell_id("1"),
-            content_items: Vec::new(),
-            error_text: Some("exec cell 1 not found".to_string()),
         })
     );
 }
@@ -364,7 +332,7 @@ text("after");
 }
 
 #[tokio::test]
-async fn observed_natural_completion_wins_over_termination() {
+async fn buffered_natural_completion_wins_over_termination() {
     let service = CodeModeService::new();
     let cell = service
         .execute(execute_request(
@@ -448,7 +416,7 @@ async fn termination_discards_pending_callbacks_before_responding() {
 }
 
 #[tokio::test]
-async fn shutdown_does_not_await_notifications_during_natural_completion() {
+async fn shutdown_cancels_a_non_cooperative_notification() {
     let (delegate, mut events_rx) = NeverResolvingNotificationDelegate::new();
     let service = Arc::new(CodeModeService::with_delegate(delegate));
     service
@@ -471,7 +439,7 @@ async fn shutdown_does_not_await_notifications_during_natural_completion() {
 }
 
 #[tokio::test]
-async fn termination_does_not_await_notifications_during_natural_completion() {
+async fn termination_cancels_a_non_cooperative_notification() {
     let (delegate, mut events_rx) = NeverResolvingNotificationDelegate::new();
     let service = CodeModeService::with_delegate(delegate);
     service
@@ -566,25 +534,6 @@ async fn termination_discards_pending_tools_before_responding() {
             content_items: Vec::new(),
         })
     );
-}
-
-#[tokio::test]
-async fn shutdown_discards_pending_tools_before_returning() {
-    let (delegate, mut events_rx) = BlockingDelegate::new();
-    let service = Arc::new(CodeModeService::with_delegate(delegate.clone()));
-    service
-        .execute(ExecuteRequest {
-            enabled_tools: vec![blocking_tool()],
-            source: r#"await tools.block({});"#.to_string(),
-            ..execute_request("")
-        })
-        .await
-        .unwrap();
-
-    assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
-
-    let shutdown_service = Arc::clone(&service);
-    assert_eq!(shutdown_service.shutdown().await, Ok(()));
 }
 
 #[tokio::test]

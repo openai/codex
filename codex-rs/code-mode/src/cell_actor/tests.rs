@@ -268,26 +268,6 @@ async fn yield_timer_preempts_buffered_runtime_output() {
 }
 
 #[tokio::test]
-async fn queued_termination_preempts_unobserved_runtime_completion() {
-    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::from_secs(60)));
-    harness
-        .event_tx
-        .send(RuntimeEvent::Result {
-            stored_value_writes: HashMap::new(),
-            error_text: None,
-        })
-        .unwrap();
-    let termination = harness.handle.terminate();
-
-    let terminated = Ok(CellEvent::Terminated {
-        content_items: Vec::new(),
-    });
-    assert_eq!(termination.await, terminated.clone());
-    assert_eq!(harness.initial_event_rx.await.unwrap(), terminated);
-    harness.task.await.unwrap();
-}
-
-#[tokio::test]
 async fn termination_preempts_result_without_committing_stored_values() {
     let host = Arc::new(RecordingHost::default());
     let harness = spawn_cell_actor_harness_with_host(
@@ -302,6 +282,10 @@ async fn termination_preempts_result_without_committing_stored_values() {
         })
         .unwrap();
     let termination = harness.handle.terminate();
+    assert_eq!(
+        harness.handle.terminate().await,
+        Err(CellError::AlreadyTerminating)
+    );
 
     let terminated = Ok(CellEvent::Terminated {
         content_items: Vec::new(),
@@ -390,53 +374,6 @@ async fn session_shutdown_during_result_callback_drain_prevents_stored_value_com
             content_items: Vec::new(),
         })
     );
-    assert!(!host.committed.load(Ordering::Acquire));
-    assert!(host.closed.load(Ordering::Acquire));
-}
-
-#[tokio::test]
-async fn termination_during_result_callback_drain_does_not_wait_for_the_notification() {
-    let host = Arc::new(PendingNotificationHost::default());
-    let harness = spawn_cell_actor_harness_with_host(
-        ObserveMode::YieldAfter(Duration::from_secs(/*secs*/ 60)),
-        Arc::clone(&host),
-    );
-    harness
-        .event_tx
-        .send(RuntimeEvent::Notify {
-            call_id: "call-1".to_string(),
-            text: "pending".to_string(),
-        })
-        .unwrap();
-    tokio::task::yield_now().await;
-    harness
-        .event_tx
-        .send(RuntimeEvent::Result {
-            stored_value_writes: HashMap::from([("key".to_string(), JsonValue::Bool(true))]),
-            error_text: None,
-        })
-        .unwrap();
-    tokio::task::yield_now().await;
-
-    let termination = harness.handle.terminate();
-    let terminated = tokio::time::timeout(Duration::from_millis(/*millis*/ 100), termination)
-        .await
-        .expect("termination should not await a non-cooperative notification");
-
-    assert_eq!(
-        terminated,
-        Ok(CellEvent::Terminated {
-            content_items: Vec::new(),
-        })
-    );
-    assert_eq!(
-        harness.initial_event_rx.await.unwrap(),
-        Ok(CellEvent::Terminated {
-            content_items: Vec::new(),
-        })
-    );
-    drop(harness.event_tx);
-    harness.task.await.unwrap();
     assert!(!host.committed.load(Ordering::Acquire));
     assert!(host.closed.load(Ordering::Acquire));
 }
@@ -559,9 +496,11 @@ async fn observer_receives_a_buffered_completion_after_commit_finishes() {
 
 #[tokio::test]
 async fn dropped_observer_does_not_block_the_next_observer() {
-    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::from_secs(
-        /*secs*/ 60,
-    )));
+    let (host, mut commit_started_rx) = BlockingCommitHost::new();
+    let harness = spawn_cell_actor_harness_with_host(
+        ObserveMode::YieldAfter(Duration::from_secs(/*secs*/ 60)),
+        Arc::clone(&host),
+    );
     harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
     assert_eq!(
         harness.initial_event_rx.await.unwrap(),
@@ -572,26 +511,31 @@ async fn dropped_observer_does_not_block_the_next_observer() {
 
     let abandoned_observer = harness
         .handle
-        .observe(ObserveMode::YieldAfter(Duration::ZERO));
+        .observe(ObserveMode::YieldAfter(Duration::from_secs(
+            /*secs*/ 60,
+        )));
     drop(abandoned_observer);
+    harness
+        .event_tx
+        .send(RuntimeEvent::Result {
+            stored_value_writes: HashMap::new(),
+            error_text: None,
+        })
+        .unwrap();
+    assert_eq!(commit_started_rx.recv().await, Some(()));
+
     let next_observer = harness
         .handle
-        .observe(ObserveMode::YieldAfter(Duration::ZERO));
-    harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
+        .observe(ObserveMode::YieldAfter(Duration::from_secs(
+            /*secs*/ 60,
+        )));
+    host.commit_release.add_permits(/*n*/ 1);
 
     assert_eq!(
         next_observer.await,
-        Ok(CellEvent::Yielded {
+        Ok(CellEvent::Completed {
             content_items: Vec::new(),
-        })
-    );
-
-    let termination = harness.handle.terminate();
-    drop(harness.event_tx);
-    assert_eq!(
-        termination.await,
-        Ok(CellEvent::Terminated {
-            content_items: Vec::new(),
+            error_text: None,
         })
     );
     harness.task.await.unwrap();

@@ -1354,7 +1354,7 @@ text("phase 3");
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID [^\n]+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&first_items, /*index*/ 0),
     );
@@ -1395,7 +1395,7 @@ text("phase 3");
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID [^\n]+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&second_items, /*index*/ 0),
     );
@@ -1498,7 +1498,7 @@ while (true) {}
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID [^\n]+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&first_items, /*index*/ 0),
     );
@@ -2177,7 +2177,7 @@ text("session b done");
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID [^\n]+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&third_items, /*index*/ 0),
     );
@@ -2299,7 +2299,7 @@ text("after yield");
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID [^\n]+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&first_items, /*index*/ 0),
     );

@@ -321,7 +321,7 @@ async fn run_cell<H: CellHost>(
                             send_termination_events(
                                 &accepting_requests,
                                 observer.take(),
-                                None,
+                                /*termination*/ None,
                                 CellEvent::Terminated {
                                     content_items: std::mem::take(&mut content_items),
                                 },
@@ -455,7 +455,7 @@ async fn run_cell<H: CellHost>(
                             send_termination_events(
                                 &accepting_requests,
                                 observer.take(),
-                                None,
+                                /*termination*/ None,
                                 CellEvent::Terminated {
                                     content_items: std::mem::take(&mut content_items),
                                 },
@@ -548,6 +548,12 @@ fn send_or_buffer_completion(
     completed_event: &mut Option<CellEvent>,
     accepting_requests: &AtomicBool,
 ) -> bool {
+    if observer
+        .as_ref()
+        .is_some_and(|observer| observer.response_tx.is_closed())
+    {
+        *observer = None;
+    }
     if observer.is_some() {
         accepting_requests.store(false, Ordering::Release);
         send_observer_event(observer.take(), event);

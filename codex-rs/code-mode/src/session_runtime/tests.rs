@@ -88,33 +88,37 @@ fn execute_request_with_id(cell_id: &str, source: &str) -> ExecuteRequest {
 async fn terminal_cells_are_unrouted_before_they_are_unregistered() {
     let runtime = Arc::new(SessionRuntime::new(Arc::new(RecordingDelegate)));
     let cell_id = CellId::new("1");
-    let event = runtime
-        .execute(
-            execute_request(r#"text("done");"#),
-            ObserveMode::YieldAfter(Duration::from_secs(/*secs*/ 60)),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        event,
-        CellEvent::Completed {
-            content_items: vec![OutputItem::Text {
-                text: "done".to_string(),
-            }],
-            error_text: None,
-        }
-    );
     assert_eq!(
         runtime
-            .observe(&cell_id, ObserveMode::PendingFrontier)
+            .execute(
+                execute_request("while (true) {}"),
+                ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
+            )
             .await,
-        Err(Error::MissingCell(cell_id.clone()))
+        Ok(CellEvent::Yielded {
+            content_items: Vec::new(),
+        })
     );
+
+    let mut cell_count = runtime.inner.cell_count_tx.subscribe();
+    let cells = runtime.inner.cells.lock().await;
+    let handle = cells.get(&cell_id).unwrap().clone();
     assert_eq!(
-        runtime.terminate(&cell_id).await,
-        Err(Error::MissingCell(cell_id.clone()))
+        handle.terminate().await,
+        Ok(CellEvent::Terminated {
+            content_items: Vec::new(),
+        })
     );
+    assert!(cells.contains_key(&cell_id));
+    assert_eq!(
+        handle.observe(ObserveMode::PendingFrontier).await,
+        Err(CellError::Closed)
+    );
+    assert_eq!(handle.terminate().await, Err(CellError::Closed));
+    drop(cells);
+
+    cell_count.changed().await.unwrap();
+    assert_eq!(*cell_count.borrow_and_update(), 0);
     assert_eq!(runtime.shutdown().await, Ok(()));
 }
 

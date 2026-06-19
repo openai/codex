@@ -28,17 +28,6 @@ async fn cancelled_notification_does_not_keep_the_turn_worker_alive() {
 
     let broker = CodeModeDispatchBroker::new();
     let cell_id = CellId::new("cell-1".to_string());
-    let worker = broker.start_turn_worker(
-        ExecContext {
-            session: Arc::clone(&session),
-            turn: Arc::clone(&turn),
-        },
-        Arc::new(ToolRouter::from_parts(
-            ToolRegistry::empty_for_test(),
-            Vec::new(),
-        )),
-        Arc::new(Mutex::new(TurnDiffTracker::new())),
-    );
     let cancellation_token = CancellationToken::new();
     let notification = broker.notify(
         "call-1".to_string(),
@@ -54,9 +43,26 @@ async fn cancelled_notification_does_not_keep_the_turn_worker_alive() {
         }
     })
     .await;
-    for _ in 0..8 {
-        tokio::task::yield_now().await;
-    }
+    assert_eq!(broker.dispatch_rx.len(), 1);
+
+    let worker = broker.start_turn_worker(
+        ExecContext {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn),
+        },
+        Arc::new(ToolRouter::from_parts(
+            ToolRegistry::empty_for_test(),
+            Vec::new(),
+        )),
+        Arc::new(Mutex::new(TurnDiffTracker::new())),
+    );
+    tokio::time::timeout(Duration::from_millis(/*millis*/ 100), async {
+        while !broker.dispatch_rx.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("turn worker did not start the notification");
 
     cancellation_token.cancel();
     assert_eq!(
