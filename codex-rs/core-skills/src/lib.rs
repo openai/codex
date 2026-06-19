@@ -4,6 +4,7 @@ pub(crate) mod invocation_utils;
 pub mod loader;
 mod mention_counts;
 pub mod model;
+mod model_visible;
 pub mod remote;
 pub mod render;
 pub mod service;

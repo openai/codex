@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
+use crate::model_visible::truncate_skill_description;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC;
 use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
@@ -21,8 +22,6 @@ const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 100;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 pub const SKILL_DESCRIPTION_TRUNCATED_WARNING: &str = "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
 pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_WITH_PERCENT: &str = "Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
-const MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS: usize = 1024;
-const TRUNCATED_SKILL_DESCRIPTION_SUFFIX: &str = "...";
 pub const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
     "Exceeded skills context budget. All skill descriptions were removed and";
 pub const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `environment resource` locators are owned by an execution environment, `orchestrator resource` locators are opaque non-filesystem resources, and `custom resource` locators use their provider's access mechanism.";
@@ -488,24 +487,7 @@ impl<'a> SkillLine<'a> {
     }
 
     fn with_path(skill: &'a SkillMetadata, path: String) -> Self {
-        let description = skill.description.as_str();
-        let description = if description
-            .char_indices()
-            .nth(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS)
-            .is_some()
-        {
-            let prefix_chars = MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS
-                .saturating_sub(TRUNCATED_SKILL_DESCRIPTION_SUFFIX.chars().count());
-            let prefix_end = description
-                .char_indices()
-                .nth(prefix_chars)
-                .map_or(description.len(), |(index, _)| index);
-            let mut truncated = description[..prefix_end].to_string();
-            truncated.push_str(TRUNCATED_SKILL_DESCRIPTION_SUFFIX);
-            Cow::Owned(truncated)
-        } else {
-            Cow::Borrowed(description)
-        };
+        let description = truncate_skill_description(skill.description.as_str());
         Self {
             name: skill.name.as_str(),
             description,
@@ -926,6 +908,8 @@ fn prompt_scope_rank(scope: SkillScope) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_visible::MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS;
+    use crate::model_visible::TRUNCATED_SKILL_DESCRIPTION_SUFFIX;
     use std::collections::HashMap;
     use std::sync::Arc;
 

@@ -30,23 +30,7 @@ pub(crate) fn available_skills_fragment(
             .short_description
             .as_deref()
             .unwrap_or(entry.description.as_str());
-        let description = if description
-            .char_indices()
-            .nth(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS)
-            .is_some()
-        {
-            let prefix_chars = MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS
-                .saturating_sub(TRUNCATED_SKILL_DESCRIPTION_SUFFIX.chars().count());
-            let prefix_end = description
-                .char_indices()
-                .nth(prefix_chars)
-                .map_or(description.len(), |(index, _)| index);
-            let mut truncated = description[..prefix_end].to_string();
-            truncated.push_str(TRUNCATED_SKILL_DESCRIPTION_SUFFIX);
-            Cow::Owned(truncated)
-        } else {
-            Cow::Borrowed(description)
-        };
+        let description = truncate_model_visible_skill_description(description);
         let line = render_skill_line(entry, description.as_ref());
         let next_bytes = total_bytes.saturating_add(line.len());
         if next_bytes > MAX_AVAILABLE_SKILLS_BYTES {
@@ -68,6 +52,26 @@ pub(crate) fn available_skills_fragment(
     }
 
     Some(AvailableSkillsInstructions::from_skill_lines(skill_lines))
+}
+
+pub(crate) fn truncate_model_visible_skill_description(description: &str) -> Cow<'_, str> {
+    if description
+        .char_indices()
+        .nth(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS)
+        .is_none()
+    {
+        return Cow::Borrowed(description);
+    }
+
+    let prefix_chars = MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS
+        .saturating_sub(TRUNCATED_SKILL_DESCRIPTION_SUFFIX.chars().count());
+    let prefix_end = description
+        .char_indices()
+        .nth(prefix_chars)
+        .map_or(description.len(), |(index, _)| index);
+    let mut truncated = description[..prefix_end].to_string();
+    truncated.push_str(TRUNCATED_SKILL_DESCRIPTION_SUFFIX);
+    Cow::Owned(truncated)
 }
 
 fn render_skill_line(entry: &SkillCatalogEntry, description: &str) -> String {

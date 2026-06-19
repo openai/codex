@@ -1,6 +1,7 @@
 use codex_context_fragments::ContextualUserFragment;
 
 use crate::injection::SkillInjection;
+use crate::model_visible::render_model_visible_skill_contents;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillInstructions {
@@ -33,9 +34,12 @@ impl ContextualUserFragment for SkillInstructions {
     }
 
     fn body(&self) -> String {
+        let contents = render_model_visible_skill_contents(&self.contents);
         format!(
             "\n<name>{}</name>\n<path>{}</path>\n{}\n",
-            self.name, self.path, self.contents
+            self.name,
+            self.path,
+            contents.as_ref()
         )
     }
 }
