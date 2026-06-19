@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::task::Poll;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -335,6 +336,59 @@ async fn concurrent_shutdowns_wait_for_the_same_cell_cleanup() {
     delegate.close_release.add_permits(/*n*/ 1);
     assert_eq!(first_shutdown.await.unwrap(), Ok(()));
     assert_eq!(second_shutdown.await.unwrap(), Ok(()));
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_cell_admission_already_queued_for_the_registry_lock() {
+    let (delegate, mut close_started_rx) = BlockingCloseDelegate::new(FirstCloseOutcome::Succeeds);
+    let runtime = Arc::new(SessionRuntime::new(Arc::clone(&delegate)));
+    let cells = runtime.inner.cells.lock().await;
+
+    let execution = runtime.execute(
+        execute_request("while (true) {}"),
+        ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
+    );
+    tokio::pin!(execution);
+    std::future::poll_fn(|context| match execution.as_mut().poll(context) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(Ok(_)) => panic!("execution completed before the registry lock was released"),
+        Poll::Ready(Err(error)) => {
+            panic!("execution failed before the registry lock was released: {error}")
+        }
+    })
+    .await;
+
+    let shutdown = runtime.shutdown();
+    tokio::pin!(shutdown);
+    std::future::poll_fn(|context| match shutdown.as_mut().poll(context) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(Ok(())) => panic!("shutdown completed before acquiring the registry lock"),
+        Poll::Ready(Err(error)) => {
+            panic!("shutdown failed before acquiring the registry lock: {error}")
+        }
+    })
+    .await;
+
+    drop(cells);
+
+    let started = execution.await.unwrap();
+    let cell_id = started.cell_id;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 1), async {
+            tokio::select! {
+                close_started = close_started_rx.recv() => close_started,
+                result = &mut shutdown => {
+                    panic!("shutdown completed before cell delegate cleanup: {result:?}");
+                }
+            }
+        })
+        .await
+        .unwrap(),
+        Some(cell_id)
+    );
+
+    delegate.close_release.add_permits(/*n*/ 1);
+    assert_eq!(shutdown.await, Ok(()));
 }
 
 #[tokio::test]
