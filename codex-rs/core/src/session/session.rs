@@ -449,7 +449,7 @@ async fn warm_plugins_and_skills_for_session_init(
     let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots)
         .with_plugin_skill_snapshots(plugin_skill_snapshots);
     skills_service
-        .snapshot_for_config(&skills_input, fs)
+        .refresh_snapshot_for_config(&skills_input, fs)
         .await
         .outcome()
         .errors

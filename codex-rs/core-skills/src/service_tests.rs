@@ -35,6 +35,7 @@ use tempfile::TempDir;
 struct CountingFileSystem {
     delegate: Arc<dyn ExecutorFileSystem>,
     operation_count: AtomicUsize,
+    content_scan_operation_count: AtomicUsize,
 }
 
 impl CountingFileSystem {
@@ -42,6 +43,7 @@ impl CountingFileSystem {
         Self {
             delegate,
             operation_count: AtomicUsize::new(0),
+            content_scan_operation_count: AtomicUsize::new(0),
         }
     }
 
@@ -51,6 +53,15 @@ impl CountingFileSystem {
 
     fn record_operation(&self) {
         self.operation_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn content_scan_operation_count(&self) -> usize {
+        self.content_scan_operation_count.load(Ordering::Relaxed)
+    }
+
+    fn record_content_scan_operation(&self) {
+        self.content_scan_operation_count
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -70,6 +81,7 @@ impl ExecutorFileSystem for CountingFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         self.record_operation();
+        self.record_content_scan_operation();
         self.delegate.read_file(path, sandbox)
     }
 
@@ -79,6 +91,7 @@ impl ExecutorFileSystem for CountingFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
         self.record_operation();
+        self.record_content_scan_operation();
         self.delegate.read_file_stream(path, sandbox)
     }
 
@@ -117,6 +130,7 @@ impl ExecutorFileSystem for CountingFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         self.record_operation();
+        self.record_content_scan_operation();
         self.delegate.read_directory(path, sandbox)
     }
 
@@ -145,6 +159,13 @@ impl ExecutorFileSystem for CountingFileSystem {
 
 fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {
     let skill_dir = codex_home.path().join("skills").join(dir);
+    fs::create_dir_all(&skill_dir).unwrap();
+    let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+    fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+}
+
+fn write_repo_skill(cwd: &TempDir, dir: &str, name: &str, description: &str) {
+    let skill_dir = cwd.path().join(".agents/skills").join(dir);
     fs::create_dir_all(&skill_dir).unwrap();
     let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
     fs::write(skill_dir.join("SKILL.md"), content).unwrap();
@@ -355,6 +376,8 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
 async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(cwd.path().join(".git")).expect("create project marker");
+    write_repo_skill(&cwd, "repo-skill", "repo-skill", "from repo");
     let config_layer_stack = config_stack(&codex_home, "");
     let skills_service = SkillsService::new(
         codex_home.path().abs(),
@@ -373,7 +396,9 @@ async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() 
         .snapshot_for_config(&skills_input, Some(Arc::clone(&file_system)))
         .await;
     let operations_after_cache_miss = counting_file_system.operation_count();
+    let content_scans_after_cache_miss = counting_file_system.content_scan_operation_count();
     assert!(operations_after_cache_miss > 0);
+    assert!(content_scans_after_cache_miss > 0);
 
     skills_service
         .snapshot_for_config(&skills_input, Some(Arc::clone(&file_system)))
@@ -381,6 +406,20 @@ async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() 
     assert_eq!(
         counting_file_system.operation_count(),
         operations_after_cache_miss
+    );
+    assert_eq!(
+        counting_file_system.content_scan_operation_count(),
+        content_scans_after_cache_miss
+    );
+
+    skills_service
+        .refresh_snapshot_for_config(&skills_input, Some(Arc::clone(&file_system)))
+        .await;
+    let operations_after_refresh = counting_file_system.operation_count();
+    assert!(operations_after_refresh > operations_after_cache_miss);
+    assert_eq!(
+        counting_file_system.content_scan_operation_count(),
+        content_scans_after_cache_miss
     );
 
     let unrelated_session_flag_input = SkillsLoadInput::new(
@@ -397,14 +436,73 @@ async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() 
         .await;
     assert_eq!(
         counting_file_system.operation_count(),
-        operations_after_cache_miss
+        operations_after_refresh
     );
 
     skills_service.clear_cache();
     skills_service
         .snapshot_for_config(&skills_input, Some(file_system))
         .await;
-    assert!(counting_file_system.operation_count() > operations_after_cache_miss);
+    assert!(counting_file_system.operation_count() > operations_after_refresh);
+    assert!(counting_file_system.content_scan_operation_count() > content_scans_after_cache_miss);
+}
+
+#[tokio::test]
+async fn refresh_snapshot_for_config_discovers_new_repo_skill_root() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(cwd.path().join(".git")).expect("create project marker");
+    let config_layer_stack = config_stack(&codex_home, "");
+    let skills_service = SkillsService::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+    let skills_input = SkillsLoadInput::new(
+        cwd.path().abs(),
+        Vec::new(),
+        config_layer_stack,
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let initial_snapshot = skills_service
+        .snapshot_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+        .await;
+    assert!(
+        initial_snapshot
+            .outcome()
+            .skills
+            .iter()
+            .all(|skill| skill.name != "late-repo-skill")
+    );
+
+    write_repo_skill(
+        &cwd,
+        "late-repo-skill",
+        "late-repo-skill",
+        "created after the snapshot",
+    );
+
+    let cached_snapshot = skills_service
+        .snapshot_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+        .await;
+    assert!(
+        cached_snapshot
+            .outcome()
+            .skills
+            .iter()
+            .all(|skill| skill.name != "late-repo-skill")
+    );
+
+    let refreshed_snapshot = skills_service
+        .refresh_snapshot_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+        .await;
+    assert!(
+        refreshed_snapshot
+            .outcome()
+            .skills
+            .iter()
+            .any(|skill| skill.name == "late-repo-skill")
+    );
 }
 
 #[tokio::test]

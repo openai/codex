@@ -74,7 +74,7 @@ pub struct SkillsService {
     restriction_product: Option<Product>,
     extra_roots: RwLock<Vec<AbsolutePathBuf>>,
     cache_by_cwd: RwLock<HashMap<AbsolutePathBuf, HostSkillsSnapshot>>,
-    cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, HostSkillsSnapshot>>,
+    cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, CachedConfigSkillsSnapshot>>,
 }
 
 impl SkillsService {
@@ -121,27 +121,59 @@ impl SkillsService {
     /// This path uses a cache keyed by the effective skill-relevant config state rather than just
     /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
     /// to share a directory.
+    pub async fn snapshot_for_config(
+        &self,
+        input: &SkillsLoadInput,
+        fs: Option<Arc<dyn ExecutorFileSystem>>,
+    ) -> HostSkillsSnapshot {
+        self.snapshot_for_config_with_lookup(input, fs, ConfigSnapshotLookup::ReuseCached)
+            .await
+    }
+
+    /// Revalidates filesystem-derived roots and skill configuration rules before returning the
+    /// cached snapshot. If they are unchanged, the existing snapshot is reused without rescanning
+    /// skill contents.
+    pub async fn refresh_snapshot_for_config(
+        &self,
+        input: &SkillsLoadInput,
+        fs: Option<Arc<dyn ExecutorFileSystem>>,
+    ) -> HostSkillsSnapshot {
+        self.snapshot_for_config_with_lookup(input, fs, ConfigSnapshotLookup::RefreshFilesystem)
+            .await
+    }
+
     #[instrument(
         name = "skills_for_config",
         level = "info",
         skip_all,
         fields(otel.name = "skills_for_config")
     )]
-    pub async fn snapshot_for_config(
+    async fn snapshot_for_config_with_lookup(
         &self,
         input: &SkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
+        lookup: ConfigSnapshotLookup,
     ) -> HostSkillsSnapshot {
         let extra_roots = self.extra_roots();
         let cache_key = config_skills_cache_key(input, &extra_roots, fs.as_ref());
-        if let Some(snapshot) = self.cached_snapshot_for_config(&cache_key) {
-            return snapshot;
+        let cached = self.cached_snapshot_for_config(&cache_key);
+        if lookup == ConfigSnapshotLookup::ReuseCached
+            && let Some(cached) = &cached
+        {
+            return cached.snapshot.clone();
         }
 
         let roots = self
             .skill_roots_for_config_with_extra_roots(input, fs, extra_roots)
             .await;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
+        let fingerprint = config_skills_filesystem_fingerprint(&roots, &skill_config_rules);
+        if let Some(cached) = cached
+            && cached.fingerprint == fingerprint
+        {
+            return cached.snapshot;
+        }
+
         let snapshot = HostSkillsSnapshot::new(Arc::new(
             self.build_skill_outcome(input, roots, &skill_config_rules)
                 .await,
@@ -150,7 +182,13 @@ impl SkillsService {
             .cache_by_config
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(cache_key, snapshot.clone());
+        cache.insert(
+            cache_key,
+            CachedConfigSkillsSnapshot {
+                fingerprint,
+                snapshot: snapshot.clone(),
+            },
+        );
         snapshot
     }
 
@@ -270,7 +308,7 @@ impl SkillsService {
     fn cached_snapshot_for_config(
         &self,
         cache_key: &ConfigSkillsCacheKey,
-    ) -> Option<HostSkillsSnapshot> {
+    ) -> Option<CachedConfigSkillsSnapshot> {
         match self.cache_by_config.read() {
             Ok(cache) => cache.get(cache_key).cloned(),
             Err(err) => err.into_inner().get(cache_key).cloned(),
@@ -283,6 +321,18 @@ impl SkillsService {
             Err(err) => err.into_inner().clone(),
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConfigSnapshotLookup {
+    ReuseCached,
+    RefreshFilesystem,
+}
+
+#[derive(Clone)]
+struct CachedConfigSkillsSnapshot {
+    fingerprint: ConfigSkillsFilesystemFingerprint,
+    snapshot: HostSkillsSnapshot,
 }
 
 /// Skill-relevant inputs that can be compared before root discovery touches the filesystem.
@@ -303,6 +353,12 @@ struct ConfigLayerSkillsCacheKey {
     disabled: bool,
     skills_config: Option<String>,
     project_root_markers: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ConfigSkillsFilesystemFingerprint {
+    roots: Vec<(AbsolutePathBuf, u8, Option<String>, Option<String>)>,
+    skill_config_rules: SkillConfigRules,
 }
 
 // Snapshots retain filesystem-bound skill paths, so cache entries must distinguish instances.
@@ -395,6 +451,32 @@ fn config_skills_cache_key(
         bundled_skills_enabled: input.bundled_skills_enabled,
         extra_roots: extra_roots.to_vec(),
         file_system: fs.cloned().map(ExecutorFileSystemCacheKey),
+    }
+}
+
+fn config_skills_filesystem_fingerprint(
+    roots: &[SkillRoot],
+    skill_config_rules: &SkillConfigRules,
+) -> ConfigSkillsFilesystemFingerprint {
+    ConfigSkillsFilesystemFingerprint {
+        roots: roots
+            .iter()
+            .map(|root| {
+                let scope_rank = match root.scope {
+                    SkillScope::Repo => 0,
+                    SkillScope::User => 1,
+                    SkillScope::System => 2,
+                    SkillScope::Admin => 3,
+                };
+                (
+                    root.path.clone(),
+                    scope_rank,
+                    root.plugin_id.clone(),
+                    root.plugin_namespace.clone(),
+                )
+            })
+            .collect(),
+        skill_config_rules: skill_config_rules.clone(),
     }
 }
 
