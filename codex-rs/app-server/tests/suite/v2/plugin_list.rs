@@ -96,6 +96,7 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -416,6 +417,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
                 AbsolutePathBuf::try_from(valid_repo_root.path())?,
                 AbsolutePathBuf::try_from(invalid_repo_root.path())?,
             ]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -530,6 +532,7 @@ async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Re
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -622,6 +625,7 @@ async fn plugin_list_reuses_cached_workspace_codex_plugins_setting() -> Result<(
         let request_id = mcp
             .send_plugin_list_request(PluginListParams {
                 cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+                thread_id: None,
                 marketplace_kinds: None,
             })
             .await?;
@@ -706,6 +710,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -819,6 +824,7 @@ async fn plugin_list_accepts_omitted_cwds() -> Result<()> {
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -872,6 +878,7 @@ async fn plugin_list_returns_share_context_for_shared_local_plugin() -> Result<(
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -964,6 +971,7 @@ enabled = false
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -1121,6 +1129,7 @@ enabled = false
                 AbsolutePathBuf::try_from(workspace_enabled.path())?,
                 AbsolutePathBuf::try_from(workspace_default.path())?,
             ]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -1205,6 +1214,7 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -1318,6 +1328,7 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -1406,6 +1417,7 @@ enabled = true
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -1596,6 +1608,7 @@ async fn plugin_list_sync_upgrades_and_removes_remote_installed_plugin_bundles()
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -1768,6 +1781,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -1908,6 +1922,7 @@ async fn plugin_list_uses_cached_global_remote_catalog_and_refreshes_it() -> Res
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -1941,6 +1956,7 @@ async fn plugin_list_uses_cached_global_remote_catalog_and_refreshes_it() -> Res
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -2022,6 +2038,7 @@ async fn plugin_list_includes_openai_curated_remote_collection_when_requested() 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Vertical]),
         })
         .await?;
@@ -2110,6 +2127,7 @@ async fn plugin_list_propagates_explicit_openai_curated_remote_collection_errors
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Vertical]),
         })
         .await?;
@@ -2149,6 +2167,7 @@ async fn plugin_list_skips_explicit_openai_curated_remote_collection_for_api_aut
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Vertical]),
         })
         .await?;
@@ -2188,6 +2207,7 @@ async fn plugin_list_includes_api_curated_marketplace_for_api_auth_when_remote_p
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -2243,6 +2263,7 @@ async fn plugin_list_does_not_query_openai_curated_remote_collection_by_default(
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -2296,6 +2317,7 @@ async fn plugin_list_vertical_kind_noops_when_remote_plugin_enabled() -> Result<
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Vertical]),
         })
         .await?;
@@ -2350,6 +2372,7 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Local]),
         })
         .await?;
@@ -2771,6 +2794,7 @@ async fn plugin_list_fetches_workspace_directory_kind_without_remote_plugin_flag
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::WorkspaceDirectory]),
         })
         .await?;
@@ -2898,6 +2922,7 @@ plugin_sharing = false
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::CreatedByMeRemote]),
         })
         .await?;
@@ -3025,6 +3050,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::SharedWithMe]),
         })
         .await?;
@@ -3182,6 +3208,7 @@ plugin_sharing = false
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::SharedWithMe]),
         })
         .await?;
@@ -3242,6 +3269,7 @@ plugin_sharing = true
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::CreatedByMeRemote]),
         })
         .await?;
@@ -3372,6 +3400,7 @@ async fn plugin_list_marks_remote_plugin_disabled_by_admin() -> Result<()> {
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -3432,6 +3461,7 @@ remote_plugin = true
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -3468,6 +3498,7 @@ async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Resul
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;
@@ -3508,6 +3539,7 @@ async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() ->
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         })
         .await?;

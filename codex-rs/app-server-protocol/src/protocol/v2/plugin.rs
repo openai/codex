@@ -23,6 +23,10 @@ pub struct SkillsListParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
 
+    /// Optional loaded thread id used to evaluate skills from that thread's config.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
@@ -131,6 +135,9 @@ pub struct PluginListParams {
     /// only home-scoped marketplaces and the official curated marketplace are considered.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<AbsolutePathBuf>>,
+    /// Optional loaded thread id used to evaluate plugins from that thread's config.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     /// Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus
     /// the default remote catalog when enabled by feature flag.
     #[ts(optional = nullable)]

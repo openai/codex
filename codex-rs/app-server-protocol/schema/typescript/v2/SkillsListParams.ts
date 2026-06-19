@@ -8,6 +8,10 @@ export type SkillsListParams = {
  */
 cwds?: Array<string>,
 /**
+ * Optional loaded thread id used to evaluate skills from that thread's config.
+ */
+threadId?: string | null,
+/**
  * When true, bypass the skills cache and re-scan skills from disk.
  */
 forceReload?: boolean, };

@@ -2765,20 +2765,25 @@ fn skills_list_params_serialization_uses_force_reload() {
     assert_eq!(
         serde_json::to_value(SkillsListParams {
             cwds: Vec::new(),
+            thread_id: None,
             force_reload: false,
         })
         .unwrap(),
-        json!({}),
+        json!({
+            "threadId": null,
+        }),
     );
 
     assert_eq!(
         serde_json::to_value(SkillsListParams {
             cwds: vec![PathBuf::from("/repo")],
+            thread_id: Some("thread-1".to_string()),
             force_reload: true,
         })
         .unwrap(),
         json!({
             "cwds": ["/repo"],
+            "threadId": "thread-1",
             "forceReload": true,
         }),
     );
@@ -2992,6 +2997,7 @@ fn plugin_list_params_ignore_removed_force_remote_sync_field() {
         .unwrap(),
         PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: None,
         },
     );
@@ -3002,6 +3008,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
     assert_eq!(
         serde_json::to_value(PluginListParams {
             cwds: None,
+            thread_id: Some("thread-1".to_string()),
             marketplace_kinds: Some(vec![
                 PluginListMarketplaceKind::Local,
                 PluginListMarketplaceKind::Vertical,
@@ -3013,6 +3020,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
         .unwrap(),
         json!({
             "cwds": null,
+            "threadId": "thread-1",
             "marketplaceKinds": [
                 "local",
                 "vertical",

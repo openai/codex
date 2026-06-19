@@ -499,14 +499,34 @@ impl CatalogRequestProcessor {
         &self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
-        let SkillsListParams { cwds, force_reload } = params;
+        let SkillsListParams {
+            cwds,
+            thread_id,
+            force_reload,
+        } = params;
+        let config = match thread_id.as_deref() {
+            Some(thread_id) => {
+                let thread_id = ThreadId::from_string(thread_id)
+                    .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+                let thread = self
+                    .thread_manager
+                    .get_thread(thread_id)
+                    .await
+                    .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
+                let thread_config = thread.config().await;
+                self.config_manager
+                    .load_latest_config_for_thread(thread_config.as_ref())
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?
+            }
+            None => self.load_latest_config(/*fallback_cwd*/ None).await?,
+        };
         let cwds = if cwds.is_empty() {
-            vec![self.config.cwd.to_path_buf()]
+            vec![config.cwd.to_path_buf()]
         } else {
             cwds
         };
 
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())

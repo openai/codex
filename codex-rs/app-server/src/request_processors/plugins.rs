@@ -529,16 +529,37 @@ impl PluginRequestProcessor {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams {
             cwds,
+            thread_id,
             marketplace_kinds,
         } = params;
-        let roots = cwds.unwrap_or_default();
         let explicit_marketplace_kinds = marketplace_kinds.is_some();
         let marketplace_kinds =
             marketplace_kinds.unwrap_or_else(|| vec![PluginListMarketplaceKind::Local]);
         let include_local = marketplace_kinds.contains(&PluginListMarketplaceKind::Local);
         let include_vertical = marketplace_kinds.contains(&PluginListMarketplaceKind::Vertical);
 
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let config = match thread_id.as_deref() {
+            Some(thread_id) => {
+                let thread_id = ThreadId::from_string(thread_id)
+                    .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+                let thread = self
+                    .thread_manager
+                    .get_thread(thread_id)
+                    .await
+                    .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
+                let thread_config = thread.config().await;
+                self.config_manager
+                    .load_latest_config_for_thread(thread_config.as_ref())
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?
+            }
+            None => self.load_latest_config(/*fallback_cwd*/ None).await?,
+        };
+        let roots = match cwds {
+            Some(cwds) => cwds,
+            None if thread_id.is_some() => vec![config.cwd.clone()],
+            None => Vec::new(),
+        };
         let empty_response = || PluginListResponse {
             marketplaces: Vec::new(),
             marketplace_load_errors: Vec::new(),

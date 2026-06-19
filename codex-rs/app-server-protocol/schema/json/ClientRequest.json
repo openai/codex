@@ -1894,6 +1894,13 @@
             "array",
             "null"
           ]
+        },
+        "threadId": {
+          "description": "Optional loaded thread id used to evaluate plugins from that thread's config.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -3476,6 +3483,13 @@
         "forceReload": {
           "description": "When true, bypass the skills cache and re-scan skills from disk.",
           "type": "boolean"
+        },
+        "threadId": {
+          "description": "Optional loaded thread id used to evaluate skills from that thread's config.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
