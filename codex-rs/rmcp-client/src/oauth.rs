@@ -47,6 +47,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::warn;
@@ -67,8 +68,9 @@ const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
 const REFRESH_LOCK_DIR: &str = "mcp-oauth-refresh-locks";
-const REFRESH_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(60);
-const REFRESH_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(500);
+const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(60);
+const CREDENTIAL_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(500);
+const STORE_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(50);
 const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -247,6 +249,7 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     server_name: &str,
     url: &str,
 ) -> Result<Option<StoredOAuthTokens>> {
+    let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
     let codex_home = find_codex_home()?;
     let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
@@ -388,6 +391,29 @@ fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
+    {
+        let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
+        save_oauth_tokens_to_secrets_keyring_unlocked(
+            keyring_store,
+            server_name,
+            tokens,
+            &serialized,
+        )?;
+    }
+
+    let key = compute_store_key(server_name, &tokens.url)?;
+    if let Err(error) = delete_oauth_tokens_from_file(&key) {
+        warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
+    }
+    Ok(())
+}
+
+fn save_oauth_tokens_to_secrets_keyring_unlocked<K: KeyringStore + Clone + 'static>(
+    keyring_store: &K,
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+    serialized: &str,
+) -> Result<()> {
     let codex_home = find_codex_home()?;
     let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
@@ -397,14 +423,8 @@ fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
     );
     let secret_name = compute_secret_name(server_name, &tokens.url)?;
     manager
-        .set(&SecretScope::Global, &secret_name, &serialized)
-        .context("failed to write OAuth tokens to encrypted storage")?;
-
-    let key = compute_store_key(server_name, &tokens.url)?;
-    if let Err(error) = delete_oauth_tokens_from_file(&key) {
-        warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
-    }
-    Ok(())
+        .set(&SecretScope::Global, &secret_name, serialized)
+        .context("failed to write OAuth tokens to encrypted storage")
 }
 
 fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore + Clone + 'static>(
@@ -538,6 +558,7 @@ fn delete_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     server_name: &str,
     url: &str,
 ) -> Result<bool> {
+    let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
     let codex_home = find_codex_home()?;
     let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
@@ -772,7 +793,7 @@ impl RefreshCredentialLock {
     }
 
     async fn acquire(store_key: &str) -> Result<Self> {
-        Self::acquire_with_timeout(store_key, REFRESH_LOCK_ACQUIRE_TIMEOUT).await
+        Self::acquire_with_timeout(store_key, LOCK_ACQUIRE_TIMEOUT).await
     }
 
     async fn acquire_with_timeout(store_key: &str, acquire_timeout: Duration) -> Result<Self> {
@@ -794,7 +815,7 @@ impl RefreshCredentialLock {
                 match file.try_lock() {
                     Ok(()) => return Ok(()),
                     Err(std::fs::TryLockError::WouldBlock) => {
-                        sleep(REFRESH_LOCK_RETRY_SLEEP).await;
+                        sleep(CREDENTIAL_LOCK_RETRY_SLEEP).await;
                     }
                     Err(error) => return Err(std::io::Error::from(error)),
                 }
@@ -815,6 +836,85 @@ impl RefreshCredentialLock {
         }
 
         Ok(Self { _file: file })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OAuthStore {
+    File,
+    Secrets,
+}
+
+impl OAuthStore {
+    fn lock_filename(self) -> &'static str {
+        match self {
+            Self::File => "file-store.lock",
+            Self::Secrets => "secrets-store.lock",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::File => "fallback file",
+            Self::Secrets => "encrypted secrets",
+        }
+    }
+}
+
+struct OAuthStoreLock {
+    _file: File,
+}
+
+impl OAuthStoreLock {
+    fn acquire(store: OAuthStore) -> Result<Self> {
+        Self::acquire_with_timeout(store, LOCK_ACQUIRE_TIMEOUT)
+    }
+
+    fn acquire_with_timeout(store: OAuthStore, acquire_timeout: Duration) -> Result<Self> {
+        let path = oauth_store_lock_path(store)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| {
+                format!(
+                    "failed to open MCP OAuth {} store lock {}",
+                    store.description(),
+                    path.display()
+                )
+            })?;
+        let started = Instant::now();
+
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(std::fs::TryLockError::WouldBlock) if started.elapsed() >= acquire_timeout => {
+                    anyhow::bail!(
+                        "timed out after {acquire_timeout:?} waiting for MCP OAuth {} store lock {}",
+                        store.description(),
+                        path.display()
+                    );
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    std::thread::sleep(STORE_LOCK_RETRY_SLEEP.min(acquire_timeout));
+                }
+                Err(error) => {
+                    return Err(std::io::Error::from(error)).with_context(|| {
+                        format!(
+                            "failed to lock MCP OAuth {} store lock {}",
+                            store.description(),
+                            path.display()
+                        )
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -881,7 +981,8 @@ struct FallbackTokenEntry {
 }
 
 fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<StoredOAuthTokens>> {
-    let Some(store) = read_fallback_file()? else {
+    let _store_lock = OAuthStoreLock::acquire(OAuthStore::File)?;
+    let Some(store) = read_fallback_file_unlocked()? else {
         return Ok(None);
     };
 
@@ -924,8 +1025,13 @@ fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<St
 }
 
 fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
+    let _store_lock = OAuthStoreLock::acquire(OAuthStore::File)?;
+    save_oauth_tokens_to_file_unlocked(tokens)
+}
+
+fn save_oauth_tokens_to_file_unlocked(tokens: &StoredOAuthTokens) -> Result<()> {
     let key = compute_store_key(&tokens.server_name, &tokens.url)?;
-    let mut store = read_fallback_file()?.unwrap_or_default();
+    let mut store = read_fallback_file_unlocked()?.unwrap_or_default();
 
     let token_response = &tokens.token_response.0;
     let expires_at = tokens
@@ -953,7 +1059,8 @@ fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
 }
 
 fn delete_oauth_tokens_from_file(key: &str) -> Result<bool> {
-    let mut store = match read_fallback_file()? {
+    let _store_lock = OAuthStoreLock::acquire(OAuthStore::File)?;
+    let mut store = match read_fallback_file_unlocked()? {
         Some(store) => store,
         None => return Ok(false),
     };
@@ -1049,7 +1156,14 @@ fn refresh_lock_path(store_key: &str) -> Result<PathBuf> {
         .to_path_buf())
 }
 
-fn read_fallback_file() -> Result<Option<FallbackFile>> {
+fn oauth_store_lock_path(store: OAuthStore) -> Result<PathBuf> {
+    Ok(find_codex_home()?
+        .join(REFRESH_LOCK_DIR)
+        .join(store.lock_filename())
+        .to_path_buf())
+}
+
+fn read_fallback_file_unlocked() -> Result<Option<FallbackFile>> {
     let path = fallback_file_path()?;
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
@@ -1273,7 +1387,7 @@ mod tests {
 
         let fallback_path = super::fallback_file_path()?;
         assert!(fallback_path.exists(), "fallback file should be created");
-        let saved = super::read_fallback_file()?.expect("fallback file should load");
+        let saved = read_fallback_file()?.expect("fallback file should load");
         let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
         let entry = saved.get(&key).expect("entry for key");
         assert_eq!(entry.server_name, tokens.server_name);
@@ -1284,6 +1398,45 @@ mod tests {
             tokens.token_response.0.access_token().secret().as_str()
         );
         assert!(store.saved_value(&key).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn file_store_lock_preserves_updates_for_different_servers() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let first = sample_tokens();
+        let mut second = sample_tokens();
+        second.server_name = "second-server".to_string();
+        second.url = "https://second.example.test".to_string();
+
+        let held_lock =
+            OAuthStoreLock::acquire_with_timeout(OAuthStore::File, Duration::from_millis(100))?;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let second_for_writer = second.clone();
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal writer start");
+            result_tx
+                .send(super::save_oauth_tokens_to_file(&second_for_writer))
+                .expect("send writer result");
+        });
+
+        started_rx.recv_timeout(Duration::from_secs(1))?;
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        super::save_oauth_tokens_to_file_unlocked(&first)?;
+        drop(held_lock);
+
+        result_rx.recv_timeout(Duration::from_secs(10))??;
+        writer.join().expect("file store writer should finish");
+        let loaded_first = super::load_oauth_tokens_from_file(&first.server_name, &first.url)?
+            .expect("first server tokens should remain stored");
+        let loaded_second = super::load_oauth_tokens_from_file(&second.server_name, &second.url)?
+            .expect("second server tokens should be stored");
+        assert_tokens_match_without_expiry(&loaded_first, &first);
+        assert_tokens_match_without_expiry(&loaded_second, &second);
         Ok(())
     }
 
@@ -1344,6 +1497,68 @@ mod tests {
         )?
         .expect("tokens should load from encrypted storage");
         assert_tokens_match_without_expiry(&loaded, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn secrets_store_lock_preserves_updates_for_different_servers() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let first = sample_tokens();
+        let mut second = sample_tokens();
+        second.server_name = "second-server".to_string();
+        second.url = "https://second.example.test".to_string();
+
+        let held_lock =
+            OAuthStoreLock::acquire_with_timeout(OAuthStore::Secrets, Duration::from_millis(100))?;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let store_for_writer = store.clone();
+        let second_for_writer = second.clone();
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal writer start");
+            result_tx
+                .send(super::save_oauth_tokens_with_keyring(
+                    &store_for_writer,
+                    AuthKeyringBackendKind::Secrets,
+                    &second_for_writer.server_name,
+                    &second_for_writer,
+                ))
+                .expect("send writer result");
+        });
+
+        started_rx.recv_timeout(Duration::from_secs(1))?;
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        let first_serialized = serde_json::to_string(&first)?;
+        super::save_oauth_tokens_to_secrets_keyring_unlocked(
+            &store,
+            &first.server_name,
+            &first,
+            &first_serialized,
+        )?;
+        drop(held_lock);
+
+        result_rx.recv_timeout(Duration::from_secs(10))??;
+        writer.join().expect("secrets store writer should finish");
+        let loaded_first = super::load_oauth_tokens_from_keyring(
+            &store,
+            AuthKeyringBackendKind::Secrets,
+            &first.server_name,
+            &first.url,
+        )?
+        .expect("first server tokens should remain stored");
+        let loaded_second = super::load_oauth_tokens_from_keyring(
+            &store,
+            AuthKeyringBackendKind::Secrets,
+            &second.server_name,
+            &second.url,
+        )?
+        .expect("second server tokens should be stored");
+        assert_tokens_match_without_expiry(&loaded_first, &first);
+        assert_tokens_match_without_expiry(&loaded_second, &second);
         Ok(())
     }
 
@@ -2009,7 +2224,7 @@ mod tests {
             &tokens,
         )?;
 
-        let saved = super::read_fallback_file()?.expect("fallback file should load");
+        let saved = read_fallback_file()?.expect("fallback file should load");
         let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
         assert!(saved.contains_key(&key));
         Ok(())
@@ -2248,6 +2463,11 @@ mod tests {
             &actual.token_response,
             &expected.token_response,
         );
+    }
+
+    fn read_fallback_file() -> Result<Option<FallbackFile>> {
+        let _store_lock = OAuthStoreLock::acquire(OAuthStore::File)?;
+        super::read_fallback_file_unlocked()
     }
 
     fn assert_token_response_match_without_expiry(
