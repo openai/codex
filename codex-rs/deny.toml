@@ -224,6 +224,8 @@ deny = [
     # Removing async-trait materially improves debug build times:
     # https://github.com/openai/codex/pull/27304
     { crate = "async-trait", wrappers = [
+        "axum",
+        "axum-core",
         "hickory-proto",
         "opentelemetry-http",
         "pagable",
