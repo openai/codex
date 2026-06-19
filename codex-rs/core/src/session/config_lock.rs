@@ -2,6 +2,7 @@ use anyhow::Context;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::MemoriesToml;
+use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::Feature;
 use codex_features::FeatureToml;
 use codex_features::FeaturesToml;
@@ -155,6 +156,12 @@ fn save_config_resolved_fields(
         rollout_budget.enabled = Some(config.features.enabled(Feature::RolloutBudget));
         features.rollout_budget = Some(FeatureToml::Config(rollout_budget));
     }
+    if let Some(current_time_reminder) = config.current_time_reminder.as_ref() {
+        let mut current_time_reminder: CurrentTimeReminderConfigToml =
+            resolved_config_to_toml(current_time_reminder, "features.current_time_reminder")?;
+        current_time_reminder.enabled = Some(config.features.enabled(Feature::CurrentTimeReminder));
+        features.current_time_reminder = Some(FeatureToml::Config(current_time_reminder));
+    }
     lock_config.memories = Some(resolved_config_to_toml::<MemoriesToml>(
         &config.memories,
         "memories",
@@ -227,6 +234,11 @@ mod tests {
             .features
             .enable(Feature::RolloutBudget)
             .expect("rollout_budget should be enableable in tests");
+        config.current_time_reminder = Some(crate::config::CurrentTimeReminderConfig::default());
+        config
+            .features
+            .enable(Feature::CurrentTimeReminder)
+            .expect("current_time_reminder should be enableable in tests");
         sc.original_config_do_not_use = Arc::new(config);
         sc.base_instructions = "resolved instructions".to_string();
         sc.developer_instructions = Some("resolved developer instructions".to_string());
@@ -300,6 +312,14 @@ mod tests {
                 reminder_interval_tokens: Some(10_000),
                 sampling_token_weight: Some(1.0),
                 prefill_token_weight: Some(0.25),
+            }))
+        );
+        assert_eq!(
+            features.current_time_reminder,
+            Some(FeatureToml::Config(CurrentTimeReminderConfigToml {
+                enabled: Some(true),
+                reminder_interval_model_requests: Some(1),
+                clock_source: Some(codex_features::CurrentTimeSource::System),
             }))
         );
 

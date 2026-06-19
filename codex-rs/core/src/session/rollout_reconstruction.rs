@@ -1,5 +1,6 @@
 use super::*;
 use crate::context_manager::is_user_turn_boundary;
+use uuid::Uuid;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -8,7 +9,14 @@ pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
-    pub(super) window_id: u64,
+    pub(super) window_number: u64,
+    pub(super) window_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReconstructedWindow {
+    number: u64,
+    id: Option<Uuid>,
 }
 
 #[derive(Debug, Default)]
@@ -34,7 +42,7 @@ struct ActiveReplaySegment<'a> {
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
     base_replacement_history: Option<&'a [ResponseItem]>,
-    window_id: Option<u64>,
+    window: Option<ReconstructedWindow>,
 }
 
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
@@ -47,7 +55,7 @@ fn finalize_active_segment<'a>(
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
-    window_id: &mut Option<u64>,
+    window: &mut Option<ReconstructedWindow>,
     pending_rollback_turns: &mut usize,
 ) {
     // Thread rollback drops the newest surviving real user-message boundaries. In replay, that
@@ -68,8 +76,8 @@ fn finalize_active_segment<'a>(
         *base_replacement_history = Some(segment_base_replacement_history);
     }
 
-    if window_id.is_none() {
-        *window_id = active_segment.window_id;
+    if window.is_none() {
+        *window = active_segment.window;
     }
 
     // `previous_turn_settings` come from the newest surviving user turn that established them.
@@ -104,7 +112,7 @@ impl Session {
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
-        let mut window_id = None;
+        let mut window = None;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
@@ -120,8 +128,13 @@ impl Session {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
-                    if active_segment.window_id.is_none() {
-                        active_segment.window_id = compacted.window_id;
+                    if active_segment.window.is_none()
+                        && let Some(window_number) = compacted.window_number
+                    {
+                        active_segment.window = Some(ReconstructedWindow {
+                            number: window_number,
+                            id: compacted.window_id.as_deref().and_then(parse_uuid_v7),
+                        });
                     }
                     // Looking backward, compaction clears any older baseline unless a newer
                     // `TurnContextItem` in this same segment has already re-established it.
@@ -210,7 +223,7 @@ impl Session {
                             &mut base_replacement_history,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
-                            &mut window_id,
+                            &mut window,
                             &mut pending_rollback_turns,
                         );
                     }
@@ -245,12 +258,12 @@ impl Session {
                 &mut base_replacement_history,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
-                &mut window_id,
+                &mut window,
                 &mut pending_rollback_turns,
             );
         }
 
-        let fallback_window_id = u64::try_from(
+        let fallback_window_number = u64::try_from(
             rollout_items
                 .iter()
                 .filter(|item| matches!(item, RolloutItem::Compacted(_)))
@@ -326,11 +339,22 @@ impl Session {
             reference_context_item
         };
 
+        let window = window.unwrap_or(ReconstructedWindow {
+            number: fallback_window_number,
+            id: None,
+        });
         RolloutReconstruction {
             history: history.raw_items().to_vec(),
             previous_turn_settings,
             reference_context_item,
-            window_id: window_id.unwrap_or(fallback_window_id),
+            window_number: window.number,
+            window_id: window.id,
         }
     }
+}
+
+fn parse_uuid_v7(value: &str) -> Option<Uuid> {
+    Uuid::parse_str(value)
+        .ok()
+        .filter(|uuid| uuid.get_version_num() == 7)
 }

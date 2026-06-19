@@ -1184,7 +1184,8 @@ client_request_definitions! {
 macro_rules! server_request_definitions {
     (
         $(
-            $(#[$variant_meta:meta])*
+            $(#[experimental($reason:expr)])?
+            $(#[doc = $variant_doc:literal])*
             $variant:ident $(=> $wire:literal)? {
                 params: $params:ty,
                 response: $response:ty,
@@ -1197,7 +1198,7 @@ macro_rules! server_request_definitions {
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ServerRequest {
             $(
-                $(#[$variant_meta])*
+                $(#[doc = $variant_doc])*
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
@@ -1237,7 +1238,7 @@ macro_rules! server_request_definitions {
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ServerResponse {
             $(
-                $(#[$variant_meta])*
+                $(#[doc = $variant_doc])*
                 $(#[serde(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
@@ -1280,6 +1281,22 @@ macro_rules! server_request_definitions {
                 }
             }
         }
+
+        pub(crate) const EXPERIMENTAL_SERVER_METHODS: &[&str] = &[
+            $(
+                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
+            )*
+        ];
+        pub(crate) const EXPERIMENTAL_SERVER_METHOD_PARAM_TYPES: &[&str] = &[
+            $(
+                experimental_type_entry!($(#[experimental($reason)])? $params),
+            )*
+        ];
+        pub(crate) const EXPERIMENTAL_SERVER_METHOD_RESPONSE_TYPES: &[&str] = &[
+            $(
+                experimental_type_entry!($(#[experimental($reason)])? $response),
+            )*
+        ];
 
         pub fn export_server_responses(
             out_dir: &::std::path::Path,
@@ -1468,6 +1485,13 @@ server_request_definitions! {
     AttestationGenerate => "attestation/generate" {
         params: v2::AttestationGenerateParams,
         response: v2::AttestationGenerateResponse,
+    },
+
+    #[experimental("currentTime/read")]
+    /// Read the current time from an external clock owned by the client.
+    CurrentTimeRead => "currentTime/read" {
+        params: v2::CurrentTimeReadParams,
+        response: v2::CurrentTimeReadResponse,
     },
 
     /// DEPRECATED APIs below
@@ -1678,7 +1702,6 @@ mod tests {
     use codex_protocol::account::PlanType;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
-    use codex_protocol::protocol::RealtimeConversationArchitecture;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
     use codex_protocol::protocol::RealtimeVoice;
@@ -1988,6 +2011,7 @@ mod tests {
             params: v2::EnvironmentAddParams {
                 environment_id: "remote-a".to_string(),
                 exec_server_url: "ws://127.0.0.1:8765".to_string(),
+                connect_timeout_ms: None,
             },
         };
         assert_eq!(
@@ -2150,7 +2174,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_initialize_with_opt_out_notification_methods() -> Result<()> {
+    fn serialize_initialize_capabilities() -> Result<()> {
         let request = ClientRequest::Initialize {
             request_id: RequestId::Integer(42),
             params: v1::InitializeParams {
@@ -2162,6 +2186,7 @@ mod tests {
                 capabilities: Some(v1::InitializeCapabilities {
                     experimental_api: true,
                     request_attestation: true,
+                    mcp_server_openai_form_elicitation: true,
                     opt_out_notification_methods: Some(vec![
                         "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
@@ -2183,6 +2208,7 @@ mod tests {
                     "capabilities": {
                         "experimentalApi": true,
                         "requestAttestation": true,
+                        "mcpServerOpenaiFormElicitation": true,
                         "optOutNotificationMethods": [
                             "thread/started",
                             "item/agentMessage/delta"
@@ -2196,7 +2222,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_initialize_with_opt_out_notification_methods() -> Result<()> {
+    fn deserialize_initialize_capabilities() -> Result<()> {
         let request: ClientRequest = serde_json::from_value(json!({
             "method": "initialize",
             "id": 42,
@@ -2209,6 +2235,7 @@ mod tests {
                 "capabilities": {
                     "experimentalApi": true,
                     "requestAttestation": true,
+                    "mcpServerOpenaiFormElicitation": true,
                     "optOutNotificationMethods": [
                         "thread/started",
                         "item/agentMessage/delta"
@@ -2230,6 +2257,7 @@ mod tests {
                     capabilities: Some(v1::InitializeCapabilities {
                         experimental_api: true,
                         request_attestation: true,
+                        mcp_server_openai_form_elicitation: true,
                         opt_out_notification_methods: Some(vec![
                             "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
@@ -2365,6 +2393,32 @@ mod tests {
         let payload = ServerRequestPayload::AttestationGenerate(params);
         assert_eq!(request.id(), &RequestId::Integer(9));
         assert_eq!(payload.request_with_id(RequestId::Integer(9)), request);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_current_time_read_request() -> Result<()> {
+        let params = v2::CurrentTimeReadParams {
+            thread_id: "thread-123".to_string(),
+        };
+        let request = ServerRequest::CurrentTimeRead {
+            request_id: RequestId::Integer(10),
+            params: params.clone(),
+        };
+        assert_eq!(
+            json!({
+                "method": "currentTime/read",
+                "id": 10,
+                "params": {
+                    "threadId": "thread-123"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+
+        let payload = ServerRequestPayload::CurrentTimeRead(params);
+        assert_eq!(request.id(), &RequestId::Integer(10));
+        assert_eq!(payload.request_with_id(RequestId::Integer(10)), request);
         Ok(())
     }
 
@@ -2519,12 +2573,17 @@ mod tests {
                 service_tier: None,
                 cwd,
                 runtime_workspace_roots: Vec::new(),
-                instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
+                instruction_sources: vec![
+                    codex_utils_path_uri::LegacyAppPathString::from_abs_path(&absolute_path(
+                        "/tmp/AGENTS.md",
+                    )),
+                ],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
                 active_permission_profile: None,
                 reasoning_effort: None,
+                multi_agent_mode: None,
             },
         };
 
@@ -2572,7 +2631,8 @@ mod tests {
                         "type": "dangerFullAccess"
                     },
                     "activePermissionProfile": null,
-                    "reasoningEffort": null
+                    "reasoningEffort": null,
+                    "multiAgentMode": null
                 }
             }),
             serde_json::to_value(&response)?,
@@ -2901,6 +2961,7 @@ mod tests {
             params: v2::EnvironmentAddParams {
                 environment_id: "remote-a".to_string(),
                 exec_server_url: "ws://127.0.0.1:8765".to_string(),
+                connect_timeout_ms: Some(300_000),
             },
         };
         assert_eq!(
@@ -2909,7 +2970,8 @@ mod tests {
                 "id": 9,
                 "params": {
                     "environmentId": "remote-a",
-                    "execServerUrl": "ws://127.0.0.1:8765"
+                    "execServerUrl": "ws://127.0.0.1:8765",
+                    "connectTimeoutMs": 300000
                 }
             }),
             serde_json::to_value(&request)?,
@@ -3081,7 +3143,6 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
-                architecture: Some(RealtimeConversationArchitecture::Avas),
                 client_managed_handoffs: Some(true),
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
@@ -3102,7 +3163,6 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
-                    "architecture": "avas",
                     "threadId": "thr_123",
                     "clientManagedHandoffs": true,
                     "codexResponsesAsItems": null,
@@ -3128,7 +3188,6 @@ mod tests {
         let default_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
-                architecture: None,
                 client_managed_handoffs: None,
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
@@ -3149,7 +3208,6 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
-                    "architecture": null,
                     "threadId": "thr_123",
                     "clientManagedHandoffs": null,
                     "codexResponsesAsItems": null,
@@ -3170,7 +3228,6 @@ mod tests {
         let null_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
-                architecture: None,
                 client_managed_handoffs: None,
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
@@ -3191,7 +3248,6 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
-                    "architecture": null,
                     "threadId": "thr_123",
                     "clientManagedHandoffs": null,
                     "codexResponsesAsItems": null,
@@ -3341,6 +3397,7 @@ mod tests {
             params: v2::EnvironmentAddParams {
                 environment_id: "remote-a".to_string(),
                 exec_server_url: "ws://127.0.0.1:8765".to_string(),
+                connect_timeout_ms: None,
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
@@ -3378,7 +3435,6 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
-                architecture: None,
                 client_managed_handoffs: None,
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
@@ -3491,6 +3547,7 @@ mod tests {
                             developer_instructions: None,
                         },
                     },
+                    multi_agent_mode: Default::default(),
                     personality: None,
                 },
             });

@@ -144,7 +144,7 @@ pub(crate) async fn run_turn(
     input: Vec<TurnInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
-) -> Option<String> {
+) -> CodexResult<Option<String>> {
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
@@ -152,25 +152,31 @@ pub(crate) async fn run_turn(
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
     if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+        if matches!(err, CodexErr::TurnAborted) {
+            return Err(err);
+        }
         let error = err.to_codex_protocol_error();
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
         error!("Failed to run pre-sampling compact");
-        return None;
+        return Ok(None);
     }
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
-    let (injection_items, explicitly_enabled_connectors) =
-        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await?;
+    let Some((injection_items, explicitly_enabled_connectors)) =
+        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await
+    else {
+        return Ok(None);
+    };
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return None;
+        return Ok(None);
     }
     let mut can_drain_pending_input = input.is_empty();
     if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
-        return None;
+        return Ok(None);
     }
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
@@ -218,35 +224,58 @@ pub(crate) async fn run_turn(
             break;
         }
 
-        // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = async {
-            sess.clone_history()
-                .await
-                .for_prompt(&turn_context.model_info.input_modalities)
-        }
-        .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
+        let window_id = sess.current_window_id().await;
+        super::rollout_budget::maybe_record_reminder(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            &window_id,
+        )
         .await;
 
-        let window_id = sess.current_window_id().await;
-        let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
-            sess.installation_id.clone(),
-            window_id,
-            CodexResponsesRequestKind::Turn,
-        );
-        let tokens_before_sampling = sess.get_total_token_usage().await;
-        match run_sampling_request(
-            Arc::clone(&sess),
-            Arc::clone(&turn_context),
-            Arc::clone(&turn_extension_data),
-            Arc::clone(&turn_diff_tracker),
-            &mut client_session,
-            &responses_metadata,
-            sampling_request_input,
-            cancellation_token.child_token(),
-        )
-        .await
-        {
-            Ok((sampling_request_output, sampling_request_input)) => {
+        let sampling_request_result: CodexResult<_> = async {
+            super::time_reminder::maybe_record_current_time_reminder(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                &window_id,
+            )
+            .await?;
+
+            // Construct the input that we will send to the model.
+            let sampling_request_input: Vec<ResponseItem> = async {
+                sess.clone_history()
+                    .await
+                    .for_prompt(&turn_context.model_info.input_modalities)
+            }
+            .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
+            .await;
+
+            let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+                sess.installation_id.clone(),
+                window_id,
+                CodexResponsesRequestKind::Turn,
+            );
+            let tokens_before_sampling = sess.get_total_token_usage().await;
+            let (sampling_request_output, sampling_request_input) = run_sampling_request(
+                Arc::clone(&sess),
+                Arc::clone(&turn_context),
+                Arc::clone(&turn_extension_data),
+                Arc::clone(&turn_diff_tracker),
+                &mut client_session,
+                &responses_metadata,
+                sampling_request_input,
+                cancellation_token.child_token(),
+            )
+            .await?;
+
+            Ok((
+                tokens_before_sampling,
+                sampling_request_output,
+                sampling_request_input,
+            ))
+        }
+        .await;
+        match sampling_request_result {
+            Ok((tokens_before_sampling, sampling_request_output, sampling_request_input)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -313,10 +342,13 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
+                        if matches!(err, CodexErr::TurnAborted) {
+                            return Err(err);
+                        }
                         let error = err.to_codex_protocol_error();
                         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                             .await;
-                        return None;
+                        return Ok(None);
                     }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
@@ -363,15 +395,14 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        return None;
+                        return Ok(None);
                     }
                     break;
                 }
                 continue;
             }
-            Err(CodexErr::TurnAborted) => {
-                // Aborted turn is reported via a different event.
-                break;
+            Err(err @ CodexErr::TurnAborted) => {
+                return Err(err);
             }
             Err(codex_error @ CodexErr::InvalidImageRequest()) => {
                 {
@@ -410,7 +441,7 @@ pub(crate) async fn run_turn(
         }
     }
 
-    last_agent_message
+    Ok(last_agent_message)
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -2174,10 +2205,14 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
-                sess.record_token_usage_info(&turn_context, token_usage.as_ref())
+                let budget_result = sess
+                    .record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_token_count = true;
                 should_emit_turn_diff = true;
+                if let Err(err) = budget_result {
+                    break Err(err);
+                }
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
                 }

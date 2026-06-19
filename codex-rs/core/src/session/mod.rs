@@ -27,10 +27,12 @@ use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
+use crate::context::MultiAgentModeInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::RecommendedPluginsInstructions;
+use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
@@ -58,7 +60,9 @@ use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::LoadedUserInstructions;
+use codex_extension_api::PromptFragment;
 use codex_extension_api::PromptSlot;
+use codex_extension_api::TurnContextContributionInput;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
@@ -89,6 +93,7 @@ use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -207,11 +212,13 @@ mod handlers;
 mod inject;
 mod input_queue;
 mod mcp;
-mod multi_agents;
+pub(crate) mod multi_agents;
 mod review;
+mod rollout_budget;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+pub(crate) mod time_reminder;
 mod token_budget;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
@@ -432,10 +439,13 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) environment_selections: Vec<TurnEnvironmentSelection>,
     pub(crate) thread_extension_init: ExtensionDataInit,
+    pub(crate) supports_openai_form_elicitation: bool,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
+    pub(crate) initial_multi_agent_mode: Option<MultiAgentMode>,
 }
 
 pub(crate) fn resolve_multi_agent_version(
@@ -514,10 +524,13 @@ impl Codex {
             parent_trace: _,
             environment_selections,
             thread_extension_init,
+            supports_openai_form_elicitation,
             analytics_events_client,
             thread_store,
             attestation_provider,
+            external_time_provider,
             inherited_multi_agent_version,
+            initial_multi_agent_mode,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -572,6 +585,7 @@ impl Codex {
             .await;
         let multi_agent_version =
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
+        let multi_agent_mode = initial_multi_agent_mode;
         config
             .validate_multi_agent_v2_config()
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
@@ -605,6 +619,7 @@ impl Codex {
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
+            multi_agent_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
@@ -656,6 +671,7 @@ impl Codex {
             mcp_manager.clone(),
             extensions,
             thread_extension_init,
+            supports_openai_form_elicitation,
             agent_control,
             environment_manager,
             inherited_environments,
@@ -663,6 +679,7 @@ impl Codex {
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
+            external_time_provider,
             multi_agent_version,
         ))
         .await
@@ -819,15 +836,13 @@ impl Codex {
         state.session_configuration.thread_config_snapshot()
     }
 
-    pub(crate) async fn instruction_sources(&self) -> Vec<AbsolutePathBuf> {
+    pub(crate) async fn instruction_sources(&self) -> Vec<PathUri> {
         let state = self.session.state.lock().await;
         state
             .session_configuration
             .loaded_agents_md
             .as_ref()
-            .map_or_else(Vec::new, |instructions| {
-                instructions.sources().cloned().collect()
-            })
+            .map_or_else(Vec::new, |instructions| instructions.sources().collect())
     }
 
     pub(crate) async fn thread_environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
@@ -909,6 +924,25 @@ async fn thread_title_from_thread_store(
 
     let title = thread.name.as_deref()?.trim();
     (!title.is_empty() && thread.preview.trim() != title).then(|| title.to_string())
+}
+
+fn push_prompt_fragment(
+    fragment: PromptFragment,
+    developer_sections: &mut Vec<String>,
+    contextual_user_sections: &mut Vec<String>,
+    separate_developer_sections: &mut Vec<String>,
+) {
+    match fragment.slot() {
+        PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
+            developer_sections.push(fragment.text().to_string());
+        }
+        PromptSlot::ContextualUser => {
+            contextual_user_sections.push(fragment.text().to_string());
+        }
+        PromptSlot::SeparateDeveloper => {
+            separate_developer_sections.push(fragment.text().to_string());
+        }
+    }
 }
 
 impl Session {
@@ -1324,6 +1358,7 @@ impl Session {
             mut history,
             previous_turn_settings,
             reference_context_item,
+            window_number,
             window_id,
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
@@ -1342,7 +1377,8 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
-            state.set_auto_compact_window_id(window_id);
+            let window_id = window_id.unwrap_or_else(|| state.auto_compact_window_id());
+            state.restore_auto_compact_window(window_number, window_id);
             state.set_previous_turn_settings(previous_turn_settings.clone());
         }
         let prefix_tokens = if matches!(
@@ -2634,17 +2670,50 @@ impl Session {
         turn_context: &TurnContext,
         items: &'a [ResponseItem],
     ) -> Cow<'a, [ResponseItem]> {
-        if !turn_context
+        let mut items = Cow::Borrowed(items);
+        if turn_context
             .config
             .features
             .enabled(Feature::ResizeAllImages)
         {
-            return Cow::Borrowed(items);
+            prepare_response_items(items.to_mut());
         }
+        if turn_context.config.features.enabled(Feature::ItemIds) {
+            Self::assign_missing_response_item_ids(items)
+        } else {
+            items
+        }
+    }
 
-        let mut prepared_items = items.to_vec();
-        prepare_response_items(&mut prepared_items);
-        Cow::Owned(prepared_items)
+    fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
+        if items.iter().all(|item| item.id().is_some()) {
+            return items;
+        }
+        let mut items = items;
+        for item in items.to_mut() {
+            if item.id().is_some() {
+                continue;
+            }
+            let prefix = match item {
+                ResponseItem::Message { .. } => "msg",
+                ResponseItem::Reasoning { .. } => "rs",
+                ResponseItem::LocalShellCall { .. } => "lsh",
+                ResponseItem::FunctionCall { .. } => "fc",
+                ResponseItem::ToolSearchCall { .. } => "tsc",
+                ResponseItem::FunctionCallOutput { .. } => "fco",
+                ResponseItem::CustomToolCall { .. } => "ctc",
+                ResponseItem::CustomToolCallOutput { .. } => "ctco",
+                ResponseItem::ToolSearchOutput { .. } => "tso",
+                ResponseItem::WebSearchCall { .. } => "ws",
+                ResponseItem::ImageGenerationCall { .. } => "ig",
+                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
+                ResponseItem::AgentMessage { .. }
+                | ResponseItem::CompactionTrigger { .. }
+                | ResponseItem::Other => continue,
+            };
+            item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
+        }
+        items
     }
 
     pub(crate) fn response_item_from_user_input(
@@ -2780,10 +2849,20 @@ impl Session {
 
     pub(crate) async fn replace_compacted_history(
         &self,
+        turn_context: &TurnContext,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         compacted_item: CompactedItem,
     ) {
+        let items = if turn_context.config.features.enabled(Feature::ItemIds) {
+            Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned()
+        } else {
+            items
+        };
+        let compacted_item = CompactedItem {
+            replacement_history: Some(items.clone()),
+            ..compacted_item
+        };
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
@@ -2858,6 +2937,57 @@ impl Session {
             )
             .await;
         }
+    }
+
+    async fn build_turn_context_contribution_items(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        let mut developer_sections = Vec::new();
+        let mut contextual_user_sections = Vec::new();
+        let mut separate_developer_sections = Vec::new();
+        let context_contributors = self.services.extensions.context_contributors().to_vec();
+
+        for contributor in &context_contributors {
+            for fragment in contributor
+                .contribute_turn_context(TurnContextContributionInput {
+                    thread_id: self.thread_id(),
+                    turn_id: turn_context.sub_id.as_str(),
+                    session_store: &self.services.session_extension_data,
+                    thread_store: &self.services.thread_extension_data,
+                    turn_store: turn_context.extension_data.as_ref(),
+                    model_context_window: turn_context.model_context_window(),
+                })
+                .await
+            {
+                push_prompt_fragment(
+                    fragment,
+                    &mut developer_sections,
+                    &mut contextual_user_sections,
+                    &mut separate_developer_sections,
+                );
+            }
+        }
+
+        let mut items = Vec::with_capacity(3);
+        if let Some(developer_message) =
+            crate::context_manager::updates::build_developer_update_item(developer_sections)
+        {
+            items.push(developer_message);
+        }
+        for section in separate_developer_sections {
+            if let Some(developer_message) =
+                crate::context_manager::updates::build_developer_update_item(vec![section])
+            {
+                items.push(developer_message);
+            }
+        }
+        if let Some(contextual_user_message) =
+            crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
+        {
+            items.push(contextual_user_message);
+        }
+        items
     }
 
     pub(crate) async fn build_initial_context(
@@ -3026,25 +3156,40 @@ impl Session {
             developer_sections.push(plugin_instructions.render());
         }
         let context_contributors = self.services.extensions.context_contributors().to_vec();
-        for contributor in context_contributors {
+        for contributor in &context_contributors {
             for fragment in contributor
-                .contribute(
+                .contribute_thread_context(
                     &self.services.session_extension_data,
                     &self.services.thread_extension_data,
                 )
                 .await
             {
-                match fragment.slot() {
-                    PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
-                        developer_sections.push(fragment.text().to_string());
-                    }
-                    PromptSlot::ContextualUser => {
-                        contextual_user_sections.push(fragment.text().to_string());
-                    }
-                    PromptSlot::SeparateDeveloper => {
-                        separate_developer_sections.push(fragment.text().to_string());
-                    }
-                }
+                push_prompt_fragment(
+                    fragment,
+                    &mut developer_sections,
+                    &mut contextual_user_sections,
+                    &mut separate_developer_sections,
+                );
+            }
+        }
+        for contributor in &context_contributors {
+            for fragment in contributor
+                .contribute_turn_context(TurnContextContributionInput {
+                    thread_id: self.thread_id(),
+                    turn_id: turn_context.sub_id.as_str(),
+                    session_store: &self.services.session_extension_data,
+                    thread_store: &self.services.thread_extension_data,
+                    turn_store: turn_context.extension_data.as_ref(),
+                    model_context_window: turn_context.model_context_window(),
+                })
+                .await
+            {
+                push_prompt_fragment(
+                    fragment,
+                    &mut developer_sections,
+                    &mut contextual_user_sections,
+                    &mut separate_developer_sections,
+                );
             }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
@@ -3101,6 +3246,20 @@ impl Session {
         {
             items.push(usage_hint_message);
         }
+        if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(
+            turn_context.multi_agent_version,
+            &turn_context.config.multi_agent_v2,
+            &session_source,
+            turn_context.multi_agent_mode,
+            turn_context
+                .config
+                .features
+                .enabled(Feature::MultiAgentMode),
+        ) {
+            items.push(ContextualUserFragment::into(
+                MultiAgentModeInstructions::new(multi_agent_mode),
+            ));
+        }
         if let Some(contextual_user_message) =
             crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
         {
@@ -3137,13 +3296,14 @@ impl Session {
     pub(crate) async fn current_window_id(&self) -> String {
         let state = self.state.lock().await;
         let thread_id = self.thread_id;
-        let window_id = state.auto_compact_window_id();
-        format!("{thread_id}:{window_id}")
+        let window_number = state.auto_compact_window_number();
+        format!("{thread_id}:{window_number}")
     }
 
-    pub(crate) async fn advance_auto_compact_window_id(&self) -> u64 {
+    pub(crate) async fn advance_auto_compact_window(&self) -> (u64, String) {
         let mut state = self.state.lock().await;
-        state.advance_auto_compact_window_id()
+        let (window_number, window_id) = state.advance_auto_compact_window();
+        (window_number, window_id.to_string())
     }
 
     pub(crate) async fn request_new_context_window(&self) {
@@ -3155,11 +3315,11 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Option<u64> {
-        let window_id = {
+        let window = {
             let mut state = self.state.lock().await;
             state.start_new_context_window_if_requested()
         };
-        let window_id = window_id?;
+        let (window_number, window_id) = window?;
         let context_items = self.build_initial_context(turn_context).await;
         let turn_context_item = turn_context.to_turn_context_item();
         let replacement_history = context_items;
@@ -3171,7 +3331,8 @@ impl Session {
             RolloutItem::Compacted(CompactedItem {
                 message: String::new(),
                 replacement_history: Some(replacement_history),
-                window_id: Some(window_id),
+                window_number: Some(window_number),
+                window_id: Some(window_id.to_string()),
             }),
             RolloutItem::TurnContext(turn_context_item),
         ])
@@ -3181,7 +3342,7 @@ impl Session {
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
         self.recompute_token_usage(turn_context).await;
-        Some(window_id)
+        Some(window_number)
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
@@ -3211,15 +3372,25 @@ impl Session {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
+        let turn_context_item = turn_context.to_turn_context_item();
+        if reference_context_item.as_ref() == Some(&turn_context_item) {
+            return;
+        }
         let should_inject_full_context = reference_context_item.is_none();
-        let context_items = if should_inject_full_context {
+        let mut context_items = if should_inject_full_context {
             self.build_initial_context(turn_context).await
         } else {
-            // Steady-state path: append only context diffs to minimize token overhead.
+            // Steady-state path: append only built-in context diffs here; turn-scoped extension
+            // context is added below.
             self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
                 .await
         };
-        let turn_context_item = turn_context.to_turn_context_item();
+        if !should_inject_full_context {
+            context_items.extend(
+                self.build_turn_context_contribution_items(turn_context)
+                    .await,
+            );
+        }
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
@@ -3239,17 +3410,19 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
-    ) {
-        self.record_token_usage_info(turn_context, token_usage)
+    ) -> CodexResult<()> {
+        let result = self
+            .record_token_usage_info(turn_context, token_usage)
             .await;
         self.send_token_count_event(turn_context).await;
+        result
     }
 
     pub(crate) async fn record_token_usage_info(
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
-    ) {
+    ) -> CodexResult<()> {
         if let Some(token_usage) = token_usage {
             let token_info = {
                 let mut state = self.state.lock().await;
@@ -3263,6 +3436,7 @@ impl Session {
                 }
                 state.token_info()
             };
+            let budget_result = self.record_rollout_budget_usage(token_usage);
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
                     contributor
@@ -3275,7 +3449,9 @@ impl Session {
                         .await;
                 }
             }
+            budget_result?;
         }
+        Ok(())
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {

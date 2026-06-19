@@ -224,6 +224,7 @@ fn sample_thread_start_response(
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
     })
 }
 
@@ -288,6 +289,7 @@ fn sample_thread_resume_response_with_source(
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
         initial_turns_page: None,
     })
 }
@@ -774,6 +776,7 @@ fn sample_initialize_fact(connection_id: u64) -> AnalyticsFact {
                 experimental_api: false,
                 request_attestation: false,
                 opt_out_notification_methods: None,
+                mcp_server_openai_form_elicitation: false,
             }),
         },
         product_client_id: DEFAULT_ORIGINATOR.to_string(),
@@ -1669,6 +1672,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                         experimental_api: false,
                         request_attestation: false,
                         opt_out_notification_methods: None,
+                        mcp_server_openai_form_elicitation: false,
                     }),
                 },
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),
@@ -1818,6 +1822,7 @@ async fn compaction_event_ingests_custom_fact() {
                         experimental_api: false,
                         request_attestation: false,
                         opt_out_notification_methods: None,
+                        mcp_server_openai_form_elicitation: false,
                     }),
                 },
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),
@@ -1946,6 +1951,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                         experimental_api: false,
                         request_attestation: false,
                         opt_out_notification_methods: None,
+                        mcp_server_openai_form_elicitation: false,
                     }),
                 },
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),
@@ -4117,6 +4123,7 @@ async fn turn_event_counts_completed_tool_items() {
         tool: "search".to_string(),
         status,
         arguments: json!({}),
+        app_context: None,
         mcp_app_resource_uri: None,
         plugin_id: Some("sample@test".to_string()),
         result: None,

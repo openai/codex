@@ -446,9 +446,6 @@
             "browser_use_external": {
               "type": "boolean"
             },
-            "child_agents_md": {
-              "type": "boolean"
-            },
             "chronicle": {
               "type": "boolean"
             },
@@ -476,7 +473,13 @@
             "connectors": {
               "type": "boolean"
             },
+            "current_time_reminder": {
+              "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
+            },
             "default_mode_request_user_input": {
+              "type": "boolean"
+            },
+            "deferred_executor": {
               "type": "boolean"
             },
             "elevated_windows_sandbox": {
@@ -530,6 +533,9 @@
             "in_app_browser": {
               "type": "boolean"
             },
+            "item_ids": {
+              "type": "boolean"
+            },
             "js_repl": {
               "type": "boolean"
             },
@@ -549,6 +555,9 @@
               "type": "boolean"
             },
             "multi_agent": {
+              "type": "boolean"
+            },
+            "multi_agent_mode": {
               "type": "boolean"
             },
             "multi_agent_v2": {
@@ -689,6 +698,9 @@
             "unified_exec_zsh_fork": {
               "type": "boolean"
             },
+            "use_agent_identity": {
+              "type": "boolean"
+            },
             "use_legacy_landlock": {
               "type": "boolean"
             },
@@ -799,6 +811,30 @@
       },
       "type": "object"
     },
+    "CurrentTimeReminderConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "clock_source": {
+          "$ref": "#/definitions/CurrentTimeSource"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "reminder_interval_model_requests": {
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CurrentTimeSource": {
+      "enum": [
+        "system",
+        "external"
+      ],
+      "type": "string"
+    },
     "DebugConfigLockToml": {
       "additionalProperties": false,
       "properties": {
@@ -888,6 +924,16 @@
         },
         {
           "$ref": "#/definitions/CodeModeConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_CurrentTimeReminderConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/CurrentTimeReminderConfigToml"
         }
       ]
     },
@@ -2487,13 +2533,6 @@
       },
       "type": "object"
     },
-    "RealtimeConversationArchitecture": {
-      "enum": [
-        "realtimeapi",
-        "avas"
-      ],
-      "type": "string"
-    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -2504,9 +2543,6 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
-        "architecture": {
-          "$ref": "#/definitions/RealtimeConversationArchitecture"
-        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },
@@ -4649,9 +4685,6 @@
         "browser_use_external": {
           "type": "boolean"
         },
-        "child_agents_md": {
-          "type": "boolean"
-        },
         "chronicle": {
           "type": "boolean"
         },
@@ -4679,7 +4712,13 @@
         "connectors": {
           "type": "boolean"
         },
+        "current_time_reminder": {
+          "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
+        },
         "default_mode_request_user_input": {
+          "type": "boolean"
+        },
+        "deferred_executor": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -4733,6 +4772,9 @@
         "in_app_browser": {
           "type": "boolean"
         },
+        "item_ids": {
+          "type": "boolean"
+        },
         "js_repl": {
           "type": "boolean"
         },
@@ -4752,6 +4794,9 @@
           "type": "boolean"
         },
         "multi_agent": {
+          "type": "boolean"
+        },
+        "multi_agent_mode": {
           "type": "boolean"
         },
         "multi_agent_v2": {
@@ -4890,6 +4935,9 @@
           "type": "boolean"
         },
         "unified_exec_zsh_fork": {
+          "type": "boolean"
+        },
+        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {

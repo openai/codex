@@ -25,7 +25,6 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::RecordingUserInstructionsProvider;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
@@ -88,7 +87,7 @@ fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
 }
 
 fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> String {
-    let cwd = cwd.as_path().display();
+    let cwd = PathUri::from_abs_path(cwd).inferred_native_path_string();
     format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
 }
 
@@ -138,8 +137,6 @@ fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agents_override_is_preferred_over_agents_md() -> Result<()> {
-    // TODO(anp): Remove after instruction-source helpers use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     let instructions =
         agents_instructions(test_codex().with_workspace_setup(|cwd, fs| async move {
             let agents_md = cwd.join("AGENTS.md");
@@ -172,8 +169,6 @@ async fn agents_override_is_preferred_over_agents_md() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn configured_fallback_is_used_when_agents_candidate_is_directory() -> Result<()> {
-    // TODO(anp): Remove after instruction-source helpers use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     let instructions = agents_instructions(
         test_codex()
             .with_config(|config| {
@@ -334,8 +329,8 @@ async fn symlinked_cwd_uses_logical_parent_for_agents_discovery() -> Result<()> 
     assert_eq!(
         test.codex.instruction_sources().await,
         vec![
-            logical_root.join("AGENTS.md"),
-            test.config.cwd.join("AGENTS.md")
+            PathUri::from_abs_path(&logical_root.join("AGENTS.md")),
+            PathUri::from_abs_path(&test.config.cwd.join("AGENTS.md"))
         ]
     );
 
@@ -355,8 +350,6 @@ async fn symlinked_cwd_uses_logical_parent_for_agents_discovery() -> Result<()> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn selected_environment_sources_match_model_visible_instructions() -> Result<()> {
-    // TODO(anp): Remove after instruction-source helpers use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(
         &server,
@@ -385,7 +378,10 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
 
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![global_agents, project_agents]
+        vec![
+            PathUri::from_abs_path(&global_agents),
+            PathUri::from_abs_path(&project_agents),
+        ]
     );
 
     test.submit_turn("hello").await?;
@@ -445,15 +441,17 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await?;
     assert_eq!(provider.load_count(), 2);
     assert_eq!(
         no_environment_thread.thread.instruction_sources().await,
-        vec![global_source]
+        vec![PathUri::from_abs_path(&global_source)]
     );
 
     no_environment_thread
@@ -484,8 +482,6 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Result<()> {
-    // TODO(anp): Remove after instruction-source helpers use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     // Set up one global source, one project source, and two ordinary model turns.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -520,7 +516,10 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
         });
     let test = builder.build_with_remote_env(&server).await?;
     let project_source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
-    let creation_sources = vec![global_source.clone(), project_source.clone()];
+    let creation_sources = vec![
+        PathUri::from_abs_path(&global_source),
+        PathUri::from_abs_path(&project_source),
+    ];
 
     // Confirm the thread records both creation-time sources in composition order.
     assert_eq!(test.codex.instruction_sources().await, creation_sources);
@@ -596,8 +595,6 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapshot() -> Result<()> {
-    // TODO(anp): Remove after instruction-source helpers use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires native cross-OS instruction-source paths");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -652,6 +649,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: vec![
                 TurnEnvironmentSelection {
@@ -664,15 +662,16 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
                 },
             ],
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await?;
     assert_eq!(provider.load_count(), 2);
     assert_eq!(
         thread.thread.instruction_sources().await,
         vec![
-            global_source.clone(),
-            remote_source.clone(),
-            local_source.clone().try_into()?,
+            PathUri::from_abs_path(&global_source),
+            PathUri::from_abs_path(&remote_source),
+            PathUri::from_path(&local_source)?,
         ]
     );
 
@@ -698,7 +697,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
 
     let contents = format!(
         "{GLOBAL_INSTRUCTIONS}\n\nfor `{REMOTE_ENVIRONMENT_ID}` with root {}\n\nremote project instructions\n\nfor `{LOCAL_ENVIRONMENT_ID}` with root {}\n\nlocal project instructions",
-        test.config.cwd.display(),
+        PathUri::from_abs_path(&test.config.cwd).inferred_native_path_string(),
         local_root.path().display(),
     );
     let expected =
@@ -710,7 +709,11 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
     assert_eq!(provider.load_count(), 2);
     assert_eq!(
         thread.thread.instruction_sources().await,
-        vec![global_source, remote_source, local_source.try_into()?]
+        vec![
+            PathUri::from_abs_path(&global_source),
+            PathUri::from_abs_path(&remote_source),
+            PathUri::from_path(&local_source)?,
+        ]
     );
 
     Ok(())
@@ -739,7 +742,10 @@ async fn invalid_utf8_global_instructions_are_lossy() -> Result<()> {
     test.submit_turn("inspect lossy global instructions")
         .await?;
 
-    assert_eq!(test.codex.instruction_sources().await, vec![source.clone()]);
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![PathUri::from_abs_path(&source)]
+    );
     let expected_fragment =
         expected_provider_only_instruction_fragment("global\u{FFFD}instructions");
     assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);
@@ -782,7 +788,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     // Assert the pre-resume thread reports the source used to create its snapshot.
     assert_eq!(
         initial.codex.instruction_sources().await,
-        vec![old_source.clone()],
+        vec![PathUri::from_abs_path(&old_source)],
         "initial thread reports the creation-time global source"
     );
     initial.submit_turn("persist instructions").await?;
@@ -812,7 +818,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     // Assert the API reports the new source while model history replays the old structured prefix.
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![new_source],
+        vec![PathUri::from_abs_path(&new_source)],
         "resume reports sources from the newly loaded config"
     );
 
@@ -866,7 +872,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     // Assert the parent reports the source used to create its snapshot.
     assert_eq!(
         parent.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![PathUri::from_abs_path(&source)],
         "parent reports the creation-time global source"
     );
     parent.submit_turn("persist instructions").await?;
@@ -901,7 +907,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     // Assert the fork reports the new source before issuing its first turn.
     assert_eq!(
         forked.thread.instruction_sources().await,
-        vec![new_source],
+        vec![PathUri::from_abs_path(&new_source)],
         "fork config should reflect the newly loaded global source"
     );
 
@@ -1031,7 +1037,7 @@ async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> 
     // Assert the parent reports the creation-time source before spawning.
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![PathUri::from_abs_path(&source)],
         "parent reports the creation-time global source before spawning"
     );
     test.submit_turn(SPAWN_SEED_PROMPT).await?;
@@ -1074,12 +1080,12 @@ async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> 
     assert_single_instruction_fragment(&child_request, &expected_fragment);
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![PathUri::from_abs_path(&source)],
         "running parent retains the creation-time global source after spawning"
     );
     assert_eq!(
         child_thread.instruction_sources().await,
-        vec![source],
+        vec![PathUri::from_abs_path(&source)],
         "subagent reports the parent's creation-time source"
     );
     if fork_context {

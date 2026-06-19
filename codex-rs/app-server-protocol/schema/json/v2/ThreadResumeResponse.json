@@ -539,6 +539,29 @@
     "LegacyAppPathString": {
       "type": "string"
     },
+    "McpToolCallAppContext": {
+      "properties": {
+        "connectorId": {
+          "type": "string"
+        },
+        "linkId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resourceUri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "connectorId"
+      ],
+      "type": "object"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -638,6 +661,14 @@
           "type": "string"
         }
       ]
+    },
+    "MultiAgentMode": {
+      "description": "Controls whether the model should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help.",
+      "enum": [
+        "explicitRequestOnly",
+        "proactive"
+      ],
+      "type": "string"
     },
     "NetworkAccess": {
       "enum": [
@@ -1420,6 +1451,16 @@
         },
         {
           "properties": {
+            "appContext": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/McpToolCallAppContext"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "arguments": true,
             "durationMs": {
               "description": "The duration of the MCP tool call in milliseconds.",
@@ -1443,6 +1484,7 @@
               "type": "string"
             },
             "mcpAppResourceUri": {
+              "description": "Deprecated: use `appContext.resourceUri` instead.",
               "type": [
                 "string",
                 "null"
@@ -2360,9 +2402,9 @@
     },
     "instructionSources": {
       "default": [],
-      "description": "Instruction source files currently loaded for this thread.",
+      "description": "Environment-native paths to instruction source files currently loaded for this thread.",
       "items": {
-        "$ref": "#/definitions/AbsolutePathBuf"
+        "$ref": "#/definitions/LegacyAppPathString"
       },
       "type": "array"
     },

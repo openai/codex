@@ -52,6 +52,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) provider: ModelProviderInfo,
 
     pub(super) collaboration_mode: CollaborationMode,
+    pub(super) multi_agent_mode: Option<MultiAgentMode>,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(super) service_tier: Option<String>,
 
@@ -192,6 +193,7 @@ impl SessionConfiguration {
             reasoning_summary: self.model_reasoning_summary,
             personality: self.personality,
             collaboration_mode: self.collaboration_mode.clone(),
+            multi_agent_mode: self.multi_agent_mode,
             session_source: self.session_source.clone(),
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
@@ -227,6 +229,9 @@ impl SessionConfiguration {
                 });
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
+        }
+        if let Some(multi_agent_mode) = updates.multi_agent_mode {
+            next_configuration.multi_agent_mode = Some(multi_agent_mode);
         }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
@@ -422,6 +427,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
+    pub(crate) multi_agent_mode: Option<MultiAgentMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<String>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
@@ -445,7 +451,9 @@ async fn warm_plugins_and_skills_for_session_init(
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots);
+    let plugin_skill_snapshots = plugins_manager.plugin_skill_snapshots_for_config(&plugins_input);
+    let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots)
+        .with_plugin_skill_snapshots(plugin_skill_snapshots);
     skills_service
         .snapshot_for_config(&skills_input, fs)
         .await
@@ -484,6 +492,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         thread_extension_init: ExtensionDataInit,
+        supports_openai_form_elicitation: bool,
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
@@ -491,6 +500,7 @@ impl Session {
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        external_time_provider: Option<Arc<dyn TimeProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -515,6 +525,10 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
+        let time_provider = crate::current_time::resolve_time_provider(
+            config.current_time_reminder.as_ref(),
+            external_time_provider,
+        )?;
         let mcp_thread_init = thread_extension_init.clone();
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
             thread_id.to_string(),
@@ -818,6 +832,7 @@ impl Session {
                 default_shell.clone(),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
+                config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;
@@ -1009,6 +1024,9 @@ impl Session {
                 session_extension_data,
                 thread_extension_data,
                 mcp_thread_init,
+                supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(
+                    supports_openai_form_elicitation,
+                ),
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
                 network_proxy_audit_metadata,
@@ -1018,6 +1036,7 @@ impl Session {
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
+                time_provider,
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     thread_id,
@@ -1027,6 +1046,7 @@ impl Session {
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
+                    /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
                     attestation_provider,
                 )
                 .with_prompt_cache_key_override(
@@ -1149,6 +1169,9 @@ impl Session {
                 host_owned_codex_apps_enabled,
                 config.prefix_mcp_tool_names(),
                 client_elicitation_capability,
+                sess.services
+                    .supports_openai_form_elicitation
+                    .load(std::sync::atomic::Ordering::Relaxed),
                 tool_plugin_provenance,
                 auth,
                 Some(sess.mcp_elicitation_reviewer()),

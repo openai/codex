@@ -328,7 +328,27 @@ async fn verify_request_plugin_install_completed(
         }),
         DiscoverableTool::Plugin(plugin) => {
             if is_remote_plugin_install_suggestion(&plugin.id) {
-                return true;
+                let (_, accessible_connectors) = tokio::join!(
+                    refresh_remote_installed_plugins_cache_after_install(
+                        session,
+                        turn,
+                        auth,
+                        plugin.id.as_str(),
+                    ),
+                    refresh_missing_requested_connectors(
+                        session,
+                        turn,
+                        auth,
+                        &plugin.app_connector_ids,
+                        plugin.id.as_str(),
+                    )
+                );
+                return accessible_connectors.is_some_and(|accessible_connectors| {
+                    all_requested_connectors_picked_up(
+                        &plugin.app_connector_ids,
+                        &accessible_connectors,
+                    )
+                });
             }
 
             session.reload_user_config_layer().await;
@@ -348,6 +368,29 @@ async fn verify_request_plugin_install_completed(
             .await;
             completed
         }
+    }
+}
+
+async fn refresh_remote_installed_plugins_cache_after_install(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    auth: Option<&codex_login::CodexAuth>,
+    tool_id: &str,
+) {
+    let plugins_manager = &session.services.plugins_manager;
+    let plugins_config = turn.config.plugins_config_input();
+    if let Err(err) = plugins_manager
+        .build_and_cache_remote_installed_plugin_marketplaces(
+            &plugins_config,
+            auth,
+            &[REMOTE_GLOBAL_MARKETPLACE_NAME],
+            /*on_effective_plugins_changed*/ None,
+        )
+        .await
+    {
+        warn!(
+            "failed to refresh remote installed plugins cache after plugin install request for {tool_id}: {err:#}"
+        );
     }
 }
 

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use crate::SkillsService;
 use crate::agent::AgentControl;
@@ -7,6 +8,7 @@ use crate::attestation::AttestationProvider;
 use crate::client::ModelClient;
 use crate::config::NetworkProxyAuditMetadata;
 use crate::config::StartedNetworkProxy;
+use crate::current_time::TimeProvider;
 use crate::environment_selection::ThreadEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
@@ -67,6 +69,7 @@ pub(crate) struct SessionServices {
     pub(crate) extensions: Arc<ExtensionRegistry<crate::config::Config>>,
     pub(crate) session_extension_data: ExtensionData,
     pub(crate) thread_extension_data: ExtensionData,
+    pub(crate) supports_openai_form_elicitation: AtomicBool,
     pub(crate) mcp_thread_init: ExtensionDataInit,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: ArcSwapOption<StartedNetworkProxy>,
@@ -77,6 +80,7 @@ pub(crate) struct SessionServices {
     pub(crate) live_thread: Option<LiveThread>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) time_provider: Arc<dyn TimeProvider>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,

@@ -62,6 +62,7 @@ codex-utils-fuzzy-match = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-oss = { workspace = true }
 codex-utils-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-sandbox-summary = { workspace = true }
 codex-utils-sleep-inhibitor = { workspace = true }
@@ -151,7 +152,6 @@ codex-cli = { workspace = true }
 codex-mcp = { workspace = true }
 core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
-codex-utils-path-uri = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }

@@ -12,6 +12,7 @@ use serde::Serializer;
 use std::fmt;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
 use ts_rs::TS;
@@ -96,6 +97,7 @@ impl PathUri {
         Self::from_opaque_path_bytes(&path_bytes)
     }
 
+    /// Parses an absolute native path using the specified path convention.
     pub(crate) fn from_absolute_native_path(
         path: &str,
         convention: PathConvention,
@@ -202,13 +204,33 @@ impl PathUri {
             .map(decode_uri_path)
     }
 
-    /// Returns the parent URI, or `None` for the URI root or an opaque fallback
-    /// URI created by [`Self::from_abs_path`].
+    /// Renders this URI as a path-flavored string using its inferred convention.
+    pub fn to_path_buf(&self) -> PathBuf {
+        PathBuf::from(self.inferred_native_path_string())
+    }
+
+    /// Returns the lexical parent without crossing the inferred native path root.
+    ///
+    /// POSIX `/`, Windows drive roots, Windows UNC share roots, and opaque fallback
+    /// URIs created by [`Self::from_abs_path`] have no parent.
     pub fn parent(&self) -> Option<Self> {
-        if self.encoded_path() == "/" || decode_bad_path_uri(&self.0).is_some() {
+        if decode_bad_path_uri(&self.0).is_some() {
             return None;
         }
 
+        let convention = self.infer_path_convention()?;
+        // In URI form, both a Windows drive root (`file:///C:`) and a UNC share root
+        // (`file://server/share`) retain one non-empty path segment. Keep that segment as the
+        // anchor so parent traversal cannot produce a URI that is not an absolute Windows path.
+        let anchor_depth = usize::from(convention == PathConvention::Windows);
+        let depth = self
+            .0
+            .path_segments()?
+            .filter(|segment| !segment.is_empty())
+            .count();
+        if depth <= anchor_depth {
+            return None;
+        }
         let mut url = self.0.clone();
         {
             let mut segments = match url.path_segments_mut() {
@@ -218,6 +240,11 @@ impl PathUri {
             segments.pop_if_empty().pop();
         }
         Some(Self(url))
+    }
+
+    /// Returns this URI and each lexical parent up to its inferred native path root.
+    pub fn ancestors(&self) -> impl Iterator<Item = Self> {
+        std::iter::successors(Some(self.clone()), Self::parent)
     }
 
     /// Lexically resolves native absolute or relative path text against this URI.
@@ -310,15 +337,19 @@ impl PathUri {
 
     /// Converts this file URI to a path using the current host's path rules.
     ///
-    /// Conversion should succeed when the URI was created from an
-    /// [`AbsolutePathBuf`] on the current host, including fallback URIs created
-    /// by [`Self::from_abs_path`]. It may fail when the URI came from a different
-    /// operating system and its `file:` URI form cannot be represented using
-    /// the current host's path rules, such as a UNC authority on POSIX or a
-    /// POSIX root on Windows. Because a `file:` URI does not record its source
-    /// operating system, callers should only use this method when the URI is
-    /// known to identify a path on the current host.
+    /// The URI's inferred path convention must match the current host. Conversion should succeed
+    /// when the URI was created from an [`AbsolutePathBuf`] on the current host, including fallback
+    /// URIs created by [`Self::from_abs_path`]. Foreign conventions are rejected rather than being
+    /// projected onto a syntactically valid but unrelated host path.
     pub fn to_abs_path(&self) -> io::Result<AbsolutePathBuf> {
+        if self.infer_path_convention() != Some(PathConvention::native()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                PathUriParseError::InvalidFileUriPath {
+                    path: self.to_string(),
+                },
+            ));
+        }
         if let Some(path_bytes) = decode_bad_path_uri(&self.0) {
             #[cfg(unix)]
             let decoded_path = {
@@ -687,6 +718,17 @@ impl PathConvention {
     #[cfg(unix)]
     pub const fn native() -> Self {
         Self::Posix
+    }
+
+    /// Splits absolute or relative native path text into lexical segments.
+    ///
+    /// This does not validate the path or require it to be absolute. POSIX paths split on `/`,
+    /// while Windows paths split on both `\\` and `/`. Empty segments are retained.
+    pub fn path_segments(self, path: &str) -> impl DoubleEndedIterator<Item = &str> {
+        path.split(move |character| match self {
+            Self::Posix => character == '/',
+            Self::Windows => matches!(character, '/' | '\\'),
+        })
     }
 }
 

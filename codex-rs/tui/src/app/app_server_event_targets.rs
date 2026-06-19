@@ -24,6 +24,9 @@ pub(super) fn server_request_thread_id(request: &ServerRequest) -> Option<Thread
         ServerRequest::DynamicToolCall { params, .. } => {
             ThreadId::from_string(&params.thread_id).ok()
         }
+        ServerRequest::CurrentTimeRead { params, .. } => {
+            ThreadId::from_string(&params.thread_id).ok()
+        }
         ServerRequest::ChatgptAuthTokensRefresh { .. }
         | ServerRequest::AttestationGenerate { .. }
         | ServerRequest::ApplyPatchApproval { .. }
@@ -227,6 +230,7 @@ mod tests {
                     developer_instructions: None,
                 },
             },
+            multi_agent_mode: Default::default(),
             personality: None,
         }
     }

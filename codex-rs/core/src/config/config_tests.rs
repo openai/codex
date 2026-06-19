@@ -14,7 +14,6 @@ use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ExperimentalRequestUserInput;
 use codex_config::config_toml::ProjectConfig;
-use codex_config::config_toml::RealtimeArchitecture;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RealtimeToml;
 use codex_config::config_toml::RealtimeTransport;
@@ -520,6 +519,67 @@ async fn load_config_rejects_enabled_rollout_budget_without_limit() -> std::io::
         );
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_current_time_reminder() -> std::io::Result<()> {
+    for (config_toml, expected) in [
+        (
+            r#"
+[features]
+current_time_reminder = true
+"#,
+            CurrentTimeReminderConfig::default(),
+        ),
+        (
+            r#"
+[features.current_time_reminder]
+enabled = true
+reminder_interval_model_requests = 4
+clock_source = "external"
+"#,
+            CurrentTimeReminderConfig {
+                reminder_interval_model_requests: 4,
+                clock_source: CurrentTimeSource::External,
+            },
+        ),
+    ] {
+        let config = load_current_time_reminder_config(config_toml).await?;
+        assert!(config.features.enabled(Feature::CurrentTimeReminder));
+        assert_eq!(config.current_time_reminder, Some(expected));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_zero_current_time_reminder_interval() -> std::io::Result<()> {
+    let error = load_current_time_reminder_config(
+        r#"
+[features.current_time_reminder]
+enabled = true
+reminder_interval_model_requests = 0
+"#,
+    )
+    .await
+    .expect_err("zero reminder interval should be rejected");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "features.current_time_reminder.reminder_interval_model_requests must be positive"
+    );
+    Ok(())
+}
+
+async fn load_current_time_reminder_config(config_toml: &str) -> std::io::Result<Config> {
+    let codex_home = tempdir()?;
+    let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
+    Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
 }
 
 #[test]
@@ -9995,9 +10055,8 @@ max_concurrent_threads_per_session = 17
 
     let config = resolve_multi_agent_v2_config(&config_toml);
     let concurrency_guidance = "There are 17 available concurrency slots, meaning that up to 17 agents can be active at once, including you.";
-    let expected_suffix = format!(
-        "{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{concurrency_guidance}\n\n{DEFAULT_MULTI_AGENT_V2_NO_SPAWN_HINT_TEXT}"
-    );
+    let expected_suffix =
+        format!("{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{concurrency_guidance}");
     assert!(
         [
             config.root_agent_usage_hint_text,
@@ -10835,7 +10894,6 @@ async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [realtime]
-architecture = "avas"
 version = "v2"
 type = "transcription"
 transport = "webrtc"
@@ -10847,7 +10905,6 @@ voice = "cedar"
     assert_eq!(
         cfg.realtime,
         Some(RealtimeToml {
-            architecture: Some(RealtimeArchitecture::Avas),
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
@@ -10866,7 +10923,6 @@ voice = "cedar"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
-            architecture: RealtimeArchitecture::Avas,
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,

@@ -2900,6 +2900,10 @@
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
         },
+        "mcpServerOpenaiFormElicitation": {
+          "description": "Allow downstream MCP servers to request OpenAI extended form elicitations.",
+          "type": "boolean"
+        },
         "optOutNotificationMethods": {
           "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
           "items": {
@@ -3647,6 +3651,27 @@
             "requestedSchema": {
               "$ref": "#/definitions/McpElicitationSchema"
             }
+          },
+          "required": [
+            "message",
+            "mode",
+            "requestedSchema"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "openai/form"
+              ],
+              "type": "string"
+            },
+            "requestedSchema": true
           },
           "required": [
             "message",
@@ -12094,6 +12119,29 @@
         "title": "McpServerToolCallResponse",
         "type": "object"
       },
+      "McpToolCallAppContext": {
+        "properties": {
+          "connectorId": {
+            "type": "string"
+          },
+          "linkId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceUri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "connectorId"
+        ],
+        "type": "object"
+      },
       "McpToolCallError": {
         "properties": {
           "message": {
@@ -12588,6 +12636,14 @@
         ],
         "title": "ModelVerificationNotification",
         "type": "object"
+      },
+      "MultiAgentMode": {
+        "description": "Controls whether the model should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help.",
+        "enum": [
+          "explicitRequestOnly",
+          "proactive"
+        ],
+        "type": "string"
       },
       "NetworkAccess": {
         "enum": [
@@ -14282,13 +14338,6 @@
         "title": "RawResponseItemCompletedNotification",
         "type": "object"
       },
-      "RealtimeConversationArchitecture": {
-        "enum": [
-          "realtimeapi",
-          "avas"
-        ],
-        "type": "string"
-      },
       "RealtimeConversationVersion": {
         "enum": [
           "v1",
@@ -14792,6 +14841,12 @@
                 },
                 "type": "array"
               },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "metadata": {
                 "anyOf": [
                   {
@@ -14842,6 +14897,12 @@
                 },
                 "type": "array"
               },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "metadata": {
                 "anyOf": [
                   {
@@ -14890,6 +14951,12 @@
                   "null"
                 ]
               },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "metadata": {
                 "anyOf": [
                   {
@@ -14933,6 +15000,13 @@
                   "null"
                 ]
               },
+              "id": {
+                "description": "Legacy id field retained for compatibility with older payloads.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "metadata": {
                 "anyOf": [
                   {
@@ -14969,6 +15043,12 @@
               },
               "call_id": {
                 "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15018,6 +15098,12 @@
               "execution": {
                 "type": "string"
               },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "metadata": {
                 "anyOf": [
                   {
@@ -15055,6 +15141,12 @@
               "call_id": {
                 "type": "string"
               },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "metadata": {
                 "anyOf": [
                   {
@@ -15088,6 +15180,12 @@
             "properties": {
               "call_id": {
                 "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "input": {
                 "type": "string"
@@ -15132,6 +15230,12 @@
             "properties": {
               "call_id": {
                 "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15179,6 +15283,12 @@
               "execution": {
                 "type": "string"
               },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "metadata": {
                 "anyOf": [
                   {
@@ -15225,6 +15335,12 @@
                   }
                 ]
               },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "metadata": {
                 "anyOf": [
                   {
@@ -15258,7 +15374,6 @@
           {
             "properties": {
               "id": {
-                "description": "Existing provider ID retained on serialized history for compatibility.",
                 "type": [
                   "string",
                   "null"
@@ -15306,6 +15421,12 @@
             "properties": {
               "encrypted_content": {
                 "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15361,6 +15482,12 @@
           {
             "properties": {
               "encrypted_content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
                 "type": [
                   "string",
                   "null"
@@ -16925,9 +17052,9 @@
           },
           "instructionSources": {
             "default": [],
-            "description": "Instruction source files currently loaded for this thread.",
+            "description": "Environment-native paths to instruction source files currently loaded for this thread.",
             "items": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": "array"
           },
@@ -17486,6 +17613,16 @@
           },
           {
             "properties": {
+              "appContext": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/McpToolCallAppContext"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "arguments": true,
               "durationMs": {
                 "description": "The duration of the MCP tool call in milliseconds.",
@@ -17509,6 +17646,7 @@
                 "type": "string"
               },
               "mcpAppResourceUri": {
+                "description": "Deprecated: use `appContext.resourceUri` instead.",
                 "type": [
                   "string",
                   "null"
@@ -18629,9 +18767,9 @@
           },
           "instructionSources": {
             "default": [],
-            "description": "Instruction source files currently loaded for this thread.",
+            "description": "Environment-native paths to instruction source files currently loaded for this thread.",
             "items": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": "array"
           },
@@ -19046,9 +19184,9 @@
           },
           "instructionSources": {
             "default": [],
-            "description": "Instruction source files currently loaded for this thread.",
+            "description": "Environment-native paths to instruction source files currently loaded for this thread.",
             "items": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": "array"
           },
