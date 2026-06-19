@@ -2,6 +2,7 @@
 """Format repository sources or check that they are already formatted."""
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
@@ -11,7 +12,6 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CODEX_RS_ROOT = REPO_ROOT / "codex-rs"
 
 
 @dataclass(frozen=True)
@@ -34,11 +34,62 @@ class FormatterResult:
     returncode: int
 
 
-def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
-    just_args = ["just", "--unstable", "--fmt"]
-    cargo_args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+def just_formatter_group(*, check: bool) -> FormatterGroup:
+    args = ["just", "--unstable", "--fmt"]
+    if check:
+        args.append("--check")
+    return FormatterGroup("Just", (Command(tuple(args)),))
+
+
+def rust_formatter_group(*, check: bool) -> FormatterGroup:
+    args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+    if check:
+        args.append("--check")
+    # Stable rustfmt repeats a nightly-only `imports_granularity` warning
+    # for each crate, so suppress that expected stderr noise.
+    command = Command(
+        tuple(args),
+        REPO_ROOT / "codex-rs",
+        discard_stderr=True,
+    )
+    return FormatterGroup("Rust", (command,))
+
+
+def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
+    repository_files = subprocess.check_output(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=REPO_ROOT,
+    ).split(b"\0")
+    buildifier_files: list[str] = []
+    for encoded_path in repository_files:
+        if not encoded_path:
+            continue
+        path = Path(os.fsdecode(encoded_path))
+        name = path.name
+        if (
+            name in {"BUILD", "WORKSPACE", "MODULE.bazel"}
+            or name.startswith(("BUILD.", "WORKSPACE."))
+            or name.endswith((".BUILD.bazel", ".MODULE.bazel", ".bzl", ".sky"))
+            or ".bzl." in name
+            or ".sky." in name
+        ):
+            buildifier_files.append(path.as_posix())
+    buildifier_files.sort()
+
+    # Invoke DotSlash explicitly because Windows does not honor shebangs.
+    buildifier_args = [
+        "dotslash",
+        str(REPO_ROOT / "tools" / "buildifier"),
+        "-mode=check" if check else "-mode=fix",
+        "-lint=off",
+        *buildifier_files,
+    ]
+    return FormatterGroup("Bazel/Starlark", (Command(tuple(buildifier_args)),))
+
+
+def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
     # Each `--project` retains its local dependency and Ruff configuration context.
-    sdk_uv_run_args = [
+    uv_run_args = [
         "uv",
         "run",
         "--frozen",
@@ -47,66 +98,55 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
         "--only-group",
         "format",
     ]
-    scripts_uv_run_args = [
+    format_args = [
+        *uv_run_args,
+        "ruff",
+        "format",
+    ]
+    if check:
+        format_args.append("--check")
+        # `ruff check --diff` reports lint-driven rewrites without changing files.
+        # It is the check-mode counterpart of `--fix --fix-only`, not a full lint gate.
+        lint_args = ["ruff", "check", "--diff"]
+    else:
+        # Ruff's lint fixer and formatter are separate passes: the first applies
+        # fixable lint rewrites, while the second formats source layout.
+        lint_args = ["ruff", "check", "--fix", "--fix-only"]
+
+    return FormatterGroup(
+        "Python SDK",
+        (
+            Command((*uv_run_args, *lint_args, "sdk/python")),
+            Command((*format_args, "sdk/python")),
+        ),
+    )
+
+
+def python_scripts_formatter_group(*, check: bool) -> FormatterGroup:
+    # The SDK and internal scripts intentionally use separate project roots so
+    # uv and Ruff retain each project's configuration context.
+    args = [
         "uv",
         "run",
         "--frozen",
         "--project",
         "scripts",
-    ]
-    sdk_format_args = [
-        *sdk_uv_run_args,
         "ruff",
         "format",
     ]
-    scripts_format_args = [
-        *scripts_uv_run_args,
-        "ruff",
-        "format",
-    ]
-
     if check:
-        just_args.append("--check")
-        cargo_args.append("--check")
-        sdk_format_args.append("--check")
-        scripts_format_args.append("--check")
-        # `ruff check --diff` reports lint-driven rewrites without changing files.
-        # It is the check-mode counterpart of `--fix --fix-only`, not a full lint gate.
-        sdk_lint_args = ["ruff", "check", "--diff"]
-    else:
-        # Ruff's lint fixer and formatter are separate passes: the first applies
-        # fixable lint rewrites, while the second formats source layout.
-        sdk_lint_args = ["ruff", "check", "--fix", "--fix-only"]
+        args.append("--check")
+    args.append("scripts")
+    return FormatterGroup("Python scripts", (Command(tuple(args)),))
 
+
+def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
     return (
-        FormatterGroup("Just", (Command(tuple(just_args)),)),
-        FormatterGroup(
-            "Rust",
-            # Stable rustfmt repeats a nightly-only `imports_granularity` warning
-            # for each crate, so suppress that expected stderr noise.
-            (Command(tuple(cargo_args), CODEX_RS_ROOT, discard_stderr=True),),
-        ),
-        FormatterGroup(
-            "Python SDK",
-            (
-                Command(
-                    (
-                        *sdk_uv_run_args,
-                        *sdk_lint_args,
-                        "sdk/python",
-                    )
-                ),
-                Command((*sdk_format_args, "sdk/python")),
-            ),
-        ),
-        FormatterGroup(
-            "Python scripts",
-            (
-                # The SDK and internal scripts intentionally use separate project
-                # roots so uv and Ruff retain each project's configuration context.
-                Command((*scripts_format_args, "scripts")),
-            ),
-        ),
+        just_formatter_group(check=check),
+        rust_formatter_group(check=check),
+        buildifier_formatter_group(check=check),
+        python_sdk_formatter_group(check=check),
+        python_scripts_formatter_group(check=check),
     )
 
 

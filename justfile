@@ -36,7 +36,7 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex {args}
 
-# Format the justfile, Rust, Python SDK code, and Python scripts.
+# Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts.
 fmt:
     {{ python }} ../scripts/format.py
 

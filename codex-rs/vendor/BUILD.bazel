@@ -12,6 +12,9 @@ filegroup(
 
 filegroup(
     name = "bubblewrap_sources",
-    srcs = [":bubblewrap_c_sources", ":bubblewrap_headers"],
+    srcs = [
+        ":bubblewrap_c_sources",
+        ":bubblewrap_headers",
+    ],
     visibility = ["//visibility:public"],
 )

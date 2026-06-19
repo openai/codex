@@ -2,9 +2,9 @@ load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "goal",
-    crate_name = "codex_goal_extension",
     compile_data = glob([
         "templates/**",
     ]),
+    crate_name = "codex_goal_extension",
     integration_compile_data_extra = ["src/accounting.rs"],
 )
