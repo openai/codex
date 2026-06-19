@@ -69,6 +69,7 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
@@ -1750,6 +1751,83 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_accepts_multi_agent_mode_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([
+            (Feature::MultiAgentV2, true),
+            (Feature::MultiAgentMode, true),
+        ]),
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            multi_agent_mode: Some(MultiAgentMode::Proactive),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let developer_texts = response_mock
+        .single_request()
+        .message_input_texts("developer");
+    assert!(developer_texts.iter().any(|text| {
+        text.contains("<multi_agent_mode>")
+            && text.contains("Proactive multi-agent delegation is active.")
+    }));
+    assert!(!developer_texts.iter().any(|text| {
+        text.contains("Do not spawn sub-agents unless the user explicitly asks for sub-agents")
+    }));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2367,6 +2445,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
+            multi_agent_mode: None,
         })
         .await?;
     timeout(
@@ -2406,6 +2485,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
+            multi_agent_mode: None,
         })
         .await?;
     timeout(

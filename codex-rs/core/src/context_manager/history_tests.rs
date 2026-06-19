@@ -146,6 +146,7 @@ fn reference_context_item() -> TurnContextItem {
         personality: None,
         collaboration_mode: None,
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: Some(false),
         effort: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -935,6 +936,7 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
         assistant_msg("turn 1 assistant"),
         developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
         developer_msg("<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>"),
+        developer_msg("<multi_agent_mode>ROLLED_BACK_MULTI_AGENT_MODE</multi_agent_mode>"),
         user_input_text_msg(
             "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",
         ),

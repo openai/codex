@@ -776,6 +776,7 @@ mod thread_processor_behavior_tests {
                     developer_instructions: None,
                 },
             },
+            multi_agent_mode: Default::default(),
             session_source: SessionSource::Cli,
             forked_from_thread_id: None,
             parent_thread_id: None,

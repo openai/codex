@@ -52,6 +52,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) provider: ModelProviderInfo,
 
     pub(super) collaboration_mode: CollaborationMode,
+    pub(super) multi_agent_mode: Option<MultiAgentMode>,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(super) service_tier: Option<String>,
 
@@ -192,6 +193,7 @@ impl SessionConfiguration {
             reasoning_summary: self.model_reasoning_summary,
             personality: self.personality,
             collaboration_mode: self.collaboration_mode.clone(),
+            multi_agent_mode: self.multi_agent_mode,
             session_source: self.session_source.clone(),
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
@@ -227,6 +229,9 @@ impl SessionConfiguration {
                 });
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
+        }
+        if let Some(multi_agent_mode) = updates.multi_agent_mode {
+            next_configuration.multi_agent_mode = Some(multi_agent_mode);
         }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
@@ -422,6 +427,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
+    pub(crate) multi_agent_mode: Option<MultiAgentMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<String>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,

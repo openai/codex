@@ -3774,11 +3774,35 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         summary: None,
         output_schema: None,
         collaboration_mode: None,
+        multi_agent_mode: None,
         personality: None,
     };
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");
     assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn turn_start_params_round_trip_multi_agent_mode() {
+    let params: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "input": [],
+        "multiAgentMode": "proactive"
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.multi_agent_mode,
+        Some(codex_protocol::config_types::MultiAgentMode::Proactive)
+    );
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+        Some("turn/start.multiAgentMode")
+    );
+    assert_eq!(
+        serde_json::to_value(params).expect("params should serialize")["multiAgentMode"],
+        "proactive"
+    );
 }
 
 #[test]
