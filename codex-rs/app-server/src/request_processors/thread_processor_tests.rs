@@ -378,6 +378,7 @@ mod thread_processor_behavior_tests {
             personality: None,
             collaboration_mode: None,
             multi_agent_version: None,
+            multi_agent_mode: None,
             realtime_active: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -410,7 +411,8 @@ mod thread_processor_behavior_tests {
         RolloutItem::Compacted(codex_protocol::protocol::CompactedItem {
             message: message.to_string(),
             replacement_history: Some(vec![compacted_resume_test_message("assistant", message)]),
-            window_id: Some(window_id),
+            window_number: Some(window_id),
+            window_id: None,
         })
     }
 

@@ -14,11 +14,16 @@ use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_login::CodexAuth;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
@@ -277,6 +282,73 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         }
     }
     assert_eq!(requests.len(), 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Scenario: a compacted resume history slice should reconstruct the same
+/// model-visible context when the next user turn runs.
+async fn compacted_resume_history_slice_preserves_next_turn_context() -> Result<()> {
+    if network_disabled() {
+        println!("Skipping test because network is disabled in this sandbox");
+        return Ok(());
+    }
+
+    const AFTER_COMPACTED_SLICE_RESUME: &str = "AFTER_COMPACTED_SLICE_RESUME";
+
+    let server = MockServer::start().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+            sse(vec![ev_completed("r3")]),
+            sse(vec![ev_completed("r4")]),
+        ],
+    )
+    .await;
+
+    let (_home, config, manager, base) = start_test_conversation(&server, /*model*/ None).await;
+    user_turn(&base, "hello world").await;
+    compact_conversation(&base).await;
+    user_turn(&base, "AFTER_COMPACT").await;
+    let rollout_path = fetch_conversation_path(&base);
+    let compacted_history = compacted_resume_history_slice_from_rollout(&rollout_path).await?;
+
+    shutdown_conversation(&base).await;
+    let resumed = resume_conversation_with_history(&manager, &config, compacted_history).await;
+    user_turn(&resumed, AFTER_COMPACTED_SLICE_RESUME).await;
+
+    let mut requests = request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    requests.iter_mut().for_each(normalize_line_endings);
+    normalize_compact_prompts(&mut requests);
+    assert_eq!(requests.len(), 4);
+
+    let summary_after_compact = extract_summary_user_text(&requests[2], SUMMARY_TEXT);
+    let summary_after_resume = extract_summary_user_text(&requests[3], SUMMARY_TEXT);
+    assert_eq!(summary_after_resume, summary_after_compact);
+
+    let after_compact_user_texts = json_message_input_texts(&requests[2], "user");
+    let resumed_user_texts = json_message_input_texts(&requests[3], "user");
+    let (resumed_last, resumed_prefix) = resumed_user_texts
+        .split_last()
+        .expect("compacted slice resume request missing user messages");
+    assert_eq!(resumed_last, AFTER_COMPACTED_SLICE_RESUME);
+    assert!(
+        resumed_prefix.starts_with(&after_compact_user_texts),
+        "compacted resume history should preserve the model-visible user history prefix",
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -835,6 +907,87 @@ async fn resume_conversation(
     .await
     .expect("resume conversation")
     .thread
+}
+
+async fn resume_conversation_with_history(
+    manager: &ThreadManager,
+    config: &Config,
+    history: InitialHistory,
+) -> Arc<CodexThread> {
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy"));
+    Box::pin(manager.resume_thread_with_history(
+        config.clone(),
+        history,
+        auth_manager,
+        /*parent_trace*/ None,
+        /*supports_openai_form_elicitation*/ false,
+    ))
+    .await
+    .expect("resume conversation from compacted history")
+    .thread
+}
+
+async fn compacted_resume_history_slice_from_rollout(
+    path: &std::path::Path,
+) -> Result<InitialHistory> {
+    let (items, thread_id, _parse_errors) =
+        codex_rollout::RolloutRecorder::load_rollout_items(path).await?;
+    let conversation_id = thread_id.expect("rollout thread id");
+    let mut history = compacted_resume_prefix_items(&items);
+    let suffix_start_index = compacted_resume_suffix_start_index(&items);
+    history.extend(items[suffix_start_index..].iter().cloned());
+    Ok(InitialHistory::Resumed(ResumedHistory {
+        conversation_id,
+        history,
+        rollout_path: Some(path.to_path_buf()),
+    }))
+}
+
+fn compacted_resume_prefix_items(items: &[RolloutItem]) -> Vec<RolloutItem> {
+    let mut history = Vec::new();
+    let mut saw_session_meta = false;
+    let mut saw_user_event = false;
+    let mut saw_user_response_item = false;
+
+    for item in items {
+        match item {
+            RolloutItem::SessionMeta(_) if !saw_session_meta => {
+                saw_session_meta = true;
+                history.push(item.clone());
+            }
+            RolloutItem::EventMsg(EventMsg::UserMessage(_)) if !saw_user_event => {
+                saw_user_event = true;
+                history.push(item.clone());
+            }
+            RolloutItem::ResponseItem(ResponseItem::Message { role, .. })
+                if role == "user" && !saw_user_response_item =>
+            {
+                saw_user_response_item = true;
+                history.push(item.clone());
+            }
+            _ => {}
+        }
+
+        if saw_session_meta && saw_user_event && saw_user_response_item {
+            break;
+        }
+    }
+
+    history
+}
+
+fn compacted_resume_suffix_start_index(items: &[RolloutItem]) -> usize {
+    let compacted_index = items
+        .iter()
+        .rposition(|item| {
+            matches!(item, RolloutItem::Compacted(compacted) if compacted.replacement_history.is_some())
+        })
+        .expect("replacement-history compaction item");
+    items[..compacted_index]
+        .iter()
+        .rposition(|item| matches!(item, RolloutItem::TurnContext(_)))
+        .unwrap_or(compacted_index)
 }
 
 #[cfg(test)]
