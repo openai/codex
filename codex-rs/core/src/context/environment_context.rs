@@ -1,3 +1,4 @@
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -363,6 +364,48 @@ impl EnvironmentContext {
             filesystem,
             subagents,
         }
+    }
+
+    pub(crate) fn from_step_context(step_context: &StepContext, shell: &Shell) -> Option<Self> {
+        let mut environments = EnvironmentContextEnvironment::from_turn_environments(
+            &step_context.environments.turn_environments,
+            shell,
+        );
+        environments.extend(
+            step_context
+                .environments
+                .starting
+                .iter()
+                .map(|environment| EnvironmentContextEnvironment {
+                    id: environment.selection.environment_id.clone(),
+                    cwd: environment.selection.cwd.clone(),
+                    shell: "still loading".to_string(),
+                }),
+        );
+
+        Self::environment_only(environments)
+    }
+
+    pub(crate) fn from_attached_environments(
+        environments: &[TurnEnvironment],
+        shell: &Shell,
+    ) -> Option<Self> {
+        Self::environment_only(EnvironmentContextEnvironment::from_turn_environments(
+            environments,
+            shell,
+        ))
+    }
+
+    fn environment_only(environments: Vec<EnvironmentContextEnvironment>) -> Option<Self> {
+        (!environments.is_empty()).then(|| {
+            Self::new(
+                environments,
+                /*current_date*/ None,
+                /*timezone*/ None,
+                /*network*/ None,
+                /*subagents*/ None,
+            )
+        })
     }
 
     /// Compares two environment contexts, ignoring the shell. Useful when
