@@ -6,7 +6,6 @@ use crate::config::ConfigOverrides;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
-use crate::environment_selection::EnvironmentSnapshotMode;
 use crate::environment_selection::ThreadEnvironments;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
@@ -4102,7 +4101,7 @@ async fn resolved_environments_for_configuration(
         default_user_shell(),
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
-        EnvironmentSnapshotMode::Blocking,
+        /*non_blocking_snapshots*/ false,
     );
     turn_environments.update_selections(session_configuration.environment_selections());
     (environment_manager, turn_environments.snapshot().await)
@@ -5012,7 +5011,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         default_user_shell(),
         ShellSnapshot::disabled(),
         resolved_environments,
-        EnvironmentSnapshotMode::Blocking,
+        /*non_blocking_snapshots*/ false,
     ));
     let environment = Arc::clone(
         &resolved_turn_environments
@@ -7068,7 +7067,7 @@ where
         default_user_shell(),
         ShellSnapshot::disabled(),
         resolved_turn_environments.clone(),
-        EnvironmentSnapshotMode::Blocking,
+        /*non_blocking_snapshots*/ false,
     ));
     let environment = Arc::clone(
         &resolved_turn_environments

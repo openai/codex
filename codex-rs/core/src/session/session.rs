@@ -2,7 +2,6 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
-use crate::environment_selection::EnvironmentSnapshotMode;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshot;
@@ -827,11 +826,7 @@ impl Session {
                 default_shell.clone(),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
-                if config.features.enabled(Feature::DeferredExecutor) {
-                    EnvironmentSnapshotMode::NonBlocking
-                } else {
-                    EnvironmentSnapshotMode::Blocking
-                },
+                config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;
