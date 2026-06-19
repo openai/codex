@@ -13,14 +13,16 @@ use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemOperation;
+use codex_exec_server::FileSystemOperationOutput;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::PluginNamespaceResolver;
 use codex_utils_plugins::PluginSkillRoot;
-use codex_utils_plugins::plugin_namespace_for_skill_path;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -66,6 +68,12 @@ struct LoadedSkillMetadata {
     interface: Option<SkillInterface>,
     dependencies: Option<SkillDependencies>,
     policy: Option<SkillPolicy>,
+}
+
+struct PreloadedSkillFile {
+    contents: io::Result<String>,
+    metadata_contents: io::Result<String>,
+    resolved_path: AbsolutePathBuf,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -523,99 +531,168 @@ async fn discover_skills_under_root(
 
     let mut queue: VecDeque<(AbsolutePathBuf, usize)> = VecDeque::from([(root.clone(), 0)]);
     let mut truncated_by_dir_limit = false;
+    let mut skill_paths = Vec::new();
 
-    while let Some((dir, depth)) = queue.pop_front() {
-        let dir_uri = PathUri::from_abs_path(&dir);
-        let entries = match fs.read_directory(&dir_uri, /*sandbox*/ None).await {
-            Ok(entries) => entries,
-            Err(e) => {
-                error!("failed to read skills dir {}: {e:#}", dir.display());
-                continue;
+    while !queue.is_empty() {
+        let dirs = queue.drain(..).collect::<Vec<_>>();
+        let directory_results = match fs
+            .execute_batch(
+                dirs.iter()
+                    .map(|(dir, _)| FileSystemOperation::ReadDirectory {
+                        path: PathUri::from_abs_path(dir),
+                    })
+                    .collect(),
+                /*sandbox*/ None,
+            )
+            .await
+        {
+            Ok(results) => results,
+            Err(err) => {
+                error!("failed to batch-read skills directories: {err:#}");
+                break;
             }
         };
 
-        for entry in entries {
-            let file_name = entry.file_name;
-            if file_name.starts_with('.') {
-                continue;
-            }
-
-            let path = dir.join(&file_name);
-            let path_uri = PathUri::from_abs_path(&path);
-            let metadata = match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
-                Ok(metadata) => metadata,
-                Err(e) => {
-                    error!("failed to stat skills path {}: {e:#}", path.display());
+        let mut candidates = Vec::new();
+        for ((dir, depth), result) in dirs.into_iter().zip(directory_results) {
+            let entries = match result {
+                Ok(FileSystemOperationOutput::ReadDirectory(entries)) => entries,
+                Ok(_) => {
+                    error!("filesystem returned the wrong result for {}", dir.display());
+                    continue;
+                }
+                Err(err) => {
+                    error!("failed to read skills dir {}: {err:#}", dir.display());
                     continue;
                 }
             };
+            candidates.extend(entries.into_iter().filter_map(|entry| {
+                let file_name = entry.file_name;
+                if file_name.starts_with('.') {
+                    return None;
+                }
+                Some((dir.join(&file_name), depth, file_name))
+            }));
+        }
 
-            if metadata.is_symlink {
-                if !follow_symlinks {
+        let metadata_results = match fs
+            .execute_batch(
+                candidates
+                    .iter()
+                    .map(|(path, _, _)| FileSystemOperation::GetMetadata {
+                        path: PathUri::from_abs_path(path),
+                    })
+                    .collect(),
+                /*sandbox*/ None,
+            )
+            .await
+        {
+            Ok(results) => results,
+            Err(err) => {
+                error!("failed to batch-stat skills paths: {err:#}");
+                break;
+            }
+        };
+
+        let mut directories = Vec::new();
+        for ((path, depth, file_name), result) in candidates.into_iter().zip(metadata_results) {
+            let metadata = match result {
+                Ok(FileSystemOperationOutput::GetMetadata(metadata)) => metadata,
+                Ok(_) => {
+                    error!(
+                        "filesystem returned the wrong result for {}",
+                        path.display()
+                    );
                     continue;
                 }
-                match fs.read_directory(&path_uri, /*sandbox*/ None).await {
-                    Ok(_) => {
-                        let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
-                        enqueue_dir(
-                            &mut queue,
-                            &mut visited_dirs,
-                            &mut truncated_by_dir_limit,
-                            resolved_dir,
-                            depth + 1,
-                        );
-                    }
-                    Err(err)
-                        if matches!(
-                            err.kind(),
-                            io::ErrorKind::NotADirectory | io::ErrorKind::NotFound
-                        ) => {}
-                    Err(err) => {
-                        error!(
-                            "failed to read skills symlink dir {}: {err:#}",
-                            path.display()
-                        );
-                    }
+                Err(err) => {
+                    error!("failed to stat skills path {}: {err:#}", path.display());
+                    continue;
                 }
-                continue;
-            }
-
-            if metadata.is_directory {
-                let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
-                enqueue_dir(
-                    &mut queue,
-                    &mut visited_dirs,
-                    &mut truncated_by_dir_limit,
-                    resolved_dir,
-                    depth + 1,
-                );
-                continue;
-            }
-
-            if metadata.is_file && file_name == SKILLS_FILENAME {
-                match parse_skill_file(
-                    fs,
-                    &path,
-                    scope,
-                    plugin_id,
-                    plugin_namespace,
-                    plugin_root.as_ref(),
-                )
-                .await
-                {
-                    Ok(skill) => {
-                        outcome.skills.push(skill);
-                    }
-                    Err(err) => {
-                        if scope != SkillScope::System {
-                            outcome.errors.push(SkillError {
-                                path: path.clone(),
-                                message: err.to_string(),
-                            });
-                        }
-                    }
+            };
+            if metadata.is_symlink {
+                if follow_symlinks && metadata.is_directory {
+                    directories.push((path, depth + 1));
                 }
+            } else if metadata.is_directory {
+                directories.push((path, depth + 1));
+            } else if metadata.is_file && file_name == SKILLS_FILENAME {
+                skill_paths.push(path);
             }
+        }
+
+        let canonical_results = match fs
+            .execute_batch(
+                directories
+                    .iter()
+                    .map(|(path, _)| FileSystemOperation::Canonicalize {
+                        path: PathUri::from_abs_path(path),
+                    })
+                    .collect(),
+                /*sandbox*/ None,
+            )
+            .await
+        {
+            Ok(results) => results,
+            Err(err) => {
+                error!("failed to batch-canonicalize skills directories: {err:#}");
+                break;
+            }
+        };
+        for ((path, depth), result) in directories.into_iter().zip(canonical_results) {
+            let resolved_dir = match result {
+                Ok(FileSystemOperationOutput::Canonicalize(resolved_path)) => {
+                    resolved_path.to_abs_path().unwrap_or_else(|_| path.clone())
+                }
+                Ok(_) => {
+                    error!(
+                        "filesystem returned the wrong result for {}",
+                        path.display()
+                    );
+                    path
+                }
+                Err(_) => path,
+            };
+            enqueue_dir(
+                &mut queue,
+                &mut visited_dirs,
+                &mut truncated_by_dir_limit,
+                resolved_dir,
+                depth,
+            );
+        }
+    }
+
+    let mut plugin_namespace_resolver = PluginNamespaceResolver::default();
+    if plugin_namespace.is_none() {
+        plugin_namespace_resolver.prime(fs, &skill_paths).await;
+    }
+    let preloaded_skills = match preload_skill_files(fs, &skill_paths).await {
+        Ok(preloaded_skills) => preloaded_skills,
+        Err(err) => {
+            error!("failed to batch-read skill files: {err:#}");
+            Vec::new()
+        }
+    };
+    for (path, preloaded) in skill_paths.into_iter().zip(preloaded_skills) {
+        match parse_skill_file(
+            fs,
+            &path,
+            scope,
+            plugin_id,
+            plugin_namespace,
+            plugin_root.as_ref(),
+            &mut plugin_namespace_resolver,
+            preloaded,
+        )
+        .await
+        {
+            Ok(skill) => outcome.skills.push(skill),
+            Err(err) if scope != SkillScope::System => outcome.errors.push(SkillError {
+                path,
+                message: err.to_string(),
+            }),
+            Err(_) => {}
         }
     }
 
@@ -628,6 +705,79 @@ async fn discover_skills_under_root(
     }
 }
 
+async fn preload_skill_files(
+    fs: &dyn ExecutorFileSystem,
+    skill_paths: &[AbsolutePathBuf],
+) -> io::Result<Vec<PreloadedSkillFile>> {
+    let operations = skill_paths
+        .iter()
+        .flat_map(|path| {
+            let metadata_path = path
+                .parent()
+                .map(|parent| {
+                    parent
+                        .join(SKILLS_METADATA_DIR)
+                        .join(SKILLS_METADATA_FILENAME)
+                })
+                .unwrap_or_else(|| path.clone());
+            [
+                FileSystemOperation::ReadFile {
+                    path: PathUri::from_abs_path(path),
+                },
+                FileSystemOperation::ReadFile {
+                    path: PathUri::from_abs_path(&metadata_path),
+                },
+                FileSystemOperation::Canonicalize {
+                    path: PathUri::from_abs_path(path),
+                },
+            ]
+        })
+        .collect();
+    let mut results = fs
+        .execute_batch(operations, /*sandbox*/ None)
+        .await?
+        .into_iter();
+
+    Ok(skill_paths
+        .iter()
+        .map(|path| {
+            let contents = decode_text_operation_result(results.next(), "read skill file");
+            let metadata_contents =
+                decode_text_operation_result(results.next(), "read skill metadata");
+            let resolved_path = match results.next() {
+                Some(Ok(FileSystemOperationOutput::Canonicalize(resolved_path))) => {
+                    resolved_path.to_abs_path().unwrap_or_else(|_| path.clone())
+                }
+                Some(Ok(_)) | Some(Err(_)) | None => path.clone(),
+            };
+            PreloadedSkillFile {
+                contents,
+                metadata_contents,
+                resolved_path,
+            }
+        })
+        .collect())
+}
+
+fn decode_text_operation_result(
+    result: Option<io::Result<FileSystemOperationOutput>>,
+    operation: &str,
+) -> io::Result<String> {
+    match result {
+        Some(Ok(FileSystemOperationOutput::ReadFile(contents))) => String::from_utf8(contents)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+        Some(Ok(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("filesystem returned the wrong result for {operation}"),
+        )),
+        Some(Err(error)) => Err(error),
+        None => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("filesystem returned no result for {operation}"),
+        )),
+    }
+}
+
 async fn parse_skill_file(
     fs: &dyn ExecutorFileSystem,
     path: &AbsolutePathBuf,
@@ -635,12 +785,15 @@ async fn parse_skill_file(
     plugin_id: Option<&str>,
     plugin_namespace: Option<&str>,
     plugin_root: Option<&AbsolutePathBuf>,
+    plugin_namespace_resolver: &mut PluginNamespaceResolver,
+    preloaded: PreloadedSkillFile,
 ) -> Result<SkillMetadata, SkillParseError> {
-    let path_uri = PathUri::from_abs_path(path);
-    let contents = fs
-        .read_file_text(&path_uri, /*sandbox*/ None)
-        .await
-        .map_err(SkillParseError::Read)?;
+    let PreloadedSkillFile {
+        contents,
+        metadata_contents,
+        resolved_path,
+    } = preloaded;
+    let contents = contents.map_err(SkillParseError::Read)?;
 
     let frontmatter = extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
 
@@ -664,7 +817,14 @@ async fn parse_skill_file(
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default_skill_name(path));
-    let name = namespaced_skill_name(fs, path, &base_name, plugin_namespace).await;
+    let name = namespaced_skill_name(
+        fs,
+        path,
+        &base_name,
+        plugin_namespace,
+        plugin_namespace_resolver,
+    )
+    .await;
     let description = parsed
         .description
         .as_deref()
@@ -680,7 +840,7 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-    } = load_skill_metadata(fs, path, plugin_root).await;
+    } = load_skill_metadata(path, plugin_root, metadata_contents);
 
     validate_len(&base_name, MAX_NAME_LEN, "name")?;
     validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")?;
@@ -692,8 +852,6 @@ async fn parse_skill_file(
             "metadata.short-description",
         )?;
     }
-
-    let resolved_path = canonicalize_for_skill_identity(fs, path).await;
 
     Ok(SkillMetadata {
         name,
@@ -725,20 +883,22 @@ async fn namespaced_skill_name(
     path: &AbsolutePathBuf,
     base_name: &str,
     plugin_namespace: Option<&str>,
+    plugin_namespace_resolver: &mut PluginNamespaceResolver,
 ) -> String {
     if let Some(plugin_namespace) = plugin_namespace {
         return format!("{plugin_namespace}:{base_name}");
     }
-    plugin_namespace_for_skill_path(fs, path)
+    plugin_namespace_resolver
+        .resolve(fs, path)
         .await
         .map(|namespace| format!("{namespace}:{base_name}"))
         .unwrap_or_else(|| base_name.to_string())
 }
 
-async fn load_skill_metadata(
-    fs: &dyn ExecutorFileSystem,
+fn load_skill_metadata(
     skill_path: &AbsolutePathBuf,
     plugin_root: Option<&AbsolutePathBuf>,
+    contents: io::Result<String>,
 ) -> LoadedSkillMetadata {
     // Fail open: optional metadata should not block loading SKILL.md.
     let Some(skill_dir) = skill_path.parent() else {
@@ -747,28 +907,11 @@ async fn load_skill_metadata(
     let metadata_path = skill_dir
         .join(SKILLS_METADATA_DIR)
         .join(SKILLS_METADATA_FILENAME);
-    let metadata_path_uri = PathUri::from_abs_path(&metadata_path);
-    match fs.get_metadata(&metadata_path_uri, /*sandbox*/ None).await {
-        Ok(metadata) if metadata.is_file => {}
-        Ok(_) => return LoadedSkillMetadata::default(),
+    let contents = match contents {
+        Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return LoadedSkillMetadata::default();
         }
-        Err(error) => {
-            tracing::warn!(
-                "ignoring {path}: failed to stat {label}: {error}",
-                path = metadata_path.display(),
-                label = SKILLS_METADATA_FILENAME
-            );
-            return LoadedSkillMetadata::default();
-        }
-    }
-
-    let contents = match fs
-        .read_file_text(&metadata_path_uri, /*sandbox*/ None)
-        .await
-    {
-        Ok(contents) => contents,
         Err(error) => {
             tracing::warn!(
                 "ignoring {path}: failed to read {label}: {error}",

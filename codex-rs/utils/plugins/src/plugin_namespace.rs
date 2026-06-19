@@ -1,8 +1,12 @@
 //! Resolve plugin namespace from skill file paths by walking ancestors for `plugin.json`.
 
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemOperation;
+use codex_exec_server::FileSystemOperationOutput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -24,29 +28,8 @@ struct RawPluginManifestName {
     name: String,
 }
 
-async fn plugin_manifest_name(
-    fs: &dyn ExecutorFileSystem,
-    plugin_root: &AbsolutePathBuf,
-) -> Option<String> {
-    let mut manifest_path = None;
-    for relative_path in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
-        let candidate = plugin_root.join(relative_path);
-        let candidate_uri = PathUri::from_abs_path(&candidate);
-        match fs.get_metadata(&candidate_uri, /*sandbox*/ None).await {
-            Ok(metadata) if metadata.is_file => {
-                manifest_path = Some(candidate);
-                break;
-            }
-            Ok(_) | Err(_) => {}
-        }
-    }
-    let manifest_path = manifest_path?;
-    let manifest_path_uri = PathUri::from_abs_path(&manifest_path);
-    let contents = fs
-        .read_file_text(&manifest_path_uri, /*sandbox*/ None)
-        .await
-        .ok()?;
-    let RawPluginManifestName { name: raw_name } = serde_json::from_str(&contents).ok()?;
+fn plugin_manifest_name(plugin_root: &AbsolutePathBuf, contents: &[u8]) -> Option<String> {
+    let RawPluginManifestName { name: raw_name } = serde_json::from_slice(contents).ok()?;
     Some(
         plugin_root
             .file_name()
@@ -57,18 +40,67 @@ async fn plugin_manifest_name(
     )
 }
 
+/// Resolves plugin namespaces while caching and batching ancestor manifest probes.
+#[derive(Default)]
+pub struct PluginNamespaceResolver {
+    manifests_by_root: HashMap<AbsolutePathBuf, Option<String>>,
+}
+
+impl PluginNamespaceResolver {
+    pub async fn prime(&mut self, fs: &dyn ExecutorFileSystem, paths: &[AbsolutePathBuf]) {
+        let mut seen = HashSet::new();
+        let unresolved_roots = paths
+            .iter()
+            .flat_map(AbsolutePathBuf::ancestors)
+            .filter(|ancestor| !self.manifests_by_root.contains_key(ancestor))
+            .filter(|ancestor| seen.insert(ancestor.clone()))
+            .collect::<Vec<_>>();
+        let operations = unresolved_roots
+            .iter()
+            .flat_map(|root| {
+                DISCOVERABLE_PLUGIN_MANIFEST_PATHS
+                    .iter()
+                    .map(|relative_path| FileSystemOperation::ReadFile {
+                        path: PathUri::from_abs_path(&root.join(relative_path)),
+                    })
+            })
+            .collect();
+        let mut results = match fs.execute_batch(operations, /*sandbox*/ None).await {
+            Ok(results) => results.into_iter(),
+            Err(_) => Vec::new().into_iter(),
+        };
+        for root in unresolved_roots {
+            let mut name = None;
+            for _ in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
+                if let Some(Ok(FileSystemOperationOutput::ReadFile(contents))) = results.next()
+                    && name.is_none()
+                {
+                    name = plugin_manifest_name(&root, &contents);
+                }
+            }
+            self.manifests_by_root.insert(root, name);
+        }
+    }
+
+    pub async fn resolve(
+        &mut self,
+        fs: &dyn ExecutorFileSystem,
+        path: &AbsolutePathBuf,
+    ) -> Option<String> {
+        self.prime(fs, std::slice::from_ref(path)).await;
+
+        path.ancestors()
+            .find_map(|ancestor| self.manifests_by_root.get(&ancestor).cloned().flatten())
+    }
+}
+
 /// Returns the plugin manifest `name` for the nearest ancestor of `path` that contains a valid
 /// plugin manifest (same `name` rules as full manifest loading in codex-core).
 pub async fn plugin_namespace_for_skill_path(
     fs: &dyn ExecutorFileSystem,
     path: &AbsolutePathBuf,
 ) -> Option<String> {
-    for ancestor in path.ancestors() {
-        if let Some(name) = plugin_manifest_name(fs, &ancestor).await {
-            return Some(name);
-        }
-    }
-    None
+    PluginNamespaceResolver::default().resolve(fs, path).await
 }
 
 #[cfg(test)]
