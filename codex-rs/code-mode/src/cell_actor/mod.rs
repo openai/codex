@@ -5,12 +5,11 @@ mod types;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -27,6 +26,7 @@ pub(crate) use self::types::CellError;
 pub(crate) use self::types::CellEventFuture;
 pub(crate) use self::types::CellHandle;
 pub(crate) use self::types::CellHost;
+pub(crate) use self::types::CellLifecycle;
 pub(crate) use self::types::CellToolCall;
 use crate::runtime::PendingRuntimeMode;
 use crate::runtime::RuntimeCommand;
@@ -65,25 +65,17 @@ impl CellActor {
             event_tx,
             PendingRuntimeMode::PauseUntilResumed,
         )?;
-        let cancellation_token = session_shutdown_token.child_token();
-        let termination_token = CancellationToken::new();
-        let accepting_requests = Arc::new(AtomicBool::new(true));
-        let handle = CellHandle::new(
-            command_tx,
-            cancellation_token.clone(),
-            termination_token.clone(),
-            Arc::clone(&accepting_requests),
-        );
+        let lifecycle = Arc::new(CellLifecycle::new(session_shutdown_token));
+        let (terminal_event_tx, terminal_event_rx) = watch::channel(/*init*/ None);
+        let handle = CellHandle::new(command_tx, Arc::clone(&lifecycle), terminal_event_rx);
         let task = run_cell(
             host,
             CellContext {
                 runtime_tx,
                 runtime_control_tx,
                 runtime_terminate_handle,
-                cancellation_token,
-                termination_token,
-                accepting_requests,
-                session_shutdown_token,
+                lifecycle,
+                terminal_event_tx,
             },
             event_rx,
             command_rx,
@@ -102,19 +94,13 @@ struct CellContext {
     runtime_tx: std::sync::mpsc::Sender<RuntimeCommand>,
     runtime_control_tx: std::sync::mpsc::Sender<RuntimeControlCommand>,
     runtime_terminate_handle: v8::IsolateHandle,
-    cancellation_token: CancellationToken,
-    termination_token: CancellationToken,
-    accepting_requests: Arc<AtomicBool>,
-    session_shutdown_token: CancellationToken,
+    lifecycle: Arc<CellLifecycle>,
+    terminal_event_tx: watch::Sender<Option<CellEvent>>,
 }
 
 struct Observer {
     mode: ObserveMode,
     response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
-}
-
-struct Termination {
-    response_tx: Option<oneshot::Sender<Result<CellEvent, CellError>>>,
 }
 
 async fn run_cell<H: CellHost>(
@@ -128,16 +114,17 @@ async fn run_cell<H: CellHost>(
         runtime_tx,
         runtime_control_tx,
         runtime_terminate_handle,
-        cancellation_token,
-        termination_token,
-        accepting_requests,
-        session_shutdown_token,
+        lifecycle,
+        terminal_event_tx,
     } = context;
+    let cancellation_token = lifecycle.work_cancellation_token();
+    let termination_token = lifecycle.termination_token();
+    let session_shutdown_token = lifecycle.session_shutdown_token();
     let mut content_items = Vec::new();
     let mut pending_tool_call_ids = Vec::new();
     let mut completed_event = None;
     let mut observer = Some(initial_observer);
-    let mut termination: Option<Termination> = None;
+    let mut termination = false;
     let mut runtime_closed = false;
     let mut runtime_paused = false;
     let mut yield_timer: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
@@ -167,14 +154,14 @@ async fn run_cell<H: CellHost>(
             } => {
                 let maybe_command = match command_outcome {
                     Some(command) => command,
-                    None if termination.is_some() => continue,
-                    None => Some(CellCommand::Terminate { response_tx: None }),
+                    None if termination => continue,
+                    None => Some(CellCommand::Terminate),
                 };
                 let Some(command) = maybe_command else {
                     if completed_event.is_some() {
                         break;
                     }
-                    termination = Some(Termination { response_tx: None });
+                    termination = true;
                     begin_termination(
                         &runtime_tx,
                         &runtime_control_tx,
@@ -189,9 +176,17 @@ async fn run_cell<H: CellHost>(
                 match command {
                     CellCommand::Observe { mode, response_tx } => {
                         if let Some(event) = completed_event.take() {
-                            accepting_requests.store(false, Ordering::Release);
-                            let _ = response_tx.send(Ok(event));
-                            break;
+                            observer = Some(Observer { mode, response_tx });
+                            if send_or_buffer_completion(
+                                event,
+                                &mut observer,
+                                &mut completed_event,
+                                &lifecycle,
+                                &terminal_event_tx,
+                            ) {
+                                break;
+                            }
+                            continue;
                         }
                         if observer
                             .as_ref()
@@ -200,7 +195,7 @@ async fn run_cell<H: CellHost>(
                             observer = None;
                             yield_timer = None;
                         }
-                        if observer.is_some() || termination.is_some() {
+                        if observer.is_some() || termination {
                             let _ = response_tx.send(Err(CellError::Busy));
                             continue;
                         }
@@ -213,21 +208,15 @@ async fn run_cell<H: CellHost>(
                             &runtime_control_tx,
                         );
                     }
-                    CellCommand::Terminate { response_tx } => {
-                        if let Some(event) = completed_event.take() {
-                            accepting_requests.store(false, Ordering::Release);
-                            if let Some(response_tx) = response_tx {
-                                let _ = response_tx.send(Ok(event));
-                            }
+                    CellCommand::Terminate => {
+                        if completed_event.take().is_some() {
+                            lifecycle.close();
                             break;
                         }
-                        if termination.is_some() {
-                            if let Some(response_tx) = response_tx {
-                                let _ = response_tx.send(Err(CellError::AlreadyTerminating));
-                            }
+                        if termination {
                             continue;
                         }
-                        termination = Some(Termination { response_tx });
+                        termination = true;
                         yield_timer = None;
                         begin_termination(
                             &runtime_tx,
@@ -243,9 +232,9 @@ async fn run_cell<H: CellHost>(
                                 CallbackCompletion::Cancel,
                             ).await;
                             send_termination_events(
-                                &accepting_requests,
+                                &lifecycle,
+                                &terminal_event_tx,
                                 observer.take(),
-                                termination.take(),
                                 CellEvent::Terminated {
                                     content_items: std::mem::take(&mut content_items),
                                 },
@@ -279,7 +268,7 @@ async fn run_cell<H: CellHost>(
             }, if !yield_deadline_elapsed => {
                 let Some(event) = maybe_event else {
                     runtime_closed = true;
-                    if termination.is_some() || session_shutdown_token.is_cancelled() {
+                    if termination || session_shutdown_token.is_cancelled() {
                         finish_callbacks(
                             &cancellation_token,
                             &mut notification_tasks,
@@ -287,9 +276,9 @@ async fn run_cell<H: CellHost>(
                             CallbackCompletion::Cancel,
                         ).await;
                         send_termination_events(
-                            &accepting_requests,
+                            &lifecycle,
+                            &terminal_event_tx,
                             observer.take(),
-                            termination.take(),
                             CellEvent::Terminated {
                                 content_items: std::mem::take(&mut content_items),
                             },
@@ -305,12 +294,10 @@ async fn run_cell<H: CellHost>(
                         )
                         .await;
                         if termination_token.is_cancelled() {
-                            let termination =
-                                receive_queued_termination(&mut command_rx).await;
                             send_termination_events(
-                                &accepting_requests,
+                                &lifecycle,
+                                &terminal_event_tx,
                                 observer.take(),
-                                termination,
                                 CellEvent::Terminated {
                                     content_items: std::mem::take(&mut content_items),
                                 },
@@ -319,9 +306,20 @@ async fn run_cell<H: CellHost>(
                         }
                         if session_shutdown_token.is_cancelled() {
                             send_termination_events(
-                                &accepting_requests,
+                                &lifecycle,
+                                &terminal_event_tx,
                                 observer.take(),
-                                /*termination*/ None,
+                                CellEvent::Terminated {
+                                    content_items: std::mem::take(&mut content_items),
+                                },
+                            );
+                            break;
+                        }
+                        if !lifecycle.commit_completion(|| {}) {
+                            send_termination_events(
+                                &lifecycle,
+                                &terminal_event_tx,
+                                observer.take(),
                                 CellEvent::Terminated {
                                     content_items: std::mem::take(&mut content_items),
                                 },
@@ -336,7 +334,8 @@ async fn run_cell<H: CellHost>(
                             event,
                             &mut observer,
                             &mut completed_event,
-                            &accepting_requests,
+                            &lifecycle,
+                            &terminal_event_tx,
                         ) {
                             break;
                         }
@@ -414,7 +413,7 @@ async fn run_cell<H: CellHost>(
                     RuntimeEvent::Result { stored_value_writes, error_text } => {
                         runtime_closed = true;
                         yield_timer = None;
-                        if termination.is_some() || session_shutdown_token.is_cancelled() {
+                        if termination || session_shutdown_token.is_cancelled() {
                             finish_callbacks(
                                 &cancellation_token,
                                 &mut notification_tasks,
@@ -422,9 +421,9 @@ async fn run_cell<H: CellHost>(
                                 CallbackCompletion::Cancel,
                             ).await;
                             send_termination_events(
-                                &accepting_requests,
+                                &lifecycle,
+                                &terminal_event_tx,
                                 observer.take(),
-                                termination.take(),
                                 CellEvent::Terminated {
                                     content_items: std::mem::take(&mut content_items),
                                 },
@@ -439,12 +438,10 @@ async fn run_cell<H: CellHost>(
                         )
                         .await;
                         if termination_token.is_cancelled() {
-                            let termination =
-                                receive_queued_termination(&mut command_rx).await;
                             send_termination_events(
-                                &accepting_requests,
+                                &lifecycle,
+                                &terminal_event_tx,
                                 observer.take(),
-                                termination,
                                 CellEvent::Terminated {
                                     content_items: std::mem::take(&mut content_items),
                                 },
@@ -453,9 +450,9 @@ async fn run_cell<H: CellHost>(
                         }
                         if session_shutdown_token.is_cancelled() {
                             send_termination_events(
-                                &accepting_requests,
+                                &lifecycle,
+                                &terminal_event_tx,
                                 observer.take(),
-                                /*termination*/ None,
                                 CellEvent::Terminated {
                                     content_items: std::mem::take(&mut content_items),
                                 },
@@ -466,18 +463,16 @@ async fn run_cell<H: CellHost>(
                             biased;
                             _ = termination_token.cancelled() => false,
                             _ = session_shutdown_token.cancelled() => false,
-                            _ = host.commit_stored_values(stored_value_writes) => true,
+                            committed = host.commit_stored_values(
+                                stored_value_writes,
+                                Arc::clone(&lifecycle),
+                            ) => committed,
                         };
-                        if !committed || session_shutdown_token.is_cancelled() {
-                            let termination = if termination_token.is_cancelled() {
-                                receive_queued_termination(&mut command_rx).await
-                            } else {
-                                None
-                            };
+                        if !committed {
                             send_termination_events(
-                                &accepting_requests,
+                                &lifecycle,
+                                &terminal_event_tx,
                                 observer.take(),
-                                termination,
                                 CellEvent::Terminated {
                                     content_items: std::mem::take(&mut content_items),
                                 },
@@ -492,7 +487,8 @@ async fn run_cell<H: CellHost>(
                             event,
                             &mut observer,
                             &mut completed_event,
-                            &accepting_requests,
+                            &lifecycle,
+                            &terminal_event_tx,
                         ) {
                             break;
                         }
@@ -508,7 +504,7 @@ async fn run_cell<H: CellHost>(
         }
     }
     // Reject requests that arrive while asynchronous terminal cleanup runs.
-    accepting_requests.store(false, Ordering::Release);
+    lifecycle.close();
     drop(command_rx.take());
     begin_termination(
         &runtime_tx,
@@ -526,41 +522,33 @@ async fn run_cell<H: CellHost>(
     host.closed().await;
 }
 
-async fn receive_queued_termination(
-    command_rx: &mut Option<mpsc::UnboundedReceiver<CellCommand>>,
-) -> Option<Termination> {
-    loop {
-        let command = command_rx.as_mut()?.recv().await?;
-        match command {
-            CellCommand::Observe { response_tx, .. } => {
-                let _ = response_tx.send(Err(CellError::Busy));
-            }
-            CellCommand::Terminate { response_tx } => {
-                return Some(Termination { response_tx });
-            }
-        }
-    }
-}
-
 fn send_or_buffer_completion(
     event: CellEvent,
     observer: &mut Option<Observer>,
     completed_event: &mut Option<CellEvent>,
-    accepting_requests: &AtomicBool,
+    lifecycle: &CellLifecycle,
+    terminal_event_tx: &watch::Sender<Option<CellEvent>>,
 ) -> bool {
-    if observer
-        .as_ref()
-        .is_some_and(|observer| observer.response_tx.is_closed())
-    {
-        *observer = None;
-    }
-    if observer.is_some() {
-        accepting_requests.store(false, Ordering::Release);
-        send_observer_event(observer.take(), event);
-        true
-    } else {
+    terminal_event_tx.send_replace(Some(event.clone()));
+    let Some(observer) = observer.take() else {
+        lifecycle.buffer_completion();
         *completed_event = Some(event);
-        false
+        return false;
+    };
+    match observer.response_tx.send(Ok(event)) {
+        Ok(()) => {
+            lifecycle.close();
+            true
+        }
+        Err(Ok(event)) => {
+            lifecycle.buffer_completion();
+            *completed_event = Some(event);
+            false
+        }
+        Err(Err(error)) => {
+            lifecycle.close();
+            panic!("completion delivery unexpectedly carried an actor error: {error:?}");
+        }
     }
 }
 
@@ -571,16 +559,14 @@ fn send_observer_event(observer: Option<Observer>, event: CellEvent) {
 }
 
 fn send_termination_events(
-    accepting_requests: &AtomicBool,
+    lifecycle: &CellLifecycle,
+    terminal_event_tx: &watch::Sender<Option<CellEvent>>,
     observer: Option<Observer>,
-    termination: Option<Termination>,
     event: CellEvent,
 ) {
-    accepting_requests.store(false, Ordering::Release);
-    send_observer_event(observer, event.clone());
-    if let Some(response_tx) = termination.and_then(|termination| termination.response_tx) {
-        let _ = response_tx.send(Ok(event));
-    }
+    lifecycle.close();
+    terminal_event_tx.send_replace(Some(event.clone()));
+    send_observer_event(observer, event);
 }
 
 fn observer_timer(observer: &Observer) -> Option<std::pin::Pin<Box<tokio::time::Sleep>>> {

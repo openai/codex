@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use codex_code_mode::CellId;
@@ -64,13 +65,11 @@ impl CodeModeDispatchBroker {
                         cancellation_token,
                         response_tx,
                     } => {
-                        let response = tokio::select! {
-                            biased;
-                            _ = cancellation_token.cancelled() => {
-                                Err("code mode notification cancelled".to_string())
-                            }
-                            response = host.notify(call_id, cell_id, text) => response,
-                        };
+                        let response = dispatch_unless_cancelled(&cancellation_token, || {
+                            host.notify(call_id, cell_id, text)
+                        })
+                        .await
+                        .unwrap_or_else(|| Err("code mode notification cancelled".to_string()));
                         let _ = response_tx.send(response);
                     }
                     DispatchMessage::InvokeTool {
@@ -78,14 +77,18 @@ impl CodeModeDispatchBroker {
                         cancellation_token,
                         response_tx,
                     } => {
+                        if cancellation_token.is_cancelled() {
+                            continue;
+                        }
                         let host = Arc::clone(&host);
                         tokio::spawn(async move {
-                            let response = tokio::select! {
-                                response = host.invoke_tool(
-                                    invocation,
-                                    cancellation_token.clone(),
-                                ) => response,
-                                _ = cancellation_token.cancelled() => return,
+                            let Some(response) =
+                                dispatch_unless_cancelled(&cancellation_token, || {
+                                    host.invoke_tool(invocation, cancellation_token.clone())
+                                })
+                                .await
+                            else {
+                                return;
                             };
                             let _ = response_tx.send(response);
                         });
@@ -96,6 +99,25 @@ impl CodeModeDispatchBroker {
         CodeModeDispatchWorker {
             shutdown_tx: Some(shutdown_tx),
         }
+    }
+}
+
+async fn dispatch_unless_cancelled<T, F, Fut>(
+    cancellation_token: &CancellationToken,
+    dispatch: F,
+) -> Option<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = T>,
+{
+    if cancellation_token.is_cancelled() {
+        return None;
+    }
+    let dispatch = dispatch();
+    tokio::select! {
+        biased;
+        _ = cancellation_token.cancelled() => None,
+        response = dispatch => Some(response),
     }
 }
 

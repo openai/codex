@@ -27,6 +27,7 @@ use crate::cell_actor::CellError;
 use crate::cell_actor::CellEventFuture;
 use crate::cell_actor::CellHandle;
 use crate::cell_actor::CellHost;
+use crate::cell_actor::CellLifecycle;
 use crate::cell_actor::CellToolCall;
 
 type RuntimeEventFuture = Pin<Box<dyn Future<Output = Result<CellEvent, Error>> + Send + 'static>>;
@@ -215,12 +216,15 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
             .await
     }
 
-    async fn commit_stored_values(&self, stored_value_writes: HashMap<String, JsonValue>) {
-        self.inner
-            .stored_values
-            .lock()
-            .await
-            .extend(stored_value_writes);
+    async fn commit_stored_values(
+        &self,
+        stored_value_writes: HashMap<String, JsonValue>,
+        lifecycle: Arc<CellLifecycle>,
+    ) -> bool {
+        let mut stored_values = self.inner.stored_values.lock().await;
+        lifecycle.commit_completion(|| {
+            stored_values.extend(stored_value_writes);
+        })
     }
 
     async fn closed(&self) {

@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_code_mode::CellId;
@@ -9,11 +11,48 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::ExecContext;
 use super::CodeModeDispatchBroker;
+use super::dispatch_unless_cancelled;
 use crate::session::tests::make_session_and_context;
 use crate::state::ActiveTurn;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router::ToolRouter;
 use crate::turn_diff_tracker::TurnDiffTracker;
+
+#[tokio::test]
+async fn cancelled_dispatch_is_rejected_before_construction() {
+    let cancellation_token = CancellationToken::new();
+    cancellation_token.cancel();
+    let constructed = AtomicBool::new(false);
+
+    let response = dispatch_unless_cancelled(&cancellation_token, || {
+        constructed.store(true, Ordering::Release);
+        async { "unexpected response" }
+    })
+    .await;
+
+    assert_eq!(response, None);
+    assert!(!constructed.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn cancellation_before_dispatch_poll_has_priority() {
+    let cancellation_token = CancellationToken::new();
+    let cancellation_for_dispatch = cancellation_token.clone();
+    let polled = Arc::new(AtomicBool::new(false));
+    let polled_by_dispatch = Arc::clone(&polled);
+
+    let response = dispatch_unless_cancelled(&cancellation_token, || {
+        cancellation_for_dispatch.cancel();
+        async move {
+            polled_by_dispatch.store(true, Ordering::Release);
+            "unexpected response"
+        }
+    })
+    .await;
+
+    assert_eq!(response, None);
+    assert!(!polled.load(Ordering::Acquire));
+}
 
 #[tokio::test]
 #[expect(
