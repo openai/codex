@@ -131,7 +131,11 @@ pub(crate) async fn permission_preset_catalog(
     cwd: Option<PathBuf>,
 ) -> std::io::Result<PermissionPresetCatalog> {
     let config = config_manager
-        .load_for_cwd(None, ConfigOverrides::default(), cwd)
+        .load_for_cwd(
+            /* request_overrides */ None,
+            ConfigOverrides::default(),
+            cwd,
+        )
         .await?;
     permission_preset_catalog_for_config(&config)
 }
@@ -209,7 +213,7 @@ fn permission_preset_catalog_for_config(
             builtin.id,
             kind,
             Some(builtin.active_permission_profile.id),
-            None,
+            /* description */ None,
             builtin.permission_profile,
             builtin.approval,
             ApprovalsReviewer::User,
@@ -221,7 +225,7 @@ fn permission_preset_catalog_for_config(
                 "granular",
                 PermissionPresetKind::Granular,
                 Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
-                None,
+                /* description */ None,
                 PermissionProfile::workspace_write(),
                 AskForApproval::Granular(GranularApprovalConfig {
                     sandbox_approval: false,
@@ -239,7 +243,7 @@ fn permission_preset_catalog_for_config(
                     "guardian-approvals",
                     PermissionPresetKind::GuardianApprovals,
                     Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
-                    None,
+                    /* description */ None,
                     PermissionProfile::workspace_write(),
                     AskForApproval::OnRequest,
                     ApprovalsReviewer::AutoReview,
@@ -281,8 +285,8 @@ fn permission_preset_catalog_for_config(
         entries.push(preset_entry(
             "legacy-config",
             PermissionPresetKind::LegacyConfig,
-            None,
-            None,
+            /* permission_profile_id */ None,
+            /* description */ None,
             config.permissions.permission_profile().clone(),
             config.permissions.approval_policy.value(),
             config.approvals_reviewer,
