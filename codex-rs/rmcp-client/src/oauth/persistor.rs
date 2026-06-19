@@ -241,10 +241,6 @@ impl OAuthPersistor {
         let transaction_started_at = Instant::now();
         let lock_started_at = Instant::now();
         debug!("waiting for the MCP OAuth credential transaction lock");
-        let snapshot = {
-            let guard = self.inner.last_credentials.lock().await;
-            guard.clone()
-        };
         let key = compute_store_key(&self.inner.server_name, &self.inner.url)?;
         let _lock = RefreshCredentialLock::acquire(&key).await?;
         debug!(
@@ -273,7 +269,10 @@ impl OAuthPersistor {
             }
         };
 
-        if latest.is_none() && snapshot.is_some() {
+        // The pre-lock snapshot only decides whether a refresh transaction might be needed. Once
+        // the lock is held, this reread is authoritative: adopt it before deciding whether to
+        // refresh so this process never sends a refresh token superseded by another process.
+        let Some(latest) = latest else {
             self.clear_manager_credentials().await;
             let mut last_credentials = self.inner.last_credentials.lock().await;
             *last_credentials = None;
@@ -281,22 +280,14 @@ impl OAuthPersistor {
                 "OAuth tokens for server {} were removed before refresh; authorization required",
                 self.inner.server_name
             );
+        };
+
+        if !token_needs_refresh(latest.expires_at) {
+            self.adopt_credentials(latest).await?;
+            return Ok(());
         }
 
-        if latest != snapshot {
-            if let Some(latest) = latest {
-                let needs_refresh = token_needs_refresh(latest.expires_at);
-                self.adopt_credentials(latest).await?;
-                // `expires_in` is derived from `expires_at` on each load and can drift without a
-                // persisted change. Even for a real concurrent update, keep going when the
-                // authoritative token is still inside the refresh window.
-                if !needs_refresh {
-                    return Ok(());
-                }
-            } else {
-                return Ok(());
-            }
-        }
+        self.adopt_credentials(latest).await?;
 
         {
             let manager = self.inner.authorization_manager.clone();
