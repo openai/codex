@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -5,6 +6,8 @@ use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PermissionPreset;
 use codex_app_server_protocol::PermissionPresetDefaultSource;
@@ -94,6 +97,49 @@ guardian_approval = true
             default_preset_id: "guardian-approvals".to_string(),
             default_source: PermissionPresetDefaultSource::Config,
         }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_preset_list_uses_runtime_guardian_enablement() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let enablement = BTreeMap::from([("guardian_approval".to_string(), false)]);
+    let request_id = mcp
+        .send_experimental_feature_enablement_set_request(
+            ExperimentalFeatureEnablementSetParams {
+                enablement: enablement.clone(),
+            },
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<ExperimentalFeatureEnablementSetResponse>(response)?,
+        ExperimentalFeatureEnablementSetResponse { enablement }
+    );
+
+    let actual = list_permission_presets(
+        &mut mcp,
+        PermissionPresetListParams {
+            cursor: None,
+            limit: None,
+            cwd: None,
+        },
+    )
+    .await?;
+
+    assert!(
+        actual
+            .data
+            .iter()
+            .all(|preset| preset.kind != PermissionPresetKind::GuardianApprovals)
     );
     Ok(())
 }
