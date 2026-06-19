@@ -39,7 +39,7 @@ impl CodeModeExecuteHandler {
         let enabled_tools =
             codex_tools::collect_code_mode_tool_definitions(&self.nested_tool_specs);
         let started_at = std::time::Instant::now();
-        let cell_id = codex_code_mode::CellId::new(uuid::Uuid::new_v4().to_string());
+        let cell_id = exec.session.services.code_mode_service.allocate_cell_id();
         let runtime_cell_id = cell_id.to_string();
         let code_cell_trace = exec
             .session

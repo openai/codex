@@ -483,11 +483,13 @@ async fn natural_completion_waits_for_notifications_before_responding() {
         next_event(&mut events_rx).await,
         DelegateEvent::NotificationStarted
     );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(/*millis*/ 100), &mut initial_response)
-            .await
-            .is_err()
-    );
+    std::future::poll_fn(|context| match initial_response.as_mut().poll(context) {
+        std::task::Poll::Pending => std::task::Poll::Ready(()),
+        std::task::Poll::Ready(result) => {
+            panic!("execute returned while the notification was blocked: {result:?}")
+        }
+    })
+    .await;
 
     delegate.release_notification();
 

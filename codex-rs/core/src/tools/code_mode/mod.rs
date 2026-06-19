@@ -6,6 +6,8 @@ mod wait_handler;
 pub(crate) mod wait_spec;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_code_mode::CellId;
@@ -61,6 +63,7 @@ pub(crate) struct ExecContext {
 pub(crate) struct CodeModeService {
     session: Option<Arc<dyn CodeModeSession>>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
+    next_cell_id: AtomicU64,
 }
 
 impl CodeModeService {
@@ -71,7 +74,16 @@ impl CodeModeService {
                 dispatch_broker.clone(),
             ))),
             dispatch_broker,
+            next_cell_id: AtomicU64::new(1),
         }
+    }
+
+    pub(crate) fn allocate_cell_id(&self) -> CellId {
+        CellId::new(
+            self.next_cell_id
+                .fetch_add(1, Ordering::Relaxed)
+                .to_string(),
+        )
     }
 
     pub(crate) async fn execute(

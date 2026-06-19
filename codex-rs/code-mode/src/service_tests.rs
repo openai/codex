@@ -354,16 +354,27 @@ await Promise.all([
         }
     );
 
-    tokio::time::sleep(Duration::from_millis(1100)).await;
-
-    let resumed_response = tokio::time::timeout(
-        Duration::from_secs(1),
-        service.wait_to_pending(WaitToPendingRequest {
-            cell_id: cell_id("1"),
-        }),
-    )
+    let resumed_response = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = service
+                .wait_to_pending(WaitToPendingRequest {
+                    cell_id: cell_id("1"),
+                })
+                .await
+                .unwrap();
+            if matches!(
+                &response,
+                WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Pending {
+                    pending_tool_call_ids,
+                    ..
+                }) if !pending_tool_call_ids.is_empty()
+            ) {
+                break response;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
     .await
-    .unwrap()
     .unwrap();
 
     assert_eq!(
