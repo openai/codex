@@ -13,28 +13,22 @@ use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_api::AuthProvider;
-use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
 use codex_exec_server::ExecServerClient;
-use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::FsReadFileParams;
 use codex_exec_server::NoiseChannelIdentity;
 use codex_exec_server::NoiseChannelPublicKey;
 use codex_exec_server::NoiseRendezvousConnectArgs;
 use codex_exec_server::NoiseRendezvousConnectBundle;
-use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
 use codex_utils_path_uri::PathUri;
-use futures::FutureExt;
 use futures::SinkExt;
 use futures::StreamExt;
-use futures::future::BoxFuture;
 use http::HeaderMap;
 use http::HeaderValue;
-use http::StatusCode;
 use pretty_assertions::assert_eq;
 use prost::Message as ProstMessage;
 use relay_proto::RelayMessageFrame;
@@ -42,7 +36,6 @@ use relay_proto::relay_message_frame;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_async;
@@ -72,79 +65,8 @@ impl AuthProvider for StaticRegistryAuthProvider {
     }
 }
 
-struct FailingNoiseConnectProvider {
-    attempt_tx: mpsc::UnboundedSender<()>,
-}
-
-impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
-    fn connect_bundle(
-        &self,
-        _: NoiseChannelPublicKey,
-    ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>> {
-        let _ = self.attempt_tx.send(());
-        async {
-            Err(ExecServerError::EnvironmentRegistryHttp {
-                status: StatusCode::SERVICE_UNAVAILABLE,
-                code: None,
-                message: "test registry unavailable".to_string(),
-            })
-        }
-        .boxed()
-    }
-}
-
 fn static_registry_auth_provider() -> codex_api::SharedAuthProvider {
     Arc::new(StaticRegistryAuthProvider)
-}
-
-#[tokio::test]
-async fn noise_environment_refreshes_bundle_during_startup_retries() -> Result<()> {
-    let (attempt_tx, mut attempt_rx) = mpsc::unbounded_channel();
-    let manager = EnvironmentManager::without_environments();
-    manager.upsert_noise_environment(
-        ENVIRONMENT_ID.to_string(),
-        Arc::new(FailingNoiseConnectProvider { attempt_tx }),
-    )?;
-    let backend = manager
-        .get_environment(ENVIRONMENT_ID)
-        .context("Noise environment should be materialized")?
-        .get_exec_backend();
-    let cwd = PathUri::from_path(std::env::current_dir()?)?;
-
-    let startup = tokio::spawn(async move {
-        backend
-            .start(ExecParams {
-                process_id: ProcessId::from("proc-1"),
-                argv: vec!["true".to_string()],
-                cwd,
-                env_policy: None,
-                env: HashMap::new(),
-                tty: false,
-                pipe_stdin: false,
-                arg0: None,
-            })
-            .await
-    });
-
-    timeout(TEST_TIMEOUT, async {
-        for _ in 0..2 {
-            attempt_rx
-                .recv()
-                .await
-                .context("connection provider should remain available")?;
-        }
-        Ok::<_, anyhow::Error>(())
-    })
-    .await
-    .context("startup should retry the Noise connection")??;
-
-    startup.abort();
-    let cancellation = match startup.await {
-        Err(error) => error,
-        Ok(_) => panic!("startup should be cancelled"),
-    };
-    assert!(cancellation.is_cancelled());
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

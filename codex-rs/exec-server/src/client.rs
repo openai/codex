@@ -108,9 +108,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
-const ENVIRONMENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const ENVIRONMENT_INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
-const ENVIRONMENT_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 impl Default for ExecServerClientConnectOptions {
     fn default() -> Self {
@@ -302,7 +299,7 @@ impl LazyRemoteExecServerClient {
         // The first caller starts the work; every other caller waits for that same result.
         let result = self
             .startup
-            .get_or_init(|| connect_with_startup_retries(self.transport_params.clone()))
+            .get_or_init(|| connect_once(self.transport_params.clone()))
             .await;
         match result {
             Ok(client) => {
@@ -380,42 +377,6 @@ impl LazyRemoteExecServerClient {
     }
 }
 
-async fn connect_with_startup_retries(
-    transport_params: ExecServerTransportParams,
-) -> ConnectionResult {
-    if matches!(
-        transport_params,
-        ExecServerTransportParams::StdioCommand { .. }
-    ) {
-        return connect_once(transport_params).await;
-    }
-
-    let startup = async {
-        let mut retry_delay = ENVIRONMENT_INITIAL_RETRY_DELAY;
-        loop {
-            match ExecServerClient::connect_for_transport(transport_params.clone()).await {
-                Ok(client) => return Ok(client),
-                Err(error) if error.is_retryable_during_startup() => {
-                    debug!(
-                        %error,
-                        retry_in = ?retry_delay,
-                        "exec-server environment is not ready; retrying"
-                    );
-                    tokio::time::sleep(retry_delay).await;
-                    retry_delay = (retry_delay * 2).min(ENVIRONMENT_MAX_RETRY_DELAY);
-                }
-                Err(error) => return Err(Arc::new(error)),
-            }
-        }
-    };
-    match timeout(ENVIRONMENT_STARTUP_TIMEOUT, startup).await {
-        Ok(result) => result,
-        Err(_) => Err(Arc::new(ExecServerError::StartupTimedOut {
-            timeout: ENVIRONMENT_STARTUP_TIMEOUT,
-        })),
-    }
-}
-
 async fn connect_once(transport_params: ExecServerTransportParams) -> ConnectionResult {
     ExecServerClient::connect_for_transport(transport_params)
         .await
@@ -487,38 +448,6 @@ pub enum ExecServerError {
     EnvironmentRegistryRequest(#[from] reqwest::Error),
     #[error("exec-server connection attempt failed: {0}")]
     ConnectionAttempt(#[source] Arc<ExecServerError>),
-    #[error("exec-server did not become ready within {timeout:?}")]
-    StartupTimedOut { timeout: Duration },
-}
-
-impl ExecServerError {
-    fn is_retryable_during_startup(&self) -> bool {
-        // This is a positive allowlist so new error variants fail fast by default.
-        match self {
-            Self::WebSocketConnectTimeout { .. }
-            | Self::InitializeTimedOut { .. }
-            | Self::Closed
-            | Self::Disconnected(_) => true,
-            Self::WebSocketConnect { source, .. } => match source {
-                tokio_tungstenite::tungstenite::Error::Io(_) => true,
-                tokio_tungstenite::tungstenite::Error::Http(response) => {
-                    retryable_http_status(response.status())
-                }
-                _ => false,
-            },
-            Self::EnvironmentRegistryHttp { status, .. } => retryable_http_status(*status),
-            Self::EnvironmentRegistryRequest(error) => error.is_connect() || error.is_timeout(),
-            _ => false,
-        }
-    }
-}
-
-fn retryable_http_status(status: reqwest::StatusCode) -> bool {
-    status.is_server_error()
-        || matches!(
-            status,
-            reqwest::StatusCode::REQUEST_TIMEOUT | reqwest::StatusCode::TOO_MANY_REQUESTS
-        )
 }
 
 impl ExecServerClient {
@@ -2087,30 +2016,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_websocket_url_fails_without_startup_retries() {
-        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
-            websocket_url: "http://example.com".to_string(),
-            connect_timeout: Duration::from_secs(1),
-            initialize_timeout: Duration::from_secs(1),
-        });
-
-        let result = timeout(Duration::from_secs(1), client.get())
-            .await
-            .expect("permanent startup failure should return immediately");
-        let error = match result {
-            Ok(_) => panic!("invalid URL should fail"),
-            Err(error) => error,
-        };
-
-        assert!(matches!(
-            error,
-            super::ExecServerError::ConnectionAttempt(source)
-                if matches!(source.as_ref(), super::ExecServerError::WebSocketConnect { .. })
-        ));
-    }
-
-    #[tokio::test]
-    async fn initial_connection_retries_once_and_is_shared_by_all_waiters() {
+    async fn initial_connection_is_shared_by_all_waiters() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
@@ -2119,20 +2025,14 @@ mod tests {
             listener.local_addr().expect("listener should have address")
         );
         let server = tokio::spawn(async move {
-            let (first, _) = listener
-                .accept()
-                .await
-                .expect("first connection should arrive");
-            drop(first);
-
-            let mut second = accept_websocket(&listener).await;
+            let mut connection = accept_websocket(&listener).await;
             complete_websocket_initialize(
-                &mut second,
+                &mut connection,
                 "startup-session",
                 /*expected_resume_session_id*/ None,
             )
             .await;
-            timeout(Duration::from_secs(1), second.next())
+            timeout(Duration::from_secs(1), connection.next())
                 .await
                 .expect("client should close after the test");
         });
