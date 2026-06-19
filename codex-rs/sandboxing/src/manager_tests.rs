@@ -317,6 +317,7 @@ fn managed_mitm_ca_private_key_is_denied_for_unrestricted_profile() {
     let managed_private_key_path =
         AbsolutePathBuf::from_absolute_path(managed_bundle_dir.path().join("ca.key"))
             .expect("absolute managed private key path");
+    std::fs::write(&managed_private_key_path, "private key").expect("write private key");
 
     let permission_profile = with_managed_mitm_ca_paths(
         PermissionProfile::Disabled,

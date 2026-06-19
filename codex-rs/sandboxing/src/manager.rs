@@ -79,13 +79,15 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
 
 pub fn with_managed_mitm_ca_access(
     permission_profile: PermissionProfile,
-    network: &NetworkProxy,
+    network: Option<&NetworkProxy>,
     sandbox_policy_cwd: &Path,
 ) -> PermissionProfile {
-    let Some(managed_mitm_ca_private_key_path) = network.managed_mitm_ca_private_key_path() else {
+    let Some(managed_mitm_ca_private_key_path) = NetworkProxy::managed_mitm_ca_private_key_path()
+    else {
         return permission_profile;
     };
-    let managed_mitm_ca_trust_bundle_path = network.managed_mitm_ca_trust_bundle_path();
+    let managed_mitm_ca_trust_bundle_path =
+        network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
     with_managed_mitm_ca_paths(
         permission_profile,
         managed_mitm_ca_trust_bundle_path.as_ref(),
@@ -100,6 +102,11 @@ fn with_managed_mitm_ca_paths(
     managed_mitm_ca_private_key_path: &AbsolutePathBuf,
     sandbox_policy_cwd: &Path,
 ) -> PermissionProfile {
+    if managed_mitm_ca_trust_bundle_path.is_none()
+        && !managed_mitm_ca_private_key_path.as_path().exists()
+    {
+        return permission_profile;
+    }
     let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
     let mut file_system_sandbox_policy = match file_system_sandbox_policy.kind {
@@ -227,14 +234,11 @@ impl PendingSandboxedExecRequest {
                 source,
             }
         })?;
-        let effective_permission_profile =
-            network.map_or(effective_permission_profile.clone(), |network| {
-                with_managed_mitm_ca_access(
-                    effective_permission_profile,
-                    network,
-                    native_sandbox_policy_cwd.as_path(),
-                )
-            });
+        let effective_permission_profile = with_managed_mitm_ca_access(
+            effective_permission_profile,
+            network,
+            native_sandbox_policy_cwd.as_path(),
+        );
         let (effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
         Ok(Self {

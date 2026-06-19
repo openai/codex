@@ -261,15 +261,10 @@ async fn run_command_under_sandbox(
     // Proxy containment depends on whether a proxy is active, not whether its
     // policy came from managed requirements.
     let enforce_managed_network = network.is_some();
-    let runtime_permission_profile = network.as_ref().map_or_else(
-        || config.permissions.effective_permission_profile(),
-        |network| {
-            with_managed_mitm_ca_access(
-                config.permissions.effective_permission_profile(),
-                network,
-                sandbox_policy_cwd.as_path(),
-            )
-        },
+    let runtime_permission_profile = with_managed_mitm_ca_access(
+        config.permissions.effective_permission_profile(),
+        network.as_ref(),
+        sandbox_policy_cwd.as_path(),
     );
 
     let mut child = match sandbox_type {

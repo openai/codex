@@ -641,7 +641,7 @@ impl NetworkProxy {
     }
 
     /// Returns the managed MITM CA private key path child sandboxes must hide.
-    pub fn managed_mitm_ca_private_key_path(&self) -> Option<AbsolutePathBuf> {
+    pub fn managed_mitm_ca_private_key_path() -> Option<AbsolutePathBuf> {
         crate::certs::managed_ca_private_key_path()
             .and_then(|path| {
                 AbsolutePathBuf::from_absolute_path(path)
