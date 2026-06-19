@@ -334,7 +334,15 @@ pub(super) async fn load_history_from_rollout_path(
 ) -> ThreadStoreResult<StoredThreadHistory> {
     #[cfg(test)]
     read_work::record_history_read();
-    let (items, thread_id, _) = RolloutRecorder::load_rollout_items(path)
+    let Some(path) = codex_rollout::existing_rollout_path(path).await else {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: format!(
+                "failed to resolve rollout path `{}`: file does not exist",
+                path.display()
+            ),
+        });
+    };
+    let (items, thread_id, _) = RolloutRecorder::load_rollout_items(path.as_path())
         .await
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to load thread history {}: {err}", path.display()),
