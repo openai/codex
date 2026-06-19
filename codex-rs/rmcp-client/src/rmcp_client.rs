@@ -64,9 +64,11 @@ use crate::elicitation_client_service::ElicitationClientService;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::in_process_transport::InProcessTransportFactory;
-use crate::load_oauth_tokens;
+use crate::oauth::LoadedOAuthTokens;
 use crate::oauth::OAuthPersistor;
+use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::StoredOAuthTokens;
+use crate::oauth::load_oauth_tokens_with_source;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
@@ -80,6 +82,8 @@ mod streamable_http_retry;
 
 use self::streamable_http_retry::HandshakeError;
 use self::streamable_http_retry::STREAMABLE_HTTP_RETRY_DELAYS_MS;
+use self::streamable_http_retry::initialize_timeout_error;
+use self::streamable_http_retry::remaining_initialize_timeout;
 use self::streamable_http_retry::sleep_with_retry_deadline;
 
 enum PendingTransport {
@@ -797,7 +801,12 @@ impl RmcpClient {
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
-                    match load_oauth_tokens(server_name, url, *store_mode, *keyring_backend_kind) {
+                    match load_oauth_tokens_with_source(
+                        server_name,
+                        url,
+                        *store_mode,
+                        *keyring_backend_kind,
+                    ) {
                         Ok(tokens) => tokens,
                         Err(err) => {
                             warn!("failed to read tokens for server `{server_name}`: {err}");
@@ -808,13 +817,16 @@ impl RmcpClient {
                     None
                 };
 
-                if let Some(initial_tokens) = initial_oauth_tokens.clone() {
+                if let Some(LoadedOAuthTokens {
+                    tokens: initial_tokens,
+                    store: credential_store,
+                }) = initial_oauth_tokens
+                {
                     match create_oauth_transport_and_runtime(
                         server_name,
                         url,
                         initial_tokens.clone(),
-                        *store_mode,
-                        *keyring_backend_kind,
+                        credential_store,
                         default_headers.clone(),
                         Arc::clone(http_client),
                     )
@@ -884,6 +896,7 @@ impl RmcpClient {
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
     )> {
+        let deadline = timeout.map(|duration| Instant::now() + duration);
         let (transport, oauth_persistor) = match pending_transport {
             PendingTransport::InProcess { transport } => (
                 service::serve_client(client_service, transport).boxed(),
@@ -900,13 +913,24 @@ impl RmcpClient {
             PendingTransport::StreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
-            } => (
-                service::serve_client(client_service, transport).boxed(),
-                Some(oauth_persistor),
-            ),
+            } => {
+                match remaining_initialize_timeout(timeout, deadline)? {
+                    Some(remaining) => {
+                        time::timeout(remaining, oauth_persistor.refresh_if_needed())
+                            .await
+                            .map_err(|_| initialize_timeout_error(timeout, remaining))??;
+                    }
+                    None => oauth_persistor.refresh_if_needed().await?,
+                }
+                (
+                    service::serve_client(client_service, transport).boxed(),
+                    Some(oauth_persistor),
+                )
+            }
         };
 
-        let service_result = match timeout {
+        let handshake_timeout = remaining_initialize_timeout(timeout, deadline)?;
+        let service_result = match handshake_timeout {
             Some(duration) => match time::timeout(duration, transport).await {
                 Ok(result) => {
                     result.map_err(|source| anyhow::Error::from(HandshakeError { source }))
@@ -1157,8 +1181,7 @@ async fn create_oauth_transport_and_runtime(
     server_name: &str,
     url: &str,
     initial_tokens: StoredOAuthTokens,
-    credentials_store: OAuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
+    credential_store: ResolvedOAuthCredentialStore,
     default_headers: HeaderMap,
     http_client: Arc<dyn HttpClient>,
 ) -> Result<(
@@ -1202,8 +1225,7 @@ async fn create_oauth_transport_and_runtime(
         server_name.to_string(),
         url.to_string(),
         auth_manager,
-        credentials_store,
-        keyring_backend_kind,
+        credential_store,
         Some(initial_tokens),
     );
 

@@ -38,6 +38,7 @@ const SERVER_NAME: &str = "test-streamable-http-oauth-startup";
 const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
 const REFRESH_TOKEN: &str = "valid-refresh-token";
 const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
+const ROTATED_REFRESH_TOKEN: &str = "rotated-refresh-token";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
 const UNREFRESHABLE_SERVER_URL: &str = "https://unrefreshable.example/mcp";
 const UNEXPIRED_SERVER_URL: &str = "https://unexpired.example/mcp";
@@ -117,6 +118,107 @@ async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result
         .status()
         .await?;
     assert!(status.success(), "OAuth startup child failed: {status}");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn concurrent_file_mode_startup_refreshes_once() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
+            "token_endpoint": format!("{}/oauth/token", server.uri()),
+            "scopes_supported": [""],
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains(format!(
+            "refresh_token={REFRESH_TOKEN}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(250))
+                .set_body_json(json!({
+                    "access_token": REFRESHED_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 7200,
+                    "refresh_token": ROTATED_REFRESH_TOKEN,
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {REFRESHED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(|request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            match body.get("method").and_then(Value::as_str) {
+                Some("initialize") => ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body.get("id").cloned().unwrap_or(Value::Null),
+                    "result": {
+                        "protocolVersion": body
+                            .pointer("/params/protocolVersion")
+                            .cloned()
+                            .unwrap_or_else(|| json!("2025-06-18")),
+                        "capabilities": {},
+                        "serverInfo": {
+                            "name": "oauth-startup-test",
+                            "version": "0.0.0-test",
+                        },
+                    },
+                })),
+                Some("notifications/initialized") => ResponseTemplate::new(202),
+                method => ResponseTemplate::new(400)
+                    .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
+            }
+        })
+        .expect(4)
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    let seed_status = Command::new(std::env::current_exe()?)
+        .args(["oauth_concurrency_seed_child", "--exact", "--ignored"])
+        .env("CODEX_HOME", codex_home.path())
+        .env(CHILD_SERVER_URL_ENV, &server_url)
+        .status()
+        .await?;
+    assert!(
+        seed_status.success(),
+        "OAuth concurrency seed child failed: {seed_status}"
+    );
+
+    let first_status = Command::new(std::env::current_exe()?)
+        .args(["oauth_concurrency_client_child", "--exact", "--ignored"])
+        .env("CODEX_HOME", codex_home.path())
+        .env(CHILD_SERVER_URL_ENV, &server_url)
+        .status();
+    let second_status = Command::new(std::env::current_exe()?)
+        .args(["oauth_concurrency_client_child", "--exact", "--ignored"])
+        .env("CODEX_HOME", codex_home.path())
+        .env(CHILD_SERVER_URL_ENV, &server_url)
+        .status();
+    let (first_status, second_status) = tokio::try_join!(first_status, second_status)?;
+    assert!(
+        first_status.success(),
+        "first OAuth concurrency child failed: {first_status}"
+    );
+    assert!(
+        second_status.success(),
+        "second OAuth concurrency child failed: {second_status}"
+    );
+
     server.verify().await;
     Ok(())
 }
@@ -277,5 +379,58 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
     .await?;
 
     initialize_client(&client).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by concurrent_file_mode_startup_refreshes_once"]
+async fn oauth_concurrency_seed_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(CHILD_SERVER_URL_ENV)?;
+    save_expired_file_mode_tokens(&server_url)?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by concurrent_file_mode_startup_refreshes_once"]
+async fn oauth_concurrency_client_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(CHILD_SERVER_URL_ENV)?;
+    let client = RmcpClient::new_streamable_http_client(
+        SERVER_NAME,
+        &server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+
+    initialize_client(&client).await?;
+    Ok(())
+}
+
+fn save_expired_file_mode_tokens(server_url: &str) -> anyhow::Result<()> {
+    let mut response = OAuthTokenResponse::new(
+        AccessToken::new(EXPIRED_ACCESS_TOKEN.to_string()),
+        BasicTokenType::Bearer,
+        VendorExtraTokenFields::default(),
+    );
+    response.set_refresh_token(Some(RefreshToken::new(REFRESH_TOKEN.to_string())));
+    response.set_expires_in(Some(&Duration::from_secs(7200)));
+    let tokens = StoredOAuthTokens {
+        server_name: SERVER_NAME.to_string(),
+        url: server_url.to_string(),
+        client_id: "test-client-id".to_string(),
+        token_response: WrappedOAuthTokenResponse(response),
+        expires_at: Some(0),
+    };
+    save_oauth_tokens(
+        SERVER_NAME,
+        &tokens,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
     Ok(())
 }

@@ -194,7 +194,7 @@ fn is_retryable_http_status(status: StatusCode) -> bool {
     )
 }
 
-fn remaining_initialize_timeout(
+pub(super) fn remaining_initialize_timeout(
     timeout: Option<Duration>,
     deadline: Option<Instant>,
 ) -> Result<Option<Duration>> {
@@ -209,7 +209,10 @@ fn remaining_initialize_timeout(
     }
 }
 
-fn initialize_timeout_error(timeout: Option<Duration>, fallback: Duration) -> anyhow::Error {
+pub(super) fn initialize_timeout_error(
+    timeout: Option<Duration>,
+    fallback: Duration,
+) -> anyhow::Error {
     let duration = timeout.unwrap_or(fallback);
     anyhow!("timed out handshaking with MCP server after {duration:?}")
 }
