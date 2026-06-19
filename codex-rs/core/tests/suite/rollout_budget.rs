@@ -10,7 +10,7 @@ use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
-use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -31,6 +31,7 @@ const ROLLOUT_BUDGET: RolloutBudgetConfig = RolloutBudgetConfig {
     sampling_token_weight: 1.0,
     prefill_token_weight: 1.0,
 };
+const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
 fn rollout_budget_texts(request: &ResponsesRequest) -> Vec<String> {
     request
@@ -128,7 +129,12 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
         |request: &wiremock::Request| wire_request_contains(request, ROOT_PROMPT),
         sse(vec![
             ev_response_created("root-1"),
-            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
             ev_completed_with_tokens("root-1", /*total_tokens*/ 10),
         ]),
     )
