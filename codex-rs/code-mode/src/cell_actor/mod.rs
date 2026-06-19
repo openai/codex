@@ -63,8 +63,8 @@ impl CellActor {
             event_tx,
             PendingRuntimeMode::PauseUntilResumed,
         )?;
-        let cancellation_token = CancellationToken::new();
-        let handle = CellHandle::new(command_tx, cancellation_token.clone());
+        let cancellation_token = session_shutdown_token.child_token();
+        let handle = CellHandle::new(command_tx);
         let task = run_cell(
             host,
             CellContext {

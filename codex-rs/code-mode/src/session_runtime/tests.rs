@@ -16,10 +16,21 @@ enum FirstCloseOutcome {
     Fails,
 }
 
+#[derive(Debug, PartialEq)]
+enum NotificationEvent {
+    Started,
+    Cancelled,
+    Closed(CellId),
+}
+
 struct BlockingCloseDelegate {
     close_started_tx: mpsc::UnboundedSender<CellId>,
     close_release: Semaphore,
     fail_first_close: AtomicBool,
+}
+
+struct BlockingNotificationDelegate {
+    events_tx: mpsc::UnboundedSender<NotificationEvent>,
 }
 
 impl BlockingCloseDelegate {
@@ -36,6 +47,13 @@ impl BlockingCloseDelegate {
             }),
             close_started_rx,
         )
+    }
+}
+
+impl BlockingNotificationDelegate {
+    fn new() -> (Arc<Self>, mpsc::UnboundedReceiver<NotificationEvent>) {
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        (Arc::new(Self { events_tx }), events_rx)
     }
 }
 
@@ -71,6 +89,38 @@ impl SessionRuntimeDelegate for BlockingCloseDelegate {
             return Err("test close failure".to_string());
         }
         Ok(())
+    }
+}
+
+impl SessionRuntimeDelegate for BlockingNotificationDelegate {
+    async fn invoke_tool(
+        &self,
+        _invocation: NestedToolCall,
+        _cancellation_token: CancellationToken,
+    ) -> Result<JsonValue, String> {
+        Ok(JsonValue::Null)
+    }
+
+    async fn notify(
+        &self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        cancellation_token: CancellationToken,
+    ) -> Result<(), String> {
+        self.events_tx
+            .send(NotificationEvent::Started)
+            .map_err(|_| "test did not receive notification start".to_string())?;
+        cancellation_token.cancelled().await;
+        self.events_tx
+            .send(NotificationEvent::Cancelled)
+            .map_err(|_| "test did not receive notification cancellation".to_string())
+    }
+
+    async fn cell_closed(&self, cell_id: &CellId) -> Result<(), String> {
+        self.events_tx
+            .send(NotificationEvent::Closed(cell_id.clone()))
+            .map_err(|_| "test did not receive cell close".to_string())
     }
 }
 
@@ -320,6 +370,51 @@ async fn drop_terminates_cells_when_the_registry_is_locked() {
     );
 
     delegate.close_release.add_permits(/*n*/ 1);
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), cell_count.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(*cell_count.borrow_and_update(), 0);
+}
+
+#[tokio::test]
+async fn drop_cancels_notifications_during_natural_completion_when_registry_is_locked() {
+    let (delegate, mut events_rx) = BlockingNotificationDelegate::new();
+    let runtime = SessionRuntime::new(Arc::clone(&delegate));
+    let started = runtime
+        .execute(
+            execute_request(r#"notify("pending");"#),
+            ObserveMode::YieldAfter(Duration::from_secs(/*secs*/ 60)),
+        )
+        .await
+        .unwrap();
+    let cell_id = started.cell_id;
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 1), events_rx.recv())
+            .await
+            .unwrap(),
+        Some(NotificationEvent::Started)
+    );
+
+    let inner = Arc::clone(&runtime.inner);
+    let mut cell_count = inner.cell_count_tx.subscribe();
+    let cells = inner.cells.lock().await;
+    drop(runtime);
+    drop(cells);
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 1), events_rx.recv())
+            .await
+            .unwrap(),
+        Some(NotificationEvent::Cancelled)
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 1), events_rx.recv())
+            .await
+            .unwrap(),
+        Some(NotificationEvent::Closed(cell_id))
+    );
     tokio::time::timeout(Duration::from_secs(/*secs*/ 1), cell_count.changed())
         .await
         .unwrap()

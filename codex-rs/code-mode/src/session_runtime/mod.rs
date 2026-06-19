@@ -128,20 +128,6 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     pub async fn shutdown(&self) -> Result<(), Error> {
         let mut cell_count = self.inner.cell_count_tx.subscribe();
         self.begin_shutdown();
-        let handles = self
-            .inner
-            .cells
-            .lock()
-            .await
-            .values()
-            .filter_map(|state| match state {
-                CellState::Live(handle) => Some(handle.clone()),
-                CellState::Closing => None,
-            })
-            .collect::<Vec<_>>();
-        for handle in handles {
-            handle.shutdown();
-        }
         while *cell_count.borrow_and_update() != 0 {
             if cell_count.changed().await.is_err() {
                 break;
@@ -194,14 +180,6 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
 
     fn begin_shutdown(&self) {
         self.inner.shutdown_token.cancel();
-        // The token reaches every cell if the registry is temporarily locked.
-        if let Ok(cells) = self.inner.cells.try_lock() {
-            for state in cells.values() {
-                if let CellState::Live(handle) = state {
-                    handle.shutdown();
-                }
-            }
-        }
     }
 }
 
