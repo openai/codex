@@ -177,6 +177,13 @@ async fn run_cell<H: CellHost>(
                             let _ = response_tx.send(Ok(event));
                             break;
                         }
+                        if observer
+                            .as_ref()
+                            .is_some_and(|observer| observer.response_tx.is_closed())
+                        {
+                            observer = None;
+                            yield_timer = None;
+                        }
                         if observer.is_some() || termination.is_some() {
                             let _ = response_tx.send(Err(CellError::Busy));
                             continue;
