@@ -26,6 +26,8 @@ read_query_labels() {
 
 final_build_targets=(//codex-rs/...)
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+  bazel_lint_args+=(--skip_incompatible_explicit_targets)
+
   # Bazel's local Windows platform currently lacks a default test toolchain for
   # `rust_test`, so target the concrete Rust crate rules directly. The lint
   # aspect still walks their crate graph, which preserves incremental reuse for
