@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -128,13 +132,16 @@ impl SkillsService {
         input: &SkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> HostSkillsSnapshot {
-        let roots = self.skill_roots_for_config(input, fs).await;
-        let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
-        let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
+        let extra_roots = self.extra_roots();
+        let cache_key = config_skills_cache_key(input, &extra_roots, fs.as_ref());
         if let Some(snapshot) = self.cached_snapshot_for_config(&cache_key) {
             return snapshot;
         }
 
+        let roots = self
+            .skill_roots_for_config_with_extra_roots(input, fs, extra_roots)
+            .await;
+        let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let snapshot = HostSkillsSnapshot::new(Arc::new(
             self.build_skill_outcome(input, roots, &skill_config_rules)
                 .await,
@@ -152,12 +159,22 @@ impl SkillsService {
         input: &SkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> Vec<SkillRoot> {
+        self.skill_roots_for_config_with_extra_roots(input, fs, self.extra_roots())
+            .await
+    }
+
+    async fn skill_roots_for_config_with_extra_roots(
+        &self,
+        input: &SkillsLoadInput,
+        fs: Option<Arc<dyn ExecutorFileSystem>>,
+        extra_roots: Vec<AbsolutePathBuf>,
+    ) -> Vec<SkillRoot> {
         let mut roots = skill_roots(
             fs,
             &input.config_layer_stack,
             &input.cwd,
             input.effective_skill_roots.clone(),
-            self.extra_roots(),
+            extra_roots,
         )
         .await;
         if !input.bundled_skills_enabled {
@@ -268,10 +285,42 @@ impl SkillsService {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Skill-relevant inputs that can be compared before root discovery touches the filesystem.
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
-    roots: Vec<(AbsolutePathBuf, u8, Option<String>, Option<String>)>,
-    skill_config_rules: SkillConfigRules,
+    cwd: AbsolutePathBuf,
+    config_layers: Vec<ConfigLayerSkillsCacheKey>,
+    effective_skill_roots: Vec<PluginSkillRoot>,
+    bundled_skills_enabled: bool,
+    extra_roots: Vec<AbsolutePathBuf>,
+    file_system: Option<ExecutorFileSystemCacheKey>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ConfigLayerSkillsCacheKey {
+    source: std::mem::Discriminant<ConfigLayerSource>,
+    config_folder: Option<AbsolutePathBuf>,
+    disabled: bool,
+    skills_config: Option<String>,
+    project_root_markers: Option<String>,
+}
+
+// Snapshots retain filesystem-bound skill paths, so cache entries must distinguish instances.
+#[derive(Clone)]
+struct ExecutorFileSystemCacheKey(Arc<dyn ExecutorFileSystem>);
+
+impl PartialEq for ExecutorFileSystemCacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ExecutorFileSystemCacheKey {}
+
+impl Hash for ExecutorFileSystemCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(Arc::as_ptr(&self.0), state);
+    }
 }
 
 pub fn bundled_skills_enabled_from_stack(
@@ -297,28 +346,55 @@ pub fn bundled_skills_enabled_from_stack(
 }
 
 fn config_skills_cache_key(
-    roots: &[SkillRoot],
-    skill_config_rules: &SkillConfigRules,
+    input: &SkillsLoadInput,
+    extra_roots: &[AbsolutePathBuf],
+    fs: Option<&Arc<dyn ExecutorFileSystem>>,
 ) -> ConfigSkillsCacheKey {
     ConfigSkillsCacheKey {
-        roots: roots
-            .iter()
-            .map(|root| {
-                let scope_rank = match root.scope {
-                    SkillScope::Repo => 0,
-                    SkillScope::User => 1,
-                    SkillScope::System => 2,
-                    SkillScope::Admin => 3,
+        cwd: input.cwd.clone(),
+        config_layers: input
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .filter_map(|layer| {
+                let config_folder = layer.config_folder();
+                let skills_config = if matches!(
+                    layer.name,
+                    ConfigLayerSource::User { .. } | ConfigLayerSource::SessionFlags
+                ) {
+                    layer.config.get("skills").map(ToString::to_string)
+                } else {
+                    None
                 };
-                (
-                    root.path.clone(),
-                    scope_rank,
-                    root.plugin_id.clone(),
-                    root.plugin_namespace.clone(),
-                )
+                let project_root_markers = if !layer.is_disabled()
+                    && !matches!(layer.name, ConfigLayerSource::Project { .. })
+                {
+                    layer
+                        .config
+                        .get("project_root_markers")
+                        .map(ToString::to_string)
+                } else {
+                    None
+                };
+                (config_folder.is_some()
+                    || skills_config.is_some()
+                    || project_root_markers.is_some())
+                .then(|| ConfigLayerSkillsCacheKey {
+                    source: std::mem::discriminant(&layer.name),
+                    config_folder,
+                    disabled: layer.is_disabled(),
+                    skills_config,
+                    project_root_markers,
+                })
             })
             .collect(),
-        skill_config_rules: skill_config_rules.clone(),
+        effective_skill_roots: input.effective_skill_roots.clone(),
+        bundled_skills_enabled: input.bundled_skills_enabled,
+        extra_roots: extra_roots.to_vec(),
+        file_system: fs.cloned().map(ExecutorFileSystemCacheKey),
     }
 }
 

@@ -7,10 +7,20 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::CopyOptions;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorFileSystemFuture;
+use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemReadStream;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::RemoveOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginSkillRoot;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
@@ -18,7 +28,120 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
+
+struct CountingFileSystem {
+    delegate: Arc<dyn ExecutorFileSystem>,
+    operation_count: AtomicUsize,
+}
+
+impl CountingFileSystem {
+    fn new(delegate: Arc<dyn ExecutorFileSystem>) -> Self {
+        Self {
+            delegate,
+            operation_count: AtomicUsize::new(0),
+        }
+    }
+
+    fn operation_count(&self) -> usize {
+        self.operation_count.load(Ordering::Relaxed)
+    }
+
+    fn record_operation(&self) {
+        self.operation_count.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl ExecutorFileSystem for CountingFileSystem {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        self.record_operation();
+        self.delegate.canonicalize(path, sandbox)
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        self.record_operation();
+        self.delegate.read_file(path, sandbox)
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        self.record_operation();
+        self.delegate.read_file_stream(path, sandbox)
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.record_operation();
+        self.delegate.write_file(path, contents, sandbox)
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.record_operation();
+        self.delegate.create_directory(path, options, sandbox)
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        self.record_operation();
+        self.delegate.get_metadata(path, sandbox)
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        self.record_operation();
+        self.delegate.read_directory(path, sandbox)
+    }
+
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: RemoveOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.record_operation();
+        self.delegate.remove(path, options, sandbox)
+    }
+
+    fn copy<'a>(
+        &'a self,
+        source_path: &'a PathUri,
+        destination_path: &'a PathUri,
+        options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.record_operation();
+        self.delegate
+            .copy(source_path, destination_path, options, sandbox)
+    }
+}
 
 fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {
     let skill_dir = codex_home.path().join("skills").join(dir);
@@ -226,6 +349,62 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
         skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
     assert_eq!(outcome2.errors, outcome1.errors);
     assert_eq!(outcome2.skills, outcome1.skills);
+}
+
+#[tokio::test]
+async fn skills_for_config_cache_hit_avoids_environment_filesystem_operations() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let config_layer_stack = config_stack(&codex_home, "");
+    let skills_service = SkillsService::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+    let skills_input = SkillsLoadInput::new(
+        cwd.path().abs(),
+        Vec::new(),
+        config_layer_stack,
+        /*bundled_skills_enabled*/ true,
+    );
+    let counting_file_system = Arc::new(CountingFileSystem::new(Arc::clone(&LOCAL_FS)));
+    let file_system: Arc<dyn ExecutorFileSystem> = counting_file_system.clone();
+
+    skills_service
+        .snapshot_for_config(&skills_input, Some(Arc::clone(&file_system)))
+        .await;
+    let operations_after_cache_miss = counting_file_system.operation_count();
+    assert!(operations_after_cache_miss > 0);
+
+    skills_service
+        .snapshot_for_config(&skills_input, Some(Arc::clone(&file_system)))
+        .await;
+    assert_eq!(
+        counting_file_system.operation_count(),
+        operations_after_cache_miss
+    );
+
+    let unrelated_session_flag_input = SkillsLoadInput::new(
+        cwd.path().abs(),
+        Vec::new(),
+        config_stack_with_session_flags(&codex_home, "", "model = 'gpt-5'"),
+        /*bundled_skills_enabled*/ true,
+    );
+    skills_service
+        .snapshot_for_config(
+            &unrelated_session_flag_input,
+            Some(Arc::clone(&file_system)),
+        )
+        .await;
+    assert_eq!(
+        counting_file_system.operation_count(),
+        operations_after_cache_miss
+    );
+
+    skills_service.clear_cache();
+    skills_service
+        .snapshot_for_config(&skills_input, Some(file_system))
+        .await;
+    assert!(counting_file_system.operation_count() > operations_after_cache_miss);
 }
 
 #[tokio::test]
