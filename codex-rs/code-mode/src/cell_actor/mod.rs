@@ -104,11 +104,6 @@ struct Termination {
     response_tx: Option<oneshot::Sender<Result<CellEvent, CellError>>>,
 }
 
-enum CommandEvent {
-    Received(Option<CellCommand>),
-    SessionShutdown,
-}
-
 async fn run_cell<H: CellHost>(
     host: Arc<H>,
     context: CellContext,
@@ -140,31 +135,25 @@ async fn run_cell<H: CellHost>(
             .is_some_and(|yield_timer| yield_timer.deadline() <= tokio::time::Instant::now());
         tokio::select! {
             biased;
-            command_event = async {
+            command_outcome = async {
                 tokio::select! {
                     biased;
                     _ = session_shutdown_token.cancelled(), if command_rx.is_some() => {
-                        CommandEvent::SessionShutdown
+                        drop(command_rx.take());
+                        None
                     }
                     command = async {
                         match command_rx.as_mut() {
                             Some(command_rx) => command_rx.recv().await,
                             None => std::future::pending::<Option<CellCommand>>().await,
                         }
-                    } => {
-                        CommandEvent::Received(command)
-                    }
+                    } => Some(command),
                 }
             } => {
-                let maybe_command = match command_event {
-                    CommandEvent::Received(command) => command,
-                    CommandEvent::SessionShutdown => {
-                        drop(command_rx.take());
-                        if termination.is_some() {
-                            continue;
-                        }
-                        Some(CellCommand::Terminate { response_tx: None })
-                    }
+                let maybe_command = match command_outcome {
+                    Some(command) => command,
+                    None if termination.is_some() => continue,
+                    None => Some(CellCommand::Terminate { response_tx: None }),
                 };
                 let Some(command) = maybe_command else {
                     if completed_event.is_some() {

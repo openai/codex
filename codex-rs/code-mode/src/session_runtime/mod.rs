@@ -168,7 +168,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             stored_values,
             host,
             initial_observe_mode,
-            self.inner.shutdown_token.child_token(),
+            self.inner.shutdown_token.clone(),
         )
         .map_err(Error::Runtime)?;
         cells.insert(cell_id.clone(), CellState::Live(handle));
