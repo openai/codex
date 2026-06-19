@@ -1,6 +1,0 @@
-interface:
-  display_name: "Image Gen"
-  short_description: "Generate or edit images for websites, games, and more"
-  icon_small: "./assets/imagegen-small.svg"
-  icon_large: "./assets/imagegen.png"
-  default_prompt: "Use $imagegen to make or edit an image for this project."
