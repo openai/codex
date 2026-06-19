@@ -159,9 +159,8 @@ use core_test_support::wait_for_event;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Histogram;
 use opentelemetry_sdk::metrics::data::Metric;
-use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use std::path::Path;
 use std::time::Duration;
@@ -255,9 +254,9 @@ fn test_session_telemetry_without_metadata() -> SessionTelemetry {
 }
 
 fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
-    for scope_metrics in resource_metrics.scope_metrics() {
-        for metric in scope_metrics.metrics() {
-            if metric.name() == name {
+    for scope_metrics in &resource_metrics.scope_metrics {
+        for metric in &scope_metrics.metrics {
+            if metric.name == name {
                 return metric;
             }
         }
@@ -267,17 +266,13 @@ fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Met
 
 fn histogram_sum(resource_metrics: &ResourceMetrics, name: &str) -> u64 {
     let metric = find_metric(resource_metrics, name);
-    match metric.data() {
-        AggregatedMetrics::F64(data) => match data {
-            MetricData::Histogram(histogram) => {
-                let points: Vec<_> = histogram.data_points().collect();
-                assert_eq!(points.len(), 1);
-                points[0].sum().round() as u64
-            }
-            _ => panic!("unexpected histogram aggregation"),
-        },
-        _ => panic!("unexpected metric data type"),
-    }
+    let histogram = metric
+        .data
+        .as_any()
+        .downcast_ref::<Histogram<f64>>()
+        .expect("metric should contain an f64 histogram");
+    assert_eq!(histogram.data_points.len(), 1);
+    histogram.data_points[0].sum.round() as u64
 }
 
 fn skill_message(text: &str) -> ResponseItem {

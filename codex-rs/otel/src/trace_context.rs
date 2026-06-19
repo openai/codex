@@ -85,7 +85,7 @@ pub fn set_parent_from_w3c_trace_context(span: &Span, trace: &W3cTraceContext) -
 }
 
 pub fn set_parent_from_context(span: &Span, context: Context) {
-    let _ = span.set_parent(context);
+    span.set_parent(context);
 }
 
 pub fn traceparent_context_from_env() -> Option<Context> {

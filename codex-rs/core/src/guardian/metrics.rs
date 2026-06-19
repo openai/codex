@@ -241,10 +241,10 @@ mod tests {
     use codex_protocol::protocol::SessionSource;
     use opentelemetry::KeyValue;
     use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-    use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+    use opentelemetry_sdk::metrics::data::Histogram;
     use opentelemetry_sdk::metrics::data::Metric;
-    use opentelemetry_sdk::metrics::data::MetricData;
     use opentelemetry_sdk::metrics::data::ResourceMetrics;
+    use opentelemetry_sdk::metrics::data::Sum;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
 
@@ -271,9 +271,9 @@ mod tests {
     }
 
     fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
-        for scope_metrics in resource_metrics.scope_metrics() {
-            for metric in scope_metrics.metrics() {
-                if metric.name() == name {
+        for scope_metrics in &resource_metrics.scope_metrics {
+            for metric in &scope_metrics.metrics {
+                if metric.name == name {
                     return metric;
                 }
             }
@@ -294,41 +294,37 @@ mod tests {
         name: &str,
     ) -> (BTreeMap<String, String>, u64) {
         let metric = find_metric(resource_metrics, name);
-        match metric.data() {
-            AggregatedMetrics::U64(data) => match data {
-                MetricData::Sum(sum) => {
-                    let points: Vec<_> = sum.data_points().collect();
-                    assert_eq!(points.len(), 1);
-                    let point = points[0];
-                    (attributes_to_map(point.attributes()), point.value())
-                }
-                _ => panic!("unexpected counter aggregation"),
-            },
-            _ => panic!("unexpected counter data type"),
-        }
+        let sum = metric
+            .data
+            .as_any()
+            .downcast_ref::<Sum<u64>>()
+            .expect("metric should contain a u64 sum");
+        assert_eq!(sum.data_points.len(), 1);
+        let point = &sum.data_points[0];
+        (attributes_to_map(point.attributes.iter()), point.value)
     }
 
     fn histogram_sums(resource_metrics: &ResourceMetrics, name: &str) -> BTreeMap<String, u64> {
         let metric = find_metric(resource_metrics, name);
-        match metric.data() {
-            AggregatedMetrics::F64(data) => match data {
-                MetricData::Histogram(histogram) => histogram
-                    .data_points()
-                    .map(|point| {
-                        let attrs = attributes_to_map(point.attributes());
-                        (
-                            attrs
-                                .get("token_type")
-                                .cloned()
-                                .unwrap_or_else(|| "sample".to_string()),
-                            point.sum() as u64,
-                        )
-                    })
-                    .collect(),
-                _ => panic!("unexpected histogram aggregation"),
-            },
-            _ => panic!("unexpected histogram data type"),
-        }
+        let histogram = metric
+            .data
+            .as_any()
+            .downcast_ref::<Histogram<f64>>()
+            .expect("metric should contain an f64 histogram");
+        histogram
+            .data_points
+            .iter()
+            .map(|point| {
+                let attrs = attributes_to_map(point.attributes.iter());
+                (
+                    attrs
+                        .get("token_type")
+                        .cloned()
+                        .unwrap_or_else(|| "sample".to_string()),
+                    point.sum as u64,
+                )
+            })
+            .collect()
     }
 
     #[test]

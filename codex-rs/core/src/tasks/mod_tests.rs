@@ -11,10 +11,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::Metric;
-use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::data::Sum;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -41,9 +40,9 @@ fn test_session_telemetry() -> SessionTelemetry {
 }
 
 fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
-    for scope_metrics in resource_metrics.scope_metrics() {
-        for metric in scope_metrics.metrics() {
-            if metric.name() == name {
+    for scope_metrics in &resource_metrics.scope_metrics {
+        for metric in &scope_metrics.metrics {
+            if metric.name == name {
                 return metric;
             }
         }
@@ -61,18 +60,14 @@ fn attributes_to_map<'a>(
 
 fn metric_point(resource_metrics: &ResourceMetrics, name: &str) -> (BTreeMap<String, String>, u64) {
     let metric = find_metric(resource_metrics, name);
-    match metric.data() {
-        AggregatedMetrics::U64(data) => match data {
-            MetricData::Sum(sum) => {
-                let points: Vec<_> = sum.data_points().collect();
-                assert_eq!(points.len(), 1);
-                let point = points[0];
-                (attributes_to_map(point.attributes()), point.value())
-            }
-            _ => panic!("unexpected counter aggregation"),
-        },
-        _ => panic!("unexpected counter data type"),
-    }
+    let sum = metric
+        .data
+        .as_any()
+        .downcast_ref::<Sum<u64>>()
+        .expect("metric should contain a u64 sum");
+    assert_eq!(sum.data_points.len(), 1);
+    let point = &sum.data_points[0];
+    (attributes_to_map(point.attributes.iter()), point.value)
 }
 
 #[test]
