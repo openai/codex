@@ -58,6 +58,9 @@ use codex_keyring_store::KeyringStore;
 use codex_utils_home_dir::find_codex_home;
 
 pub(crate) use self::persistor::OAuthPersistor;
+#[cfg(test)]
+use self::persistor::install_tokens_in_manager;
+use self::refresh_lock::RefreshCredentialLock;
 pub(crate) use self::resolved_store::LoadedOAuthTokens;
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 #[cfg(test)]
@@ -244,6 +247,43 @@ pub fn save_oauth_tokens(
     )
 }
 
+pub(crate) async fn save_oauth_tokens_locked(
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<()> {
+    let keyring_store = DefaultKeyringStore;
+    save_oauth_tokens_locked_with_keyring_store(
+        &keyring_store,
+        server_name,
+        tokens,
+        store_mode,
+        keyring_backend_kind,
+    )
+    .await
+}
+
+async fn save_oauth_tokens_locked_with_keyring_store<K: KeyringStore + Clone + 'static>(
+    keyring_store: &K,
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<()> {
+    // Login persistence shares the refresh transaction lock so a completed login always becomes
+    // authoritative: it either lands before refresh's reread or waits and overwrites the refresh
+    // result afterward.
+    let _lock = RefreshCredentialLock::acquire_for_server(server_name, &tokens.url).await?;
+    save_oauth_tokens_with_keyring_store(
+        keyring_store,
+        server_name,
+        tokens,
+        store_mode,
+        keyring_backend_kind,
+    )
+}
+
 fn save_oauth_tokens_with_keyring_store<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     server_name: &str,
@@ -373,6 +413,42 @@ pub fn delete_oauth_tokens(
     let keyring_store = DefaultKeyringStore;
     delete_oauth_tokens_from_keyring_and_file(
         &keyring_store,
+        store_mode,
+        keyring_backend_kind,
+        server_name,
+        url,
+    )
+}
+
+pub async fn delete_oauth_tokens_locked(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<bool> {
+    let keyring_store = DefaultKeyringStore;
+    delete_oauth_tokens_locked_with_keyring_store(
+        &keyring_store,
+        store_mode,
+        keyring_backend_kind,
+        server_name,
+        url,
+    )
+    .await
+}
+
+async fn delete_oauth_tokens_locked_with_keyring_store<K: KeyringStore + Clone + 'static>(
+    keyring_store: &K,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    server_name: &str,
+    url: &str,
+) -> Result<bool> {
+    // Logout shares the refresh transaction lock so refresh cannot resurrect credentials after a
+    // completed delete: it either observes the deletion or finishes before logout removes it.
+    let _lock = RefreshCredentialLock::acquire_for_server(server_name, url).await?;
+    delete_oauth_tokens_from_keyring_and_file(
+        keyring_store,
         store_mode,
         keyring_backend_kind,
         server_name,
@@ -1265,6 +1341,232 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_login_prevents_delayed_post_operation_overwrite() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        let store = MockKeyringStore::default();
+        let (initial_tokens, manager, persistor) =
+            persistor_after_rmcp_refresh(&store, &server).await?;
+
+        let login_tokens = tokens_with_credentials(
+            initial_tokens.clone(),
+            "login-access-token",
+            "login-refresh-token",
+        );
+        super::save_oauth_tokens_locked_with_keyring_store(
+            &store,
+            &login_tokens.server_name,
+            &login_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )
+        .await?;
+
+        persistor
+            .persist_if_needed_locked_with_keyring_store(&store)
+            .await?;
+
+        let stored = super::load_oauth_tokens_with_source_and_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens.url,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?
+        .expect("login tokens should remain persisted");
+        assert_eq!(access_token(&stored.tokens), "login-access-token");
+        assert_eq!(
+            refresh_token(&stored.tokens),
+            Some("login-refresh-token".to_string())
+        );
+        let manager_tokens = tokens_from_manager(&manager).await?;
+        assert_eq!(access_token(&manager_tokens), "login-access-token");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn locked_login_save_after_refresh_still_wins() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        mount_oauth_metadata(&server).await;
+        let refresh_started = mount_refresh_response_with_signal(
+            &server,
+            "refresh-token",
+            "refreshed-before-login",
+            "rotated-before-login",
+            Duration::from_millis(200),
+        )
+        .await;
+
+        let store = MockKeyringStore::default();
+        let initial_tokens = expired_sample_tokens(&format!("{}/mcp", server.uri()));
+        super::save_oauth_tokens_with_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+
+        let manager = authorization_manager_for(&initial_tokens).await?;
+        let persistor = OAuthPersistor::new(
+            initial_tokens.server_name.clone(),
+            initial_tokens.url.clone(),
+            manager,
+            ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
+            Some(initial_tokens.clone()),
+        );
+        let refresh_task = tokio::spawn({
+            let persistor = persistor.clone();
+            let store = store.clone();
+            async move { persistor.refresh_if_needed_with_keyring_store(&store).await }
+        });
+
+        wait_for_signal(refresh_started).await?;
+
+        let mut login_tokens = sample_tokens();
+        login_tokens.url.clone_from(&initial_tokens.url);
+        login_tokens
+            .token_response
+            .0
+            .set_access_token(AccessToken::new("login-after-refresh-access".to_string()));
+        login_tokens
+            .token_response
+            .0
+            .set_refresh_token(Some(RefreshToken::new(
+                "login-after-refresh-token".to_string(),
+            )));
+        super::save_oauth_tokens_locked_with_keyring_store(
+            &store,
+            &login_tokens.server_name,
+            &login_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )
+        .await?;
+        refresh_task.await??;
+
+        server.verify().await;
+        let stored = super::load_oauth_tokens_with_source_and_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens.url,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?
+        .expect("login tokens should remain persisted");
+        assert_eq!(access_token(&stored.tokens), "login-after-refresh-access");
+        assert_eq!(
+            refresh_token(&stored.tokens),
+            Some("login-after-refresh-token".to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "AuthorizationManager async access must be serialized through its mutex"
+    )]
+    async fn completed_logout_prevents_delayed_post_operation_resurrection() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        let store = MockKeyringStore::default();
+        let (initial_tokens, manager, persistor) =
+            persistor_after_rmcp_refresh(&store, &server).await?;
+
+        let removed = super::delete_oauth_tokens_locked_with_keyring_store(
+            &store,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+            &initial_tokens.server_name,
+            &initial_tokens.url,
+        )
+        .await?;
+        assert!(removed);
+
+        persistor
+            .persist_if_needed_locked_with_keyring_store(&store)
+            .await?;
+
+        let stored = super::load_oauth_tokens_with_source_and_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens.url,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+        assert!(stored.is_none());
+        let guard = manager.lock().await;
+        let (_, manager_tokens) = guard.get_credentials().await?;
+        assert!(manager_tokens.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn locked_logout_after_refresh_still_deletes() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        mount_oauth_metadata(&server).await;
+        let refresh_started = mount_refresh_response_with_signal(
+            &server,
+            "refresh-token",
+            "refreshed-before-logout",
+            "rotated-before-logout",
+            Duration::from_millis(200),
+        )
+        .await;
+
+        let store = MockKeyringStore::default();
+        let initial_tokens = expired_sample_tokens(&format!("{}/mcp", server.uri()));
+        super::save_oauth_tokens_with_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+
+        let manager = authorization_manager_for(&initial_tokens).await?;
+        let persistor = OAuthPersistor::new(
+            initial_tokens.server_name.clone(),
+            initial_tokens.url.clone(),
+            manager,
+            ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
+            Some(initial_tokens.clone()),
+        );
+        let refresh_task = tokio::spawn({
+            let persistor = persistor.clone();
+            let store = store.clone();
+            async move { persistor.refresh_if_needed_with_keyring_store(&store).await }
+        });
+
+        wait_for_signal(refresh_started).await?;
+
+        let removed = super::delete_oauth_tokens_locked_with_keyring_store(
+            &store,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+            &initial_tokens.server_name,
+            &initial_tokens.url,
+        )
+        .await?;
+        refresh_task.await??;
+
+        server.verify().await;
+        assert!(removed);
+        let stored = super::load_oauth_tokens_with_source_and_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens.url,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+        assert!(stored.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn provider_refresh_timeout_permits_a_later_serialized_retry() -> Result<()> {
         let _env = TempCodexHome::new();
         let server = MockServer::start().await;
@@ -1694,6 +1996,57 @@ mod tests {
             actual_response.expires_in().is_some(),
             expected_response.expires_in().is_some()
         );
+    }
+
+    async fn persistor_after_rmcp_refresh(
+        store: &MockKeyringStore,
+        server: &MockServer,
+    ) -> Result<(
+        StoredOAuthTokens,
+        Arc<TokioMutex<AuthorizationManager>>,
+        OAuthPersistor,
+    )> {
+        mount_oauth_metadata(server).await;
+        let mut initial_tokens = sample_tokens();
+        initial_tokens.url = format!("{}/mcp", server.uri());
+        super::save_oauth_tokens_with_keyring_store(
+            store,
+            &initial_tokens.server_name,
+            &initial_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+        let manager = authorization_manager_for(&initial_tokens).await?;
+        let persistor = OAuthPersistor::new(
+            initial_tokens.server_name.clone(),
+            initial_tokens.url.clone(),
+            manager.clone(),
+            ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
+            Some(initial_tokens.clone()),
+        );
+        let rmcp_tokens = tokens_with_credentials(
+            initial_tokens.clone(),
+            "rmcp-access-token",
+            "rmcp-refresh-token",
+        );
+        install_tokens_in_manager(&manager, &rmcp_tokens).await?;
+        Ok((initial_tokens, manager, persistor))
+    }
+
+    fn tokens_with_credentials(
+        mut tokens: StoredOAuthTokens,
+        access_token: &str,
+        refresh_token: &str,
+    ) -> StoredOAuthTokens {
+        tokens
+            .token_response
+            .0
+            .set_access_token(AccessToken::new(access_token.to_string()));
+        tokens
+            .token_response
+            .0
+            .set_refresh_token(Some(RefreshToken::new(refresh_token.to_string())));
+        tokens
     }
 
     async fn authorization_manager_for(

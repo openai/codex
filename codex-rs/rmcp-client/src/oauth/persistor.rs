@@ -15,6 +15,7 @@ use oauth2::TokenResponse;
 use rmcp::transport::auth::AuthorizationManager;
 use rmcp::transport::auth::CredentialStore as _;
 use rmcp::transport::auth::InMemoryCredentialStore;
+use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::StoredCredentials;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
@@ -73,8 +74,103 @@ impl OAuthPersistor {
     /// Persists the latest stored credentials if they have changed.
     /// Deletes the credentials if they are no longer present.
     pub(crate) async fn persist_if_needed(&self) -> Result<()> {
-        self.persist_if_needed_with_keyring_store(&DefaultKeyringStore)
+        self.persist_if_needed_locked_with_keyring_store(&DefaultKeyringStore)
             .await
+    }
+
+    pub(super) async fn persist_if_needed_locked_with_keyring_store<
+        K: KeyringStore + Clone + 'static,
+    >(
+        &self,
+        keyring_store: &K,
+    ) -> Result<()> {
+        let snapshot = {
+            let last_credentials = self.inner.last_credentials.lock().await;
+            last_credentials.clone()
+        };
+        let (client_id, current_credentials) = self.manager_credentials().await?;
+        let manager_changed = match (&snapshot, current_credentials.as_ref()) {
+            (Some(previous), Some(current)) => {
+                previous.client_id != client_id
+                    || previous.token_response != WrappedOAuthTokenResponse(current.clone())
+            }
+            (None, None) => false,
+            (Some(_), None) | (None, Some(_)) => true,
+        };
+        if !manager_changed {
+            return Ok(());
+        }
+
+        let _lock =
+            RefreshCredentialLock::acquire_for_server(&self.inner.server_name, &self.inner.url)
+                .await?;
+        let latest = self.load_resolved_credentials(keyring_store)?;
+
+        let latest_matches_snapshot = match (&latest, &snapshot) {
+            (Some(latest), Some(snapshot)) => {
+                // `expires_in` is reconstructed from the durable `expires_at` timestamp on every
+                // load, so elapsed time alone must not look like a concurrent credential change.
+                let mut comparable_latest = latest.clone();
+                comparable_latest
+                    .token_response
+                    .0
+                    .set_expires_in(snapshot.token_response.0.expires_in().as_ref());
+                comparable_latest == *snapshot
+            }
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+
+        if !latest_matches_snapshot {
+            // A completed login or logout is authoritative over tokens refreshed inside an RMCP
+            // operation. Adopt that state instead of allowing delayed post-operation persistence
+            // to overwrite the login or resurrect the logout.
+            match latest {
+                Some(latest) => self.adopt_credentials(latest).await?,
+                None => {
+                    self.clear_manager_credentials().await;
+                    let mut last_credentials = self.inner.last_credentials.lock().await;
+                    *last_credentials = None;
+                }
+            }
+            return Ok(());
+        }
+
+        self.persist_if_needed_with_keyring_store(keyring_store)
+            .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "AuthorizationManager async access must be serialized through its mutex"
+    )]
+    async fn manager_credentials(&self) -> Result<(String, Option<OAuthTokenResponse>)> {
+        let manager = self.inner.authorization_manager.clone();
+        let guard = manager.lock().await;
+        guard.get_credentials().await.map_err(Into::into)
+    }
+
+    fn load_resolved_credentials<K: KeyringStore + Clone + 'static>(
+        &self,
+        keyring_store: &K,
+    ) -> Result<Option<StoredOAuthTokens>> {
+        match self.inner.credential_store {
+            ResolvedOAuthCredentialStore::File => {
+                load_oauth_tokens_from_file(&self.inner.server_name, &self.inner.url)
+                    .context("failed to reread OAuth tokens from resolved file storage")
+            }
+            ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind) => {
+                load_oauth_tokens_from_keyring(
+                    keyring_store,
+                    keyring_backend_kind,
+                    &self.inner.server_name,
+                    &self.inner.url,
+                )
+                .context(
+                    "failed to reread OAuth tokens from resolved keyring storage; refusing file fallback",
+                )
+            }
+        }
     }
 
     #[expect(
@@ -241,8 +337,9 @@ impl OAuthPersistor {
         let transaction_started_at = Instant::now();
         let lock_started_at = Instant::now();
         debug!("waiting for the MCP OAuth credential transaction lock");
-        let key = compute_store_key(&self.inner.server_name, &self.inner.url)?;
-        let _lock = RefreshCredentialLock::acquire(&key).await?;
+        let _lock =
+            RefreshCredentialLock::acquire_for_server(&self.inner.server_name, &self.inner.url)
+                .await?;
         debug!(
             lock_wait_ms = lock_started_at.elapsed().as_millis(),
             "acquired the MCP OAuth credential transaction lock"
@@ -251,23 +348,7 @@ impl OAuthPersistor {
         // here could replay an older rotating refresh token from the other store. We assume store
         // availability is stable for this client lifecycle and surface violations of that
         // assumption instead of switching stores.
-        let latest = match self.inner.credential_store {
-            ResolvedOAuthCredentialStore::File => {
-                load_oauth_tokens_from_file(&self.inner.server_name, &self.inner.url)
-                    .context("failed to reread OAuth tokens from resolved file storage")?
-            }
-            ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind) => {
-                load_oauth_tokens_from_keyring(
-                    keyring_store,
-                    keyring_backend_kind,
-                    &self.inner.server_name,
-                    &self.inner.url,
-                )
-                .context(
-                    "failed to reread OAuth tokens from resolved keyring storage; refusing file fallback",
-                )?
-            }
-        };
+        let latest = self.load_resolved_credentials(keyring_store)?;
 
         // The pre-lock snapshot only decides whether a refresh transaction might be needed. Once
         // the lock is held, this reread is authoritative: adopt it before deciding whether to
@@ -363,7 +444,7 @@ impl OAuthPersistor {
     clippy::await_holding_invalid_type,
     reason = "AuthorizationManager async access must be serialized through its mutex"
 )]
-async fn install_tokens_in_manager(
+pub(super) async fn install_tokens_in_manager(
     authorization_manager: &Arc<Mutex<AuthorizationManager>>,
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
