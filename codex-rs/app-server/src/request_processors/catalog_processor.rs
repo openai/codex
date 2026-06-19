@@ -1,6 +1,6 @@
-use crate::permission_presets::permission_presets;
-use codex_core::config::permission_profile_catalog;
 use super::*;
+use crate::permission_presets::permission_preset_catalog;
+use codex_core::config::permission_profile_catalog;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -495,15 +495,21 @@ impl CatalogRequestProcessor {
         params: PermissionPresetListParams,
     ) -> Result<PermissionPresetListResponse, JSONRPCErrorError> {
         let PermissionPresetListParams { cursor, limit, cwd } = params;
-        let presets = permission_presets(&self.config_manager, cwd.map(PathBuf::from))
+        let catalog = permission_preset_catalog(&self.config_manager, cwd.map(PathBuf::from))
             .await
             .map_err(|err| {
                 internal_error(format!("failed to resolve permission presets: {err}"))
             })?;
+        let presets = catalog.presets().cloned().collect();
         let (data, next_cursor) =
             paginate_catalog_items(presets, cursor, limit, "permission presets")?;
 
-        Ok(PermissionPresetListResponse { data, next_cursor })
+        Ok(PermissionPresetListResponse {
+            data,
+            next_cursor,
+            default_preset_id: catalog.default_preset_id,
+            default_source: catalog.default_source,
+        })
     }
 
     async fn mock_experimental_method_inner(

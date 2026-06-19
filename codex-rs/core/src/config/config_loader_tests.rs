@@ -1,7 +1,6 @@
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConstraintError;
-use crate::config::PermissionProfileCatalogEntry;
 use crate::config::permission_profile_catalog;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
@@ -1770,35 +1769,24 @@ extends = ":workspace"
         .build()
         .await?;
 
+    let catalog = permission_profile_catalog(&config.config_layer_stack)?;
     assert_eq!(
-        permission_profile_catalog(&config.config_layer_stack)?,
+        catalog
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.allowed))
+            .collect::<Vec<_>>(),
         vec![
-            PermissionProfileCatalogEntry {
-                id: ":read-only".to_string(),
-                description: None,
-                allowed: false,
-            },
-            PermissionProfileCatalogEntry {
-                id: ":workspace".to_string(),
-                description: None,
-                allowed: false,
-            },
-            PermissionProfileCatalogEntry {
-                id: ":danger-full-access".to_string(),
-                description: None,
-                allowed: false,
-            },
-            PermissionProfileCatalogEntry {
-                id: "managed-disabled".to_string(),
-                description: None,
-                allowed: false,
-            },
-            PermissionProfileCatalogEntry {
-                id: "managed-standard".to_string(),
-                description: None,
-                allowed: true,
-            },
+            (":read-only", false),
+            (":workspace", false),
+            (":danger-full-access", false),
+            ("managed-disabled", false),
+            ("managed-standard", true),
         ]
+    );
+    assert!(
+        catalog
+            .iter()
+            .all(|entry| entry.permission_profile.is_some())
     );
     Ok(())
 }

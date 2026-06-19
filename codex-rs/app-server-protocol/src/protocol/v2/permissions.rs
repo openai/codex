@@ -409,13 +409,51 @@ pub struct PermissionPresetListParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub enum PermissionPresetKind {
+    ReadOnly,
+    Auto,
+    Granular,
+    GuardianApprovals,
+    FullAccess,
+    PermissionProfile,
+    LegacyConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum PermissionPresetUnavailabilityReason {
+    PermissionProfile {
+        #[serde(rename = "permissionProfileId")]
+        #[ts(rename = "permissionProfileId")]
+        permission_profile_id: String,
+    },
+    ApprovalPolicy,
+    ApprovalsReviewer,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum PermissionPresetDefaultSource {
+    Implicit,
+    Config,
+    Requirements,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct PermissionPreset {
     pub id: String,
-    pub permission_profile_id: String,
+    pub kind: PermissionPresetKind,
+    pub permission_profile_id: Option<String>,
     pub description: Option<String>,
+    pub sandbox_policy: SandboxPolicy,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
-    pub is_default: bool,
+    pub allowed: bool,
+    pub unavailability_reason: Option<PermissionPresetUnavailabilityReason>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -424,6 +462,8 @@ pub struct PermissionPreset {
 pub struct PermissionPresetListResponse {
     pub data: Vec<PermissionPreset>,
     pub next_cursor: Option<String>,
+    pub default_preset_id: String,
+    pub default_source: PermissionPresetDefaultSource,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

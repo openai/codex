@@ -84,6 +84,11 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<String>,
+    /// Permission preset to apply. Cannot be combined with raw permission,
+    /// sandbox, approval-policy, or reviewer overrides.
+    #[experimental("thread/start.permissionPresetId")]
+    #[ts(optional = nullable)]
+    pub permission_preset_id: Option<String>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -185,6 +190,9 @@ pub struct ThreadStartResponse {
     #[experimental("thread/start.activePermissionProfile")]
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
+    #[experimental("thread/start.activePermissionPresetId")]
+    #[serde(default)]
+    pub active_permission_preset_id: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Current multi-agent mode for this thread.
     #[experimental("thread/start.multiAgentMode")]
@@ -224,6 +232,11 @@ pub struct ThreadSettingsUpdateParams {
     #[experimental("thread/settings/update.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<String>,
+    /// Permission preset to apply. Cannot be combined with raw permission,
+    /// sandbox, approval-policy, or reviewer overrides.
+    #[experimental("thread/settings/update.permissionPresetId")]
+    #[ts(optional = nullable)]
+    pub permission_preset_id: Option<String>,
     /// Override the model for subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -273,6 +286,9 @@ pub struct ThreadSettings {
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
     pub active_permission_profile: Option<ActivePermissionProfile>,
+    #[experimental("thread/settings.activePermissionPresetId")]
+    #[serde(default)]
+    pub active_permission_preset_id: Option<String>,
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<String>,
@@ -368,6 +384,11 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<String>,
+    /// Permission preset to apply. Cannot be combined with raw permission,
+    /// sandbox, approval-policy, or reviewer overrides.
+    #[experimental("thread/resume.permissionPresetId")]
+    #[ts(optional = nullable)]
+    pub permission_preset_id: Option<String>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -418,6 +439,9 @@ pub struct ThreadResumeResponse {
     #[experimental("thread/resume.activePermissionProfile")]
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
+    #[experimental("thread/resume.activePermissionPresetId")]
+    #[serde(default)]
+    pub active_permission_preset_id: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Current multi-agent mode for this thread.
     #[experimental("thread/resume.multiAgentMode")]
@@ -529,6 +553,11 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<String>,
+    /// Permission preset to apply. Cannot be combined with raw permission,
+    /// sandbox, approval-policy, or reviewer overrides.
+    #[experimental("thread/fork.permissionPresetId")]
+    #[ts(optional = nullable)]
+    pub permission_preset_id: Option<String>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -577,6 +606,9 @@ pub struct ThreadForkResponse {
     #[experimental("thread/fork.activePermissionProfile")]
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
+    #[experimental("thread/fork.activePermissionPresetId")]
+    #[serde(default)]
+    pub active_permission_preset_id: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Current multi-agent mode for this thread.
     #[experimental("thread/fork.multiAgentMode")]

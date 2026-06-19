@@ -1,5 +1,6 @@
 use super::*;
 use crate::error_code::method_not_found;
+use crate::permission_presets::permission_preset_catalog;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
@@ -115,6 +116,18 @@ fn collect_resume_override_mismatches(
             config_snapshot.active_permission_profile
         ));
     }
+    if let Some(requested_permission_preset_id) = request.permission_preset_id.as_deref()
+        && config_snapshot.active_permission_preset_id.as_deref()
+            != Some(requested_permission_preset_id)
+    {
+        mismatch_details.push(format!(
+            "permission_preset_id requested={requested_permission_preset_id} active={}",
+            config_snapshot
+                .active_permission_preset_id
+                .as_deref()
+                .unwrap_or("<none>")
+        ));
+    }
     if let Some(requested_personality) = request.personality.as_ref()
         && config_snapshot.personality.as_ref() != Some(requested_personality)
     {
@@ -158,6 +171,15 @@ fn merge_persisted_resume_metadata(
             serde_json::Value::String(reasoning_effort.to_string()),
         );
     }
+}
+
+fn session_configuration_from_rollout_items(
+    items: &[RolloutItem],
+) -> Option<SessionConfiguredEvent> {
+    items.iter().rev().find_map(|item| match item {
+        RolloutItem::EventMsg(EventMsg::SessionConfigured(event)) => Some(event.clone()),
+        _ => None,
+    })
 }
 
 fn normalize_thread_list_cwd_filters(
@@ -894,6 +916,7 @@ impl ThreadRequestProcessor {
             approvals_reviewer,
             sandbox,
             permissions,
+            permission_preset_id,
             config,
             service_name,
             base_instructions,
@@ -909,6 +932,16 @@ impl ThreadRequestProcessor {
             thread_source,
             environments,
         } = params;
+        if permission_preset_id.is_some()
+            && (approval_policy.is_some()
+                || approvals_reviewer.is_some()
+                || sandbox.is_some()
+                || permissions.is_some())
+        {
+            return Err(invalid_request(
+                "`permissionPresetId` cannot be combined with raw permission overrides",
+            ));
+        }
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",
@@ -917,6 +950,11 @@ impl ThreadRequestProcessor {
         let environment_selections =
             resolve_turn_environment_selections(self.thread_manager.as_ref(), environments)?;
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
+        let preset_cwd = cwd.as_ref().map(PathBuf::from);
+        let has_raw_permission_overrides = approval_policy.is_some()
+            || approvals_reviewer.is_some()
+            || sandbox.is_some()
+            || permissions.is_some();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -931,6 +969,14 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        self.apply_permission_preset(
+            permission_preset_id,
+            preset_cwd,
+            has_raw_permission_overrides,
+            /*inherited_session*/ None,
+            &mut typesafe_overrides,
+        )
+        .await?;
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
@@ -1261,6 +1307,7 @@ impl ThreadRequestProcessor {
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),
             sandbox,
             active_permission_profile,
+            active_permission_preset_id: config_snapshot.active_permission_preset_id,
             reasoning_effort: config_snapshot.reasoning_effort,
             multi_agent_mode: config_snapshot.multi_agent_mode,
         };
@@ -1325,6 +1372,47 @@ impl ThreadRequestProcessor {
             personality,
             ..Default::default()
         }
+    }
+
+    async fn apply_permission_preset(
+        &self,
+        permission_preset_id: Option<String>,
+        cwd: Option<PathBuf>,
+        has_raw_permission_overrides: bool,
+        inherited_session: Option<&SessionConfiguredEvent>,
+        overrides: &mut ConfigOverrides,
+    ) -> Result<(), JSONRPCErrorError> {
+        if permission_preset_id.is_none() && has_raw_permission_overrides {
+            return Ok(());
+        }
+        let catalog = permission_preset_catalog(&self.config_manager, cwd)
+            .await
+            .map_err(|err| config_load_error(&err))?;
+        match permission_preset_id {
+            Some(permission_preset_id) => catalog
+                .selection(&permission_preset_id)
+                .map_err(|err| invalid_request(err.to_string()))?
+                .apply_to(overrides),
+            None => {
+                if let Some(selection) = inherited_session.and_then(|session| {
+                    catalog.selection_for_session(
+                        session.active_permission_preset_id.as_deref(),
+                        session
+                            .active_permission_profile
+                            .as_ref()
+                            .map(|profile| profile.id.as_str()),
+                        session.approval_policy,
+                        session.approvals_reviewer,
+                        &session.permission_profile,
+                    )
+                }) {
+                    selection.apply_to(overrides);
+                } else {
+                    overrides.active_permission_preset_id = Some(catalog.default_preset_id);
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn thread_archive_inner(
@@ -2541,12 +2629,27 @@ impl ThreadRequestProcessor {
                 .await;
             return Ok(());
         }
-
         if params.sandbox.is_some() && params.permissions.is_some() {
             self.outgoing
                 .send_error(
                     request_id,
                     invalid_request("`permissions` cannot be combined with `sandbox`"),
+                )
+                .await;
+            return Ok(());
+        }
+        if params.permission_preset_id.is_some()
+            && (params.approval_policy.is_some()
+                || params.approvals_reviewer.is_some()
+                || params.sandbox.is_some()
+                || params.permissions.is_some())
+        {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    invalid_request(
+                        "`permissionPresetId` cannot be combined with raw permission overrides",
+                    ),
                 )
                 .await;
             return Ok(());
@@ -2591,6 +2694,7 @@ impl ThreadRequestProcessor {
             approvals_reviewer,
             sandbox,
             permissions,
+            permission_preset_id,
             config: mut request_overrides,
             base_instructions,
             developer_instructions,
@@ -2623,6 +2727,17 @@ impl ThreadRequestProcessor {
 
         let history_cwd = thread_history.session_cwd();
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
+        let preset_cwd = cwd
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| history_cwd.clone());
+        let has_raw_permission_overrides = approval_policy.is_some()
+            || approvals_reviewer.is_some()
+            || sandbox.is_some()
+            || permissions.is_some();
+        let inherited_session = (permission_preset_id.is_none() && !has_raw_permission_overrides)
+            .then(|| session_configuration_from_rollout_items(&thread_history.get_rollout_items()))
+            .flatten();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2637,6 +2752,19 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        if let Err(error) = self
+            .apply_permission_preset(
+                permission_preset_id,
+                preset_cwd,
+                has_raw_permission_overrides,
+                inherited_session.as_ref(),
+                &mut typesafe_overrides,
+            )
+            .await
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return Ok(());
+        }
         self.load_and_apply_persisted_resume_metadata(
             &thread_history,
             &mut request_overrides,
@@ -2792,6 +2920,7 @@ impl ThreadRequestProcessor {
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox,
                     active_permission_profile,
+                    active_permission_preset_id: config_snapshot.active_permission_preset_id,
                     reasoning_effort: session_configured.reasoning_effort,
                     multi_agent_mode: config_snapshot.multi_agent_mode,
                     initial_turns_page,
@@ -2916,6 +3045,20 @@ impl ThreadRequestProcessor {
                 )));
             }
             let config_snapshot = existing_thread.config_snapshot().await;
+            if let Some(permission_preset_id) = params.permission_preset_id.as_deref() {
+                permission_preset_catalog(
+                    &self.config_manager,
+                    params
+                        .cwd
+                        .as_ref()
+                        .map(PathBuf::from)
+                        .or_else(|| Some(config_snapshot.cwd().as_path().to_path_buf())),
+                )
+                .await
+                .map_err(|err| config_load_error(&err))?
+                .selection(permission_preset_id)
+                .map_err(|err| invalid_request(err.to_string()))?;
+            }
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self
@@ -2949,6 +3092,19 @@ impl ThreadRequestProcessor {
                             warn!("thread {existing_thread_id} shutdown timed out");
                         }
                     }
+                }
+
+                if let Some(permission_preset_id) = params.permission_preset_id.as_deref()
+                    && config_snapshot.active_permission_preset_id.as_deref()
+                        != Some(permission_preset_id)
+                {
+                    return Err(invalid_request(format!(
+                        "cannot resume running thread {existing_thread_id} with permission preset `{permission_preset_id}`; active preset is `{}`",
+                        config_snapshot
+                            .active_permission_preset_id
+                            .as_deref()
+                            .unwrap_or("<none>")
+                    )));
                 }
 
                 // Preserve rejoin semantics when another client can still observe
@@ -3300,6 +3456,7 @@ impl ThreadRequestProcessor {
             approvals_reviewer,
             sandbox,
             permissions,
+            permission_preset_id,
             config: cli_overrides,
             base_instructions,
             developer_instructions,
@@ -3308,6 +3465,16 @@ impl ThreadRequestProcessor {
             exclude_turns,
         } = params;
         let include_turns = !exclude_turns;
+        if permission_preset_id.is_some()
+            && (approval_policy.is_some()
+                || approvals_reviewer.is_some()
+                || sandbox.is_some()
+                || permissions.is_some())
+        {
+            return Err(invalid_request(
+                "`permissionPresetId` cannot be combined with raw permission overrides",
+            ));
+        }
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",
@@ -3355,6 +3522,17 @@ impl ThreadRequestProcessor {
             Some(cli_overrides)
         };
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
+        let preset_cwd = cwd
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| history_cwd.clone());
+        let has_raw_permission_overrides = approval_policy.is_some()
+            || approvals_reviewer.is_some()
+            || sandbox.is_some()
+            || permissions.is_some();
+        let inherited_session = (permission_preset_id.is_none() && !has_raw_permission_overrides)
+            .then(|| session_configuration_from_rollout_items(&history_items))
+            .flatten();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -3369,6 +3547,14 @@ impl ThreadRequestProcessor {
             developer_instructions,
             /*personality*/ None,
         );
+        self.apply_permission_preset(
+            permission_preset_id,
+            preset_cwd,
+            has_raw_permission_overrides,
+            inherited_session.as_ref(),
+            &mut typesafe_overrides,
+        )
+        .await?;
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = self
@@ -3514,6 +3700,7 @@ impl ThreadRequestProcessor {
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox,
             active_permission_profile,
+            active_permission_preset_id: config_snapshot.active_permission_preset_id,
             reasoning_effort: session_configured.reasoning_effort,
             multi_agent_mode: config_snapshot.multi_agent_mode,
         };

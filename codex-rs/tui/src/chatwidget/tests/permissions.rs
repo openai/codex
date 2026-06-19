@@ -59,8 +59,7 @@ fn windows_sandbox_requirements_stack(
             allowed_sandbox_implementations: Some(allowed_sandbox_implementations),
         }),
         ..Default::default()
-    };
-    requirements_stack(requirements_toml)
+    })
 }
 
 fn requirements_stack(requirements_toml: codex_config::ConfigRequirementsToml) -> ConfigLayerStack {
@@ -140,11 +139,13 @@ async fn profile_permissions_selection_popup_with_custom_profiles_snapshot() {
             id: "locked-down".to_string(),
             description: Some("Inspect and patch only approved workspace files.".to_string()),
             allowed: true,
+            permission_profile: Some(PermissionProfile::workspace_write()),
         },
         PermissionProfileCatalogEntry {
             id: "web-enabled".to_string(),
             description: Some("Workspace profile with network access.".to_string()),
             allowed: false,
+            permission_profile: Some(PermissionProfile::workspace_write()),
         },
     ];
     chat.config
@@ -223,6 +224,7 @@ async fn profile_permissions_selection_emits_active_custom_profile() {
         id: "locked-down".to_string(),
         description: None,
         allowed: true,
+        permission_profile: Some(PermissionProfile::workspace_write()),
     }];
     chat.config
         .permissions

@@ -789,6 +789,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             exclude_slash_tmp: false,
         },
         active_permission_profile: None,
+        active_permission_preset_id: None,
         reasoning_effort: None,
         multi_agent_mode: Default::default(),
     }

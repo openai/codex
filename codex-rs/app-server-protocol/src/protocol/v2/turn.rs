@@ -116,6 +116,11 @@ pub struct TurnStartParams {
     #[experimental("turn/start.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<String>,
+    /// Permission preset to apply. Cannot be combined with raw permission,
+    /// sandbox, approval-policy, or reviewer overrides.
+    #[experimental("turn/start.permissionPresetId")]
+    #[ts(optional = nullable)]
+    pub permission_preset_id: Option<String>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,

@@ -14,6 +14,7 @@ use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
@@ -53,6 +54,85 @@ use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+
+#[tokio::test]
+async fn thread_start_applies_permission_preset() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            permission_preset_id: Some("full-access".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: ThreadStartResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+
+    assert_eq!(
+        response.active_permission_preset_id.as_deref(),
+        Some("full-access")
+    );
+    assert_eq!(response.approval_policy, AskForApproval::Never);
+    assert_eq!(response.sandbox, SandboxPolicy::DangerFullAccess);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_rejects_unknown_disallowed_and_conflicting_permission_presets() -> Result<()>
+{
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"
+default_permissions = ":read-only"
+
+[allowed_permission_profiles]
+":read-only" = true
+"#,
+    )?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    for (permission_preset_id, approval_policy, expected) in [
+        ("missing", None, "unknown permission preset `missing`"),
+        (
+            "full-access",
+            None,
+            "permission preset `full-access` is not allowed",
+        ),
+        (
+            "read-only",
+            Some(AskForApproval::OnRequest),
+            "`permissionPresetId` cannot be combined with raw permission overrides",
+        ),
+    ] {
+        let request_id = mcp
+            .send_thread_start_request(ThreadStartParams {
+                permission_preset_id: Some(permission_preset_id.to_string()),
+                approval_policy,
+                ..Default::default()
+            })
+            .await?;
+        let error: JSONRPCError = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        assert_eq!(error.error.message, expected);
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_start_creates_thread_and_emits_started() -> Result<()> {

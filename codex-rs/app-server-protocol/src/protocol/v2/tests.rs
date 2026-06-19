@@ -199,6 +199,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox: SandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
+        active_permission_preset_id: None,
         reasoning_effort: None,
         multi_agent_mode: Default::default(),
         initial_turns_page: Some(TurnsPage {
@@ -3782,6 +3783,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         approvals_reviewer: None,
         sandbox_policy: None,
         permissions: None,
+        permission_preset_id: None,
         model: None,
         service_tier: None,
         effort: None,

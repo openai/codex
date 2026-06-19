@@ -7,9 +7,13 @@ use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PermissionPreset;
+use codex_app_server_protocol::PermissionPresetDefaultSource;
+use codex_app_server_protocol::PermissionPresetKind;
 use codex_app_server_protocol::PermissionPresetListParams;
 use codex_app_server_protocol::PermissionPresetListResponse;
+use codex_app_server_protocol::PermissionPresetUnavailabilityReason;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -22,7 +26,7 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::test]
-async fn permission_preset_list_returns_resolved_builtin_presets() -> Result<()> {
+async fn permission_preset_list_returns_complete_builtin_catalog() -> Result<()> {
     let actual = list_permission_presets_from_config(
         r#"
 default_permissions = ":workspace"
@@ -39,23 +43,27 @@ guardian_approval = true
         actual,
         PermissionPresetListResponse {
             data: vec![
-                preset(
+                builtin_preset(
                     "read-only",
+                    PermissionPresetKind::ReadOnly,
                     BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+                    read_only(),
                     AskForApproval::OnRequest,
                     ApprovalsReviewer::User,
-                    /*is_default*/ false,
                 ),
-                preset(
+                builtin_preset(
                     "auto",
+                    PermissionPresetKind::Auto,
                     BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+                    workspace_write(),
                     AskForApproval::OnRequest,
                     ApprovalsReviewer::User,
-                    /*is_default*/ false,
                 ),
-                preset(
+                builtin_preset(
                     "granular",
+                    PermissionPresetKind::Granular,
                     BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+                    workspace_write(),
                     AskForApproval::Granular {
                         sandbox_approval: false,
                         rules: false,
@@ -64,31 +72,57 @@ guardian_approval = true
                         mcp_elicitations: true,
                     },
                     ApprovalsReviewer::User,
-                    /*is_default*/ false,
                 ),
-                preset(
+                builtin_preset(
                     "guardian-approvals",
+                    PermissionPresetKind::GuardianApprovals,
                     BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+                    workspace_write(),
                     AskForApproval::OnRequest,
                     ApprovalsReviewer::AutoReview,
-                    /*is_default*/ true,
                 ),
-                preset(
+                builtin_preset(
                     "full-access",
+                    PermissionPresetKind::FullAccess,
                     BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
+                    SandboxPolicy::DangerFullAccess,
                     AskForApproval::Never,
                     ApprovalsReviewer::User,
-                    /*is_default*/ false,
                 ),
             ],
             next_cursor: None,
+            default_preset_id: "guardian-approvals".to_string(),
+            default_source: PermissionPresetDefaultSource::Config,
         }
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn permission_preset_list_applies_managed_profile_and_policy_fallbacks() -> Result<()> {
+async fn permission_preset_list_keeps_allowed_config_default_provenance() -> Result<()> {
+    let actual = list_permission_presets_from_config(
+        r#"
+default_permissions = ":workspace"
+"#,
+        Some(
+            r#"
+default_permissions = ":read-only"
+
+[allowed_permission_profiles]
+":read-only" = true
+":workspace" = true
+"#,
+        ),
+    )
+    .await?;
+
+    assert_eq!(actual.default_preset_id, "auto");
+    assert_eq!(actual.default_source, PermissionPresetDefaultSource::Config);
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_preset_list_retains_disallowed_profiles_without_coercion() -> Result<()> {
     let actual = list_permission_presets_from_config(
         r#"
 default_permissions = "dev"
@@ -121,113 +155,136 @@ description = "Inspect without writes."
     )
     .await?;
 
+    assert_eq!(actual.default_preset_id, "permission-profile:audit");
     assert_eq!(
-        actual,
-        PermissionPresetListResponse {
-            data: vec![
-                preset(
-                    "read-only",
-                    BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-                    AskForApproval::OnRequest,
-                    ApprovalsReviewer::User,
-                    /*is_default*/ false,
-                ),
-                PermissionPreset {
-                    id: "permission-profile:audit".to_string(),
-                    permission_profile_id: "audit".to_string(),
-                    description: Some("Inspect without writes.".to_string()),
-                    approval_policy: AskForApproval::OnRequest,
-                    approvals_reviewer: ApprovalsReviewer::User,
-                    is_default: true,
-                },
-            ],
-            next_cursor: None,
-        }
+        actual.default_source,
+        PermissionPresetDefaultSource::Requirements
+    );
+    assert_eq!(
+        actual
+            .data
+            .iter()
+            .map(|preset| preset.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "read-only",
+            "auto",
+            "granular",
+            "guardian-approvals",
+            "full-access",
+            "permission-profile:audit",
+            "permission-profile:dev",
+        ]
+    );
+    assert_eq!(
+        preset(&actual, "auto").unavailability_reason,
+        Some(PermissionPresetUnavailabilityReason::PermissionProfile {
+            permission_profile_id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+        })
+    );
+    assert_eq!(
+        preset(&actual, "full-access").approval_policy,
+        AskForApproval::Never
+    );
+    assert_eq!(
+        preset(&actual, "permission-profile:dev").unavailability_reason,
+        Some(PermissionPresetUnavailabilityReason::PermissionProfile {
+            permission_profile_id: "dev".to_string(),
+        })
+    );
+    assert!(preset(&actual, "permission-profile:audit").allowed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_preset_list_reports_approval_and_reviewer_constraints() -> Result<()> {
+    let actual = list_permission_presets_from_config(
+        r#"
+[features]
+guardian_approval = true
+"#,
+        Some(
+            r#"
+allowed_approval_policies = ["on-request"]
+allowed_approvals_reviewers = ["user"]
+default_permissions = ":workspace"
+
+[allowed_permission_profiles]
+":read-only" = true
+":workspace" = true
+":danger-full-access" = true
+"#,
+        ),
+    )
+    .await?;
+
+    assert_eq!(
+        preset(&actual, "granular").unavailability_reason,
+        Some(PermissionPresetUnavailabilityReason::ApprovalPolicy)
+    );
+    assert_eq!(
+        preset(&actual, "guardian-approvals").unavailability_reason,
+        Some(PermissionPresetUnavailabilityReason::ApprovalsReviewer)
+    );
+    assert_eq!(
+        preset(&actual, "full-access").unavailability_reason,
+        Some(PermissionPresetUnavailabilityReason::ApprovalPolicy)
+    );
+    assert_eq!(
+        preset(&actual, "full-access").approval_policy,
+        AskForApproval::Never
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn permission_preset_list_matches_legacy_defaults() -> Result<()> {
-    for (config, requirements, expected, expected_ids) in [
-        (
-            r#"
+async fn permission_preset_list_keeps_equivalent_legacy_config() -> Result<()> {
+    let actual = list_permission_presets_from_config(
+        r#"
 sandbox_mode = "read-only"
 approval_policy = "on-request"
 "#,
-            None,
-            preset(
-                "read-only",
-                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-                AskForApproval::OnRequest,
-                ApprovalsReviewer::User,
-                /*is_default*/ true,
-            ),
-            None,
-        ),
-        (
-            r#"
-sandbox_mode = "workspace-write"
-approval_policy = "on-request"
-"#,
-            Some(
-                r#"
-allowed_sandbox_modes = ["read-only"]
-"#,
-            ),
-            preset(
-                "read-only",
-                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-                AskForApproval::OnRequest,
-                ApprovalsReviewer::User,
-                /*is_default*/ true,
-            ),
-            Some(vec!["read-only"]),
-        ),
-        (
-            r#"
-sandbox_mode = "danger-full-access"
-approval_policy = "never"
-"#,
-            None,
-            preset(
-                "full-access",
-                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
-                AskForApproval::Never,
-                ApprovalsReviewer::User,
-                /*is_default*/ true,
-            ),
-            None,
-        ),
-    ] {
-        let actual = list_permission_presets_from_config(config, requirements).await?;
+        /*requirements*/ None,
+    )
+    .await?;
 
-        if let Some(expected_ids) = expected_ids {
-            assert_eq!(
-                actual
-                    .data
-                    .iter()
-                    .map(|preset| preset.id.as_str())
-                    .collect::<Vec<_>>(),
-                expected_ids
-            );
-        }
-
-        assert_eq!(
-            actual
-                .data
-                .iter()
-                .filter(|preset| preset.is_default)
-                .cloned()
-                .collect::<Vec<_>>(),
-            vec![expected]
-        );
-    }
+    assert_eq!(actual.default_preset_id, "legacy-config");
+    assert_eq!(actual.default_source, PermissionPresetDefaultSource::Config);
+    assert_eq!(
+        preset(&actual, "legacy-config").kind,
+        PermissionPresetKind::LegacyConfig
+    );
+    assert_eq!(
+        preset(&actual, "legacy-config").sandbox_policy,
+        preset(&actual, "read-only").sandbox_policy
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn permission_preset_list_resolves_project_profiles_and_paginates() -> Result<()> {
+async fn permission_preset_list_keeps_named_profile_equivalent_to_builtin() -> Result<()> {
+    let actual = list_permission_presets_from_config(
+        r#"
+default_permissions = "project"
+
+[permissions.project]
+description = "Project-scoped profile."
+extends = ":workspace"
+"#,
+        /*requirements*/ None,
+    )
+    .await?;
+
+    assert_eq!(actual.default_preset_id, "permission-profile:project");
+    assert_eq!(
+        preset(&actual, "permission-profile:project").sandbox_policy,
+        preset(&actual, "auto").sandbox_policy
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_preset_list_paginates_without_losing_default_metadata() -> Result<()> {
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     let project_config_dir = workspace.path().join(".codex");
@@ -238,11 +295,7 @@ async fn permission_preset_list_resolves_project_profiles_and_paginates() -> Res
 default_permissions = "project"
 
 [permissions.project]
-description = "Project-scoped profile."
 extends = ":workspace"
-
-[features]
-guardian_approval = false
 "#,
     )?;
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
@@ -250,7 +303,6 @@ guardian_approval = false
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let cwd = workspace.path().to_string_lossy().into_owned();
-
     let first = list_permission_presets(
         &mut mcp,
         PermissionPresetListParams {
@@ -260,127 +312,65 @@ guardian_approval = false
         },
     )
     .await?;
-    assert_eq!(
-        first,
-        PermissionPresetListResponse {
-            data: vec![
-                preset(
-                    "read-only",
-                    BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-                    AskForApproval::OnRequest,
-                    ApprovalsReviewer::User,
-                    /*is_default*/ false,
-                ),
-                preset(
-                    "auto",
-                    BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
-                    AskForApproval::OnRequest,
-                    ApprovalsReviewer::User,
-                    /*is_default*/ false,
-                ),
-                preset(
-                    "granular",
-                    BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
-                    AskForApproval::Granular {
-                        sandbox_approval: false,
-                        rules: false,
-                        skill_approval: false,
-                        request_permissions: true,
-                        mcp_elicitations: true,
-                    },
-                    ApprovalsReviewer::User,
-                    /*is_default*/ false,
-                ),
-                preset(
-                    "full-access",
-                    BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
-                    AskForApproval::Never,
-                    ApprovalsReviewer::User,
-                    /*is_default*/ false,
-                ),
-            ],
-            next_cursor: Some("4".to_string()),
-        }
-    );
-
     let second = list_permission_presets(
         &mut mcp,
         PermissionPresetListParams {
-            cursor: first.next_cursor,
+            cursor: first.next_cursor.clone(),
             limit: Some(4),
             cwd: Some(cwd),
         },
     )
     .await?;
-    assert_eq!(
-        second,
-        PermissionPresetListResponse {
-            data: vec![PermissionPreset {
-                id: "permission-profile:project".to_string(),
-                permission_profile_id: "project".to_string(),
-                description: Some("Project-scoped profile.".to_string()),
-                approval_policy: AskForApproval::OnRequest,
-                approvals_reviewer: ApprovalsReviewer::User,
-                is_default: true,
-            }],
-            next_cursor: None,
-        }
-    );
+
+    assert_eq!(first.next_cursor, Some("4".to_string()));
+    assert_eq!(second.data.len(), 2);
+    assert_eq!(first.default_preset_id, second.default_preset_id);
+    assert_eq!(first.default_source, second.default_source);
     Ok(())
 }
 
-#[tokio::test]
-async fn permission_preset_list_removes_presets_with_identical_resolved_settings() -> Result<()> {
-    let actual = list_permission_presets_from_config(
-        r#"
-default_permissions = ":workspace"
-approval_policy = "never"
-approvals_reviewer = "auto_review"
-"#,
-        Some(
-            r#"
-allowed_approval_policies = ["on-request"]
-allowed_approvals_reviewers = ["user"]
-default_permissions = ":workspace"
-
-[allowed_permission_profiles]
-":workspace" = true
-"#,
-        ),
-    )
-    .await?;
-
-    assert_eq!(
-        actual,
-        PermissionPresetListResponse {
-            data: vec![preset(
-                "auto",
-                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
-                AskForApproval::OnRequest,
-                ApprovalsReviewer::User,
-                /*is_default*/ true,
-            )],
-            next_cursor: None,
-        }
-    );
-    Ok(())
-}
-
-fn preset(
+fn builtin_preset(
     id: &str,
+    kind: PermissionPresetKind,
     permission_profile_id: &str,
+    sandbox_policy: SandboxPolicy,
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
-    is_default: bool,
 ) -> PermissionPreset {
     PermissionPreset {
         id: id.to_string(),
-        permission_profile_id: permission_profile_id.to_string(),
+        kind,
+        permission_profile_id: Some(permission_profile_id.to_string()),
         description: None,
+        sandbox_policy,
         approval_policy,
         approvals_reviewer,
-        is_default,
+        allowed: true,
+        unavailability_reason: None,
     }
+}
+
+fn read_only() -> SandboxPolicy {
+    SandboxPolicy::ReadOnly {
+        network_access: false,
+    }
+}
+
+fn workspace_write() -> SandboxPolicy {
+    SandboxPolicy::WorkspaceWrite {
+        writable_roots: Vec::new(),
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    }
+}
+
+fn preset<'a>(response: &'a PermissionPresetListResponse, id: &str) -> &'a PermissionPreset {
+    response
+        .data
+        .iter()
+        .find(|preset| preset.id == id)
+        .unwrap_or_else(|| panic!("missing permission preset `{id}`"))
 }
 
 async fn list_permission_presets(

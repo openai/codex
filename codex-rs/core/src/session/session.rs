@@ -185,6 +185,10 @@ impl SessionConfiguration {
             approvals_reviewer: self.approvals_reviewer,
             permission_profile: self.permission_profile(),
             active_permission_profile: self.active_permission_profile(),
+            active_permission_preset_id: self
+                .original_config_do_not_use
+                .active_permission_preset_id
+                .clone(),
             environments: self.environments.clone(),
             workspace_roots: self.workspace_roots.clone(),
             profile_workspace_roots: self.profile_workspace_roots().to_vec(),
@@ -375,6 +379,11 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
+        if let Some(active_permission_preset_id) = updates.active_permission_preset_id.clone() {
+            let mut config = (*next_configuration.original_config_do_not_use).clone();
+            config.active_permission_preset_id = active_permission_preset_id;
+            next_configuration.original_config_do_not_use = Arc::new(config);
+        }
         Ok(next_configuration)
     }
 
@@ -425,6 +434,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
     pub(crate) permission_profile: Option<PermissionProfile>,
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
+    pub(crate) active_permission_preset_id: Option<Option<String>>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) multi_agent_mode: Option<MultiAgentMode>,
@@ -1120,6 +1130,7 @@ impl Session {
                     approvals_reviewer: session_configuration.approvals_reviewer,
                     permission_profile: session_configuration.permission_profile(),
                     active_permission_profile: session_configuration.active_permission_profile(),
+                    active_permission_preset_id: config.active_permission_preset_id.clone(),
                     cwd: session_configuration.cwd().clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                     initial_messages,

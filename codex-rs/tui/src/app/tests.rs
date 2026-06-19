@@ -6032,6 +6032,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             active_permission_profile: Some(
                 codex_app_server_protocol::ActivePermissionProfile::read_only(),
             ),
+            active_permission_preset_id: None,
             model: "gpt-plan".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,

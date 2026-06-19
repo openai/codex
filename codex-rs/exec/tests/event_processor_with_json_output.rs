@@ -121,6 +121,7 @@ fn session_configured_produces_thread_started_event() {
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
+        active_permission_preset_id: None,
         cwd: test_path_buf("/tmp/project").abs(),
         reasoning_effort: None,
         initial_messages: None,

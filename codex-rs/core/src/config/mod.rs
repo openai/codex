@@ -153,7 +153,6 @@ mod permissions;
 mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
-mod selectable_permission_profiles;
 pub use auth_keyring::resolve_bootstrap_auth_keyring_backend_kind;
 pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
@@ -176,7 +175,6 @@ pub(crate) use permissions::reject_unknown_builtin_permission_profile;
 pub(crate) use permissions::resolve_permission_profile;
 pub use resolved_permission_profile::PermissionProfileSnapshot;
 pub(crate) use resolved_permission_profile::PermissionProfileState;
-pub use selectable_permission_profiles::SelectablePermissionProfile;
 
 const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
 const DEFAULT_IGNORE_LARGE_UNTRACKED_FILES: i64 = 10 * 1024 * 1024;
@@ -654,6 +652,9 @@ pub struct Config {
 
     /// User-defined permission profiles available from effective config.
     pub custom_permission_profiles: Vec<PermissionProfileCatalogEntry>,
+
+    /// App-server permission preset identity applied to this session, when known.
+    pub active_permission_preset_id: Option<String>,
 
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
@@ -2392,6 +2393,7 @@ pub struct ConfigOverrides {
     pub sandbox_mode: Option<SandboxMode>,
     pub permission_profile: Option<PermissionProfile>,
     pub default_permissions: Option<String>,
+    pub active_permission_preset_id: Option<String>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<String>>,
     pub codex_self_exe: Option<PathBuf>,
@@ -2963,6 +2965,7 @@ impl Config {
             sandbox_mode,
             permission_profile,
             default_permissions: default_permissions_override,
+            active_permission_preset_id,
             model_provider,
             service_tier: service_tier_override,
             codex_self_exe,
@@ -3773,6 +3776,8 @@ impl Config {
                 windows_sandbox_private_desktop,
             },
             explicit_permission_profile_mode,
+            custom_permission_profiles,
+            active_permission_preset_id,
             approvals_reviewer: constrained_approvals_reviewer.value(),
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,

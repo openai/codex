@@ -1,4 +1,5 @@
 use super::*;
+use crate::permission_presets::permission_preset_catalog;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
@@ -56,6 +57,7 @@ struct ThreadSettingsBuildParams {
     approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
     sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
     permissions: Option<String>,
+    permission_preset_id: Option<String>,
     model: Option<String>,
     service_tier: Option<Option<String>>,
     effort: Option<ReasoningEffort>,
@@ -451,6 +453,7 @@ impl TurnRequestProcessor {
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,
                     permissions: params.permissions,
+                    permission_preset_id: params.permission_preset_id,
                     model: params.model,
                     service_tier: params.service_tier,
                     effort: params.effort,
@@ -558,6 +561,7 @@ impl TurnRequestProcessor {
             approvals_reviewer,
             sandbox_policy,
             permissions,
+            permission_preset_id,
             model,
             service_tier,
             effort,
@@ -567,6 +571,16 @@ impl TurnRequestProcessor {
             personality,
         } = params;
 
+        if permission_preset_id.is_some()
+            && (approval_policy.is_some()
+                || approvals_reviewer.is_some()
+                || sandbox_policy.is_some()
+                || permissions.is_some())
+        {
+            return Err(invalid_request(
+                "`permissionPresetId` cannot be combined with raw permission overrides",
+            ));
+        }
         if sandbox_policy.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandboxPolicy`",
@@ -580,7 +594,7 @@ impl TurnRequestProcessor {
         // `thread/settings/update` only acknowledges that the update was queued.
         // Clients that send dependent partial updates should wait for
         // `thread/settings/updated` or combine the fields in one request.
-        let snapshot = if permissions.is_some() {
+        let snapshot = if permissions.is_some() || permission_preset_id.is_some() {
             Some(thread.config_snapshot().await)
         } else {
             None
@@ -592,6 +606,7 @@ impl TurnRequestProcessor {
             || approvals_reviewer.is_some()
             || sandbox_policy.is_some()
             || permissions.is_some()
+            || permission_preset_id.is_some()
             || model.is_some()
             || service_tier.is_some()
             || effort.is_some()
@@ -602,19 +617,19 @@ impl TurnRequestProcessor {
 
         let runtime_workspace_roots =
             runtime_workspace_roots_request.map(resolve_runtime_workspace_roots);
-        let approval_policy =
+        let mut approval_policy =
             approval_policy.map(codex_app_server_protocol::AskForApproval::to_core);
-        let approvals_reviewer =
+        let mut approvals_reviewer =
             approvals_reviewer.map(codex_app_server_protocol::ApprovalsReviewer::to_core);
         let sandbox_policy = sandbox_policy.map(|policy| policy.to_core());
         let (permission_profile, active_permission_profile, profile_workspace_roots) =
-            if let Some(permissions) = permissions {
+            if permissions.is_some() || permission_preset_id.is_some() {
                 let Some(snapshot) = snapshot.as_ref() else {
                     return Err(internal_error(format!(
                         "{method} permission selection missing thread snapshot"
                     )));
                 };
-                let overrides = ConfigOverrides {
+                let mut overrides = ConfigOverrides {
                     cwd: environments
                         .as_ref()
                         .map(|environments| environments.legacy_fallback_cwd.to_path_buf()),
@@ -623,11 +638,25 @@ impl TurnRequestProcessor {
                             .clone()
                             .unwrap_or_else(|| snapshot.workspace_roots.clone()),
                     ),
-                    default_permissions: Some(permissions),
+                    default_permissions: permissions,
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
                 };
+                if let Some(permission_preset_id) = permission_preset_id.as_deref() {
+                    let cwd = overrides
+                        .cwd
+                        .clone()
+                        .unwrap_or_else(|| snapshot.cwd().to_path_buf());
+                    let selection = permission_preset_catalog(&self.config_manager, Some(cwd))
+                        .await
+                        .map_err(|err| config_load_error(&err))?
+                        .selection(permission_preset_id)
+                        .map_err(|err| invalid_request(err.to_string()))?;
+                    approval_policy = Some(selection.approval_policy);
+                    approvals_reviewer = Some(selection.approvals_reviewer);
+                    selection.apply_to(&mut overrides);
+                }
                 let config = self
                     .config_manager
                     .load_for_cwd(
@@ -655,6 +684,17 @@ impl TurnRequestProcessor {
             } else {
                 (None, None, None)
             };
+        let active_permission_preset_id = if let Some(permission_preset_id) = permission_preset_id {
+            Some(Some(permission_preset_id))
+        } else if approval_policy.is_some()
+            || approvals_reviewer.is_some()
+            || sandbox_policy.is_some()
+            || permission_profile.is_some()
+        {
+            Some(None)
+        } else {
+            None
+        };
         let effort = effort.map(Some);
 
         if has_any_overrides {
@@ -667,6 +707,7 @@ impl TurnRequestProcessor {
                     sandbox_policy: sandbox_policy.clone(),
                     permission_profile: permission_profile.clone(),
                     active_permission_profile: active_permission_profile.clone(),
+                    active_permission_preset_id: active_permission_preset_id.clone(),
                     profile_workspace_roots: profile_workspace_roots.clone(),
                     windows_sandbox_level: None,
                     model: model.clone(),
@@ -692,6 +733,7 @@ impl TurnRequestProcessor {
             sandbox_policy,
             permission_profile,
             active_permission_profile,
+            active_permission_preset_id,
             windows_sandbox_level: None,
             model,
             effort,
@@ -724,6 +766,7 @@ impl TurnRequestProcessor {
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,
                     permissions: params.permissions,
+                    permission_preset_id: params.permission_preset_id,
                     model: params.model,
                     service_tier: params.service_tier,
                     effort: params.effort,

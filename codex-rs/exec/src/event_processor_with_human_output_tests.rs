@@ -221,6 +221,7 @@ async fn config_summary_entries_include_runtime_workspace_roots() {
         approvals_reviewer: config.approvals_reviewer,
         permission_profile: config.permissions.effective_permission_profile(),
         active_permission_profile: None,
+        active_permission_preset_id: None,
         cwd,
         reasoning_effort: None,
         initial_messages: None,

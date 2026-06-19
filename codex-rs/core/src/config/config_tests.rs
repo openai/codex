@@ -3194,6 +3194,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
         vec![PermissionProfileCatalogEntry {
             id: "dev".to_string(),
             description: Some("Workspace access.".to_string()),
+            permission_profile: Some(config.permissions.permission_profile().clone()),
             allowed: true,
         }]
     );
