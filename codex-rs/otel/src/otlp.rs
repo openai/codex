@@ -1,5 +1,6 @@
 use crate::config::OtelTlsConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use http::Uri;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT;
@@ -29,6 +30,13 @@ pub(crate) fn build_header_map(headers: &std::collections::HashMap<String, Strin
         }
     }
     header_map
+}
+
+pub(crate) fn default_grpc_tls_config() -> ClientTlsConfig {
+    ensure_rustls_crypto_provider();
+    ClientTlsConfig::new()
+        .with_enabled_roots()
+        .assume_http2(true)
 }
 
 pub(crate) fn build_grpc_tls_config(

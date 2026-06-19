@@ -12,7 +12,6 @@ use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_utils_cli::CliConfigOverrides;
-use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
@@ -79,7 +78,6 @@ pub async fn run_main(
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
     set_default_client_residency_requirement(config.enforce_residency.value());
-    ensure_rustls_crypto_provider();
     let otel = codex_core::otel_init::build_provider(
         &config,
         env!("CARGO_PKG_VERSION"),
@@ -220,7 +218,6 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_server_builds_otel_provider_with_logs_traces_and_metrics() -> anyhow::Result<()> {
-        ensure_rustls_crypto_provider();
         let codex_home = TempDir::new()?;
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())

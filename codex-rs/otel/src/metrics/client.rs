@@ -38,7 +38,6 @@ use std::sync::Mutex;
 use std::sync::Weak;
 use std::time::Duration;
 use tonic::metadata::MetadataMap;
-use tonic::transport::ClientTlsConfig;
 use tracing::debug;
 
 const ENV_ATTRIBUTE: &str = "env";
@@ -476,9 +475,7 @@ fn build_otlp_metric_exporter(
 
             let header_map = crate::otlp::build_header_map(&headers);
 
-            let base_tls_config = ClientTlsConfig::new()
-                .with_enabled_roots()
-                .assume_http2(true);
+            let base_tls_config = crate::otlp::default_grpc_tls_config();
 
             let tls_config = match tls.as_ref() {
                 Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)

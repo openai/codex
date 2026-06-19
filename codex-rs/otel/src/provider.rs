@@ -38,7 +38,6 @@ use opentelemetry_semantic_conventions as semconv;
 use std::collections::BTreeMap;
 use std::error::Error;
 use tonic::metadata::MetadataMap;
-use tonic::transport::ClientTlsConfig;
 use tracing::debug;
 use tracing_subscriber::Layer;
 use tracing_subscriber::registry::LookupSpan;
@@ -308,9 +307,7 @@ fn build_logger(
 
             let header_map = crate::otlp::build_header_map(&headers);
 
-            let base_tls_config = ClientTlsConfig::new()
-                .with_enabled_roots()
-                .assume_http2(true);
+            let base_tls_config = crate::otlp::default_grpc_tls_config();
 
             let tls_config = match tls.as_ref() {
                 Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)?,
@@ -376,9 +373,7 @@ fn build_tracer_provider(
 
             let header_map = crate::otlp::build_header_map(&headers);
 
-            let base_tls_config = ClientTlsConfig::new()
-                .with_enabled_roots()
-                .assume_http2(true);
+            let base_tls_config = crate::otlp::default_grpc_tls_config();
 
             let tls_config = match tls.as_ref() {
                 Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)?,
