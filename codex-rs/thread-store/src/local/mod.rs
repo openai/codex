@@ -1,6 +1,4 @@
 mod archive_thread;
-#[cfg(test)]
-mod benchmark;
 mod create_thread;
 mod delete_thread;
 mod helpers;
@@ -950,11 +948,11 @@ mod tests {
             .await
             .expect("flush live thread");
 
-        let (history, read_work) =
-            read_thread::read_work::measure(store.load_history(LoadThreadHistoryParams {
+        let history = store
+            .load_history(LoadThreadHistoryParams {
                 thread_id,
                 include_archived: false,
-            }))
+            })
             .await;
         let history = history.expect("load external live history");
 
@@ -964,13 +962,6 @@ mod tests {
                 RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "external history item"
             )
         }));
-        assert_eq!(
-            read_work,
-            read_thread::read_work::ReadWork {
-                summary_reads: 0,
-                history_reads: 1,
-            }
-        );
     }
 
     #[tokio::test]

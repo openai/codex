@@ -46,6 +46,7 @@ use super::metadata;
 use super::session_index::find_thread_names_by_ids;
 use crate::config::RolloutConfigView;
 use crate::default_client::originator;
+use crate::load_error::LoadRolloutItemsForThreadError;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_git_utils::collect_git_info;
@@ -867,6 +868,26 @@ impl RolloutRecorder {
     pub async fn load_rollout_items(
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+        Self::load_rollout_items_inner(path, /*expected_thread_id*/ None)
+            .await
+            .map_err(LoadRolloutItemsForThreadError::into_io_error)
+    }
+
+    /// Loads rollout items and rejects a mismatched first `SessionMeta` before reading the rest of
+    /// the rollout.
+    pub async fn load_rollout_items_for_thread(
+        path: &Path,
+        expected_thread_id: ThreadId,
+    ) -> Result<(Vec<RolloutItem>, usize), LoadRolloutItemsForThreadError> {
+        let (items, _, parse_errors) =
+            Self::load_rollout_items_inner(path, Some(expected_thread_id)).await?;
+        Ok((items, parse_errors))
+    }
+
+    async fn load_rollout_items_inner(
+        path: &Path,
+        expected_thread_id: Option<ThreadId>,
+    ) -> Result<(Vec<RolloutItem>, Option<ThreadId>, usize), LoadRolloutItemsForThreadError> {
         trace!("Resuming rollout from {path:?}");
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
@@ -900,7 +921,15 @@ impl RolloutRecorder {
                     if thread_id.is_none()
                         && let RolloutItem::SessionMeta(session_meta_line) = &item
                     {
-                        thread_id = Some(session_meta_line.meta.id);
+                        let actual_thread_id = session_meta_line.meta.id;
+                        if let Some(expected_thread_id) = expected_thread_id.as_ref()
+                            && *expected_thread_id != actual_thread_id
+                        {
+                            return Err(LoadRolloutItemsForThreadError::ThreadIdMismatch {
+                                actual_thread_id,
+                            });
+                        }
+                        thread_id = Some(actual_thread_id);
                     }
                     items.push(item);
                 }
@@ -911,7 +940,10 @@ impl RolloutRecorder {
             }
         }
         if !saw_non_empty_line {
-            return Err(IoError::other("empty session file"));
+            return Err(IoError::other("empty session file").into());
+        }
+        if expected_thread_id.is_some() && thread_id.is_none() {
+            return Err(LoadRolloutItemsForThreadError::MissingSessionMeta);
         }
 
         tracing::debug!(
