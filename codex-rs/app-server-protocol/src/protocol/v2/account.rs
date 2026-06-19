@@ -331,8 +331,12 @@ pub struct WorkspaceMessage {
     pub message_id: String,
     pub message_type: WorkspaceMessageType,
     pub message_body: String,
-    pub created_at: Option<String>,
-    pub archived_at: Option<String>,
+    /// Unix timestamp (in seconds) when the message was created.
+    #[ts(type = "number | null")]
+    pub created_at: Option<i64>,
+    /// Unix timestamp (in seconds) when the message was archived.
+    #[ts(type = "number | null")]
+    pub archived_at: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

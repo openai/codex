@@ -1,4 +1,5 @@
 use super::*;
+use chrono::DateTime;
 use codex_protocol::account::PlanType as AccountPlanType;
 
 mod rate_limit_resets;
@@ -970,12 +971,12 @@ impl AccountRequestProcessor {
         }
 
         if !workspace_messages_allowed_for_plan(auth.account_plan_type()) {
-            return Ok(Self::workspace_messages_response(
+            return Self::workspace_messages_response(
                 BackendWorkspaceMessagesResponse {
                     messages: Vec::new(),
                 },
                 /*feature_enabled*/ true,
-            ));
+            );
         }
 
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
@@ -988,24 +989,16 @@ impl AccountRequestProcessor {
         .map_err(|_| internal_error("workspace messages fetch timed out"))?;
 
         match messages {
-            Ok(messages) => Ok(Self::workspace_messages_response(
-                messages, /*feature_enabled*/ true,
-            )),
+            Ok(messages) => {
+                Self::workspace_messages_response(messages, /*feature_enabled*/ true)
+            }
             Err(err) if workspace_messages_feature_disabled(&err) => {
-                Ok(Self::workspace_messages_response(
+                Self::workspace_messages_response(
                     BackendWorkspaceMessagesResponse {
                         messages: Vec::new(),
                     },
                     /*feature_enabled*/ false,
-                ))
-            }
-            Err(err) if workspace_messages_auth_unavailable(&err) => {
-                Ok(Self::workspace_messages_response(
-                    BackendWorkspaceMessagesResponse {
-                        messages: Vec::new(),
-                    },
-                    /*feature_enabled*/ true,
-                ))
+                )
             }
             Err(err) => Err(internal_error(format!(
                 "failed to fetch workspace messages: {err}"
@@ -1038,15 +1031,15 @@ impl AccountRequestProcessor {
     fn workspace_messages_response(
         messages: BackendWorkspaceMessagesResponse,
         feature_enabled: bool,
-    ) -> GetWorkspaceMessagesResponse {
-        GetWorkspaceMessagesResponse {
+    ) -> Result<GetWorkspaceMessagesResponse, JSONRPCErrorError> {
+        Ok(GetWorkspaceMessagesResponse {
             feature_enabled,
             messages: messages
                 .messages
                 .into_iter()
                 .map(workspace_message_from_backend)
-                .collect(),
-        }
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 
     async fn send_add_credits_nudge_email_response(
@@ -1099,14 +1092,32 @@ impl AccountRequestProcessor {
     }
 }
 
-fn workspace_message_from_backend(message: BackendWorkspaceMessage) -> WorkspaceMessage {
-    WorkspaceMessage {
+fn workspace_message_from_backend(
+    message: BackendWorkspaceMessage,
+) -> Result<WorkspaceMessage, JSONRPCErrorError> {
+    Ok(WorkspaceMessage {
         message_id: message.message_id,
         message_type: workspace_message_type_from_backend(message.message_type),
         message_body: message.message_body,
-        created_at: message.created_at,
-        archived_at: message.archived_at,
-    }
+        created_at: workspace_message_timestamp_from_backend(message.created_at)?,
+        archived_at: workspace_message_timestamp_from_backend(message.archived_at)?,
+    })
+}
+
+fn workspace_message_timestamp_from_backend(
+    timestamp: Option<String>,
+) -> Result<Option<i64>, JSONRPCErrorError> {
+    timestamp
+        .map(|timestamp| {
+            DateTime::parse_from_rfc3339(&timestamp)
+                .map(|timestamp| timestamp.timestamp())
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to parse workspace message timestamp `{timestamp}`: {err}"
+                    ))
+                })
+        })
+        .transpose()
 }
 
 fn workspace_message_type_from_backend(
@@ -1128,11 +1139,6 @@ fn workspace_messages_allowed_for_plan(plan_type: Option<AccountPlanType>) -> bo
 
 fn workspace_messages_feature_disabled(err: &BackendRequestError) -> bool {
     err.status().is_some_and(|status| status.as_u16() == 404)
-}
-
-fn workspace_messages_auth_unavailable(err: &BackendRequestError) -> bool {
-    err.status()
-        .is_some_and(|status| matches!(status.as_u16(), 401 | 403))
 }
 
 #[cfg(test)]
@@ -1185,11 +1191,12 @@ mod tests {
                     message_type: BackendWorkspaceMessageType::Headline,
                     message_body: "Headline body".to_string(),
                     created_at: Some("2026-06-14T00:00:00Z".to_string()),
-                    archived_at: None,
+                    archived_at: Some("2026-06-15T00:00:00Z".to_string()),
                 }],
             },
             /*feature_enabled*/ true,
-        );
+        )
+        .expect("workspace message timestamps should parse");
 
         assert_eq!(
             response,
@@ -1199,10 +1206,30 @@ mod tests {
                     message_id: "headline-id".to_string(),
                     message_type: WorkspaceMessageType::Headline,
                     message_body: "Headline body".to_string(),
-                    created_at: Some("2026-06-14T00:00:00Z".to_string()),
-                    archived_at: None,
+                    created_at: Some(1_781_395_200),
+                    archived_at: Some(1_781_481_600),
                 }],
             }
         );
+    }
+
+    #[test]
+    fn workspace_messages_feature_disabled_only_for_not_found() {
+        let cases = [
+            (reqwest::StatusCode::NOT_FOUND, true),
+            (reqwest::StatusCode::UNAUTHORIZED, false),
+            (reqwest::StatusCode::FORBIDDEN, false),
+        ];
+
+        for (status, expected) in cases {
+            let err = BackendRequestError::UnexpectedStatus {
+                method: "GET".to_string(),
+                url: "https://example.test/api/codex/workspace-messages".to_string(),
+                status,
+                content_type: "application/json".to_string(),
+                body: "{}".to_string(),
+            };
+            assert_eq!(workspace_messages_feature_disabled(&err), expected);
+        }
     }
 }

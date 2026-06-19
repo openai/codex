@@ -20476,14 +20476,18 @@
       "WorkspaceMessage": {
         "properties": {
           "archivedAt": {
+            "description": "Unix timestamp (in seconds) when the message was archived.",
+            "format": "int64",
             "type": [
-              "string",
+              "integer",
               "null"
             ]
           },
           "createdAt": {
+            "description": "Unix timestamp (in seconds) when the message was created.",
+            "format": "int64",
             "type": [
-              "string",
+              "integer",
               "null"
             ]
           },

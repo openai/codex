@@ -2047,7 +2047,7 @@ Field notes:
 ```json
 { "method": "account/workspaceMessages/read", "id": 9 }
 { "id": 9, "result": { "featureEnabled": true, "messages": [
-    { "messageId": "msg_123", "messageType": "headline", "messageBody": "Workspace maintenance starts at 5pm.", "createdAt": "2026-06-14T00:00:00Z", "archivedAt": null }
+    { "messageId": "msg_123", "messageType": "headline", "messageBody": "Workspace maintenance starts at 5pm.", "createdAt": 1781395200, "archivedAt": null }
 ] } }
 ```
 

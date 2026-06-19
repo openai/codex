@@ -78,20 +78,6 @@ pub enum CodexWorkspaceMessageType {
     Unknown,
 }
 
-impl CodexWorkspaceMessagesResponse {
-    pub fn headlines(&self) -> impl Iterator<Item = &CodexWorkspaceMessage> {
-        self.messages
-            .iter()
-            .filter(|message| message.message_type == CodexWorkspaceMessageType::Headline)
-    }
-
-    pub fn announcements(&self) -> impl Iterator<Item = &CodexWorkspaceMessage> {
-        self.messages
-            .iter()
-            .filter(|message| message.message_type == CodexWorkspaceMessageType::Announcement)
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct AccountsCheckResponse {
     pub accounts: Vec<AccountEntry>,
@@ -562,7 +548,7 @@ Second line"
     }
 
     #[test]
-    fn workspace_messages_response_deserializes_headlines_and_announcements() {
+    fn workspace_messages_response_deserializes_messages() {
         let response: CodexWorkspaceMessagesResponse = serde_json::from_value(serde_json::json!({
             "messages": [
                 {
@@ -588,21 +574,33 @@ Second line"
         }))
         .expect("workspace messages response should deserialize");
 
-        let headlines = response
-            .headlines()
-            .map(|message| message.message_id.as_str())
-            .collect::<Vec<_>>();
-        let announcements = response
-            .announcements()
-            .map(|message| message.message_id.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(headlines, vec!["headline-id"]);
-        assert_eq!(announcements, vec!["announcement-id"]);
         assert_eq!(
-            response.messages[0].created_at.as_deref(),
-            Some("2026-06-14T00:00:00Z")
+            response,
+            CodexWorkspaceMessagesResponse {
+                messages: vec![
+                    CodexWorkspaceMessage {
+                        message_id: "headline-id".to_string(),
+                        message_type: CodexWorkspaceMessageType::Headline,
+                        message_body: "Headline body".to_string(),
+                        created_at: Some("2026-06-14T00:00:00Z".to_string()),
+                        archived_at: None,
+                    },
+                    CodexWorkspaceMessage {
+                        message_id: "announcement-id".to_string(),
+                        message_type: CodexWorkspaceMessageType::Announcement,
+                        message_body: "Announcement body".to_string(),
+                        created_at: Some("2026-06-14T01:00:00Z".to_string()),
+                        archived_at: None,
+                    },
+                    CodexWorkspaceMessage {
+                        message_id: "unknown-id".to_string(),
+                        message_type: CodexWorkspaceMessageType::Unknown,
+                        message_body: "Unknown body".to_string(),
+                        created_at: None,
+                        archived_at: None,
+                    },
+                ],
+            }
         );
-        assert_eq!(response.messages[0].archived_at, None);
     }
 }
