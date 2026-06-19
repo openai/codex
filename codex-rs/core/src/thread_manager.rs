@@ -659,6 +659,7 @@ impl ThreadManager {
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -756,6 +757,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -828,6 +830,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -1038,30 +1041,27 @@ impl ThreadManager {
             &config.cwd,
         );
         let agent_control = self.agent_control_for_config(&config);
-        Box::pin(
-            self.state
-                .spawn_thread_with_source_and_initial_rollout_copy(
-                    config,
-                    history,
-                    Arc::clone(&self.state.auth_manager),
-                    agent_control,
-                    self.state.session_source.clone(),
-                    /*parent_thread_id*/ None,
-                    source_thread_id,
-                    thread_source,
-                    Vec::new(),
-                    /*metrics_service_name*/ None,
-                    initial_multi_agent_mode,
-                    /*inherited_environments*/ None,
-                    /*inherited_exec_policy*/ None,
-                    parent_trace,
-                    environments,
-                    /*thread_extension_init*/ ExtensionDataInit::default(),
-                    supports_openai_form_elicitation,
-                    /*user_shell_override*/ None,
-                    initial_rollout_copy,
-                ),
-        )
+        Box::pin(self.state.spawn_thread_with_source(
+            config,
+            history,
+            Arc::clone(&self.state.auth_manager),
+            agent_control,
+            self.state.session_source.clone(),
+            /*parent_thread_id*/ None,
+            source_thread_id,
+            thread_source,
+            Vec::new(),
+            /*metrics_service_name*/ None,
+            initial_multi_agent_mode,
+            /*inherited_environments*/ None,
+            /*inherited_exec_policy*/ None,
+            parent_trace,
+            environments,
+            /*thread_extension_init*/ ExtensionDataInit::default(),
+            supports_openai_form_elicitation,
+            /*user_shell_override*/ None,
+            initial_rollout_copy,
+        ))
         .await
     }
 
@@ -1325,6 +1325,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -1365,6 +1366,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -1406,6 +1408,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -1449,58 +1452,13 @@ impl ThreadManagerState {
             thread_extension_init,
             supports_openai_form_elicitation,
             user_shell_override,
-        ))
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn spawn_thread_with_source(
-        &self,
-        config: Config,
-        initial_history: InitialHistory,
-        auth_manager: Arc<AuthManager>,
-        agent_control: AgentControl,
-        session_source: SessionSource,
-        parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
-        thread_source: Option<ThreadSource>,
-        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-        metrics_service_name: Option<String>,
-        initial_multi_agent_mode: Option<MultiAgentMode>,
-        inherited_environments: Option<TurnEnvironmentSnapshot>,
-        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-        parent_trace: Option<W3cTraceContext>,
-        environments: Vec<TurnEnvironmentSelection>,
-        thread_extension_init: ExtensionDataInit,
-        supports_openai_form_elicitation: bool,
-        user_shell_override: Option<crate::shell::Shell>,
-    ) -> CodexResult<NewThread> {
-        Box::pin(self.spawn_thread_with_source_and_initial_rollout_copy(
-            config,
-            initial_history,
-            auth_manager,
-            agent_control,
-            session_source,
-            parent_thread_id,
-            forked_from_thread_id,
-            thread_source,
-            dynamic_tools,
-            metrics_service_name,
-            initial_multi_agent_mode,
-            inherited_environments,
-            inherited_exec_policy,
-            parent_trace,
-            environments,
-            thread_extension_init,
-            supports_openai_form_elicitation,
-            user_shell_override,
             /*initial_rollout_copy*/ None,
         ))
         .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn spawn_thread_with_source_and_initial_rollout_copy(
+    pub(crate) async fn spawn_thread_with_source(
         &self,
         config: Config,
         initial_history: InitialHistory,
