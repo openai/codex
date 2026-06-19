@@ -7,6 +7,7 @@ use crate::fragments::AvailableSkillsInstructions;
 
 const MAX_AVAILABLE_SKILLS_BYTES: usize = 8_000;
 const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
+const MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS: usize = 1_024;
 pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
@@ -26,6 +27,10 @@ pub(crate) fn available_skills_fragment(
             .short_description
             .as_deref()
             .unwrap_or(entry.description.as_str());
+        let description = description
+            .char_indices()
+            .nth(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS)
+            .map_or(description, |(index, _)| &description[..index]);
         let line = render_skill_line(entry, description);
         let next_bytes = total_bytes.saturating_add(line.len());
         if next_bytes > MAX_AVAILABLE_SKILLS_BYTES {

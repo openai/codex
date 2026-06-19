@@ -20,6 +20,7 @@ const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 100;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 pub const SKILL_DESCRIPTION_TRUNCATED_WARNING: &str = "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
 pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_WITH_PERCENT: &str = "Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
+const MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS: usize = 1024;
 pub const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
     "Exceeded skills context budget. All skill descriptions were removed and";
 pub const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `environment resource` locators are owned by an execution environment, `orchestrator resource` locators are opaque non-filesystem resources, and `custom resource` locators use their provider's access mechanism.";
@@ -485,9 +486,14 @@ impl<'a> SkillLine<'a> {
     }
 
     fn with_path(skill: &'a SkillMetadata, path: String) -> Self {
+        let description = skill.description.as_str();
+        let description = description
+            .char_indices()
+            .nth(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS)
+            .map_or(description, |(index, _)| &description[..index]);
         Self {
             name: skill.name.as_str(),
-            description: skill.description.as_str(),
+            description,
             path,
         }
     }
@@ -1027,6 +1033,25 @@ mod tests {
         assert_eq!(
             default_skill_metadata_budget(Some(-1)),
             SkillMetadataBudget::Characters(DEFAULT_SKILL_METADATA_CHAR_BUDGET)
+        );
+    }
+
+    #[test]
+    fn rendering_caps_model_visible_descriptions_without_mutating_metadata() {
+        let description = "\u{1F4A1}".repeat(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS + 1);
+        let skill = make_skill_with_description("long-skill", SkillScope::Repo, &description);
+        let expected_description = "\u{1F4A1}".repeat(MAX_MODEL_VISIBLE_SKILL_DESCRIPTION_CHARS);
+
+        let rendered = build_available_skills_from_metadata(
+            std::slice::from_ref(&skill),
+            SkillMetadataBudget::Characters(usize::MAX),
+        )
+        .expect("skill should render");
+
+        assert_eq!(skill.description, description);
+        assert_eq!(
+            rendered.skill_lines,
+            vec![expected_skill_line(&skill, &expected_description)]
         );
     }
 

@@ -256,6 +256,55 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
 }
 
 #[tokio::test]
+async fn model_context_truncates_catalog_descriptions() -> TestResult {
+    let description = "x".repeat(1_025);
+    let mut entry = test_entry(
+        SkillSourceKind::Orchestrator,
+        "codex_apps",
+        "orchestrator/long-description",
+        "skill://orchestrator/long-description/SKILL.md",
+    );
+    entry.description = description.clone();
+    let providers =
+        SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: vec![entry],
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: None,
+            fail_first_list: false,
+        }));
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let session_source = SessionSource::Cli;
+    let config = default_config();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            environments: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let fragments = registry.context_contributors()[0]
+        .contribute_thread_context(&session_store, &thread_store)
+        .await;
+    assert_eq!(1, fragments.len());
+    let rendered = fragments[0].text();
+    assert!(rendered.contains(&"x".repeat(1_024)));
+    assert!(!rendered.contains(&description));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
     let list_calls = Arc::new(AtomicUsize::new(0));
     let providers =

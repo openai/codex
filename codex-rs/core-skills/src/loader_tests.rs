@@ -1548,7 +1548,7 @@ async fn preserves_block_scalar_body_while_repairing_other_fields() {
 }
 
 #[tokio::test]
-async fn truncates_overlong_short_descriptions() {
+async fn preserves_overlong_short_descriptions() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let skill_dir = codex_home.path().join("skills/demo");
     fs::create_dir_all(&skill_dir).unwrap();
@@ -1566,10 +1566,7 @@ async fn truncates_overlong_short_descriptions() {
         outcome.errors
     );
     assert_eq!(outcome.skills.len(), 1);
-    assert_eq!(
-        outcome.skills[0].short_description,
-        Some("x".repeat(MAX_SHORT_DESCRIPTION_LEN))
-    );
+    assert_eq!(outcome.skills[0].short_description, Some(too_long));
 }
 
 #[tokio::test]
@@ -1601,7 +1598,7 @@ async fn skips_hidden_and_invalid() {
 }
 
 #[tokio::test]
-async fn truncates_overlong_descriptions() {
+async fn preserves_overlong_descriptions() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let max_desc = "\u{1F4A1}".repeat(MAX_DESCRIPTION_LEN);
     write_skill(&codex_home, "max-len", "max-len", &max_desc);
@@ -1629,7 +1626,7 @@ async fn truncates_overlong_descriptions() {
         .iter()
         .find(|skill| skill.name == "too-long")
         .expect("too-long skill");
-    assert_eq!(too_long_skill.description, max_desc);
+    assert_eq!(too_long_skill.description, too_long_desc);
 }
 
 #[tokio::test]

@@ -28,7 +28,6 @@ const MAX_RESOURCE_PAGES: usize = 10;
 const MAX_ORCHESTRATOR_SKILLS: usize = 100;
 const MAX_SKILL_NAME_CHARS: usize = 64;
 const MAX_QUALIFIED_SKILL_NAME_CHARS: usize = 128;
-const MAX_SKILL_DESCRIPTION_CHARS: usize = 1_024;
 const MAX_SKILL_PACKAGE_URI_CHARS: usize = 1_024;
 const MAX_SKILL_RESOURCE_URI_CHARS: usize = 2_048;
 const MAX_SKILL_RESOURCE_CONTENT_BYTES: usize = 1024 * 1024;
@@ -315,9 +314,6 @@ fn normalized_description(value: &str) -> Option<String> {
 
     Some(
         value
-            .chars()
-            .take(MAX_SKILL_DESCRIPTION_CHARS)
-            .collect::<String>()
             .replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;"),

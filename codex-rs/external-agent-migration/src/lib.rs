@@ -1163,10 +1163,7 @@ fn command_source_name(source_commands: &Path, source_file: &Path) -> String {
 
 fn render_command_skill(body: &str, name: &str, description: &str, source_name: &str) -> String {
     let body = rewrite_external_agent_terms(body.trim());
-    let description = rewrite_external_agent_terms(description)
-        .chars()
-        .take(MAX_SKILL_DESCRIPTION_LEN)
-        .collect::<String>();
+    let description = rewrite_external_agent_terms(description);
     let template_body = if body.is_empty() {
         "No command template body was found.".to_string()
     } else {
@@ -1724,7 +1721,7 @@ command = "enabled-server"
     }
 
     #[test]
-    fn commands_with_overlong_descriptions_are_truncated() {
+    fn commands_with_overlong_descriptions_are_preserved() {
         let root = source_path("commands");
         let file = source_path("commands/review.md");
         let description = "x".repeat(MAX_SKILL_DESCRIPTION_LEN + 1);
@@ -1743,13 +1740,12 @@ command = "enabled-server"
             "review",
         );
         let rendered_document = parse_document_content(&rendered);
-        let expected_description = "x".repeat(MAX_SKILL_DESCRIPTION_LEN);
         assert_eq!(
             rendered_document
                 .frontmatter
                 .get("description")
                 .and_then(FrontmatterValue::as_scalar),
-            Some(expected_description.as_str())
+            Some(description.as_str())
         );
     }
 
