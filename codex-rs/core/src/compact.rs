@@ -254,8 +254,8 @@ async fn run_compact_task_inner_impl(
             Ok(()) => {
                 break;
             }
-            Err(CodexErr::Interrupted) => {
-                return Err(CodexErr::Interrupted);
+            Err(err @ (CodexErr::Interrupted | CodexErr::TurnAborted)) => {
+                return Err(err);
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input_len > 1 {

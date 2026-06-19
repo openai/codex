@@ -22,6 +22,7 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
+use test_case::test_case;
 use tokio::time::timeout;
 
 const ROLLOUT_BUDGET: RolloutBudgetConfig = RolloutBudgetConfig {
@@ -251,6 +252,75 @@ async fn exhausted_budget_aborts_current_and_later_turns() -> Result<()> {
         };
         assert_eq!(abort.reason, TurnAbortReason::Interrupted);
     }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(false ; "local")]
+#[test_case(true ; "remote_v2")]
+async fn compaction_budget_exhaustion_aborts_without_error_or_retry(remote_v2: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let compact_response = if remote_v2 {
+        sse(vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "compaction",
+                    "encrypted_content": "encrypted-summary",
+                }
+            }),
+            ev_completed_with_tokens("compact", /*total_tokens*/ 10),
+        ])
+    } else {
+        sse(vec![
+            ev_response_created("compact"),
+            ev_assistant_message("compact-summary", "compact summary"),
+            ev_completed_with_tokens("compact", /*total_tokens*/ 10),
+        ])
+    };
+    let responses = mount_sse_sequence(&server, vec![compact_response]).await;
+    let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    model_provider.supports_websockets = false;
+    if !remote_v2 {
+        model_provider.name = "OpenAI-compatible test provider".to_string();
+    }
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.rollout_budget = Some(RolloutBudgetConfig {
+                limit_tokens: 10,
+                reminder_interval_tokens: 5,
+                ..ROLLOUT_BUDGET
+            });
+            if remote_v2 {
+                config
+                    .features
+                    .enable(Feature::RemoteCompactionV2)
+                    .expect("test config should allow remote compaction v2");
+            }
+        })
+        .build(&server)
+        .await?;
+
+    test.codex.submit(Op::Compact).await?;
+    let event = wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnAborted(_) => true,
+        EventMsg::Error(error) => panic!("budget exhaustion emitted an error: {}", error.message),
+        EventMsg::TurnComplete(_) => {
+            panic!("budget-exhausting compaction completed instead of aborting")
+        }
+        _ => false,
+    })
+    .await;
+    let EventMsg::TurnAborted(abort) = event else {
+        unreachable!("event filter only accepts TurnAborted")
+    };
+    assert_eq!(abort.reason, TurnAbortReason::Interrupted);
+    assert_eq!(responses.requests().len(), 1, "compaction should not retry");
 
     Ok(())
 }

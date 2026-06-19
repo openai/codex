@@ -165,6 +165,9 @@ async fn run_remote_compact_task_inner(
     attempt
         .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
+    if matches!(&result, Err(CodexErr::TurnAborted)) {
+        return result;
+    }
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
         let event = EventMsg::Error(
