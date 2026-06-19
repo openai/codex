@@ -66,6 +66,21 @@ pub struct InitializeResponse {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExecServerCapabilities {
+    #[serde(default)]
+    pub rpc_batch: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InitializeWireResponse {
+    pub session_id: String,
+    #[serde(default)]
+    pub capabilities: ExecServerCapabilities,
+}
+
 /// Information about an execution/filesystem environment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

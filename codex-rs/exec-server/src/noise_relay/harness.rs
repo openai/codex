@@ -420,7 +420,7 @@ async fn receive_data(
         // messages; emit only complete, successfully parsed messages.
         for message in decoder.push(&plaintext)? {
             incoming_tx
-                .send(JsonRpcConnectionEvent::Message(message))
+                .send(message.into_connection_event())
                 .await
                 .map_err(|_| ExecServerError::Closed)?;
         }

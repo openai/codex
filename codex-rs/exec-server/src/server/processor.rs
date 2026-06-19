@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
 use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
@@ -8,7 +9,13 @@ use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
+use crate::connection::MAX_RPC_BATCH_REQUESTS;
+use crate::protocol::FS_CANONICALIZE_METHOD;
+use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_READ_DIRECTORY_METHOD;
+use crate::protocol::FS_READ_FILE_METHOD;
 use crate::rpc::RpcNotificationSender;
+use crate::rpc::RpcRouter;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
 use crate::rpc::invalid_request;
@@ -16,6 +23,8 @@ use crate::rpc::method_not_found;
 use crate::server::ExecServerHandler;
 use crate::server::registry::build_router;
 use crate::server::session_registry::SessionRegistry;
+
+const MAX_RPC_BATCH_CONCURRENCY: usize = 32;
 
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
@@ -100,29 +109,19 @@ async fn run_connection(
             }
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_app_server_protocol::JSONRPCMessage::Request(request) => {
-                    if let Some(route) = router.request_route(request.method.as_str()) {
-                        let message = tokio::select! {
-                            message = route(Arc::clone(&handler), request) => message,
-                            _ = disconnected_rx.changed() => {
-                                debug!("exec-server transport disconnected while handling request");
-                                break;
-                            }
-                        };
-                        if let Some(message) = message
-                            && outgoing_tx.send(message).await.is_err()
-                        {
+                    let message = tokio::select! {
+                        message = dispatch_request(
+                            Arc::clone(&router),
+                            Arc::clone(&handler),
+                            request,
+                        ) => message,
+                        _ = disconnected_rx.changed() => {
+                            debug!("exec-server transport disconnected while handling request");
                             break;
                         }
-                    } else if outgoing_tx
-                        .send(RpcServerOutboundMessage::Error {
-                            request_id: request.id,
-                            error: method_not_found(format!(
-                                "exec-server stub does not implement `{}` yet",
-                                request.method
-                            )),
-                        })
-                        .await
-                        .is_err()
+                    };
+                    if let Some(message) = message
+                        && outgoing_tx.send(message).await.is_err()
                     {
                         break;
                     }
@@ -165,6 +164,99 @@ async fn run_connection(
                     break;
                 }
             },
+            JsonRpcConnectionEvent::Batch(messages) => {
+                if messages.is_empty() || messages.len() > MAX_RPC_BATCH_REQUESTS {
+                    let message = if messages.is_empty() {
+                        "JSON-RPC batch must not be empty".to_string()
+                    } else {
+                        format!(
+                            "JSON-RPC batch contains {} requests; maximum is {MAX_RPC_BATCH_REQUESTS}",
+                            messages.len()
+                        )
+                    };
+                    if outgoing_tx
+                        .send(RpcServerOutboundMessage::Error {
+                            request_id: codex_app_server_protocol::RequestId::Integer(-1),
+                            error: invalid_request(message),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+
+                let batch = futures::stream::iter(messages)
+                    .map(|message| {
+                        let router = Arc::clone(&router);
+                        let handler = Arc::clone(&handler);
+                        async move {
+                            match message {
+                                codex_app_server_protocol::JSONRPCMessage::Request(request)
+                                    if !is_batchable_request_method(request.method.as_str()) =>
+                                {
+                                    Some(RpcServerOutboundMessage::Error {
+                                        request_id: request.id,
+                                        error: invalid_request(format!(
+                                            "`{}` cannot be sent in a JSON-RPC batch",
+                                            request.method
+                                        )),
+                                    })
+                                }
+                                codex_app_server_protocol::JSONRPCMessage::Request(request) => {
+                                    dispatch_request(router, handler, request).await
+                                }
+                                codex_app_server_protocol::JSONRPCMessage::Notification(_) => {
+                                    Some(RpcServerOutboundMessage::Error {
+                                        request_id: codex_app_server_protocol::RequestId::Integer(
+                                            -1,
+                                        ),
+                                        error: invalid_request(
+                                            "notifications cannot be sent in a JSON-RPC batch"
+                                                .to_string(),
+                                        ),
+                                    })
+                                }
+                                codex_app_server_protocol::JSONRPCMessage::Response(response) => {
+                                    Some(RpcServerOutboundMessage::Error {
+                                        request_id: response.id,
+                                        error: invalid_request(
+                                            "client responses cannot be sent in a JSON-RPC batch"
+                                                .to_string(),
+                                        ),
+                                    })
+                                }
+                                codex_app_server_protocol::JSONRPCMessage::Error(error) => {
+                                    Some(RpcServerOutboundMessage::Error {
+                                        request_id: error.id,
+                                        error: invalid_request(
+                                            "client errors cannot be sent in a JSON-RPC batch"
+                                                .to_string(),
+                                        ),
+                                    })
+                                }
+                            }
+                        }
+                    })
+                    .buffered(MAX_RPC_BATCH_CONCURRENCY)
+                    .filter_map(std::future::ready)
+                    .collect::<Vec<_>>();
+                let messages = tokio::select! {
+                    messages = batch => messages,
+                    _ = disconnected_rx.changed() => {
+                        debug!("exec-server transport disconnected while handling batch");
+                        break;
+                    }
+                };
+                if outgoing_tx
+                    .send(RpcServerOutboundMessage::Batch(messages))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             JsonRpcConnectionEvent::Disconnected { reason } => {
                 if let Some(reason) = reason {
                     debug!("exec-server connection disconnected: {reason}");
@@ -184,6 +276,35 @@ async fn run_connection(
     let _ = outbound_task.await;
 }
 
+fn is_batchable_request_method(method: &str) -> bool {
+    // Batch handling is only for remote skill discovery lookups. Keep it read-only so concurrent
+    // execution cannot reorder mutations, process I/O, HTTP side effects, or file handle lifetimes.
+    matches!(
+        method,
+        FS_CANONICALIZE_METHOD
+            | FS_GET_METADATA_METHOD
+            | FS_READ_DIRECTORY_METHOD
+            | FS_READ_FILE_METHOD
+    )
+}
+
+async fn dispatch_request(
+    router: Arc<RpcRouter<ExecServerHandler>>,
+    handler: Arc<ExecServerHandler>,
+    request: codex_app_server_protocol::JSONRPCRequest,
+) -> Option<RpcServerOutboundMessage> {
+    let Some(route) = router.request_route(request.method.as_str()) else {
+        return Some(RpcServerOutboundMessage::Error {
+            request_id: request.id,
+            error: method_not_found(format!(
+                "exec-server stub does not implement `{}` yet",
+                request.method
+            )),
+        });
+    };
+    route(handler, request).await
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -196,6 +317,7 @@ mod tests {
     use codex_app_server_protocol::JSONRPCResponse;
     use codex_app_server_protocol::RequestId;
     use codex_utils_path_uri::PathUri;
+    use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde::de::DeserializeOwned;
     use tokio::io::AsyncBufReadExt;
@@ -216,6 +338,10 @@ mod tests {
     use crate::protocol::EXEC_TERMINATE_METHOD;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
+    use crate::protocol::FS_READ_DIRECTORY_METHOD;
+    use crate::protocol::FS_WRITE_FILE_METHOD;
+    use crate::protocol::FsReadDirectoryParams;
+    use crate::protocol::FsReadDirectoryResponse;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeParams;
@@ -224,6 +350,82 @@ mod tests {
     use crate::protocol::TerminateParams;
     use crate::protocol::TerminateResponse;
     use crate::server::session_registry::SessionRegistry;
+
+    #[tokio::test]
+    async fn json_rpc_batch_allows_only_read_only_filesystem_requests() {
+        let registry = SessionRegistry::new();
+        let (mut writer, mut lines, task) = spawn_test_connection(registry, "batch");
+
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        let cwd = PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI");
+        write_batch(
+            &mut writer,
+            &[
+                JSONRPCMessage::Request(JSONRPCRequest {
+                    id: RequestId::Integer(2),
+                    method: FS_READ_DIRECTORY_METHOD.to_string(),
+                    params: Some(
+                        serde_json::to_value(FsReadDirectoryParams {
+                            path: cwd,
+                            sandbox: None,
+                        })
+                        .expect("serialize fs/readDirectory params"),
+                    ),
+                    trace: None,
+                }),
+                JSONRPCMessage::Request(JSONRPCRequest {
+                    id: RequestId::Integer(3),
+                    method: FS_WRITE_FILE_METHOD.to_string(),
+                    params: Some(serde_json::json!({})),
+                    trace: None,
+                }),
+            ],
+        )
+        .await;
+
+        let messages = read_batch(&mut lines).await;
+        assert_eq!(messages.len(), 2);
+        match &messages[0] {
+            JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
+                assert_eq!(*id, RequestId::Integer(2));
+                let _: FsReadDirectoryResponse =
+                    serde_json::from_value(result.clone()).expect("decode fs/readDirectory result");
+            }
+            other => panic!("expected fs/readDirectory response, got {other:?}"),
+        }
+        match &messages[1] {
+            JSONRPCMessage::Error(error) => {
+                assert_eq!(error.id, RequestId::Integer(3));
+                assert_eq!(error.error.code, -32600);
+                assert!(
+                    error
+                        .error
+                        .message
+                        .contains("`fs/writeFile` cannot be sent in a JSON-RPC batch")
+                );
+            }
+            other => panic!("expected fs/writeFile error, got {other:?}"),
+        }
+
+        drop(writer);
+        drop(lines);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+    }
 
     #[tokio::test]
     async fn transport_disconnect_detaches_session_during_in_flight_read() {
@@ -370,6 +572,12 @@ mod tests {
         writer.write_all(b"\n").await.expect("write newline");
     }
 
+    async fn write_batch(writer: &mut DuplexStream, messages: &[JSONRPCMessage]) {
+        let encoded = serde_json::to_vec(messages).expect("serialize JSON-RPC batch");
+        writer.write_all(&encoded).await.expect("write batch");
+        writer.write_all(b"\n").await.expect("write newline");
+    }
+
     async fn read_response<T: DeserializeOwned>(
         lines: &mut Lines<BufReader<DuplexStream>>,
         expected_id: i64,
@@ -387,6 +595,15 @@ mod tests {
             JSONRPCMessage::Error(error) => panic!("unexpected JSON-RPC error: {error:?}"),
             other => panic!("expected JSON-RPC response, got {other:?}"),
         }
+    }
+
+    async fn read_batch(lines: &mut Lines<BufReader<DuplexStream>>) -> Vec<JSONRPCMessage> {
+        let line = lines
+            .next_line()
+            .await
+            .expect("read batch")
+            .expect("batch line");
+        serde_json::from_str(&line).expect("decode JSON-RPC batch")
     }
 
     fn exec_params(process_id: ProcessId) -> ExecParams {

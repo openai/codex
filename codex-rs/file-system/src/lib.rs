@@ -12,6 +12,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::Stream;
+use futures::StreamExt;
 use std::future::Future;
 use std::io;
 use std::path::Path;
@@ -21,6 +22,7 @@ use std::task::Poll;
 
 /// Maximum chunk size returned by [`ExecutorFileSystem::read_file_stream`].
 pub const FILE_READ_CHUNK_SIZE: usize = 1024 * 1024;
+const FILE_SYSTEM_BATCH_CONCURRENCY: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateDirectoryOptions {
@@ -55,6 +57,26 @@ pub struct ReadDirectoryEntry {
     pub is_directory: bool,
     pub is_file: bool,
 }
+
+/// One independent, read-only filesystem operation eligible for batching.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FileSystemOperation {
+    Canonicalize { path: PathUri },
+    ReadFile { path: PathUri },
+    GetMetadata { path: PathUri },
+    ReadDirectory { path: PathUri },
+}
+
+/// Typed output for a [`FileSystemOperation`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FileSystemOperationOutput {
+    Canonicalize(PathUri),
+    ReadFile(Vec<u8>),
+    GetMetadata(FileMetadata),
+    ReadDirectory(Vec<ReadDirectoryEntry>),
+}
+
+pub type FileSystemOperationResult = FileSystemResult<FileSystemOperationOutput>;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -263,4 +285,62 @@ pub trait ExecutorFileSystem: Send + Sync {
         copy_options: CopyOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
+
+    /// Executes independent read-only filesystem operations concurrently.
+    ///
+    /// Results retain request order. Operations have no ordering or transactional relationship;
+    /// callers must put dependent operations in separate batches.
+    fn execute_batch<'a>(
+        &'a self,
+        operations: Vec<FileSystemOperation>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemOperationResult>> {
+        Box::pin(execute_batch_with_scalar_operations(
+            self, operations, sandbox,
+        ))
+    }
+}
+
+/// Default batch implementation used by local filesystems and by remote fallbacks.
+pub async fn execute_batch_with_scalar_operations<F>(
+    file_system: &F,
+    operations: Vec<FileSystemOperation>,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> FileSystemResult<Vec<FileSystemOperationResult>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    Ok(futures::stream::iter(operations)
+        .map(|operation| execute_scalar_operation(file_system, operation, sandbox))
+        .buffered(FILE_SYSTEM_BATCH_CONCURRENCY)
+        .collect()
+        .await)
+}
+
+async fn execute_scalar_operation<F>(
+    file_system: &F,
+    operation: FileSystemOperation,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> FileSystemOperationResult
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    match operation {
+        FileSystemOperation::Canonicalize { path } => file_system
+            .canonicalize(&path, sandbox)
+            .await
+            .map(FileSystemOperationOutput::Canonicalize),
+        FileSystemOperation::ReadFile { path } => file_system
+            .read_file(&path, sandbox)
+            .await
+            .map(FileSystemOperationOutput::ReadFile),
+        FileSystemOperation::GetMetadata { path } => file_system
+            .get_metadata(&path, sandbox)
+            .await
+            .map(FileSystemOperationOutput::GetMetadata),
+        FileSystemOperation::ReadDirectory { path } => file_system
+            .read_directory(&path, sandbox)
+            .await
+            .map(FileSystemOperationOutput::ReadDirectory),
+    }
 }

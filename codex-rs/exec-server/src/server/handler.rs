@@ -17,6 +17,7 @@ use crate::client::http_client::ReqwestHttpRequestRunner;
 use crate::protocol::EnvironmentInfo;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecServerCapabilities;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCloseParams;
@@ -41,7 +42,7 @@ use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::InitializeParams;
-use crate::protocol::InitializeResponse;
+use crate::protocol::InitializeWireResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::SignalParams;
@@ -107,7 +108,7 @@ impl ExecServerHandler {
     pub(crate) async fn initialize(
         &self,
         params: InitializeParams,
-    ) -> Result<InitializeResponse, JSONRPCErrorError> {
+    ) -> Result<InitializeWireResponse, JSONRPCErrorError> {
         if self.initialize_requested.swap(true, Ordering::SeqCst) {
             return Err(invalid_request(
                 "initialize may only be sent once per connection".to_string(),
@@ -135,7 +136,10 @@ impl ExecServerHandler {
             .session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(session);
-        Ok(InitializeResponse { session_id })
+        Ok(InitializeWireResponse {
+            session_id,
+            capabilities: ExecServerCapabilities { rpc_batch: true },
+        })
     }
 
     pub(crate) fn initialized(&self) -> Result<(), String> {
