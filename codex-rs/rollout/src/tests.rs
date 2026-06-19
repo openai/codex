@@ -26,6 +26,7 @@ use crate::list::ThreadSortKey;
 use crate::list::ThreadsPage;
 use crate::list::get_threads;
 use crate::list::read_head_for_summary;
+use crate::list::read_thread_item_from_rollout;
 use crate::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
@@ -1345,6 +1346,64 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     let age = now - updated;
     assert!(age.num_seconds().abs() < 30);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_thread_item_from_cow_child_uses_parent_preview() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let parent_ts = "2025-06-01T08-00-00";
+    let parent_uuid = Uuid::from_u128(42);
+    write_session_file(
+        home,
+        parent_ts,
+        parent_uuid,
+        /*num_records*/ 0,
+        Some(SessionSource::VSCode),
+    )?;
+    let parent_path = home
+        .join("sessions")
+        .join("2025")
+        .join("06")
+        .join("01")
+        .join(format!("rollout-{parent_ts}-{parent_uuid}.jsonl"));
+    let parent_byte_len = fs::metadata(&parent_path)?.len();
+
+    let child_ts = "2025-06-01T09-00-00";
+    let child_uuid = Uuid::from_u128(43);
+    let child_dir = home.join("sessions").join("2025").join("06").join("01");
+    fs::create_dir_all(&child_dir)?;
+    let child_path = child_dir.join(format!("rollout-{child_ts}-{child_uuid}.jsonl"));
+    let child_meta = serde_json::json!({
+        "timestamp": child_ts,
+        "type": "session_meta",
+        "payload": {
+            "id": child_uuid,
+            "forked_from_id": parent_uuid,
+            "timestamp": child_ts,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "base_instructions": null,
+            "source": "vscode",
+            "model_provider": TEST_PROVIDER,
+            "fork_parent_rollout_path": parent_path.to_string_lossy(),
+            "fork_parent_rollout_byte_len": parent_byte_len,
+        }
+    });
+    fs::write(&child_path, format!("{child_meta}\n"))?;
+
+    let item = read_thread_item_from_rollout(child_path.clone())
+        .await
+        .expect("child summary should expand parent preview");
+
+    assert_eq!(item.path, child_path);
+    assert_eq!(item.thread_id, Some(thread_id_from_uuid(child_uuid)));
+    assert_eq!(item.preview.as_deref(), Some("Hello from user"));
+    assert_eq!(item.first_user_message.as_deref(), Some("Hello from user"));
+    assert_eq!(item.model_provider.as_deref(), Some(TEST_PROVIDER));
     Ok(())
 }
 

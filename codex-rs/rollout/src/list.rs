@@ -91,6 +91,7 @@ pub type ConversationsPage = ThreadsPage;
 #[derive(Default)]
 struct HeadTailSummary {
     saw_session_meta: bool,
+    has_fork_parent_rollout_ref: bool,
     thread_id: Option<ThreadId>,
     first_user_message: Option<String>,
     preview: Option<String>,
@@ -770,9 +771,17 @@ async fn build_thread_item(
 ) -> Option<ThreadItem> {
     // Read head and detect preview-bearing events; goal previews can appear before
     // the first normal user message.
-    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
+    let mut summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
         .await
         .unwrap_or_default();
+    if summary.saw_session_meta && summary.preview.is_none() && summary.has_fork_parent_rollout_ref
+    {
+        if let Ok(expanded_summary) = read_expanded_rollout_summary(&path).await {
+            if expanded_summary.preview.is_some() {
+                summary = expanded_summary;
+            }
+        }
+    }
     if !allowed_sources.is_empty()
         && !summary
             .source
@@ -855,6 +864,22 @@ pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> 
         /*updated_at*/ None,
     )
     .await
+}
+
+async fn read_expanded_rollout_summary(path: &Path) -> io::Result<HeadTailSummary> {
+    let (items, _, _) = super::recorder::RolloutRecorder::load_rollout_items(path).await?;
+    let mut summary = HeadTailSummary::default();
+    let scan_limit = HEAD_RECORD_LIMIT + USER_EVENT_SCAN_LIMIT;
+    for item in items.iter().take(scan_limit) {
+        observe_summary_rollout_item(&mut summary, item, /*timestamp*/ None);
+        if summary.saw_session_meta
+            && summary.preview.is_some()
+            && summary.first_user_message.is_some()
+        {
+            break;
+        }
+    }
+    Ok(summary)
 }
 
 /// Collects immediate subdirectories of `parent`, parses their (string) names with `parse`,
@@ -1115,61 +1140,18 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             continue;
         }
         lines_scanned += 1;
+        if !summary.saw_session_meta {
+            summary.has_fork_parent_rollout_ref = rollout_line_has_fork_parent_rollout_ref(trimmed);
+        }
 
         let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
         let Ok(rollout_line) = parsed else { continue };
 
-        match rollout_line.item {
-            RolloutItem::SessionMeta(session_meta_line) => {
-                if !summary.saw_session_meta {
-                    summary.source = Some(session_meta_line.meta.source.clone());
-                    summary.parent_thread_id = session_meta_line.meta.parent_thread_id;
-                    summary.agent_nickname = session_meta_line.meta.agent_nickname.clone();
-                    summary.agent_role = session_meta_line.meta.agent_role.clone();
-                    summary.model_provider = session_meta_line.meta.model_provider.clone();
-                    summary.thread_id = Some(session_meta_line.meta.id);
-                    summary.cwd = Some(session_meta_line.meta.cwd.clone());
-                    summary.git_branch = session_meta_line
-                        .git
-                        .as_ref()
-                        .and_then(|git| git.branch.clone());
-                    summary.git_sha = session_meta_line
-                        .git
-                        .as_ref()
-                        .and_then(|git| git.commit_hash.as_ref().map(|sha| sha.0.clone()));
-                    summary.git_origin_url = session_meta_line
-                        .git
-                        .as_ref()
-                        .and_then(|git| git.repository_url.clone());
-                    summary.cli_version = Some(session_meta_line.meta.cli_version);
-                    summary.created_at = Some(session_meta_line.meta.timestamp.clone());
-                    summary.saw_session_meta = true;
-                }
-            }
-            RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
-                summary
-                    .created_at
-                    .get_or_insert_with(|| rollout_line.timestamp.clone());
-            }
-            RolloutItem::TurnContext(_) => {
-                // Not included in `head`; skip.
-            }
-            RolloutItem::Compacted(_) => {
-                // Not included in `head`; skip.
-            }
-            RolloutItem::EventMsg(ev) => {
-                if let Some(preview) = event_msg_preview(&ev) {
-                    if summary.preview.is_none() {
-                        summary.preview = Some(preview.clone());
-                    }
-                    if let EventMsg::UserMessage(_) = ev
-                        && summary.first_user_message.is_none()
-                    {
-                        summary.first_user_message = Some(preview);
-                    }
-                }
-            }
-        }
+        observe_summary_rollout_item(
+            &mut summary,
+            &rollout_line.item,
+            Some(&rollout_line.timestamp),
+        );
 
         if summary.saw_session_meta
             && summary.preview.is_some()
@@ -1180,6 +1162,76 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
     }
 
     Ok(summary)
+}
+
+fn observe_summary_rollout_item(
+    summary: &mut HeadTailSummary,
+    item: &RolloutItem,
+    timestamp: Option<&str>,
+) {
+    match item {
+        RolloutItem::SessionMeta(session_meta_line) => {
+            if !summary.saw_session_meta {
+                summary.source = Some(session_meta_line.meta.source.clone());
+                summary.parent_thread_id = session_meta_line.meta.parent_thread_id;
+                summary.agent_nickname = session_meta_line.meta.agent_nickname.clone();
+                summary.agent_role = session_meta_line.meta.agent_role.clone();
+                summary.model_provider = session_meta_line.meta.model_provider.clone();
+                summary.thread_id = Some(session_meta_line.meta.id);
+                summary.cwd = Some(session_meta_line.meta.cwd.clone());
+                summary.git_branch = session_meta_line
+                    .git
+                    .as_ref()
+                    .and_then(|git| git.branch.clone());
+                summary.git_sha = session_meta_line
+                    .git
+                    .as_ref()
+                    .and_then(|git| git.commit_hash.as_ref().map(|sha| sha.0.clone()));
+                summary.git_origin_url = session_meta_line
+                    .git
+                    .as_ref()
+                    .and_then(|git| git.repository_url.clone());
+                summary.cli_version = Some(session_meta_line.meta.cli_version.clone());
+                summary.created_at = Some(session_meta_line.meta.timestamp.clone());
+                summary.saw_session_meta = true;
+            }
+        }
+        RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
+            if let Some(timestamp) = timestamp {
+                summary
+                    .created_at
+                    .get_or_insert_with(|| timestamp.to_string());
+            }
+        }
+        RolloutItem::TurnContext(_) | RolloutItem::Compacted(_) => {}
+        RolloutItem::EventMsg(event) => {
+            if let Some(preview) = event_msg_preview(event) {
+                if summary.preview.is_none() {
+                    summary.preview = Some(preview.clone());
+                }
+                if let EventMsg::UserMessage(_) = event
+                    && summary.first_user_message.is_none()
+                {
+                    summary.first_user_message = Some(preview);
+                }
+            }
+        }
+    }
+}
+
+fn rollout_line_has_fork_parent_rollout_ref(line: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+    let payload = value.get("payload").unwrap_or(&value);
+    payload
+        .get("fork_parent_rollout_path")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|path| !path.is_empty())
+        && payload
+            .get("fork_parent_rollout_byte_len")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|byte_len| byte_len > 0)
 }
 
 /// Read up to `HEAD_RECORD_LIMIT` records from the start of the rollout file at `path`.
