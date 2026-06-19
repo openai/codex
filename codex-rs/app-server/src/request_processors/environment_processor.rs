@@ -17,19 +17,13 @@ impl EnvironmentRequestProcessor {
         &self,
         params: EnvironmentAddParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let result = match params.connect_timeout_ms {
-            Some(connect_timeout_ms) => self
-                .environment_manager
-                .upsert_environment_with_connect_timeout(
-                    params.environment_id,
-                    params.exec_server_url,
-                    Duration::from_millis(connect_timeout_ms),
-                ),
-            None => self
-                .environment_manager
-                .upsert_environment(params.environment_id, params.exec_server_url),
-        };
-        result.map_err(|err| invalid_request(err.to_string()))?;
+        self.environment_manager
+            .upsert_environment(
+                params.environment_id,
+                params.exec_server_url,
+                params.connect_timeout_ms.map(Duration::from_millis),
+            )
+            .map_err(|err| invalid_request(err.to_string()))?;
         Ok(Some(EnvironmentAddResponse {}.into()))
     }
 }
