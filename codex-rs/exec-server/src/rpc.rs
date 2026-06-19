@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -116,6 +117,7 @@ impl RpcNotificationSender {
 
 pub(crate) struct RpcRouter<S> {
     request_routes: HashMap<&'static str, RequestRoute<S>>,
+    batchable_request_methods: HashSet<&'static str>,
     notification_routes: HashMap<&'static str, NotificationRoute<S>>,
 }
 
@@ -123,6 +125,7 @@ impl<S> Default for RpcRouter<S> {
     fn default() -> Self {
         Self {
             request_routes: HashMap::new(),
+            batchable_request_methods: HashSet::new(),
             notification_routes: HashMap::new(),
         }
     }
@@ -143,6 +146,7 @@ where
         F: Fn(Arc<S>, P) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
     {
+        self.batchable_request_methods.remove(method);
         self.request_routes.insert(
             method,
             Box::new(move |state, request| {
@@ -172,12 +176,24 @@ where
         );
     }
 
+    pub(crate) fn batchable_request<P, R, F, Fut>(&mut self, method: &'static str, handler: F)
+    where
+        P: DeserializeOwned + Send + 'static,
+        R: Serialize + Send + 'static,
+        F: Fn(Arc<S>, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
+    {
+        self.request(method, handler);
+        self.batchable_request_methods.insert(method);
+    }
+
     pub(crate) fn request_with_id<P, F, Fut>(&mut self, method: &'static str, handler: F)
     where
         P: DeserializeOwned + Send + 'static,
         F: Fn(Arc<S>, RequestId, P) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<(), JSONRPCErrorError>> + Send + 'static,
     {
+        self.batchable_request_methods.remove(method);
         self.request_routes.insert(
             method,
             Box::new(move |state, request| {
@@ -224,6 +240,10 @@ where
 
     pub(crate) fn request_route(&self, method: &str) -> Option<&RequestRoute<S>> {
         self.request_routes.get(method)
+    }
+
+    pub(crate) fn is_request_batchable(&self, method: &str) -> bool {
+        self.batchable_request_methods.contains(method)
     }
 
     pub(crate) fn notification_route(&self, method: &str) -> Option<&NotificationRoute<S>> {
