@@ -300,6 +300,83 @@ async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> an
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn response_item_ids_are_persisted_for_remote_v2_compaction_when_not_sent()
+-> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
+                    }
+                }),
+                ev_completed("resp-compact"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        })
+        .build(&server)
+        .await?;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    test.submit_turn("before compaction").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("after compaction").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let post_compaction_input = requests[2].input();
+    assert!(!post_compaction_input.is_empty());
+    assert!(
+        post_compaction_input
+            .iter()
+            .all(|item| item.get("id").is_none()),
+        "post-compaction request items should omit IDs when sending is disabled: {post_compaction_input:#?}"
+    );
+
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let rollout_text = std::fs::read_to_string(rollout_path)?;
+    let replacement_history = rollout_text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .find_map(|entry| match entry.item {
+            RolloutItem::Compacted(compacted) => compacted.replacement_history,
+            _ => None,
+        })
+        .expect("v2 compaction should persist replacement history");
+    assert!(
+        replacement_history.iter().all(|item| item.id().is_some()),
+        "all v2 replacement history items should have IDs: {replacement_history:#?}"
+    );
+
+    Ok(())
+}
+
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
 /// Returns the fake JWT string written to `tokens.id_token`.
 #[expect(clippy::unwrap_used)]

@@ -2672,16 +2672,14 @@ impl Session {
         {
             prepare_response_items(items.to_mut());
         }
-        if turn_context.config.features.enabled(Feature::ItemIds) {
-            Self::assign_missing_response_item_ids(&mut items);
-        }
-        items
+        Self::assign_missing_response_item_ids(items)
     }
 
-    fn assign_missing_response_item_ids(items: &mut Cow<'_, [ResponseItem]>) {
+    fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
         if items.iter().all(|item| item.id().is_some()) {
-            return;
+            return items;
         }
+        let mut items = items;
         for item in items.to_mut() {
             if item.id().is_some() {
                 continue;
@@ -2705,6 +2703,7 @@ impl Session {
             };
             item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
         }
+        items
     }
 
     pub(crate) fn response_item_from_user_input(
@@ -2844,6 +2843,11 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
         compacted_item: CompactedItem,
     ) {
+        let items = Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned();
+        let compacted_item = CompactedItem {
+            replacement_history: Some(items.clone()),
+            ..compacted_item
+        };
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
