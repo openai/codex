@@ -7,7 +7,6 @@ use std::sync::Mutex;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::session_runtime::CellEvent;
@@ -32,7 +31,7 @@ pub(crate) struct CellToolCall {
     pub(crate) input: Option<JsonValue>,
 }
 
-/// Connects a cell actor to session-owned callbacks and lifecycle state.
+/// Connects a cell actor to session-owned callbacks and stored values.
 ///
 /// Implementations should forward callback cancellation to downstream work.
 /// The actor stops awaiting callbacks once cancellation begins. Implementations
@@ -52,10 +51,11 @@ pub(crate) trait CellHost: Send + Sync + 'static {
         cancellation_token: CancellationToken,
     ) -> impl Future<Output = Result<(), String>> + Send;
 
-    fn commit_stored_values(
+    fn commit_completion(
         &self,
         stored_value_writes: HashMap<String, JsonValue>,
-        lifecycle: Arc<CellLifecycle>,
+        event: CellEvent,
+        cell_state: Arc<CellState>,
     ) -> impl Future<Output = bool> + Send;
 
     fn closed(&self) -> impl Future<Output = ()> + Send;
@@ -64,28 +64,22 @@ pub(crate) trait CellHost: Send + Sync + 'static {
 #[derive(Clone)]
 pub(crate) struct CellHandle {
     command_tx: mpsc::UnboundedSender<CellCommand>,
-    lifecycle: Arc<CellLifecycle>,
-    terminal_event_rx: watch::Receiver<Option<CellEvent>>,
+    state: Arc<CellState>,
 }
 
 impl CellHandle {
     pub(super) fn new(
         command_tx: mpsc::UnboundedSender<CellCommand>,
-        lifecycle: Arc<CellLifecycle>,
-        terminal_event_rx: watch::Receiver<Option<CellEvent>>,
+        state: Arc<CellState>,
     ) -> Self {
-        Self {
-            command_tx,
-            lifecycle,
-            terminal_event_rx,
-        }
+        Self { command_tx, state }
     }
 
     pub(crate) fn observe(&self, mode: ObserveMode) -> CellEventFuture {
-        if !self.lifecycle.accepting_requests() {
+        if !self.state.accepting_observations() {
             return closed_event();
         }
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let (response_tx, response_rx) = oneshot::channel();
         if self
             .command_tx
             .send(CellCommand::Observe { mode, response_tx })
@@ -97,134 +91,207 @@ impl CellHandle {
     }
 
     pub(crate) fn terminate(&self) -> CellEventFuture {
-        match self.lifecycle.request_termination() {
-            TerminationRequest::Terminate => {}
-            TerminationRequest::ConsumeCompletion => {}
-            TerminationRequest::AlreadyTerminating => {
-                return Box::pin(async { Err(CellError::AlreadyTerminating) });
-            }
-            TerminationRequest::Closed => return closed_event(),
-        }
-        if self.command_tx.send(CellCommand::Terminate).is_err() {
-            self.lifecycle.close();
-            return closed_event();
-        }
-        terminal_event(self.terminal_event_rx.clone())
+        self.state.request_termination()
     }
 }
 
-pub(crate) struct CellLifecycle {
-    state: Mutex<CellLifecycleState>,
-    session_shutdown_token: CancellationToken,
-    termination_token: CancellationToken,
-    work_cancellation_token: CancellationToken,
+/// The single linearization point for a cell's terminal outcome.
+///
+/// The cancellation token is a child of the owning session token. Callback
+/// tokens are children of this token, so cancellation flows strictly from the
+/// session to the cell and then to its callbacks.
+///
+/// The mutex is held only for synchronous phase transitions and terminal
+/// delivery. Runtime execution, observation waits, and callbacks never run
+/// while it is held.
+pub(crate) struct CellState {
+    phase: Mutex<CellPhase>,
+    cancellation_token: CancellationToken,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CellLifecycleState {
+enum CellPhase {
     Running,
-    TerminationRequested,
-    CompletionCommitted,
-    CompletionBuffered,
-    CompletionConsumptionRequested,
+    Terminating {
+        response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
+    },
+    Completed(CellEvent),
+    Tombstone,
+}
+
+pub(crate) enum CompletionDelivery {
+    Delivered,
+    Buffered,
+    Rejected(Option<oneshot::Sender<Result<CellEvent, CellError>>>),
+}
+
+pub(crate) enum ObservationDelivery {
+    Running(oneshot::Sender<Result<CellEvent, CellError>>),
+    Delivered,
+    Buffered,
     Closed,
 }
 
-enum TerminationRequest {
-    Terminate,
-    ConsumeCompletion,
-    AlreadyTerminating,
-    Closed,
-}
-
-impl CellLifecycle {
-    pub(crate) fn new(session_shutdown_token: CancellationToken) -> Self {
-        let work_cancellation_token = session_shutdown_token.child_token();
+impl CellState {
+    pub(crate) fn new(cancellation_token: CancellationToken) -> Self {
         Self {
-            state: Mutex::new(CellLifecycleState::Running),
-            session_shutdown_token,
-            termination_token: CancellationToken::new(),
-            work_cancellation_token,
+            phase: Mutex::new(CellPhase::Running),
+            cancellation_token,
         }
     }
 
-    pub(crate) fn accepting_requests(&self) -> bool {
-        let accepting_state = matches!(
+    pub(crate) fn accepting_observations(&self) -> bool {
+        let accepting_phase = matches!(
             *self
-                .state
+                .phase
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-            CellLifecycleState::Running
-                | CellLifecycleState::CompletionCommitted
-                | CellLifecycleState::CompletionBuffered
+            CellPhase::Running | CellPhase::Completed(_)
         );
-        accepting_state && !self.session_shutdown_token.is_cancelled()
+        accepting_phase && !self.cancellation_token.is_cancelled()
     }
 
-    fn request_termination(&self) -> TerminationRequest {
-        let mut state = self
-            .state
+    pub(crate) fn request_termination(&self) -> CellEventFuture {
+        let mut phase = self
+            .phase
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match *state {
-            CellLifecycleState::Running => {
-                *state = CellLifecycleState::TerminationRequested;
-                self.termination_token.cancel();
-                self.work_cancellation_token.cancel();
-                TerminationRequest::Terminate
+        match std::mem::replace(&mut *phase, CellPhase::Tombstone) {
+            CellPhase::Running => {
+                let (response_tx, response_rx) = oneshot::channel();
+                *phase = CellPhase::Terminating { response_tx };
+                self.cancellation_token.cancel();
+                response_event(response_rx)
             }
-            CellLifecycleState::TerminationRequested => TerminationRequest::AlreadyTerminating,
-            CellLifecycleState::CompletionCommitted | CellLifecycleState::CompletionBuffered => {
-                *state = CellLifecycleState::CompletionConsumptionRequested;
-                TerminationRequest::ConsumeCompletion
+            CellPhase::Terminating { response_tx } => {
+                *phase = CellPhase::Terminating { response_tx };
+                Box::pin(async { Err(CellError::AlreadyTerminating) })
             }
-            CellLifecycleState::CompletionConsumptionRequested => {
-                TerminationRequest::AlreadyTerminating
+            CellPhase::Completed(event) => {
+                *phase = CellPhase::Completed(event.clone());
+                self.cancellation_token.cancel();
+                ready_event(event)
             }
-            CellLifecycleState::Closed => TerminationRequest::Closed,
+            CellPhase::Tombstone => closed_event(),
         }
     }
 
-    pub(crate) fn commit_completion(&self, commit: impl FnOnce()) -> bool {
-        let mut state = self
-            .state
+    pub(crate) fn commit_completion(&self, event: CellEvent, commit: impl FnOnce()) -> bool {
+        let mut phase = self
+            .phase
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *state != CellLifecycleState::Running || self.session_shutdown_token.is_cancelled() {
+        if !matches!(*phase, CellPhase::Running) || self.cancellation_token.is_cancelled() {
             return false;
         }
         commit();
-        *state = CellLifecycleState::CompletionCommitted;
+        *phase = CellPhase::Completed(event);
         true
     }
 
-    pub(crate) fn buffer_completion(&self) {
-        let mut state = self
-            .state
+    pub(crate) fn deliver_completion(
+        &self,
+        response_tx: Option<oneshot::Sender<Result<CellEvent, CellError>>>,
+    ) -> CompletionDelivery {
+        let mut phase = self
+            .phase
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *state == CellLifecycleState::CompletionCommitted {
-            *state = CellLifecycleState::CompletionBuffered;
+        let event = match std::mem::replace(&mut *phase, CellPhase::Tombstone) {
+            CellPhase::Completed(event) => event,
+            previous => {
+                *phase = previous;
+                return CompletionDelivery::Rejected(response_tx);
+            }
+        };
+        let Some(response_tx) = response_tx else {
+            *phase = CellPhase::Completed(event);
+            return CompletionDelivery::Buffered;
+        };
+        match response_tx.send(Ok(event)) {
+            Ok(()) => {
+                self.cancellation_token.cancel();
+                CompletionDelivery::Delivered
+            }
+            Err(Ok(event)) => {
+                *phase = CellPhase::Completed(event);
+                CompletionDelivery::Buffered
+            }
+            Err(Err(error)) => {
+                panic!("completion delivery unexpectedly carried an actor error: {error:?}")
+            }
         }
     }
 
-    pub(crate) fn close(&self) {
-        *self
-            .state
+    pub(crate) fn route_observation(
+        &self,
+        response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
+    ) -> ObservationDelivery {
+        let mut phase = self
+            .phase
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = CellLifecycleState::Closed;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match std::mem::replace(&mut *phase, CellPhase::Tombstone) {
+            CellPhase::Running => {
+                *phase = CellPhase::Running;
+                ObservationDelivery::Running(response_tx)
+            }
+            CellPhase::Completed(event) => match response_tx.send(Ok(event)) {
+                Ok(()) => {
+                    self.cancellation_token.cancel();
+                    ObservationDelivery::Delivered
+                }
+                Err(Ok(event)) => {
+                    *phase = CellPhase::Completed(event);
+                    ObservationDelivery::Buffered
+                }
+                Err(Err(error)) => {
+                    panic!("completion delivery unexpectedly carried an actor error: {error:?}")
+                }
+            },
+            CellPhase::Terminating {
+                response_tx: termination_tx,
+            } => {
+                *phase = CellPhase::Terminating {
+                    response_tx: termination_tx,
+                };
+                let _ = response_tx.send(Err(CellError::Closed));
+                ObservationDelivery::Closed
+            }
+            CellPhase::Tombstone => {
+                let _ = response_tx.send(Err(CellError::Closed));
+                ObservationDelivery::Closed
+            }
+        }
     }
 
-    pub(crate) fn session_shutdown_token(&self) -> CancellationToken {
-        self.session_shutdown_token.clone()
+    pub(crate) fn finish_termination(&self, event: CellEvent) -> Option<CellEvent> {
+        let mut phase = self
+            .phase
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let observer_event = match std::mem::replace(&mut *phase, CellPhase::Tombstone) {
+            CellPhase::Running => Some(event),
+            CellPhase::Terminating { response_tx } => {
+                let _ = response_tx.send(Ok(event.clone()));
+                Some(event)
+            }
+            CellPhase::Completed(completed_event) => Some(completed_event),
+            CellPhase::Tombstone => None,
+        };
+        self.cancellation_token.cancel();
+        observer_event
     }
 
-    pub(crate) fn termination_token(&self) -> CancellationToken {
-        self.termination_token.clone()
+    pub(crate) fn tombstone(&self) {
+        *self
+            .phase
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = CellPhase::Tombstone;
+        self.cancellation_token.cancel();
     }
 
-    pub(crate) fn work_cancellation_token(&self) -> CancellationToken {
-        self.work_cancellation_token.clone()
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
     }
 }
 
@@ -233,26 +300,14 @@ pub(super) enum CellCommand {
         mode: ObserveMode,
         response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
     },
-    Terminate,
 }
 
-fn response_event(
-    response_rx: tokio::sync::oneshot::Receiver<Result<CellEvent, CellError>>,
-) -> CellEventFuture {
+fn response_event(response_rx: oneshot::Receiver<Result<CellEvent, CellError>>) -> CellEventFuture {
     Box::pin(async move { response_rx.await.unwrap_or(Err(CellError::Closed)) })
 }
 
-fn terminal_event(mut terminal_event_rx: watch::Receiver<Option<CellEvent>>) -> CellEventFuture {
-    Box::pin(async move {
-        loop {
-            if let Some(event) = terminal_event_rx.borrow_and_update().clone() {
-                return Ok(event);
-            }
-            if terminal_event_rx.changed().await.is_err() {
-                return Err(CellError::Closed);
-            }
-        }
-    })
+fn ready_event(event: CellEvent) -> CellEventFuture {
+    Box::pin(async move { Ok(event) })
 }
 
 fn closed_event() -> CellEventFuture {

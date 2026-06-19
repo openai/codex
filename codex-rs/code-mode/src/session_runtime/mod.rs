@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 pub use self::types::CellEvent;
 pub use self::types::CellId;
@@ -27,7 +27,7 @@ use crate::cell_actor::CellError;
 use crate::cell_actor::CellEventFuture;
 use crate::cell_actor::CellHandle;
 use crate::cell_actor::CellHost;
-use crate::cell_actor::CellLifecycle;
+use crate::cell_actor::CellState;
 use crate::cell_actor::CellToolCall;
 
 type RuntimeEventFuture = Pin<Box<dyn Future<Output = Result<CellEvent, Error>> + Send + 'static>>;
@@ -39,20 +39,25 @@ pub struct SessionRuntime<D: SessionRuntimeDelegate> {
 
 struct Inner<D: SessionRuntimeDelegate> {
     stored_values: Mutex<HashMap<String, JsonValue>>,
-    cells: Mutex<HashMap<CellId, CellHandle>>,
-    cell_count_tx: watch::Sender<usize>,
+    cells: Mutex<HashMap<CellId, CellEntry>>,
+    // Tracks actor cleanup only. CellPhase remains the semantic lifecycle.
+    cell_tasks: TaskTracker,
     shutdown_token: CancellationToken,
     delegate: Arc<D>,
 }
 
+enum CellEntry {
+    Active(CellHandle),
+    Tombstone,
+}
+
 impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     pub fn new(delegate: Arc<D>) -> Self {
-        let (cell_count_tx, _) = watch::channel(/*init*/ 0);
         Self {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
                 cells: Mutex::new(HashMap::new()),
-                cell_count_tx,
+                cell_tasks: TaskTracker::new(),
                 shutdown_token: CancellationToken::new(),
                 delegate,
             }),
@@ -85,7 +90,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     ) -> Result<PendingEvent, Error> {
         let handle = {
             let cells = self.inner.cells.lock().await;
-            let Some(handle) = cells.get(cell_id) else {
+            let Some(CellEntry::Active(handle)) = cells.get(cell_id) else {
                 return Err(Error::MissingCell(cell_id.clone()));
             };
             handle.clone()
@@ -98,7 +103,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     pub async fn terminate(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
         let handle = {
             let cells = self.inner.cells.lock().await;
-            let Some(handle) = cells.get(cell_id) else {
+            let Some(CellEntry::Active(handle)) = cells.get(cell_id) else {
                 return Err(Error::MissingCell(cell_id.clone()));
             };
             handle.clone()
@@ -111,15 +116,12 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
 
     pub async fn shutdown(&self) -> Result<(), Error> {
         self.begin_shutdown();
-        // Serialize with cell admission before taking the count snapshot.
+        // Taking the registry lock ensures every cell that passed the shutdown
+        // check has registered its actor with the tracker before we wait.
         let cells = self.inner.cells.lock().await;
-        let mut cell_count = self.inner.cell_count_tx.subscribe();
+        self.inner.cell_tasks.close();
         drop(cells);
-        while *cell_count.borrow_and_update() != 0 {
-            if cell_count.changed().await.is_err() {
-                break;
-            }
-        }
+        self.inner.cell_tasks.wait().await;
         Ok(())
     }
 
@@ -141,23 +143,24 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         if cells.contains_key(&cell_id) {
             return Err(Error::DuplicateCell(cell_id));
         }
+        let cell_state = Arc::new(CellState::new(self.inner.shutdown_token.child_token()));
         let (handle, initial_event, task) = CellActor::prepare(
             request,
             stored_values,
             host,
             initial_observe_mode,
-            self.inner.shutdown_token.clone(),
+            cell_state,
         )
         .map_err(Error::Runtime)?;
-        cells.insert(cell_id.clone(), handle);
-        self.inner.cell_count_tx.send_replace(cells.len());
+        cells.insert(cell_id.clone(), CellEntry::Active(handle));
+        self.inner.cell_tasks.spawn(task);
         drop(cells);
-        tokio::spawn(task);
         Ok(map_actor_event(cell_id, initial_event))
     }
 
     fn begin_shutdown(&self) {
         self.inner.shutdown_token.cancel();
+        self.inner.cell_tasks.close();
     }
 }
 
@@ -216,21 +219,22 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
             .await
     }
 
-    async fn commit_stored_values(
+    async fn commit_completion(
         &self,
         stored_value_writes: HashMap<String, JsonValue>,
-        lifecycle: Arc<CellLifecycle>,
+        event: CellEvent,
+        cell_state: Arc<CellState>,
     ) -> bool {
         let mut stored_values = self.inner.stored_values.lock().await;
-        lifecycle.commit_completion(|| {
+        cell_state.commit_completion(event, || {
             stored_values.extend(stored_value_writes);
         })
     }
 
     async fn closed(&self) {
         let mut cells = self.inner.cells.lock().await;
-        if cells.remove(&self.cell_id).is_some() {
-            self.inner.cell_count_tx.send_replace(cells.len());
+        if let Some(entry) = cells.get_mut(&self.cell_id) {
+            *entry = CellEntry::Tombstone;
         }
     }
 }

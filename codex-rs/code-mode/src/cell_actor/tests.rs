@@ -61,12 +61,13 @@ impl CellHost for TestHost {
         Ok(())
     }
 
-    async fn commit_stored_values(
+    async fn commit_completion(
         &self,
         _stored_value_writes: HashMap<String, JsonValue>,
-        lifecycle: Arc<CellLifecycle>,
+        event: CellEvent,
+        cell_state: Arc<CellState>,
     ) -> bool {
-        lifecycle.commit_completion(|| {})
+        cell_state.commit_completion(event, || {})
     }
 
     async fn closed(&self) {}
@@ -90,12 +91,13 @@ impl CellHost for RecordingHost {
         Ok(())
     }
 
-    async fn commit_stored_values(
+    async fn commit_completion(
         &self,
         _stored_value_writes: HashMap<String, JsonValue>,
-        lifecycle: Arc<CellLifecycle>,
+        event: CellEvent,
+        cell_state: Arc<CellState>,
     ) -> bool {
-        lifecycle.commit_completion(|| {
+        cell_state.commit_completion(event, || {
             self.committed.store(true, Ordering::Release);
         })
     }
@@ -123,12 +125,13 @@ impl CellHost for PendingNotificationHost {
         std::future::pending().await
     }
 
-    async fn commit_stored_values(
+    async fn commit_completion(
         &self,
         _stored_value_writes: HashMap<String, JsonValue>,
-        lifecycle: Arc<CellLifecycle>,
+        event: CellEvent,
+        cell_state: Arc<CellState>,
     ) -> bool {
-        lifecycle.commit_completion(|| {
+        cell_state.commit_completion(event, || {
             self.committed.store(true, Ordering::Release);
         })
     }
@@ -169,10 +172,11 @@ impl CellHost for BlockingCommitHost {
         Ok(())
     }
 
-    async fn commit_stored_values(
+    async fn commit_completion(
         &self,
         _stored_value_writes: HashMap<String, JsonValue>,
-        lifecycle: Arc<CellLifecycle>,
+        event: CellEvent,
+        cell_state: Arc<CellState>,
     ) -> bool {
         self.commit_started_tx
             .send(())
@@ -182,7 +186,7 @@ impl CellHost for BlockingCommitHost {
             .await
             .expect("test did not release commit")
             .forget();
-        lifecycle.commit_completion(|| {})
+        cell_state.commit_completion(event, || {})
     }
 
     async fn closed(&self) {}
@@ -216,14 +220,15 @@ impl CellHost for TerminationCommitRaceHost {
         Ok(())
     }
 
-    async fn commit_stored_values(
+    async fn commit_completion(
         &self,
         _stored_value_writes: HashMap<String, JsonValue>,
-        lifecycle: Arc<CellLifecycle>,
+        event: CellEvent,
+        cell_state: Arc<CellState>,
     ) -> bool {
         self.commit_polled.wait();
         self.termination_admitted.wait();
-        lifecycle.commit_completion(|| {
+        cell_state.commit_completion(event, || {
             self.committed.store(true, Ordering::Release);
         })
     }
@@ -268,21 +273,15 @@ fn spawn_cell_actor_harness_with_host<H: CellHost>(
     )
     .unwrap();
     let session_shutdown_token = CancellationToken::new();
-    let lifecycle = Arc::new(CellLifecycle::new(session_shutdown_token.clone()));
-    let (terminal_event_tx, terminal_event_rx) = watch::channel(/*init*/ None);
-    let handle = CellHandle::new(
-        command_tx.clone(),
-        Arc::clone(&lifecycle),
-        terminal_event_rx,
-    );
+    let cell_state = Arc::new(CellState::new(session_shutdown_token.child_token()));
+    let handle = CellHandle::new(command_tx.clone(), Arc::clone(&cell_state));
     let task = tokio::spawn(run_cell(
         host,
         CellContext {
             runtime_tx,
             runtime_control_tx,
             runtime_terminate_handle,
-            lifecycle,
-            terminal_event_tx,
+            cell_state,
         },
         event_rx,
         command_rx,
@@ -416,16 +415,14 @@ async fn session_shutdown_during_result_callback_drain_prevents_stored_value_com
     )
     .unwrap();
     let session_shutdown_token = CancellationToken::new();
-    let lifecycle = Arc::new(CellLifecycle::new(session_shutdown_token.clone()));
-    let (terminal_event_tx, _) = watch::channel(/*init*/ None);
+    let cell_state = Arc::new(CellState::new(session_shutdown_token.child_token()));
     let mut task = Box::pin(run_cell(
         Arc::clone(&host),
         CellContext {
             runtime_tx,
             runtime_control_tx,
             runtime_terminate_handle,
-            lifecycle,
-            terminal_event_tx,
+            cell_state,
         },
         event_rx,
         command_rx,
@@ -592,48 +589,34 @@ async fn observer_receives_a_buffered_completion_after_commit_finishes() {
 #[test]
 fn failed_completion_delivery_rebuffers_the_event() {
     let session_shutdown_token = CancellationToken::new();
-    let lifecycle = CellLifecycle::new(session_shutdown_token);
-    assert!(lifecycle.commit_completion(|| {}));
-    let (terminal_event_tx, terminal_event_rx) = watch::channel(/*init*/ None);
-    let (response_tx, response_rx) = oneshot::channel();
-    drop(response_rx);
-    let mut observer = Some(Observer {
-        mode: ObserveMode::PendingFrontier,
-        response_tx,
-    });
+    let cell_state = CellState::new(session_shutdown_token.child_token());
     let event = CellEvent::Completed {
         content_items: Vec::new(),
         error_text: None,
     };
-    let mut completed_event = None;
+    assert!(cell_state.commit_completion(event.clone(), || {}));
+    let (response_tx, response_rx) = oneshot::channel();
+    drop(response_rx);
+    assert!(matches!(
+        cell_state.deliver_completion(Some(response_tx)),
+        CompletionDelivery::Buffered
+    ));
+    assert!(cell_state.accepting_observations());
 
-    let delivered = send_or_buffer_completion(
-        event.clone(),
-        &mut observer,
-        &mut completed_event,
-        &lifecycle,
-        &terminal_event_tx,
-    );
-
-    assert_eq!(
-        (
-            delivered,
-            observer.is_none(),
-            completed_event,
-            terminal_event_rx.borrow().clone(),
-            lifecycle.accepting_requests(),
-        ),
-        (false, true, Some(event.clone()), Some(event), true),
-    );
+    let (response_tx, mut response_rx) = oneshot::channel();
+    assert!(matches!(
+        cell_state.route_observation(response_tx),
+        ObservationDelivery::Delivered
+    ));
+    assert_eq!(response_rx.try_recv(), Ok(Ok(event)));
 }
 
 #[tokio::test]
 async fn session_shutdown_rejects_observation_before_the_actor_closes() {
     let session_shutdown_token = CancellationToken::new();
-    let lifecycle = Arc::new(CellLifecycle::new(session_shutdown_token.clone()));
+    let cell_state = Arc::new(CellState::new(session_shutdown_token.child_token()));
     let (command_tx, mut command_rx) = mpsc::unbounded_channel();
-    let (_terminal_event_tx, terminal_event_rx) = watch::channel(/*init*/ None);
-    let handle = CellHandle::new(command_tx, lifecycle, terminal_event_rx);
+    let handle = CellHandle::new(command_tx, cell_state);
     session_shutdown_token.cancel();
 
     assert_eq!(

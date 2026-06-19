@@ -87,9 +87,9 @@ fn execute_request_with_id(cell_id: &str, source: &str) -> ExecuteRequest {
 #[tokio::test]
 #[expect(
     clippy::await_holding_invalid_type,
-    reason = "test holds the registry lock to observe terminal routing before removal"
+    reason = "test holds the registry lock to observe terminal routing before tombstoning"
 )]
-async fn terminal_cells_are_unrouted_before_they_are_unregistered() {
+async fn terminal_cells_are_unrouted_before_the_registry_is_tombstoned() {
     let runtime = Arc::new(SessionRuntime::new(Arc::new(RecordingDelegate)));
     let cell_id = CellId::new("1");
     assert_eq!(
@@ -104,9 +104,11 @@ async fn terminal_cells_are_unrouted_before_they_are_unregistered() {
         })
     );
 
-    let mut cell_count = runtime.inner.cell_count_tx.subscribe();
     let cells = runtime.inner.cells.lock().await;
-    let handle = cells.get(&cell_id).unwrap().clone();
+    let CellEntry::Active(handle) = cells.get(&cell_id).unwrap() else {
+        panic!("running cell was unexpectedly tombstoned");
+    };
+    let handle = handle.clone();
     assert_eq!(
         handle.terminate().await,
         Ok(CellEvent::Terminated {
@@ -121,9 +123,11 @@ async fn terminal_cells_are_unrouted_before_they_are_unregistered() {
     assert_eq!(handle.terminate().await, Err(CellError::Closed));
     drop(cells);
 
-    cell_count.changed().await.unwrap();
-    assert_eq!(*cell_count.borrow_and_update(), 0);
     assert_eq!(runtime.shutdown().await, Ok(()));
+    assert!(matches!(
+        runtime.inner.cells.lock().await.get(&cell_id),
+        Some(CellEntry::Tombstone)
+    ));
 }
 
 #[tokio::test]
@@ -254,16 +258,14 @@ async fn drop_terminates_cells_when_the_registry_is_locked() {
     );
 
     let inner = Arc::clone(&runtime.inner);
-    let mut cell_count = inner.cell_count_tx.subscribe();
     let cells = inner.cells.lock().await;
     drop(runtime);
     drop(cells);
 
-    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), cell_count.changed())
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), inner.cell_tasks.wait())
         .await
-        .unwrap()
         .unwrap();
-    assert_eq!(*cell_count.borrow_and_update(), 0);
+    assert!(inner.cell_tasks.is_empty());
 }
 
 #[tokio::test]
@@ -291,20 +293,18 @@ async fn drop_cancels_notifications_during_natural_completion_when_registry_is_l
     );
 
     let inner = Arc::clone(&runtime.inner);
-    let mut cell_count = inner.cell_count_tx.subscribe();
     let cells = inner.cells.lock().await;
     drop(runtime);
     drop(cells);
 
-    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), cell_count.changed())
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), inner.cell_tasks.wait())
         .await
-        .unwrap()
         .unwrap();
-    assert_eq!(*cell_count.borrow_and_update(), 0);
+    assert!(inner.cell_tasks.is_empty());
 }
 
 #[tokio::test]
-async fn client_owned_cell_id_is_preserved_and_active_duplicates_are_rejected() {
+async fn client_owned_cell_id_is_preserved_and_ids_are_never_reused() {
     let runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
     let cell_id = CellId::new("client-generated");
 
@@ -334,5 +334,14 @@ async fn client_owned_cell_id_is_preserved_and_active_duplicates_are_rejected() 
         Ok(CellEvent::Terminated {
             content_items: Vec::new(),
         })
+    );
+    assert_eq!(
+        runtime
+            .execute(
+                execute_request_with_id(cell_id.as_str(), "text('resurrected');"),
+                ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
+            )
+            .await,
+        Err(Error::DuplicateCell(cell_id))
     );
 }
