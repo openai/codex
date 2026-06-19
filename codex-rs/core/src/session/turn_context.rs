@@ -204,6 +204,7 @@ impl TurnContext {
         self.config
             .features
             .apps_enabled_for_auth(uses_codex_backend)
+            && self.config.orchestrator_mcp_enabled
     }
 
     pub(crate) fn tool_environment_mode(&self) -> ToolEnvironmentMode {
