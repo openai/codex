@@ -1091,7 +1091,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ConnectorSkills,
         key: "connector_skills",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
