@@ -12,8 +12,6 @@ use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
-use serde::Deserialize;
-use serde::Serialize;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::process::Child;
@@ -31,7 +29,6 @@ use tokio::io::BufReader;
 use tokio::io::BufWriter;
 
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
-pub(crate) const MAX_RPC_BATCH_REQUESTS: usize = 512;
 const STDIO_TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(2);
 #[cfg(test)]
 pub(crate) const WEBSOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_millis(25);
@@ -41,35 +38,8 @@ pub(crate) const WEBSOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30
 #[derive(Debug)]
 pub(crate) enum JsonRpcConnectionEvent {
     Message(JSONRPCMessage),
-    Batch(Vec<JSONRPCMessage>),
     MalformedMessage { reason: String },
     Disconnected { reason: Option<String> },
-}
-
-/// Exec-server-local wire envelope for one JSON-RPC message or a batch.
-///
-/// Keeping this type local avoids expanding the app-server protocol surface while still using
-/// standard JSON-RPC batch framing on exec-server transports.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum JsonRpcWireMessage {
-    Single(JSONRPCMessage),
-    Batch(Vec<JSONRPCMessage>),
-}
-
-impl JsonRpcWireMessage {
-    pub(crate) fn into_connection_event(self) -> JsonRpcConnectionEvent {
-        match self {
-            Self::Single(message) => JsonRpcConnectionEvent::Message(message),
-            Self::Batch(messages) => JsonRpcConnectionEvent::Batch(messages),
-        }
-    }
-}
-
-impl From<JSONRPCMessage> for JsonRpcWireMessage {
-    fn from(message: JSONRPCMessage) -> Self {
-        Self::Single(message)
-    }
 }
 
 #[derive(Clone)]
@@ -251,7 +221,7 @@ fn log_stdio_child_wait_result(result: std::io::Result<std::process::ExitStatus>
 }
 
 pub(crate) struct JsonRpcConnection {
-    pub(crate) outgoing_tx: mpsc::Sender<JsonRpcWireMessage>,
+    pub(crate) outgoing_tx: mpsc::Sender<JSONRPCMessage>,
     pub(crate) incoming_rx: mpsc::Receiver<JsonRpcConnectionEvent>,
     pub(crate) disconnected_rx: watch::Receiver<bool>,
     pub(crate) task_handles: Vec<tokio::task::JoinHandle<()>>,
@@ -279,10 +249,10 @@ impl JsonRpcConnection {
                         if line.trim().is_empty() {
                             continue;
                         }
-                        match serde_json::from_str::<JsonRpcWireMessage>(&line) {
+                        match serde_json::from_str::<JSONRPCMessage>(&line) {
                             Ok(message) => {
                                 if incoming_tx_for_reader
-                                    .send(message.into_connection_event())
+                                    .send(JsonRpcConnectionEvent::Message(message))
                                     .await
                                     .is_err()
                                 {
@@ -425,7 +395,7 @@ impl JsonRpcConnection {
                             Some(Ok(message)) => match message.parse_jsonrpc_frame() {
                                 Ok(JsonRpcWebSocketFrame::Message(message)) => {
                                     if incoming_tx
-                                        .send(message.into_connection_event())
+                                        .send(JsonRpcConnectionEvent::Message(message))
                                         .await
                                         .is_err()
                                     {
@@ -494,7 +464,7 @@ impl JsonRpcConnection {
 }
 
 enum JsonRpcWebSocketFrame {
-    Message(JsonRpcWireMessage),
+    Message(JSONRPCMessage),
     Close,
     Ignore,
 }
@@ -579,7 +549,7 @@ async fn send_malformed_message(
 
 async fn write_jsonrpc_line_message<W>(
     writer: &mut BufWriter<W>,
-    message: &JsonRpcWireMessage,
+    message: &JSONRPCMessage,
 ) -> std::io::Result<()>
 where
     W: AsyncWrite + Unpin,
@@ -594,7 +564,7 @@ where
 async fn send_websocket_jsonrpc_message<W, M, E>(
     websocket_writer: &mut W,
     connection_label: &str,
-    message: &JsonRpcWireMessage,
+    message: &JSONRPCMessage,
 ) -> Result<(), String>
 where
     W: Sink<M, Error = E> + Unpin,
@@ -614,7 +584,7 @@ where
     }
 }
 
-fn serialize_jsonrpc_message(message: &JsonRpcWireMessage) -> Result<String, serde_json::Error> {
+fn serialize_jsonrpc_message(message: &JSONRPCMessage) -> Result<String, serde_json::Error> {
     serde_json::to_string(message)
 }
 
@@ -724,7 +694,7 @@ mod tests {
         );
         let message = test_jsonrpc_message();
 
-        connection.outgoing_tx.send(message.clone().into()).await?;
+        connection.outgoing_tx.send(message.clone()).await?;
         control.wait_for_blocked_write().await?;
         control.send_inbound(Message::Pong(b"check".to_vec().into()))?;
         assert!(

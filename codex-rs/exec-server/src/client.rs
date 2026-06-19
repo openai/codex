@@ -87,7 +87,6 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
-use crate::protocol::InitializeWireResponse;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadParams;
@@ -98,7 +97,6 @@ use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
-use crate::rpc::RpcBatchCall;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
 
@@ -201,7 +199,6 @@ struct Inner {
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_next_id: AtomicU64,
     session_id: OnceLock<String>,
-    rpc_batch_supported: AtomicBool,
     reconnect_strategy: Option<ExecServerReconnectStrategy>,
 }
 
@@ -474,7 +471,7 @@ impl ExecServerClient {
         } = options;
 
         timeout(initialize_timeout, async {
-            let response: InitializeWireResponse = rpc_client
+            let response: InitializeResponse = rpc_client
                 .call(
                     INITIALIZE_METHOD,
                     &InitializeParams {
@@ -487,9 +484,6 @@ impl ExecServerClient {
                 .inner
                 .session_id
                 .get_or_init(|| response.session_id.clone());
-            self.inner
-                .rpc_batch_supported
-                .store(response.capabilities.rpc_batch, Ordering::Release);
             if session_id != &response.session_id {
                 return Err(ExecServerError::Protocol(format!(
                     "exec-server initialized an unexpected session {}",
@@ -499,9 +493,7 @@ impl ExecServerClient {
             rpc_client
                 .notify(INITIALIZED_METHOD, &serde_json::json!({}))
                 .await?;
-            Ok(InitializeResponse {
-                session_id: response.session_id,
-            })
+            Ok(response)
         })
         .await
         .map_err(|_| ExecServerError::InitializeTimedOut {
@@ -716,10 +708,6 @@ impl ExecServerClient {
         self.inner.session_id.get().cloned()
     }
 
-    pub(crate) fn supports_rpc_batch(&self) -> bool {
-        self.inner.rpc_batch_supported.load(Ordering::Acquire)
-    }
-
     fn is_disconnected(&self) -> bool {
         self.inner.is_failed()
     }
@@ -753,7 +741,6 @@ impl ExecServerClient {
             http_body_streams_write_lock: Mutex::new(()),
             http_body_stream_next_id: AtomicU64::new(1),
             session_id,
-            rpc_batch_supported: AtomicBool::new(false),
             reconnect_strategy,
         });
         let client = Self { inner };
@@ -772,29 +759,6 @@ impl ExecServerClient {
     {
         let rpc_client = self.inner.rpc_client().await?;
         self.call_rpc(&rpc_client, method, params).await
-    }
-
-    pub(crate) async fn call_batch(
-        &self,
-        calls: Vec<RpcBatchCall>,
-    ) -> Result<Vec<Result<Value, ExecServerError>>, ExecServerError> {
-        let rpc_client = self.inner.rpc_client().await?;
-        match rpc_client.call_batch(calls).await {
-            Ok(results) => Ok(results
-                .into_iter()
-                .map(|result| result.map_err(ExecServerError::from))
-                .collect()),
-            Err(error) => {
-                let error = ExecServerError::from(error);
-                if is_transport_closed_error(&error) {
-                    Err(ExecServerError::Disconnected(disconnected_message(
-                        /*reason*/ None,
-                    )))
-                } else {
-                    Err(error)
-                }
-            }
-        }
     }
 
     async fn call_rpc<P, T>(
@@ -849,7 +813,6 @@ impl From<RpcCallError> for ExecServerError {
                 code: error.code,
                 message: error.message,
             },
-            RpcCallError::InvalidBatch(message) => Self::Protocol(message),
         }
     }
 }

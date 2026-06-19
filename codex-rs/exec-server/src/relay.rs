@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use codex_app_server_protocol::JSONRPCMessage;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -24,7 +25,6 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
-use crate::connection::JsonRpcWireMessage;
 use crate::connection::WEBSOCKET_KEEPALIVE_INTERVAL;
 use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_channel::NoiseChannelPublicKey;
@@ -170,7 +170,7 @@ impl RelayMessageFrame {
         }
     }
 
-    fn into_jsonrpc_message(self) -> Result<JsonRpcWireMessage, ExecServerError> {
+    fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
         let payload = self.into_data()?.payload;
         serde_json::from_slice(&payload).map_err(ExecServerError::Json)
     }
@@ -211,7 +211,7 @@ pub(crate) fn decode_relay_message_frame(
         .map_err(|err| ExecServerError::Protocol(format!("invalid relay message frame: {err}")))
 }
 
-pub(crate) fn jsonrpc_payload(message: &JsonRpcWireMessage) -> Result<Vec<u8>, ExecServerError> {
+pub(crate) fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
     serde_json::to_vec(message).map_err(ExecServerError::Json)
 }
 
@@ -346,7 +346,7 @@ where
                                             &mut websocket,
                                             &mut keepalive,
                                             &incoming_tx,
-                                            message.into_connection_event(),
+                                            JsonRpcConnectionEvent::Message(message),
                                         )
                                         .await
                                         {
@@ -847,7 +847,6 @@ mod tests {
     use std::task::Poll;
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCRequest;
     use codex_app_server_protocol::RequestId;
     use futures::Sink;
@@ -881,7 +880,7 @@ mod tests {
                 encode_relay_message_frame(&RelayMessageFrame::data(
                     stream_id,
                     /*seq*/ 0,
-                    jsonrpc_payload(&message.clone().into())?,
+                    jsonrpc_payload(&message)?,
                 ))
                 .into(),
             ))
@@ -1030,7 +1029,7 @@ mod tests {
         let message = test_jsonrpc_message();
 
         control.set_write_blocked();
-        connection.outgoing_tx.send(message.clone().into()).await?;
+        connection.outgoing_tx.send(message.clone()).await?;
         control.wait_for_blocked_write().await?;
         control.send_inbound(Message::Pong(b"check".to_vec().into()))?;
         assert!(
@@ -1048,7 +1047,7 @@ mod tests {
         };
         let frame = decode_relay_message_frame(data_payload.as_ref())?;
         assert_eq!(frame.stream_id, stream_id);
-        assert_eq!(frame.into_jsonrpc_message()?, message.into());
+        assert_eq!(frame.into_jsonrpc_message()?, message);
         drop(connection);
         Ok(())
     }

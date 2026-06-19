@@ -93,7 +93,7 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
             handler.terminate(params).await
         },
     );
-    router.batchable_request(
+    router.concurrent_request(
         FS_READ_FILE_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsReadFileParams| async move {
             handler.fs_read_file(params).await
@@ -129,19 +129,19 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
             handler.fs_create_directory(params).await
         },
     );
-    router.batchable_request(
+    router.concurrent_request(
         FS_GET_METADATA_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsGetMetadataParams| async move {
             handler.fs_get_metadata(params).await
         },
     );
-    router.batchable_request(
+    router.concurrent_request(
         FS_CANONICALIZE_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsCanonicalizeParams| async move {
             handler.fs_canonicalize(params).await
         },
     );
-    router.batchable_request(
+    router.concurrent_request(
         FS_READ_DIRECTORY_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsReadDirectoryParams| async move {
             handler.fs_read_directory(params).await
