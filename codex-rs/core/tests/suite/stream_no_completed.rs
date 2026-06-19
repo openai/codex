@@ -13,6 +13,7 @@ use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use serde_json::Value;
 
 fn sse_incomplete() -> String {
     responses::sse(vec![serde_json::json!({
@@ -98,6 +99,20 @@ async fn retries_on_early_close() {
         2,
         "expected retry after incomplete SSE stream"
     );
+    let tool_timing_report_ids = requests
+        .iter()
+        .map(|request| {
+            let body = serde_json::from_slice::<Value>(request).expect("request JSON");
+            let turn_metadata = body["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .expect("turn metadata");
+            serde_json::from_str::<Value>(turn_metadata).expect("turn metadata JSON")["tool_timing"]
+                ["report_id"]
+                .as_u64()
+                .expect("tool timing report id")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(tool_timing_report_ids, vec![0, 1]);
 
     server.shutdown().await;
 }
