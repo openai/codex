@@ -2524,13 +2524,6 @@
       },
       "type": "object"
     },
-    "RealtimeConversationArchitecture": {
-      "enum": [
-        "realtimeapi",
-        "avas"
-      ],
-      "type": "string"
-    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -2541,9 +2534,6 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
-        "architecture": {
-          "$ref": "#/definitions/RealtimeConversationArchitecture"
-        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },

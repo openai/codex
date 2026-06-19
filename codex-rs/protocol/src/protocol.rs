@@ -180,8 +180,6 @@ pub struct McpServerRefreshConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationStartParams {
-    /// Overrides the configured realtime architecture for this session only.
-    pub architecture: Option<RealtimeConversationArchitecture>,
     /// Whether Codex response handoffs are managed through explicit client append calls.
     pub client_managed_handoffs: bool,
     /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
@@ -1547,15 +1545,6 @@ pub enum RealtimeConversationVersion {
     V1,
     #[default]
     V2,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum RealtimeConversationArchitecture {
-    #[default]
-    #[serde(rename = "realtimeapi")]
-    RealtimeApi,
-    Avas,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
