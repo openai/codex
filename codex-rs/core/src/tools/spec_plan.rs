@@ -21,6 +21,7 @@ use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
+use crate::tools::handlers::RolloutBudgetHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::SleepHandler;
@@ -709,6 +710,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     if features.enabled(Feature::TokenBudget) {
         planned_tools.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
         planned_tools.add(GetContextRemainingHandler);
+    }
+
+    if features.enabled(Feature::RolloutBudget) {
+        planned_tools.add(RolloutBudgetHandler);
     }
 
     if features.enabled(Feature::SleepTool) {

@@ -24,6 +24,14 @@ struct RolloutBudgetState {
     deliveries: HashMap<ThreadId, ThreadBudgetDelivery>,
 }
 
+impl RolloutBudgetState {
+    fn remaining_tokens(&self) -> i64 {
+        (self.config.limit_tokens as f64 - self.weighted_tokens_used)
+            .max(0.0)
+            .floor() as i64
+    }
+}
+
 struct ThreadBudgetDelivery {
     window_id: String,
     reminder_index: i64,
@@ -49,6 +57,10 @@ impl RolloutBudget {
             + usage.non_cached_input() as f64 * state.config.prefill_token_weight;
     }
 
+    pub(crate) fn remaining_tokens(&self) -> Option<i64> {
+        self.lock().map(|state| state.remaining_tokens())
+    }
+
     pub(crate) fn pending_reminder(
         &self,
         thread_id: ThreadId,
@@ -64,9 +76,7 @@ impl RolloutBudget {
             return None;
         }
         Some(RolloutBudgetReminder {
-            remaining_tokens: (state.config.limit_tokens as f64 - state.weighted_tokens_used)
-                .max(0.0)
-                .floor() as i64,
+            remaining_tokens: state.remaining_tokens(),
             reminder_index,
         })
     }

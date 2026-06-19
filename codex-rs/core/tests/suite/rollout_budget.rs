@@ -9,6 +9,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -298,6 +299,51 @@ async fn restates_the_current_remainder_after_rollback() -> Result<()> {
         rollout_budget_texts(&requests[1]),
         vec![rollout_budget_message(/*remaining_tokens*/ 70)],
         "rollback should rearm the current budget reminder without refunding usage"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remaining_budget_tool_returns_the_current_remainder() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const CALL_ID: &str = "remaining-budget";
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 30),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call_with_namespace(CALL_ID, "rollout", "remaining_budget", "{}"),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![ev_response_created("resp-3"), ev_completed("resp-3")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::RolloutBudget)
+                .expect("test config should allow rollout budgets");
+            config.rollout_budget = Some(ROLLOUT_BUDGET);
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("use some budget").await?;
+    test.submit_turn("check the remaining budget").await?;
+
+    assert_eq!(
+        responses.requests()[2].function_call_output_text(CALL_ID),
+        Some(rollout_budget_message(/*remaining_tokens*/ 70))
     );
 
     Ok(())
