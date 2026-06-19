@@ -10,10 +10,6 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::MAX_RPC_BATCH_REQUESTS;
-use crate::protocol::FS_CANONICALIZE_METHOD;
-use crate::protocol::FS_GET_METADATA_METHOD;
-use crate::protocol::FS_READ_DIRECTORY_METHOD;
-use crate::protocol::FS_READ_FILE_METHOD;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcRouter;
 use crate::rpc::RpcServerOutboundMessage;
@@ -194,7 +190,7 @@ async fn run_connection(
                         async move {
                             match message {
                                 codex_app_server_protocol::JSONRPCMessage::Request(request)
-                                    if !is_batchable_request_method(request.method.as_str()) =>
+                                    if !router.is_request_batchable(request.method.as_str()) =>
                                 {
                                     Some(RpcServerOutboundMessage::Error {
                                         request_id: request.id,
@@ -274,18 +270,6 @@ async fn run_connection(
         let _ = task.await;
     }
     let _ = outbound_task.await;
-}
-
-fn is_batchable_request_method(method: &str) -> bool {
-    // Batch handling is only for remote skill discovery lookups. Keep it read-only so concurrent
-    // execution cannot reorder mutations, process I/O, HTTP side effects, or file handle lifetimes.
-    matches!(
-        method,
-        FS_CANONICALIZE_METHOD
-            | FS_GET_METADATA_METHOD
-            | FS_READ_DIRECTORY_METHOD
-            | FS_READ_FILE_METHOD
-    )
 }
 
 async fn dispatch_request(
