@@ -40,6 +40,26 @@ pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::O
     Ok(modified.map(time::OffsetDateTime::from))
 }
 
+/// Blocking equivalent of [`file_modified_time`] for filesystem walkers.
+pub(crate) fn file_modified_time_blocking(path: &Path) -> io::Result<Option<time::OffsetDateTime>> {
+    for attempt in 0..MAX_NOT_FOUND_RETRIES {
+        if let Some(path) = path::existing_rollout_path_blocking(path) {
+            match std::fs::metadata(path) {
+                Ok(meta) => {
+                    let modified = meta.modified().ok();
+                    return Ok(modified.map(time::OffsetDateTime::from));
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+        if attempt + 1 < MAX_NOT_FOUND_RETRIES {
+            std::thread::sleep(OPEN_ROLLOUT_LINE_READER_RETRY_DELAY);
+        }
+    }
+    Ok(None)
+}
+
 /// Opens a rollout line reader that transparently handles plain `.jsonl` and `.jsonl.zst` files.
 ///
 /// If the requested path disappears during a representation transition, this briefly retries
@@ -950,6 +970,19 @@ mod path {
         }
         let compressed_path = compressed_rollout_path(plain_path.as_path());
         if matches!(tokio::fs::metadata(compressed_path.as_path()).await, Ok(metadata) if metadata.is_file())
+        {
+            return Some(compressed_path);
+        }
+        None
+    }
+
+    pub(super) fn existing_rollout_path_blocking(path: &Path) -> Option<PathBuf> {
+        let plain_path = plain_rollout_path(path);
+        if matches!(std::fs::metadata(plain_path.as_path()), Ok(metadata) if metadata.is_file()) {
+            return Some(plain_path);
+        }
+        let compressed_path = compressed_rollout_path(plain_path.as_path());
+        if matches!(std::fs::metadata(compressed_path.as_path()), Ok(metadata) if metadata.is_file())
         {
             return Some(compressed_path);
         }
