@@ -34,7 +34,8 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   while IFS= read -r label; do
     [[ -n "$label" ]] || continue
     final_build_targets+=("$label")
-  done < <(read_query_labels 'kind("rust_(library|binary|proc_macro) rule", //codex-rs/...)')
+  # Linux lint covers these deliberately Linux-only Wine host runners.
+  done < <(read_query_labels 'kind("rust_(library|binary|proc_macro) rule", //codex-rs/...) except set(//codex-rs/exec-server/testing:wine-exec-server-test-support //codex-rs/exec-server/testing:wine-exec-test-runner)')
 
   if [[ ${#final_build_targets[@]} -eq 0 ]]; then
     echo "Failed to discover Windows Bazel lint targets." >&2

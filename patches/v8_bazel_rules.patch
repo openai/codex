@@ -242,7 +242,7 @@ index b432f86..28c567b 100644
      ],
      outs = [
          "include/inspector/Debugger.h",
-@@ -4462,15 +4467,19 @@ genrule(
+@@ -4462,15 +4467,21 @@ genrule(
          "src/inspector/protocol/Schema.cpp",
          "src/inspector/protocol/Schema.h",
      ],
@@ -250,7 +250,7 @@ index b432f86..28c567b 100644
 -           --inspector_protocol_dir third_party/inspector_protocol \
 +    cmd = "INSPECTOR_PROTOCOL_DIR=$$(dirname $(execpath third_party/inspector_protocol/code_generator.py)); \
 +           PYTHONPATH=$$INSPECTOR_PROTOCOL_DIR:external/rules_python++pip+v8_python_deps_311_jinja2/site-packages:external/rules_python++pip+v8_python_deps_311_markupsafe/site-packages:$${PYTHONPATH-} \
-+           $(execpath @rules_python//python/bin:python) $(execpath third_party/inspector_protocol/code_generator.py) --jinja_dir . \
++           $(PYTHON3) $(execpath third_party/inspector_protocol/code_generator.py) --jinja_dir . \
 +           --inspector_protocol_dir $$INSPECTOR_PROTOCOL_DIR \
             --config $(location :src/inspector/inspector_protocol_config.json) \
             --config_value protocol.path=$(location :include/js_protocol.pdl) \
@@ -260,13 +260,15 @@ index b432f86..28c567b 100644
      message = "Generating inspector files",
      tools = [
 -        ":code_generator",
-+        "@rules_python//python/bin:python",
 +        requirement("jinja2"),
 +        requirement("markupsafe"),
      ],
++    toolchains = [
++        "@rules_python//python:current_py_toolchain",
++    ],
  )
  
-@@ -4484,6 +4493,35 @@ filegroup(
+@@ -4484,6 +4495,35 @@ filegroup(
      ],
  )
  
@@ -302,7 +304,7 @@ index b432f86..28c567b 100644
  filegroup(
      name = "d8_files",
      srcs = [
-@@ -4603,16 +4641,9 @@ cc_library(
+@@ -4603,16 +4643,9 @@ cc_library(
      ],
  )
  
@@ -322,7 +324,7 @@ index b432f86..28c567b 100644
  )
  
  v8_library(
-@@ -4629,7 +4660,7 @@ v8_library(
+@@ -4629,7 +4662,7 @@ v8_library(
      copts = ["-Wno-implicit-fallthrough"],
      icu_deps = [
          ":icu/generated_torque_definitions_headers",
@@ -331,7 +333,7 @@ index b432f86..28c567b 100644
      ],
      icu_srcs = [
          ":generated_regexp_special_case",
-@@ -4644,7 +4675,7 @@ v8_library(
+@@ -4644,7 +4677,7 @@ v8_library(
      ],
      deps = [
          ":lib_dragonbox",
@@ -340,7 +342,7 @@ index b432f86..28c567b 100644
          ":lib_fp16",
          ":simdutf",
          ":v8_libbase",
-@@ -4700,6 +4731,7 @@ alias(
+@@ -4700,6 +4733,7 @@ alias(
  alias(
      name = "core_lib_icu",
      actual = "icu/v8",
@@ -348,7 +350,7 @@ index b432f86..28c567b 100644
  )
  
  v8_library(
-@@ -4751,7 +4783,7 @@ v8_binary(
+@@ -4751,7 +4785,7 @@ v8_binary(
      ],
      deps = [
          ":v8_libbase",
@@ -357,7 +359,7 @@ index b432f86..28c567b 100644
      ],
  )
  
-@@ -4791,9 +4823,20 @@ v8_binary(
+@@ -4791,9 +4825,20 @@ v8_binary(
          ":icu/generated_torque_initializers",
          ":icu/v8_initializers_files",
      ],
