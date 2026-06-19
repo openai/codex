@@ -509,6 +509,84 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn recent_not_loaded_rollout_items_keeps_lifecycle_events() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+        let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let contents = compacted_resume_test_rollout_contents(vec![
+            compacted_resume_test_session(thread_id),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: "turn-a".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            )),
+            compacted_resume_test_user_event("first user event"),
+            compacted_resume_test_agent_event("first agent event"),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: "turn-a".to_string(),
+                    last_agent_message: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: "turn-b".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            )),
+            compacted_resume_test_user_event("second user event"),
+            compacted_resume_test_agent_event("second agent event"),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: "turn-b".to_string(),
+                    last_agent_message: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                },
+            )),
+        ])?;
+        std::fs::write(&path, contents)?;
+
+        let recent = read_recent_not_loaded_rollout_items(path.as_path(), /*page_size*/ 1)?
+            .expect("recent notLoaded suffix");
+        assert!(
+            recent
+                .items
+                .iter()
+                .any(|item| { matches!(item, RolloutItem::EventMsg(EventMsg::TurnComplete(_))) })
+        );
+        let page = build_recent_not_loaded_turns_page_response(
+            recent,
+            codex_app_server_protocol::ThreadStatus::NotLoaded,
+            Some(1),
+        )
+        .expect("recent notLoaded page should build");
+
+        assert_eq!(page.data.len(), 1);
+        assert_eq!(page.data[0].id, "turn-b");
+        assert_eq!(
+            page.data[0].items_view,
+            codex_app_server_protocol::TurnItemsView::NotLoaded
+        );
+        assert_eq!(
+            page.data[0].status,
+            codex_app_server_protocol::TurnStatus::Completed
+        );
+        Ok(())
+    }
+
+    #[test]
     fn validate_dynamic_tools_rejects_empty_namespace() {
         let tools = vec![dynamic_tool(
             Some(""),

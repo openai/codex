@@ -4494,15 +4494,7 @@ fn rollout_item_opens_implicit_turn(item: &RolloutItem) -> bool {
 }
 
 fn rollout_item_disables_recent_not_loaded_fast_path(item: &RolloutItem) -> bool {
-    matches!(
-        item,
-        RolloutItem::EventMsg(
-            EventMsg::ThreadRolledBack(_)
-                | EventMsg::TurnStarted(_)
-                | EventMsg::TurnComplete(_)
-                | EventMsg::TurnAborted(_)
-        )
-    )
+    matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)))
 }
 
 fn build_recent_not_loaded_turns_page_response(
