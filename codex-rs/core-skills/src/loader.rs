@@ -26,7 +26,6 @@ use codex_utils_plugins::PluginSkillRoot;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -502,7 +501,7 @@ async fn discover_skills_under_root(
     }
 
     fn enqueue_dir(
-        queue: &mut VecDeque<(AbsolutePathBuf, usize)>,
+        queue: &mut Vec<(AbsolutePathBuf, usize)>,
         visited_dirs: &mut HashSet<AbsolutePathBuf>,
         truncated_by_dir_limit: &mut bool,
         path: AbsolutePathBuf,
@@ -516,7 +515,7 @@ async fn discover_skills_under_root(
             return;
         }
         if visited_dirs.insert(path.clone()) {
-            queue.push_back((path, depth));
+            queue.push((path, depth));
         }
     }
 
@@ -529,12 +528,12 @@ async fn discover_skills_under_root(
     let mut visited_dirs: HashSet<AbsolutePathBuf> = HashSet::new();
     visited_dirs.insert(root.clone());
 
-    let mut queue: VecDeque<(AbsolutePathBuf, usize)> = VecDeque::from([(root.clone(), 0)]);
+    let mut queue = vec![(root.clone(), 0)];
     let mut truncated_by_dir_limit = false;
     let mut skill_paths = Vec::new();
 
     while !queue.is_empty() {
-        let dirs = queue.drain(..).collect::<Vec<_>>();
+        let dirs = std::mem::take(&mut queue);
         let directory_results = match fs
             .execute_batch(
                 dirs.iter()
@@ -663,10 +662,11 @@ async fn discover_skills_under_root(
         }
     }
 
-    let mut plugin_namespace_resolver = PluginNamespaceResolver::default();
-    if plugin_namespace.is_none() {
-        plugin_namespace_resolver.prime(fs, &skill_paths).await;
-    }
+    let plugin_namespace_resolver = if plugin_namespace.is_none() {
+        Some(PluginNamespaceResolver::load(fs, &skill_paths).await)
+    } else {
+        None
+    };
     let preloaded_skills = match preload_skill_files(fs, &skill_paths).await {
         Ok(preloaded_skills) => preloaded_skills,
         Err(err) => {
@@ -675,18 +675,19 @@ async fn discover_skills_under_root(
         }
     };
     for (path, preloaded) in skill_paths.into_iter().zip(preloaded_skills) {
+        let plugin_namespace = plugin_namespace.or_else(|| {
+            plugin_namespace_resolver
+                .as_ref()
+                .and_then(|resolver| resolver.resolve(&path))
+        });
         match parse_skill_file(
-            fs,
             &path,
             scope,
             plugin_id,
             plugin_namespace,
             plugin_root.as_ref(),
-            &mut plugin_namespace_resolver,
             preloaded,
-        )
-        .await
-        {
+        ) {
             Ok(skill) => outcome.skills.push(skill),
             Err(err) if scope != SkillScope::System => outcome.errors.push(SkillError {
                 path,
@@ -778,14 +779,12 @@ fn decode_text_operation_result(
     }
 }
 
-async fn parse_skill_file(
-    fs: &dyn ExecutorFileSystem,
+fn parse_skill_file(
     path: &AbsolutePathBuf,
     scope: SkillScope,
     plugin_id: Option<&str>,
     plugin_namespace: Option<&str>,
     plugin_root: Option<&AbsolutePathBuf>,
-    plugin_namespace_resolver: &mut PluginNamespaceResolver,
     preloaded: PreloadedSkillFile,
 ) -> Result<SkillMetadata, SkillParseError> {
     let PreloadedSkillFile {
@@ -817,14 +816,9 @@ async fn parse_skill_file(
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default_skill_name(path));
-    let name = namespaced_skill_name(
-        fs,
-        path,
-        &base_name,
-        plugin_namespace,
-        plugin_namespace_resolver,
-    )
-    .await;
+    let name = plugin_namespace
+        .map(|namespace| format!("{namespace}:{base_name}"))
+        .unwrap_or_else(|| base_name.clone());
     let description = parsed
         .description
         .as_deref()
@@ -876,23 +870,6 @@ fn default_skill_name(path: &AbsolutePathBuf) -> String {
         })
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "skill".to_string())
-}
-
-async fn namespaced_skill_name(
-    fs: &dyn ExecutorFileSystem,
-    path: &AbsolutePathBuf,
-    base_name: &str,
-    plugin_namespace: Option<&str>,
-    plugin_namespace_resolver: &mut PluginNamespaceResolver,
-) -> String {
-    if let Some(plugin_namespace) = plugin_namespace {
-        return format!("{plugin_namespace}:{base_name}");
-    }
-    plugin_namespace_resolver
-        .resolve(fs, path)
-        .await
-        .map(|namespace| format!("{namespace}:{base_name}"))
-        .unwrap_or_else(|| base_name.to_string())
 }
 
 fn load_skill_metadata(
