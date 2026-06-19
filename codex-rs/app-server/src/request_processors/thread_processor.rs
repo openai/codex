@@ -2980,6 +2980,17 @@ impl ThreadRequestProcessor {
                 };
 
                 let connection_id = request_id.connection_id;
+                log_listener_attach_result(
+                    self.ensure_conversation_listener(
+                        thread_id,
+                        connection_id,
+                        /*raw_events_enabled*/ false,
+                    )
+                    .await,
+                    thread_id,
+                    connection_id,
+                    "thread",
+                );
                 self.outgoing.send_response(request_id, response).await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
@@ -3003,21 +3014,6 @@ impl ThreadRequestProcessor {
                     )
                     .await;
                 }
-                tokio::task::yield_now().await;
-                // Auto-attach after the response is queued. The attach is
-                // best-effort logging, and idle resumes do not need it to
-                // construct the response.
-                log_listener_attach_result(
-                    self.ensure_conversation_listener(
-                        thread_id,
-                        connection_id,
-                        /*raw_events_enabled*/ false,
-                    )
-                    .await,
-                    thread_id,
-                    connection_id,
-                    "thread",
-                );
                 self.thread_goal_processor
                     .emit_resume_goal_snapshot_and_continue(thread_id, codex_thread.as_ref())
                     .await;
