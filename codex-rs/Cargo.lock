@@ -3394,6 +3394,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
+ "codex-utils-rustls-provider",
  "core_test_support",
  "mcp_test_support",
  "os_info",

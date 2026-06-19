@@ -18,6 +18,7 @@ use super::ThreadConfigSource;
 use super::UserThreadConfig;
 use proto::thread_config_loader_client::ThreadConfigLoaderClient;
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 #[path = "proto/codex.thread_config.v1.rs"]
 mod proto;
 
