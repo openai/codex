@@ -31,6 +31,7 @@ use std::io::Write;
 use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::info;
@@ -119,6 +120,14 @@ pub const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
     "NPM_CONFIG_CAFILE",
 ];
 
+pub(crate) fn ca_env_from_process() -> HashMap<&'static str, String> {
+    CUSTOM_CA_ENV_KEYS
+        .into_iter()
+        .chain([SSL_CERT_DIR_ENV_KEY])
+        .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
+        .collect()
+}
+
 /// Immutable managed MITM CA bundle path plus startup TLS env values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManagedMitmCaTrustBundle {
@@ -148,14 +157,7 @@ fn managed_ca_trust_bundle_for_cert_path(
     cert_path: &Path,
     env: &HashMap<&'static str, String>,
 ) -> Result<ManagedMitmCaTrustBundle> {
-    let startup_env_values = CUSTOM_CA_ENV_KEYS
-        .into_iter()
-        .filter_map(|key| {
-            env.get(key)
-                .filter(|value| !value.is_empty())
-                .map(|value| (key, value.clone()))
-        })
-        .collect();
+    let startup_env_values = startup_ca_file_env_values(env);
     let startup_cert_dir = env
         .get(SSL_CERT_DIR_ENV_KEY)
         .filter(|value| !value.is_empty())
@@ -170,12 +172,81 @@ fn managed_ca_trust_bundle_for_cert_path(
     })
 }
 
+pub(crate) fn upstream_tls_root_store(
+    env: &HashMap<&'static str, String>,
+) -> Result<Arc<rustls::RootCertStore>> {
+    let (managed_ca_cert_path, _) = managed_ca_paths()?;
+    upstream_tls_root_store_for_cert_path(&managed_ca_cert_path, env)
+}
+
+pub(crate) fn upstream_tls_root_store_for_cert_path(
+    managed_ca_cert_path: &Path,
+    env: &HashMap<&'static str, String>,
+) -> Result<Arc<rustls::RootCertStore>> {
+    let startup_env_values = startup_ca_file_env_values(env);
+    let startup_cert_dir = env
+        .get(SSL_CERT_DIR_ENV_KEY)
+        .filter(|value| !value.is_empty())
+        .map(String::as_str);
+    let certificates = load_platform_and_startup_root_certificates(
+        managed_ca_cert_path,
+        &startup_env_values,
+        startup_cert_dir,
+    )?;
+    let mut roots = rustls::RootCertStore::empty();
+    let (_, ignored) = roots.add_parsable_certificates(certificates);
+    if ignored > 0 {
+        warn!(
+            ignored_root_count = ignored,
+            "ignored invalid platform or startup roots for MITM upstream TLS"
+        );
+    }
+    Ok(Arc::new(roots))
+}
+
+fn startup_ca_file_env_values(
+    env: &HashMap<&'static str, String>,
+) -> HashMap<&'static str, String> {
+    CUSTOM_CA_ENV_KEYS
+        .into_iter()
+        .filter_map(|key| {
+            env.get(key)
+                .filter(|value| !value.is_empty())
+                .map(|value| (key, value.clone()))
+        })
+        .collect()
+}
+
 fn build_managed_ca_trust_bundle(
     managed_ca_cert_path: &Path,
     startup_env_values: &HashMap<&'static str, String>,
     startup_cert_dir: Option<&str>,
 ) -> Result<String> {
     let mut trust_bundle = String::new();
+    for cert in load_platform_and_startup_root_certificates(
+        managed_ca_cert_path,
+        startup_env_values,
+        startup_cert_dir,
+    )? {
+        push_certificate_pem(&mut trust_bundle, cert.as_ref());
+    }
+    append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
+    Ok(trust_bundle)
+}
+
+fn load_platform_and_startup_root_certificates(
+    managed_ca_cert_path: &Path,
+    startup_env_values: &HashMap<&'static str, String>,
+    startup_cert_dir: Option<&str>,
+) -> Result<Vec<CertificateDer<'static>>> {
+    let managed_ca_cert = fs::read(managed_ca_cert_path).with_context(|| {
+        format!(
+            "failed to read managed MITM CA certificate: {}",
+            managed_ca_cert_path.display()
+        )
+    })?;
+    let managed_ca_cert = CertificateDer::from_pem_slice(&managed_ca_cert)
+        .context("failed to parse managed MITM CA certificate")?;
     let rustls_native_certs::CertificateResult { certs, errors, .. } =
         crate::native_certs::load_platform_native_certs();
     if !errors.is_empty() {
@@ -184,9 +255,7 @@ fn build_managed_ca_trust_bundle(
             "encountered errors while loading native root certificates for MITM trust bundle"
         );
     }
-    for cert in certs {
-        push_certificate_pem(&mut trust_bundle, cert.as_ref());
-    }
+    let mut certificates = certs;
     let mut appended_startup_paths = HashSet::new();
     for path in CUSTOM_CA_ENV_KEYS
         .into_iter()
@@ -197,21 +266,22 @@ fn build_managed_ca_trust_bundle(
             && !is_current_generated_trust_bundle_path(&path, managed_ca_cert_path)
             && appended_startup_paths.insert(path.clone())
         {
-            append_ca_certificates(&mut trust_bundle, &path)?;
+            certificates.extend(read_ca_certificates(&path)?);
         }
     }
     if let Some(startup_cert_dir) = startup_cert_dir {
         for path in std::env::split_paths(startup_cert_dir) {
             if appended_startup_paths.insert(path.clone()) {
-                append_ca_directory_certificates(&mut trust_bundle, &path);
+                certificates.extend(load_ca_directory_certificates(&path));
             }
         }
     }
-    append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
-    Ok(trust_bundle)
+    let mut seen = HashSet::new();
+    certificates.retain(|cert| cert != &managed_ca_cert && seen.insert(cert.as_ref().to_vec()));
+    Ok(certificates)
 }
 
-fn append_ca_certificates(bundle: &mut String, path: &Path) -> Result<()> {
+fn read_ca_certificates(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
     let pem = fs::read(path)
         .with_context(|| format!("failed to read startup CA bundle: {}", path.display()))?;
     let pem = String::from_utf8_lossy(&pem);
@@ -228,23 +298,25 @@ fn append_ca_certificates(bundle: &mut String, path: &Path) -> Result<()> {
             path.display()
         ));
     }
-    for cert in certs {
-        let cert = if contains_trusted_certificates {
-            first_der_item(cert.as_ref()).ok_or_else(|| {
-                anyhow!(
-                    "startup CA bundle contained an invalid trusted certificate: {}",
-                    path.display()
-                )
-            })?
-        } else {
-            cert.as_ref()
-        };
-        push_certificate_pem(bundle, cert);
-    }
-    Ok(())
+    certs
+        .into_iter()
+        .map(|cert| {
+            let cert = if contains_trusted_certificates {
+                first_der_item(cert.as_ref()).ok_or_else(|| {
+                    anyhow!(
+                        "startup CA bundle contained an invalid trusted certificate: {}",
+                        path.display()
+                    )
+                })?
+            } else {
+                cert.as_ref()
+            };
+            Ok(CertificateDer::from(cert.to_vec()))
+        })
+        .collect()
 }
 
-fn append_ca_directory_certificates(bundle: &mut String, path: &Path) {
+fn load_ca_directory_certificates(path: &Path) -> Vec<CertificateDer<'static>> {
     let rustls_native_certs::CertificateResult { certs, errors, .. } =
         rustls_native_certs::load_certs_from_paths(None, Some(path));
     if !errors.is_empty() {
@@ -254,9 +326,7 @@ fn append_ca_directory_certificates(bundle: &mut String, path: &Path) {
             "encountered errors while loading startup CA directory"
         );
     }
-    for cert in certs {
-        push_certificate_pem(bundle, cert.as_ref());
-    }
+    certs
 }
 
 fn first_der_item(der: &[u8]) -> Option<&[u8]> {
