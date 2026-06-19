@@ -136,10 +136,10 @@ impl std::fmt::Debug for ExecServerTransportParams {
 }
 
 impl ExecServerTransportParams {
-    pub(crate) fn websocket_url(websocket_url: String) -> Self {
+    pub(crate) fn websocket_url(websocket_url: String, connect_timeout: Duration) -> Self {
         Self::WebSocketUrl {
             websocket_url,
-            connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+            connect_timeout,
             initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
         }
     }
