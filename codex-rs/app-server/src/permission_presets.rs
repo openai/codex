@@ -132,7 +132,7 @@ pub(crate) async fn permission_preset_catalog(
 ) -> std::io::Result<PermissionPresetCatalog> {
     let config = config_manager
         .load_for_cwd(
-            /* request_overrides */ None,
+            /*request_overrides*/ None,
             ConfigOverrides::default(),
             cwd,
         )
@@ -213,7 +213,7 @@ fn permission_preset_catalog_for_config(
             builtin.id,
             kind,
             Some(builtin.active_permission_profile.id),
-            /* description */ None,
+            /*description*/ None,
             builtin.permission_profile,
             builtin.approval,
             ApprovalsReviewer::User,
@@ -225,7 +225,7 @@ fn permission_preset_catalog_for_config(
                 "granular",
                 PermissionPresetKind::Granular,
                 Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
-                /* description */ None,
+                /*description*/ None,
                 PermissionProfile::workspace_write(),
                 AskForApproval::Granular(GranularApprovalConfig {
                     sandbox_approval: false,
@@ -243,7 +243,7 @@ fn permission_preset_catalog_for_config(
                     "guardian-approvals",
                     PermissionPresetKind::GuardianApprovals,
                     Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
-                    /* description */ None,
+                    /*description*/ None,
                     PermissionProfile::workspace_write(),
                     AskForApproval::OnRequest,
                     ApprovalsReviewer::AutoReview,
@@ -285,8 +285,8 @@ fn permission_preset_catalog_for_config(
         entries.push(preset_entry(
             "legacy-config",
             PermissionPresetKind::LegacyConfig,
-            /* permission_profile_id */ None,
-            /* description */ None,
+            /*permission_profile_id*/ None,
+            /*description*/ None,
             config.permissions.permission_profile().clone(),
             config.permissions.approval_policy.value(),
             config.approvals_reviewer,
