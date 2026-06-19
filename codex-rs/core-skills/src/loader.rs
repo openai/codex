@@ -684,13 +684,8 @@ async fn parse_skill_file(
 
     validate_len(&base_name, MAX_NAME_LEN, "name")?;
     validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")?;
-    validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
-    if let Some(short_description) = short_description.as_deref() {
-        validate_len(
-            short_description,
-            MAX_SHORT_DESCRIPTION_LEN,
-            "metadata.short-description",
-        )?;
+    if description.is_empty() {
+        return Err(SkillParseError::MissingField("description"));
     }
 
     let resolved_path = canonicalize_for_skill_identity(fs, path).await;

@@ -1573,7 +1573,7 @@ async fn preserves_block_scalar_body_while_repairing_other_fields() {
 }
 
 #[tokio::test]
-async fn enforces_short_description_length_limits() {
+async fn preserves_overlong_short_descriptions() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let skill_dir = codex_home.path().join("skills/demo");
     fs::create_dir_all(&skill_dir).unwrap();
@@ -1585,15 +1585,13 @@ async fn enforces_short_description_length_limits() {
 
     let cfg = make_config(&codex_home).await;
     let outcome = load_skills_for_test(&cfg).await;
-    assert_eq!(outcome.skills.len(), 0);
-    assert_eq!(outcome.errors.len(), 1);
     assert!(
-        outcome.errors[0]
-            .message
-            .contains("invalid metadata.short-description"),
-        "expected length error, got: {:?}",
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
         outcome.errors
     );
+    assert_eq!(outcome.skills.len(), 1);
+    assert_eq!(outcome.skills[0].short_description, Some(too_long));
 }
 
 #[tokio::test]
@@ -1625,7 +1623,7 @@ async fn skips_hidden_and_invalid() {
 }
 
 #[tokio::test]
-async fn enforces_length_limits() {
+async fn preserves_overlong_descriptions() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let max_desc = "\u{1F4A1}".repeat(MAX_DESCRIPTION_LEN);
     write_skill(&codex_home, "max-len", "max-len", &max_desc);
@@ -1642,12 +1640,18 @@ async fn enforces_length_limits() {
     let too_long_desc = "\u{1F4A1}".repeat(MAX_DESCRIPTION_LEN + 1);
     write_skill(&codex_home, "too-long", "too-long", &too_long_desc);
     let outcome = load_skills_for_test(&cfg).await;
-    assert_eq!(outcome.skills.len(), 1);
-    assert_eq!(outcome.errors.len(), 1);
     assert!(
-        outcome.errors[0].message.contains("invalid description"),
-        "expected length error"
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
     );
+    assert_eq!(outcome.skills.len(), 2);
+    let too_long_skill = outcome
+        .skills
+        .iter()
+        .find(|skill| skill.name == "too-long")
+        .expect("too-long skill");
+    assert_eq!(too_long_skill.description, too_long_desc);
 }
 
 #[tokio::test]
