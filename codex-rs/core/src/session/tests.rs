@@ -1693,6 +1693,7 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
         Vec::new(),
         |config| {
             let _ = config.features.enable(Feature::ResizeAllImages);
+            let _ = config.features.enable(Feature::ItemIds);
         },
     )
     .await;

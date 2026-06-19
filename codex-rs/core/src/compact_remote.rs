@@ -284,8 +284,13 @@ async fn run_remote_compact_task_inner_impl(
         input_history: &trace_input_history,
         replacement_history: &new_history,
     });
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    sess.replace_compacted_history(
+        turn_context.as_ref(),
+        new_history,
+        reference_context_item,
+        compacted_item,
+    )
+    .await;
     sess.recompute_token_usage(turn_context).await;
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
