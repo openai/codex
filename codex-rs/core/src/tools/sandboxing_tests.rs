@@ -4,9 +4,16 @@ use crate::tools::hook_names::HookToolName;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::HashMap;
 
 #[test]
 fn bash_permission_request_payload_omits_missing_description() {
@@ -192,4 +199,57 @@ fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
         SandboxOverride::NoOverride,
         "exec-policy allow rules would drop deny-read filesystem policy, so keep the first attempt sandboxed",
     );
+}
+
+#[test]
+fn exec_server_env_keeps_command_native() {
+    let cwd: AbsolutePathBuf = std::env::current_dir()
+        .expect("current dir")
+        .try_into()
+        .expect("absolute cwd");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let permissions = codex_protocol::models::PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::default(),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let manager = SandboxManager::new();
+    let attempt = SandboxAttempt {
+        sandbox: SandboxType::MacosSeatbelt,
+        permissions: &permissions,
+        enforce_managed_network: false,
+        manager: &manager,
+        sandbox_cwd: &cwd_uri,
+        workspace_roots: std::slice::from_ref(&cwd),
+        codex_linux_sandbox_exe: None,
+        use_legacy_landlock: false,
+        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        network_denial_cancellation_token: None,
+    };
+    let command = SandboxCommand {
+        program: "/bin/bash".into(),
+        args: vec!["-lc".to_string(), "pwd".to_string()],
+        cwd: cwd_uri.clone(),
+        env: HashMap::new(),
+        additional_permissions: None,
+    };
+    let options = crate::sandboxing::ExecOptions {
+        expiration: crate::exec::ExecExpiration::DefaultTimeout,
+        capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
+    };
+
+    let request = attempt
+        .env_for_exec_server(command, options, /*network*/ None, Some("remote"))
+        .expect("prepare remote exec request");
+
+    assert_eq!(
+        request.command,
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "pwd".to_string()
+        ]
+    );
+    assert_eq!(request.arg0, None);
+    assert_eq!(request.sandbox, SandboxType::None);
 }
