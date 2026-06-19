@@ -83,7 +83,7 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
 fn external_web_access_for_mode(web_search_mode: WebSearchMode) -> ExternalWebAccess {
     match web_search_mode {
         WebSearchMode::Disabled | WebSearchMode::Cached => ExternalWebAccess::Boolean(false),
-        WebSearchMode::Indexed => ExternalWebAccess::Mode(ExternalWebAccessMode::Indexed),
+        WebSearchMode::Indexed => ExternalWebAccess::Mode(ExternalWebAccessMode::IndexOnly),
         WebSearchMode::Live => ExternalWebAccess::Boolean(true),
     }
 }
@@ -177,7 +177,7 @@ mod tests {
             [
                 ExternalWebAccess::Boolean(false),
                 ExternalWebAccess::Boolean(false),
-                ExternalWebAccess::Mode(ExternalWebAccessMode::Indexed),
+                ExternalWebAccess::Mode(ExternalWebAccessMode::IndexOnly),
                 ExternalWebAccess::Boolean(true),
             ]
         );

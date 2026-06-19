@@ -224,7 +224,7 @@ async fn code_mode_can_call_standalone_web_search() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_call_indexed_standalone_web_search() -> Result<()> {
-    assert_code_mode_standalone_web_search(WebSearchMode::Indexed, serde_json::json!("indexed"))
+    assert_code_mode_standalone_web_search(WebSearchMode::Indexed, serde_json::json!("index_only"))
         .await
 }
 
