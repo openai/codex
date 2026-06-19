@@ -303,8 +303,13 @@ async fn current_time_tool_returns_the_latest_time() -> Result<()> {
 
     test.submit_turn("check the current time").await?;
 
+    let requests = responses.requests();
+    assert!(
+        requests[0].tool_by_name("clock", "curr_time").is_some(),
+        "clock.curr_time should be exposed when current-time reminders are enabled"
+    );
     assert_eq!(
-        responses.requests()[1].function_call_output_text(CALL_ID),
+        requests[1].function_call_output_text(CALL_ID),
         Some(SECOND_REMINDER.to_string())
     );
 
