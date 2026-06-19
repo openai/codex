@@ -15,6 +15,7 @@ use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::tools::context::ExecCommandToolOutput;
@@ -26,6 +27,7 @@ use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::ExecCommandRequest;
@@ -50,10 +52,12 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_sandboxing::SandboxCommand;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathUri;
@@ -886,7 +890,47 @@ impl UnifiedExecProcessManager {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn open_session_with_exec_env(
+        &self,
+        process_id: i32,
+        command: SandboxCommand,
+        options: ExecOptions,
+        attempt: &SandboxAttempt<'_>,
+        network: Option<&NetworkProxy>,
+        environment_id: Option<&str>,
+        exec_server_env_config: Option<ExecServerEnvConfig>,
+        tty: bool,
+        spawn_lifecycle: SpawnLifecycleHandle,
+        environment: &codex_exec_server::Environment,
+    ) -> Result<UnifiedExecProcess, ToolError> {
+        let mut request = if environment.is_remote() {
+            attempt.env_for_exec_server(command, options, network, environment_id)
+        } else {
+            attempt.env_for(command, options, network, environment_id)
+        }
+        .map_err(ToolError::Codex)?;
+        request.exec_server_env_config = exec_server_env_config;
+        self.open_session_with_prepared_exec_env(
+            process_id,
+            &request,
+            tty,
+            spawn_lifecycle,
+            environment,
+        )
+        .await
+        .map_err(|err| match err {
+            UnifiedExecError::SandboxDenied { output, .. } => {
+                ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(output),
+                    network_policy_decision: None,
+                }))
+            }
+            other => ToolError::Rejected(other.to_string()),
+        })
+    }
+
+    pub(crate) async fn open_session_with_prepared_exec_env(
         &self,
         process_id: i32,
         request: &ExecRequest,
