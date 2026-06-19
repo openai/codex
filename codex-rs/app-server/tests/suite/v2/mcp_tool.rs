@@ -513,6 +513,7 @@ url = "{mcp_server_url}/mcp"
         tool,
         status,
         arguments: json!({ "message": LARGE_RESPONSE_MESSAGE }),
+        app_context: None,
         mcp_app_resource_uri: None,
         plugin_id: None,
         result: Some(result),

@@ -34,21 +34,24 @@ fn file_uri_round_trips_an_absolute_path() {
 #[test]
 fn non_native_uri_io_conversion_is_invalid_input() {
     #[cfg(unix)]
-    let uri = PathUri::parse("file://server/share/file.txt").expect("valid file URI");
+    let uris = ["file://server/share/file.txt", "file:///C:/workspace"];
     #[cfg(windows)]
-    let uri = PathUri::parse("file:///usr/local/file.txt").expect("valid file URI");
+    let uris = ["file:///usr/local/file.txt"];
 
-    let error = uri
-        .to_abs_path()
-        .expect_err("URI should not be host-native");
+    for uri in uris {
+        let uri = PathUri::parse(uri).expect("valid file URI");
+        let error = uri
+            .to_abs_path()
+            .expect_err("URI should not be host-native");
 
-    assert_eq!(
-        (error.kind(), error.to_string()),
-        (
-            io::ErrorKind::InvalidInput,
-            format!("'{uri}' is invalid on '{}'", std::env::consts::OS),
-        )
-    );
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (
+                io::ErrorKind::InvalidInput,
+                format!("'{uri}' is invalid on '{}'", std::env::consts::OS),
+            )
+        );
+    }
 }
 
 #[test]
@@ -91,6 +94,35 @@ fn infers_path_conventions_from_uri_shape() {
 }
 
 #[test]
+fn path_convention_splits_absolute_relative_and_bare_path_text() {
+    for (convention, path, expected) in [
+        (
+            PathConvention::Posix,
+            "/usr/local/bin/bash",
+            vec!["", "usr", "local", "bin", "bash"],
+        ),
+        (
+            PathConvention::Posix,
+            r"tools\pwsh.exe",
+            vec![r"tools\pwsh.exe"],
+        ),
+        (
+            PathConvention::Windows,
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            vec!["C:", "Program Files", "PowerShell", "7", "pwsh.exe"],
+        ),
+        (
+            PathConvention::Windows,
+            "tools/pwsh.exe",
+            vec!["tools", "pwsh.exe"],
+        ),
+        (PathConvention::Windows, "cmd.exe", vec!["cmd.exe"]),
+    ] {
+        assert_eq!(convention.path_segments(path).collect::<Vec<_>>(), expected);
+    }
+}
+
+#[test]
 fn drive_shaped_posix_uri_is_intentionally_inferred_as_windows() {
     let path = PathUri::parse("file:///C:/actually/a/posix/path").expect("valid path URI");
 
@@ -118,6 +150,11 @@ fn inferred_native_path_string_uses_the_inferred_convention() {
             path.inferred_native_path_string(),
             expected,
             "rendering {uri}"
+        );
+        assert_eq!(
+            LegacyAppPathString::from(path).as_str(),
+            expected,
+            "rendering typed API path {uri}"
         );
     }
 }
@@ -471,7 +508,21 @@ fn basename_uses_decoded_uri_segments() {
 }
 
 #[test]
-fn parent_uses_uri_hierarchy_and_preserves_authority() {
+fn path_buf_uses_the_inferred_native_spelling() {
+    let windows = PathUri::parse("file:///C:/Program%20Files/pwsh.exe").expect("Windows URI");
+    let posix = PathUri::parse("file:///usr/local/bin/bash").expect("POSIX URI");
+
+    assert_eq!(
+        (windows.to_path_buf(), posix.to_path_buf()),
+        (
+            PathBuf::from(r"C:\Program Files\pwsh.exe"),
+            PathBuf::from("/usr/local/bin/bash"),
+        )
+    );
+}
+
+#[test]
+fn parent_stops_at_posix_drive_and_unc_roots() {
     for (input, expected) in [
         (
             "file:///workspace/src/lib.rs",
@@ -480,16 +531,46 @@ fn parent_uses_uri_hierarchy_and_preserves_authority() {
         ("file:///workspace", Some("file:///")),
         ("file:///", None),
         ("file:///C:/Users", Some("file:///C:")),
-        ("file:///C:/", Some("file:///")),
+        ("file:///C:/", None),
+        ("file:///C:", None),
         (
             "file://server/share/src/main.rs",
             Some("file://server/share/src"),
         ),
-        ("file://server/share", Some("file://server/")),
+        ("file://server/share", None),
     ] {
         let uri = PathUri::parse(input).expect("valid file URI");
         let expected = expected.map(|value| PathUri::parse(value).expect("valid expected URI"));
         assert_eq!(uri.parent(), expected, "parent for {input}");
+    }
+}
+
+#[test]
+fn ancestors_include_self_and_stop_at_native_path_roots() {
+    for (input, expected) in [
+        (
+            "file:///workspace/src",
+            vec!["file:///workspace/src", "file:///workspace", "file:///"],
+        ),
+        (
+            "file:///C:/workspace/src",
+            vec![
+                "file:///C:/workspace/src",
+                "file:///C:/workspace",
+                "file:///C:",
+            ],
+        ),
+        (
+            "file://server/share/project",
+            vec!["file://server/share/project", "file://server/share"],
+        ),
+    ] {
+        let uri = PathUri::parse(input).expect("valid file URI");
+        let ancestors = uri
+            .ancestors()
+            .map(|path| path.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ancestors, expected, "ancestors for {input}");
     }
 }
 

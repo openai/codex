@@ -48,6 +48,7 @@ mod compact;
 mod compact_remote;
 mod compact_remote_parity;
 mod compact_resume_fork;
+mod current_time_reminder;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;
@@ -56,7 +57,6 @@ mod extension_sandbox;
 mod fork_thread;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
-mod hierarchical_agents;
 #[cfg(not(target_os = "windows"))]
 mod hooks;
 #[cfg(not(target_os = "windows"))]
@@ -65,6 +65,7 @@ mod image_rollout;
 mod items;
 mod json_result;
 mod live_cli;
+mod mcp_tool_exposure;
 mod mcp_turn_metadata;
 mod model_overrides;
 mod model_runtime_selectors;
@@ -99,6 +100,7 @@ mod resume;
 mod resume_warning;
 mod review;
 mod rmcp_client;
+mod rollout_budget;
 mod rollout_list_find;
 mod safety_check_downgrade;
 mod search_tool;

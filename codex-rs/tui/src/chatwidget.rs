@@ -163,6 +163,7 @@ use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::resume_hint;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 use crossterm::event::KeyCode;
@@ -687,7 +688,7 @@ pub(crate) struct ChatWidget {
     // App-server-backed command runner for status-line workspace metadata lookups.
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     // Instruction source files loaded for the current session, supplied by app-server.
-    instruction_source_paths: Vec<AbsolutePathBuf>,
+    instruction_source_paths: Vec<PathUri>,
     // Runtime network proxy bind addresses from SessionConfigured.
     session_network_proxy: Option<SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
@@ -840,6 +841,12 @@ fn exec_approval_request_from_params(
     params: CommandExecutionRequestApprovalParams,
     fallback_cwd: &AbsolutePathBuf,
 ) -> ExecApprovalRequestEvent {
+    // TODO(anp): Keep this as PathUri once `tui::approval_events::ExecApprovalRequestEvent` and
+    // approval rendering support foreign paths.
+    let cwd = params
+        .cwd
+        .and_then(|cwd| cwd.to_inferred_abs_path())
+        .unwrap_or_else(|| fallback_cwd.clone());
     ExecApprovalRequestEvent {
         call_id: params.item_id,
         command: params
@@ -847,7 +854,7 @@ fn exec_approval_request_from_params(
             .as_deref()
             .map(split_command_string)
             .unwrap_or_default(),
-        cwd: params.cwd.unwrap_or_else(|| fallback_cwd.clone()),
+        cwd,
         reason: params.reason,
         network_approval_context: params.network_approval_context,
         additional_permissions: params.additional_permissions,

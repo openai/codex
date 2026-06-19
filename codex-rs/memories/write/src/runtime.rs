@@ -235,6 +235,7 @@ impl MemoryStartupContext {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
+            config.features.enabled(Feature::ItemIds),
             /*attestation_provider*/ None,
         );
 
@@ -313,6 +314,7 @@ impl MemoryStartupContext {
                 parent_trace: None,
                 environments,
                 thread_extension_init: Default::default(),
+                supports_openai_form_elicitation: false,
             })
             .await?;
 

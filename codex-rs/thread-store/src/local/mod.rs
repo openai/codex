@@ -510,6 +510,7 @@ mod tests {
                     memory_citation: None,
                 })),
                 RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                    id: None,
                     call_id: "call-1".to_string(),
                     output: FunctionCallOutputPayload::from_text("tool output".to_string()),
                     metadata: None,

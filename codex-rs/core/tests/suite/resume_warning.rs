@@ -110,6 +110,7 @@ async fn emits_warning_when_resumed_model_differs() {
             initial_history,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume conversation");

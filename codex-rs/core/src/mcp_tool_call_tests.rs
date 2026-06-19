@@ -3,6 +3,7 @@ use crate::config::ConfigBuilder;
 use crate::config::ManagedFeatures;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
+use crate::session::turn_context::TurnEnvironment;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::hook_names::HookToolName;
@@ -31,6 +32,7 @@ use codex_rollout_trace::ToolDispatchInvocation;
 use codex_rollout_trace::ToolDispatchPayload;
 use codex_rollout_trace::ToolDispatchRequester;
 use codex_rollout_trace::replay_bundle;
+use codex_utils_path_uri::PathUri;
 use core_test_support::hooks::trusted_config_layer_stack;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -76,6 +78,7 @@ fn approval_metadata(
     McpToolApprovalMetadata {
         annotations: None,
         connector_id: connector_id.map(str::to_string),
+        link_id: None,
         connector_name: connector_name.map(str::to_string),
         connector_description: connector_description.map(str::to_string),
         plugin_id: None,
@@ -1092,6 +1095,39 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
 }
 
 #[tokio::test]
+async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Result<()> {
+    let (_, mut turn_context) = make_session_and_context().await;
+    let secondary_cwd = PathUri::parse("file:///C:/remote/project")?;
+    let environment = turn_context.environments.turn_environments[0]
+        .environment
+        .clone();
+    turn_context
+        .environments
+        .turn_environments
+        .push(TurnEnvironment::new(
+            "remote".to_string(),
+            environment,
+            secondary_cwd.clone(),
+            /*shell*/ None,
+        ));
+
+    let sandbox_cwd = sandbox_cwd_for_mcp_server(&turn_context, "remote");
+
+    assert_eq!(sandbox_cwd, Some(secondary_cwd));
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_sandbox_cwd_is_none_for_unselected_server_environment() -> anyhow::Result<()> {
+    let (_, turn_context) = make_session_and_context().await;
+
+    let sandbox_cwd = sandbox_cwd_for_mcp_server(&turn_context, "remote");
+
+    assert_eq!(sandbox_cwd, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     let (_, turn_context) = make_session_and_context().await;
     let expected_turn_metadata = turn_context
@@ -1114,8 +1150,39 @@ async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     );
 }
 
+#[test]
+fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
+    let mut metadata = approval_metadata(
+        Some("asdk_app_0123456789abcdef0123456789abcdef"),
+        /*connector_name*/ None,
+        /*connector_description*/ None,
+        /*tool_title*/ None,
+        /*tool_description*/ None,
+    );
+    metadata.link_id = Some("link_fedcba9876543210fedcba9876543210".to_string());
+
+    assert_eq!(
+        McpToolCallItemMetadata::from_tool_metadata(CODEX_APPS_MCP_SERVER_NAME, Some(&metadata),),
+        McpToolCallItemMetadata {
+            connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
+            link_id: Some("link_fedcba9876543210fedcba9876543210".to_string()),
+            mcp_app_resource_uri: None,
+            plugin_id: None,
+        }
+    );
+    assert_eq!(
+        McpToolCallItemMetadata::from_tool_metadata("custom_server", Some(&metadata)),
+        McpToolCallItemMetadata {
+            connector_id: None,
+            link_id: None,
+            mcp_app_resource_uri: None,
+            plugin_id: None,
+        }
+    );
+}
+
 #[tokio::test]
-async fn mcp_tool_call_item_includes_plugin_id() {
+async fn mcp_tool_call_item_includes_app_identity() {
     let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
 
     notify_mcp_tool_call_started(
@@ -1123,11 +1190,13 @@ async fn mcp_tool_call_item_includes_plugin_id() {
         &turn_context,
         "call-plugin",
         McpInvocation {
-            server: "sample".to_string(),
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             tool: "echo".to_string(),
             arguments: None,
         },
         McpToolCallItemMetadata {
+            connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
+            link_id: Some("link_fedcba9876543210fedcba9876543210".to_string()),
             mcp_app_resource_uri: None,
             plugin_id: Some("sample@test".to_string()),
         },
@@ -1145,6 +1214,14 @@ async fn mcp_tool_call_item_includes_plugin_id() {
         panic!("expected MCP tool call item");
     };
 
+    assert_eq!(
+        item.connector_id.as_deref(),
+        Some("asdk_app_0123456789abcdef0123456789abcdef")
+    );
+    assert_eq!(
+        item.link_id.as_deref(),
+        Some("link_fedcba9876543210fedcba9876543210")
+    );
     assert_eq!(item.plugin_id.as_deref(), Some("sample@test"));
 }
 
@@ -1158,6 +1235,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
     let metadata = McpToolApprovalMetadata {
         annotations: None,
         connector_id: Some("calendar".to_string()),
+        link_id: None,
         connector_name: Some("Calendar".to_string()),
         connector_description: Some("Manage events".to_string()),
         plugin_id: None,
@@ -1279,6 +1357,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         /*host_owned_codex_apps_enabled*/ true,
         turn_context.config.prefix_mcp_tool_names(),
         rmcp::model::ElicitationCapability::default(),
+        /*supports_openai_form_elicitation*/ false,
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
@@ -1625,6 +1704,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
         connector_id: None,
+        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2290,6 +2370,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
             /*open_world*/ None,
         )),
         connector_id: None,
+        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2364,6 +2445,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
             /*open_world*/ None,
         )),
         connector_id: None,
+        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2421,6 +2503,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
             /*open_world*/ None,
         )),
         connector_id: None,
+        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2557,6 +2640,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
             /*open_world*/ None,
         )),
         connector_id: None,
+        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2644,6 +2728,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
         connector_id: None,
+        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2698,6 +2783,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
             /*open_world*/ None,
         )),
         connector_id: None,
+        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2753,6 +2839,7 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
         connector_id: Some("calendar".to_string()),
+        link_id: None,
         connector_name: Some("Calendar".to_string()),
         connector_description: Some("Manage events".to_string()),
         plugin_id: None,
@@ -2806,6 +2893,7 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
         connector_id: Some("calendar".to_string()),
+        link_id: None,
         connector_name: Some("Calendar".to_string()),
         connector_description: Some("Manage events".to_string()),
         plugin_id: None,

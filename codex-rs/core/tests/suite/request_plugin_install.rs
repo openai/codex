@@ -11,6 +11,7 @@ use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::approvals::ElicitationRequest;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -38,6 +39,7 @@ use core_test_support::wait_for_event_match;
 use serde_json::Value;
 use serde_json::json;
 use wiremock::Mock;
+use wiremock::MockGuard;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -47,6 +49,11 @@ const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME: &str = "list_available_plugins_to_install";
 const REQUEST_PLUGIN_INSTALL_TOOL_NAME: &str = "request_plugin_install";
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
+const REMOTE_CALENDAR_PLUGIN_CONFIG_ID: &str = "calendar@openai-curated-remote";
+const REMOTE_CALENDAR_PLUGIN_ID: &str = "plugin_calendar";
+const CALENDAR_CONNECTOR_ID: &str = "calendar";
+const CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
+const CALENDAR_CREATE_EVENT_TOOL: &str = "_create_event";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -131,6 +138,134 @@ async fn build_test(
             move |config| configure_apps_without_search_tool(config, apps_base_url.as_str())
         });
     builder.build(server).await
+}
+
+async fn start_install_turn(test: &TestCodex, prompt: &str) -> Result<ElicitationRequestEvent> {
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    Ok(wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ElicitationRequest(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await)
+}
+
+async fn resolve_install_elicitation(
+    test: &TestCodex,
+    elicitation: ElicitationRequestEvent,
+    decision: ElicitationAction,
+) -> Result<()> {
+    test.codex
+        .submit(Op::ResolveElicitation {
+            server_name: elicitation.server_name,
+            request_id: elicitation.id,
+            decision,
+            content: None,
+            meta: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    Ok(())
+}
+
+async fn mount_remote_calendar_recommendation(server: &wiremock::MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/ps/plugins/suggested"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "enabled": true,
+            "plugins": [{
+                "id": REMOTE_CALENDAR_PLUGIN_ID,
+                "name": "calendar",
+                "status": "ENABLED",
+                "installation_policy": "AVAILABLE",
+                "release": {
+                    "display_name": "Calendar",
+                    "app_ids": [CALENDAR_CONNECTOR_ID]
+                }
+            }]
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+fn remote_installed_plugins_response(plugins: Vec<Value>) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "plugins": plugins,
+        "pagination": {
+            "next_page_token": null
+        }
+    }))
+}
+
+async fn mount_empty_remote_installed_plugins(server: &wiremock::MockServer) -> MockGuard {
+    Mock::given(method("GET"))
+        .and(path("/ps/plugins/installed"))
+        .respond_with(remote_installed_plugins_response(Vec::new()))
+        .mount_as_scoped(server)
+        .await
+}
+
+async fn mount_remote_calendar_installed_plugins(server: &wiremock::MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(remote_installed_plugins_response(vec![json!({
+            "id": REMOTE_CALENDAR_PLUGIN_ID,
+            "name": "calendar",
+            "scope": "GLOBAL",
+            "status": "ENABLED",
+            "installation_policy": "AVAILABLE",
+            "authentication_policy": "ON_USE",
+            "release": {
+                "display_name": "Calendar",
+                "description": "Manage calendar events.",
+                "interface": {}
+            },
+            "enabled": true
+        })]))
+        .with_priority(1)
+        .mount(server)
+        .await;
+    for scope in ["WORKSPACE", "USER"] {
+        Mock::given(method("GET"))
+            .and(path("/ps/plugins/installed"))
+            .and(query_param("scope", scope))
+            .respond_with(remote_installed_plugins_response(Vec::new()))
+            .with_priority(1)
+            .mount(server)
+            .await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -278,6 +413,10 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
 {
     skip_if_no_network!(Ok(()));
 
+    run_remote_plugin_install_metadata_case().await
+}
+
+async fn run_remote_plugin_install_metadata_case() -> Result<()> {
     const REMOTE_PLUGIN_ID: &str = "plugin_connector_github";
     const APP_CONNECTOR_ID: &str = "connector_github";
 
@@ -325,40 +464,7 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
     )
     .await;
     let test = build_test(&server, &apps_server).await?;
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
-
-    test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "use GitHub".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: ThreadSettingsOverrides {
-                approval_policy: Some(AskForApproval::Never),
-                sandbox_policy: Some(sandbox_policy),
-                permission_profile,
-                collaboration_mode: Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: test.session_configured.model.clone(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            },
-        })
-        .await?;
-
-    let elicitation = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::ElicitationRequest(request) => Some(request.clone()),
-        _ => None,
-    })
-    .await;
+    let elicitation = start_install_turn(&test, "use GitHub").await?;
     let ElicitationRequest::Form {
         meta: Some(meta), ..
     } = &elicitation.request
@@ -368,19 +474,7 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
     assert_eq!(meta["remote_plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(meta["app_connector_ids"], json!([APP_CONNECTOR_ID]));
 
-    test.codex
-        .submit(Op::ResolveElicitation {
-            server_name: elicitation.server_name,
-            request_id: elicitation.id,
-            decision: ElicitationAction::Decline,
-            content: None,
-            meta: None,
-        })
-        .await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    resolve_install_elicitation(&test, elicitation, ElicitationAction::Decline).await?;
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 2);
@@ -389,6 +483,104 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
         assert!(!body.contains(REMOTE_PLUGIN_ID));
         assert!(!body.contains(APP_CONNECTOR_ID));
     }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum RefreshedAppsTools {
+    Available,
+    Missing,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_plugin_install_refreshes_plugin_and_apps_tool_caches() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    run_remote_plugin_install_refresh_case(RefreshedAppsTools::Available).await?;
+    run_remote_plugin_install_refresh_case(RefreshedAppsTools::Missing).await
+}
+
+async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTools) -> Result<()> {
+    let server = start_mock_server().await;
+    let apps_server = match refreshed_tools {
+        RefreshedAppsTools::Available => {
+            AppsTestServer::mount_with_tools_available_after_initial_list(&server).await?
+        }
+        RefreshedAppsTools::Missing => AppsTestServer::mount_without_tools(&server).await?,
+    };
+    mount_remote_calendar_recommendation(&server).await;
+    let initial_remote_installed_plugins = mount_empty_remote_installed_plugins(&server).await;
+
+    let install_call_id = "install-calendar";
+    let suggest_reason = "Use Calendar for this request";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    install_call_id,
+                    REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+                    &serde_json::to_string(&json!({
+                        "plugin_id": REMOTE_CALENDAR_PLUGIN_CONFIG_ID,
+                        "suggest_reason": suggest_reason
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = build_test(&server, &apps_server).await?;
+
+    let elicitation = start_install_turn(&test, "use Calendar").await?;
+    mount_remote_calendar_installed_plugins(&server).await;
+    drop(initial_remote_installed_plugins);
+    resolve_install_elicitation(&test, elicitation, ElicitationAction::Accept).await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0]
+            .tool_by_name(CALENDAR_NAMESPACE, CALENDAR_CREATE_EVENT_TOOL)
+            .is_none(),
+        "calendar tool should be absent before the remote install"
+    );
+    let completed = matches!(refreshed_tools, RefreshedAppsTools::Available);
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &requests[1]
+                .function_call_output_text(install_call_id)
+                .expect("install tool output")
+        )?,
+        json!({
+            "completed": completed,
+            "user_confirmed": true,
+            "tool_type": "plugin",
+            "action_type": "install",
+            "tool_id": REMOTE_CALENDAR_PLUGIN_CONFIG_ID,
+            "tool_name": "Calendar",
+            "suggest_reason": suggest_reason
+        })
+    );
+    assert_eq!(
+        requests[1]
+            .tool_by_name(CALENDAR_NAMESPACE, CALENDAR_CREATE_EVENT_TOOL)
+            .is_some(),
+        completed,
+        "the resumed router should reflect the refreshed Apps tools"
+    );
+    assert!(
+        !tool_names(&requests[1].body_json())
+            .iter()
+            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
+        "the refreshed installed-plugin cache should filter the cached recommendation"
+    );
     Ok(())
 }
 

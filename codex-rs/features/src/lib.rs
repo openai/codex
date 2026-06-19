@@ -17,12 +17,15 @@ use toml::Table;
 mod feature_configs;
 mod legacy;
 pub use feature_configs::CodeModeConfigToml;
+pub use feature_configs::CurrentTimeReminderConfigToml;
+pub use feature_configs::CurrentTimeSource;
 pub use feature_configs::MultiAgentV2ConfigToml;
 pub use feature_configs::NetworkProxyConfigToml;
 pub use feature_configs::NetworkProxyDomainPermissionToml;
 pub use feature_configs::NetworkProxyModeToml;
 pub use feature_configs::NetworkProxyUnixSocketPermissionToml;
 use feature_configs::RemovedAppsMcpPathOverrideConfigToml;
+pub use feature_configs::RolloutBudgetConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -129,8 +132,6 @@ pub enum Feature {
     LocalThreadStoreCompression,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
-    /// Append additional AGENTS.md guidance to user instructions.
-    ChildAgentsMd,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
     /// Start the managed network proxy for sandboxed sessions.
@@ -189,6 +190,8 @@ pub enum Feature {
     ImageGenExt,
     /// Resize all inline data-URL images before recording them in history.
     ResizeAllImages,
+    /// Generate Responses API item IDs for client-created history items.
+    ItemIds,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -203,6 +206,10 @@ pub enum Feature {
     Goals,
     /// Add current context-window metadata to model-visible context.
     TokenBudget,
+    /// Track and report a shared token budget across a session's agent threads.
+    RolloutBudget,
+    /// Add current-time reminders to model-visible context.
+    CurrentTimeReminder,
     /// Expose an input-interruptible sleep tool.
     SleepTool,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
@@ -221,6 +228,8 @@ pub enum Feature {
     PreventIdleSleep,
     /// Enable remote compaction v2 over the normal Responses API.
     RemoteCompactionV2,
+    /// Use Agent Identity for ChatGPT-authenticated sessions.
+    UseAgentIdentity,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 
@@ -618,6 +627,10 @@ pub struct FeaturesToml {
     pub code_mode: Option<FeatureToml<CodeModeConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_budget: Option<FeatureToml<RolloutBudgetConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_time_reminder: Option<FeatureToml<CurrentTimeReminderConfigToml>>,
     #[serde(default, rename = "apps_mcp_path_override", skip_serializing)]
     #[schemars(skip)]
     removed_apps_mcp_path_override: Option<FeatureToml<RemovedAppsMcpPathOverrideConfigToml>>,
@@ -650,6 +663,16 @@ impl FeaturesToml {
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
+        if let Some(enabled) = self.rollout_budget.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::RolloutBudget.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self
+            .current_time_reminder
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::CurrentTimeReminder.key().to_string(), enabled);
+        }
         if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
         }
@@ -661,6 +684,8 @@ impl FeaturesToml {
         let Self {
             code_mode,
             multi_agent_v2,
+            rollout_budget,
+            current_time_reminder,
             removed_apps_mcp_path_override: _,
             network_proxy,
             entries,
@@ -674,6 +699,10 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(code_mode, enabled);
             } else if spec.id == Feature::MultiAgentV2 {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
+            } else if spec.id == Feature::RolloutBudget {
+                materialize_resolved_feature_enabled(rollout_budget, enabled);
+            } else if spec.id == Feature::CurrentTimeReminder {
+                materialize_resolved_feature_enabled(current_time_reminder, enabled);
             } else if spec.id == Feature::NetworkProxy {
                 materialize_resolved_feature_enabled(network_proxy, enabled);
             } else {
@@ -878,12 +907,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Chronicle,
         key: "chronicle",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ChildAgentsMd,
-        key: "child_agents_md",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -1114,6 +1137,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ItemIds,
+        key: "item_ids",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::SkillMcpDependencyInstall,
         key: "skill_mcp_dependency_install",
         stage: Stage::Stable,
@@ -1164,6 +1193,18 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TokenBudget,
         key: "token_budget",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RolloutBudget,
+        key: "rollout_budget",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CurrentTimeReminder,
+        key: "current_time_reminder",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -1274,6 +1315,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_compaction_v2",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::UseAgentIdentity,
+        key: "use_agent_identity",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WorkspaceDependencies,

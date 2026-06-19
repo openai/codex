@@ -31,7 +31,10 @@ Keep these requirements in mind while migrating code to conform with the above g
 * path reasoning must work before the related environment has come online
 * URIs cannot explicitly encode the executor’s path convention or operating system
 * users must not configure the environment’s OS/path convention explicitly
-* URIs should not yet be stored in rollouts
+* URIs should not yet be stored in rollouts, databases, or other persistent storage
+* path conversion errors: fail-closed for security-relevant paths, fail-open for UI/diagnostics
+* prefer small focused methods on `PathUri` or `LegacyAppPathString` over local helpers
+* represent `PathUri` values as URIs in diagnostics
 
 It is OK if the conversion between paths and URIs is somewhat lossy as long as it will do the right
 thing for real users.

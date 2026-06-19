@@ -134,6 +134,22 @@ fn message_input_text_contains(request: &ResponsesRequest, role: &str, needle: &
         .any(|text| text.contains(needle))
 }
 
+fn response_message_item_id(request: &ResponsesRequest, role: &str, text: &str) -> String {
+    request
+        .inputs_of_type("message")
+        .into_iter()
+        .find(|item| {
+            item.get("role").and_then(serde_json::Value::as_str) == Some(role)
+                && message_input_texts(item).contains(&text)
+        })
+        .and_then(|item| {
+            item.get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| panic!("missing item ID for {role} message {text:?}"))
+}
+
 fn assert_codex_client_metadata(
     request_body: &serde_json::Value,
     installation_id: &str,
@@ -216,7 +232,129 @@ async fn non_openai_responses_requests_omit_item_turn_metadata() {
             item.get("metadata").is_none(),
             "input item should omit metadata: {item}"
         );
+        assert!(
+            item.get("id").is_none(),
+            "input item should omit generated IDs: {item}"
+        );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg_server", "first reply"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let initial = builder.build(&server).await?;
+    let home = Arc::clone(&initial.home);
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    initial.submit_turn("before resume").await?;
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    builder = builder.with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let resumed = builder.resume(&server, home, rollout_path).await?;
+    resumed.submit_turn("after resume").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let user_id = response_message_item_id(&requests[0], "user", "before resume");
+    let user_uuid = user_id
+        .strip_prefix("msg_")
+        .expect("message ID should have the Responses API prefix");
+    assert_eq!(
+        Uuid::parse_str(user_uuid)?.get_version(),
+        Some(uuid::Version::SortRand)
+    );
+    assert_eq!(
+        response_message_item_id(&requests[1], "user", "before resume"),
+        user_id
+    );
+    assert_eq!(
+        response_message_item_id(&requests[1], "assistant", "first reply"),
+        "msg_server"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn response_item_ids_are_sent_for_all_remote_v2_compaction_requests() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
+                    }
+                }),
+                ev_completed("resp-compact"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::ItemIds);
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("before compaction").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("after compaction").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    for (request_index, request) in requests.iter().enumerate() {
+        let input = request.input();
+        assert!(!input.is_empty(), "request {request_index} input is empty");
+        for item in input {
+            if item.get("type").and_then(serde_json::Value::as_str) == Some("compaction_trigger") {
+                continue;
+            }
+            assert!(
+                item.get("id").and_then(serde_json::Value::as_str).is_some(),
+                "request {request_index} item should have an ID: {item:#?}"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
@@ -611,6 +749,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.000Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: "legacy-js-call".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("legacy js_repl stdout".to_string()),
@@ -751,6 +890,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.500Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: function_call_id.to_string(),
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
@@ -775,6 +915,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.500Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: custom_call_id.to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
@@ -1019,6 +1160,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
         /*attestation_provider*/ None,
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
@@ -1256,6 +1398,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         /*state_db*/ None,
         installation_id,
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config.clone())
@@ -2511,6 +2654,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
@@ -2518,7 +2662,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
-        id: "reasoning-id".into(),
+        id: Some("reasoning-id".into()),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "summary".into(),
         }],
@@ -2555,6 +2699,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         metadata: None,
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {
+        id: None,
         call_id: "function-call-id".into(),
         output: FunctionCallOutputPayload::from_text("ok".into()),
         metadata: None,
@@ -2581,6 +2726,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         metadata: None,
     });
     prompt.input.push(ResponseItem::CustomToolCallOutput {
+        id: None,
         call_id: "custom-tool-call-id".into(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".into()),

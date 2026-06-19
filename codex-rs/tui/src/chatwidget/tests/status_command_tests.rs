@@ -1,5 +1,6 @@
 use super::*;
 use assert_matches::assert_matches;
+use codex_utils_path_uri::PathUri;
 
 #[tokio::test]
 async fn status_command_renders_immediately_and_refreshes_rate_limits_for_chatgpt_auth() {
@@ -96,9 +97,23 @@ async fn status_command_uses_catalog_default_reasoning_when_config_empty() {
 }
 
 #[tokio::test]
-async fn status_command_renders_instruction_sources_from_thread_session() {
+async fn status_command_renders_native_and_foreign_instruction_sources() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.instruction_source_paths = vec![chat.config.cwd.join("AGENTS.md")];
+    let (foreign_source, foreign_display) = if cfg!(windows) {
+        (
+            PathUri::parse("file:///remote/AGENTS.md").expect("POSIX instruction source"),
+            "/remote/AGENTS.md",
+        )
+    } else {
+        (
+            PathUri::parse("file:///C:/remote/AGENTS.md").expect("Windows instruction source"),
+            r"C:\remote\AGENTS.md",
+        )
+    };
+    chat.instruction_source_paths = vec![
+        PathUri::from_abs_path(&chat.config.cwd.join("AGENTS.md")),
+        foreign_source,
+    ];
 
     chat.dispatch_command(SlashCommand::Status);
 
@@ -109,8 +124,8 @@ async fn status_command_renders_instruction_sources_from_thread_session() {
         other => panic!("expected status output, got {other:?}"),
     };
     assert!(
-        rendered.contains("Agents.md"),
-        "expected /status to render app-server instruction sources, got: {rendered}"
+        rendered.contains(&format!("AGENTS.md, {foreign_display}")),
+        "expected /status to show native-relative and environment-native foreign paths, got: {rendered}"
     );
     assert!(
         !rendered.contains("Agents.md  <none>"),

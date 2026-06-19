@@ -7,6 +7,7 @@ use crate::tools::effective_tool_mode;
 use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
+use crate::tools::handlers::CurrentTimeHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
@@ -192,9 +193,39 @@ fn build_tool_specs_and_registry(
     };
     let mut planned_tools = PlannedTools::default();
     add_tool_sources(&context, &mut planned_tools);
+    apply_direct_model_only_namespace_overrides(turn_context, &mut planned_tools);
     append_tool_search_executor(&context, &mut planned_tools);
     prepend_code_mode_executors(&context, &mut planned_tools);
     build_model_visible_specs_and_registry(turn_context, planned_tools)
+}
+
+fn apply_direct_model_only_namespace_overrides(
+    turn_context: &TurnContext,
+    planned_tools: &mut PlannedTools,
+) {
+    for runtime in &mut planned_tools.runtimes {
+        let configured = runtime
+            .tool_name()
+            .namespace
+            .as_ref()
+            .is_some_and(|namespace| {
+                turn_context
+                    .config
+                    .code_mode
+                    .direct_only_tool_namespaces
+                    .contains(namespace)
+            });
+        match runtime.exposure() {
+            ToolExposure::Direct | ToolExposure::Deferred if configured => {
+                *runtime =
+                    override_tool_exposure(Arc::clone(runtime), ToolExposure::DirectModelOnly);
+            }
+            ToolExposure::Direct
+            | ToolExposure::Deferred
+            | ToolExposure::DirectModelOnly
+            | ToolExposure::Hidden => {}
+        }
+    }
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -679,6 +710,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     if features.enabled(Feature::TokenBudget) {
         planned_tools.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
         planned_tools.add(GetContextRemainingHandler);
+    }
+
+    if features.enabled(Feature::CurrentTimeReminder) {
+        planned_tools.add(CurrentTimeHandler);
     }
 
     if features.enabled(Feature::SleepTool) {

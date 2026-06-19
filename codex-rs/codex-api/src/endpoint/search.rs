@@ -149,7 +149,7 @@ mod tests {
                     model: "gpt-test".to_string(),
                     reasoning: None,
                     input: Some(SearchInput::Items(vec![ResponseItem::Message {
-                        id: None,
+                        id: Some("msg_search".to_string()),
                         role: "user".to_string(),
                         content: vec![
                             ContentItem::InputText {
@@ -228,6 +228,7 @@ mod tests {
                 "model": "gpt-test",
                 "input": [{
                     "type": "message",
+                    "id": "msg_search",
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": "find this"},
