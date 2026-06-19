@@ -18,7 +18,6 @@ const EXTERNAL_AGENT_HOOKS_SUBDIR: &str = "hooks";
 const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "hooks";
 const COMMAND_SKILL_PREFIX: &str = "source-command";
 const MAX_SKILL_NAME_LEN: usize = 64;
-const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
 
 #[derive(Debug)]
 struct ParsedDocument {
@@ -1385,6 +1384,8 @@ fn external_agent_term_variants() -> [String; 5] {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
 
     fn source_path(relative_path: &str) -> PathBuf {
         Path::new("/repo")
