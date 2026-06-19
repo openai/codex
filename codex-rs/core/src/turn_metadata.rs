@@ -17,6 +17,10 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 
 use crate::sandbox_tags::permission_profile_sandbox_tag;
+use crate::tool_timing::TOOL_TIMING_KEY;
+use crate::tool_timing::ToolTimingCall;
+use crate::tool_timing::ToolTimingGuard;
+use crate::tool_timing::ToolTimingState;
 use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_has_changes;
@@ -197,6 +201,7 @@ fn merge_turn_metadata(
                     | REQUEST_KIND_KEY
                     | COMPACTION_KEY
                     | WINDOW_ID_KEY
+                    | TOOL_TIMING_KEY
             ) {
                 continue;
             }
@@ -252,6 +257,7 @@ pub(crate) struct TurnMetadataState {
     enriched_header: Arc<RwLock<Option<String>>>,
     turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
     responsesapi_client_metadata: Arc<RwLock<Option<HashMap<String, String>>>>,
+    tool_timing_state: ToolTimingState,
     user_input_requested_during_turn: Arc<AtomicBool>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -312,6 +318,7 @@ impl TurnMetadataState {
             enriched_header: Arc::new(RwLock::new(None)),
             turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
             responsesapi_client_metadata: Arc::new(RwLock::new(None)),
+            tool_timing_state: ToolTimingState::default(),
             user_input_requested_during_turn: Arc::new(AtomicBool::new(false)),
             enrichment_task: Arc::new(Mutex::new(None)),
         }
@@ -401,7 +408,20 @@ impl TurnMetadataState {
     }
 
     pub(crate) fn current_header_value_for_model_request(&self, window_id: &str) -> Option<String> {
-        self.current_header_value_for_model_request_kind(window_id, TurnMetadataRequestKind::Turn)
+        let header = self.current_header_value_for_model_request_kind(
+            window_id,
+            TurnMetadataRequestKind::Turn,
+        )?;
+        let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
+        metadata.insert(
+            TOOL_TIMING_KEY.to_string(),
+            serde_json::to_value(self.tool_timing_state.take_report()).ok()?,
+        );
+        to_ascii_json_string(&metadata).ok()
+    }
+
+    pub(crate) fn start_tool_timing(&self, call: ToolTimingCall) -> ToolTimingGuard {
+        self.tool_timing_state.start_call(call)
     }
 
     pub(crate) fn current_header_value_for_prewarm(&self, window_id: &str) -> Option<String> {
@@ -424,6 +444,10 @@ impl TurnMetadataState {
         metadata.insert(
             COMPACTION_KEY.to_string(),
             serde_json::to_value(compaction).ok()?,
+        );
+        metadata.insert(
+            TOOL_TIMING_KEY.to_string(),
+            serde_json::to_value(self.tool_timing_state.take_report()).ok()?,
         );
         to_ascii_json_string(&metadata).ok()
     }

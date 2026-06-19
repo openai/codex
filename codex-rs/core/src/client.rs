@@ -85,6 +85,7 @@ use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::create_tools_json_for_responses_api;
+use codex_utils_string::to_ascii_json_string;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -111,6 +112,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::feedback_tags;
+use crate::tool_timing::TOOL_TIMING_KEY;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
@@ -650,7 +652,7 @@ impl ModelClient {
         extra_headers
     }
 
-    fn build_ws_client_metadata(
+    fn build_responses_client_metadata(
         &self,
         turn_metadata_header: Option<&str>,
     ) -> HashMap<String, String> {
@@ -918,7 +920,7 @@ impl ModelClient {
         turn_state: Option<&Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
     ) -> ApiHeaderMap {
-        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
+        let turn_metadata_header = parse_transport_turn_metadata_header(turn_metadata_header);
         let session_id = self.state.session_id.to_string();
         let thread_id = self.state.thread_id.to_string();
         let mut headers = build_responses_headers(
@@ -976,7 +978,7 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
         compression: Compression,
     ) -> ApiResponsesOptions {
-        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
+        let turn_metadata_header = parse_transport_turn_metadata_header(turn_metadata_header);
         let session_id = self.client.state.session_id.to_string();
         let thread_id = self.client.state.thread_id.to_string();
         ApiResponsesOptions {
@@ -1263,7 +1265,7 @@ impl ModelClientSession {
                 .build_responses_options(turn_metadata_header, compression)
                 .await;
 
-            let request = self.client.build_responses_request(
+            let mut request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
@@ -1271,6 +1273,10 @@ impl ModelClientSession {
                 summary,
                 service_tier.clone(),
             )?;
+            request.client_metadata = Some(
+                self.client
+                    .build_responses_client_metadata(turn_metadata_header),
+            );
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
@@ -1372,7 +1378,7 @@ impl ModelClientSession {
             let options = self
                 .build_responses_options(turn_metadata_header, compression)
                 .await;
-            let request = self.client.build_responses_request(
+            let mut request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
@@ -1380,9 +1386,13 @@ impl ModelClientSession {
                 summary,
                 service_tier.clone(),
             )?;
+            request.client_metadata = Some(
+                self.client
+                    .build_responses_client_metadata(turn_metadata_header),
+            );
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
-                    Some(self.client.build_ws_client_metadata(turn_metadata_header)),
+                    request.client_metadata.clone(),
                     request_trace.as_ref(),
                 ),
                 ..ResponseCreateWsRequest::from(&request)
@@ -1652,6 +1662,15 @@ impl ModelClientSession {
 /// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
+}
+
+fn parse_transport_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
+    // Responses request bodies carry the report in client metadata.
+    let mut metadata =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(turn_metadata_header?)
+            .ok()?;
+    metadata.remove(TOOL_TIMING_KEY);
+    HeaderValue::from_str(&to_ascii_json_string(&metadata).ok()?).ok()
 }
 
 /// Stamp a ResponsesWsRequest with the current time.

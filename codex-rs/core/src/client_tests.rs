@@ -7,6 +7,7 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::parse_transport_turn_metadata_header;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
@@ -278,7 +279,7 @@ fn build_subagent_headers_sets_internal_memory_consolidation_label() {
 }
 
 #[test]
-fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
+fn build_responses_client_metadata_includes_window_lineage_and_turn_metadata() {
     let parent_thread_id = ThreadId::new();
     let client = test_model_client_with_parent(
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -293,7 +294,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
 
     client.advance_window_generation();
 
-    let client_metadata = client.build_ws_client_metadata(Some(r#"{"turn_id":"turn-123"}"#));
+    let client_metadata = client.build_responses_client_metadata(Some(r#"{"turn_id":"turn-123"}"#));
     let thread_id = client.state.thread_id;
     assert_eq!(
         client_metadata,
@@ -320,6 +321,18 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             ),
         ])
     );
+}
+
+#[test]
+fn transport_turn_metadata_header_omits_tool_timing() {
+    let header = parse_transport_turn_metadata_header(Some(
+        r#"{"turn_id":"turn-123","tool_timing":{"version":1}}"#,
+    ))
+    .expect("valid metadata header");
+    let metadata: serde_json::Value =
+        serde_json::from_str(header.to_str().expect("ASCII metadata header")).expect("JSON");
+
+    assert_eq!(metadata, json!({"turn_id": "turn-123"}));
 }
 
 #[tokio::test]

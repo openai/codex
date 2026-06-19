@@ -663,6 +663,15 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
     assert_eq!(compact_json["turn_id"].as_str(), Some("turn-a"));
     assert_eq!(compact_json[WINDOW_ID_KEY].as_str(), Some("thread-a:2"));
     assert_eq!(
+        compact_json["tool_timing"],
+        serde_json::json!({
+            "version": 1,
+            "report_id": 0,
+            "tool_active_s": 0.0,
+            "calls": [],
+        })
+    );
+    assert_eq!(
         compact_json["compaction"],
         serde_json::json!({
             "trigger": "auto",
@@ -679,6 +688,15 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
     let regular_json: Value = serde_json::from_str(&regular_header).expect("json");
     assert_eq!(regular_json["request_kind"].as_str(), Some("turn"));
     assert_eq!(regular_json[WINDOW_ID_KEY].as_str(), Some("thread-a:3"));
+    assert_eq!(
+        regular_json["tool_timing"],
+        serde_json::json!({
+            "version": 1,
+            "report_id": 1,
+            "tool_active_s": 0.0,
+            "calls": [],
+        })
+    );
     assert!(regular_json.get("compaction").is_none());
 }
 
