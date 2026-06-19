@@ -106,7 +106,7 @@ fn build_multi_agent_mode_update_item(
         &next.config.multi_agent_v2,
         &next.session_source,
         next.multi_agent_mode,
-        next.features.enabled(Feature::MultiAgentMode),
+        next.config.features.enabled(Feature::MultiAgentMode),
     );
     let previous = previous?;
     if previous.multi_agent_mode == effective_multi_agent_mode {

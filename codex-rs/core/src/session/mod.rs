@@ -3249,7 +3249,10 @@ impl Session {
             &turn_context.config.multi_agent_v2,
             &session_source,
             turn_context.multi_agent_mode,
-            turn_context.features.enabled(Feature::MultiAgentMode),
+            turn_context
+                .config
+                .features
+                .enabled(Feature::MultiAgentMode),
         ) {
             items.push(ContextualUserFragment::into(
                 MultiAgentModeInstructions::new(multi_agent_mode),
