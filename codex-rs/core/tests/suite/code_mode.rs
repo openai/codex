@@ -221,6 +221,19 @@ async fn run_code_mode_turn_with_model_and_config(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_call_standalone_web_search() -> Result<()> {
+    assert_code_mode_standalone_web_search(WebSearchMode::Live, serde_json::json!(true)).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_call_indexed_standalone_web_search() -> Result<()> {
+    assert_code_mode_standalone_web_search(WebSearchMode::Indexed, serde_json::json!("indexed"))
+        .await
+}
+
+async fn assert_code_mode_standalone_web_search(
+    web_search_mode: WebSearchMode,
+    expected_external_web_access: Value,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -268,7 +281,7 @@ text(result);
         .with_auth(auth)
         .with_extensions(Arc::new(extension_builder.build()))
         .with_model("test-gpt-5.1-codex")
-        .with_config(|config| {
+        .with_config(move |config| {
             config
                 .features
                 .enable(Feature::CodeMode)
@@ -279,7 +292,7 @@ text(result);
                 .expect("standalone web search should be enabled");
             config
                 .web_search_mode
-                .set(WebSearchMode::Live)
+                .set(web_search_mode)
                 .expect("web search mode should be accepted");
         });
     let test = builder.build(&server).await?;
@@ -310,7 +323,7 @@ text(result);
         search_body["settings"],
         serde_json::json!({
             "allowed_callers": ["direct"],
-            "external_web_access": true,
+            "external_web_access": expected_external_web_access,
         })
     );
     assert_eq!(

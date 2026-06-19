@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use codex_api::AllowedCaller;
 use codex_api::ApproximateLocation;
+use codex_api::ExternalWebAccess;
+use codex_api::ExternalWebAccessMode;
 use codex_api::LocationType;
 use codex_api::SearchContextSize;
 use codex_api::SearchFilters;
@@ -73,11 +75,16 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
                 blocked_domains: None,
             }),
         allowed_callers: Some(vec![AllowedCaller::Direct]),
-        external_web_access: Some(match web_search_mode {
-            WebSearchMode::Live => true,
-            WebSearchMode::Cached | WebSearchMode::Disabled => false,
-        }),
+        external_web_access: Some(external_web_access_for_mode(web_search_mode)),
         ..Default::default()
+    }
+}
+
+fn external_web_access_for_mode(web_search_mode: WebSearchMode) -> ExternalWebAccess {
+    match web_search_mode {
+        WebSearchMode::Disabled | WebSearchMode::Cached => ExternalWebAccess::Boolean(false),
+        WebSearchMode::Indexed => ExternalWebAccess::Mode(ExternalWebAccessMode::Indexed),
+        WebSearchMode::Live => ExternalWebAccess::Boolean(true),
     }
 }
 
@@ -149,9 +156,32 @@ mod tests {
     use super::AuthManager;
     use super::Config;
     use super::WebSearchExtensionConfig;
+    use super::external_web_access_for_mode;
     use super::install;
     use crate::tool::RUN_TOOL_NAME;
     use crate::tool::WEB_NAMESPACE;
+    use codex_api::ExternalWebAccess;
+    use codex_api::ExternalWebAccessMode;
+    use codex_protocol::config_types::WebSearchMode;
+
+    #[test]
+    fn external_web_access_preserves_legacy_values_until_indexed() {
+        assert_eq!(
+            [
+                WebSearchMode::Disabled,
+                WebSearchMode::Cached,
+                WebSearchMode::Indexed,
+                WebSearchMode::Live,
+            ]
+            .map(external_web_access_for_mode),
+            [
+                ExternalWebAccess::Boolean(false),
+                ExternalWebAccess::Boolean(false),
+                ExternalWebAccess::Mode(ExternalWebAccessMode::Indexed),
+                ExternalWebAccess::Boolean(true),
+            ]
+        );
+    }
 
     #[test]
     fn installed_extension_contributes_web_run_when_enabled() {

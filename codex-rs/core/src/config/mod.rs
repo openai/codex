@@ -2667,7 +2667,7 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     let preferred = web_search_mode.value();
 
     if matches!(permission_profile, PermissionProfile::Disabled)
-        && preferred != WebSearchMode::Disabled
+        && !matches!(preferred, WebSearchMode::Disabled | WebSearchMode::Indexed)
     {
         for mode in [
             WebSearchMode::Live,

@@ -274,3 +274,42 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
         })
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn indexed_web_search_mode_sets_index_gate() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
+
+    let home = Arc::new(tempfile::TempDir::new().expect("create codex home"));
+    std::fs::write(home.path().join("config.toml"), r#"web_search = "indexed""#)
+        .expect("write config.toml");
+
+    let mut builder = test_codex().with_model("gpt-5.3-codex").with_home(home);
+    let test = builder
+        .build(&server)
+        .await
+        .expect("create test Codex conversation");
+
+    test.submit_turn_with_permission_profile(
+        "hello indexed web search",
+        PermissionProfile::Disabled,
+    )
+    .await
+    .expect("submit turn");
+
+    let body = resp_mock.single_request().body_json();
+    let tool = find_web_search_tool(&body);
+    assert_eq!(
+        (
+            tool.get("external_web_access").and_then(Value::as_bool),
+            tool.get("index_gated_web_access").and_then(Value::as_bool),
+        ),
+        (Some(true), Some(true))
+    );
+}

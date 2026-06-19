@@ -665,10 +665,11 @@ fn is_glob_metacharacter(ch: char) -> bool {
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WebSearchModeRequirement {
     Disabled,
     Cached,
+    Indexed,
     Live,
 }
 
@@ -677,6 +678,7 @@ impl From<WebSearchMode> for WebSearchModeRequirement {
         match mode {
             WebSearchMode::Disabled => WebSearchModeRequirement::Disabled,
             WebSearchMode::Cached => WebSearchModeRequirement::Cached,
+            WebSearchMode::Indexed => WebSearchModeRequirement::Indexed,
             WebSearchMode::Live => WebSearchModeRequirement::Live,
         }
     }
@@ -687,6 +689,7 @@ impl From<WebSearchModeRequirement> for WebSearchMode {
         match mode {
             WebSearchModeRequirement::Disabled => WebSearchMode::Disabled,
             WebSearchModeRequirement::Cached => WebSearchMode::Cached,
+            WebSearchModeRequirement::Indexed => WebSearchMode::Indexed,
             WebSearchModeRequirement::Live => WebSearchMode::Live,
         }
     }
@@ -697,6 +700,7 @@ impl fmt::Display for WebSearchModeRequirement {
         match self {
             WebSearchModeRequirement::Disabled => write!(f, "disabled"),
             WebSearchModeRequirement::Cached => write!(f, "cached"),
+            WebSearchModeRequirement::Indexed => write!(f, "indexed"),
             WebSearchModeRequirement::Live => write!(f, "live"),
         }
     }
@@ -1345,6 +1349,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 
                 let initial_value = if accepted.contains(&WebSearchModeRequirement::Cached) {
                     WebSearchMode::Cached
+                } else if accepted.contains(&WebSearchModeRequirement::Indexed) {
+                    WebSearchMode::Indexed
                 } else if accepted.contains(&WebSearchModeRequirement::Live) {
                     WebSearchMode::Live
                 } else {
@@ -2923,6 +2929,34 @@ allowed_approvals_reviewers = ["user"]
                 .can_set(&WebSearchMode::Cached)
                 .is_ok()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_web_search_modes_supports_indexed() -> Result<()> {
+        let config: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_web_search_modes = ["indexed"]
+            "#,
+        )?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(requirements.web_search_mode.value(), WebSearchMode::Indexed);
+        for mode in [WebSearchMode::Disabled, WebSearchMode::Indexed] {
+            assert!(requirements.web_search_mode.can_set(&mode).is_ok());
+        }
+        for mode in [WebSearchMode::Cached, WebSearchMode::Live] {
+            assert_eq!(
+                requirements.web_search_mode.can_set(&mode),
+                Err(ConstraintError::InvalidValue {
+                    field_name: "web_search_mode",
+                    candidate: format!("{mode:?}"),
+                    allowed: "[Disabled, Indexed]".into(),
+                    requirement_source: RequirementSource::Unknown,
+                })
+            );
+        }
 
         Ok(())
     }
