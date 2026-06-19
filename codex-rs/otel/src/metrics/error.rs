@@ -41,6 +41,6 @@ pub enum MetricsError {
     #[error("failed to collect runtime metrics snapshot from metrics reader")]
     RuntimeSnapshotCollect {
         #[source]
-        source: opentelemetry_sdk::error::OTelSdkError,
+        source: opentelemetry_sdk::metrics::MetricError,
     },
 }

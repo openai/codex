@@ -21,8 +21,6 @@ use opentelemetry_otlp::SpanExporter;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::WithTonicConfig;
-use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
-use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
@@ -39,7 +37,8 @@ use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProces
 use opentelemetry_semantic_conventions as semconv;
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::time::Duration;
+use tonic::metadata::MetadataMap;
+use tonic::transport::ClientTlsConfig;
 use tracing::debug;
 use tracing_subscriber::Layer;
 use tracing_subscriber::registry::LookupSpan;
@@ -286,7 +285,7 @@ impl SpanProcessor for SpanAttributesProcessor {
         Ok(())
     }
 
-    fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
+    fn shutdown(&self) -> OTelSdkResult {
         Ok(())
     }
 }

@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_dir = PathBuf::from(proto_dir_arg);
     let proto_file = proto_dir.join("codex.thread_config.v1.proto");
 
-    tonic_prost_build::configure()
+    tonic_build::configure()
         .build_client(true)
         .build_server(true)
         .out_dir(&proto_dir)

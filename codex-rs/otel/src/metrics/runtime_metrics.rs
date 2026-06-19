@@ -16,10 +16,10 @@ use crate::metrics::names::WEBSOCKET_EVENT_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Histogram;
 use opentelemetry_sdk::metrics::data::Metric;
-use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::data::Sum;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RuntimeMetricTotals {
@@ -171,40 +171,46 @@ impl RuntimeMetricsSummary {
 
 fn sum_counter(snapshot: &ResourceMetrics, name: &str) -> u64 {
     snapshot
-        .scope_metrics()
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .filter(|metric| metric.name() == name)
+        .scope_metrics
+        .iter()
+        .flat_map(|scope_metrics| scope_metrics.metrics.iter())
+        .filter(|metric| metric.name == name)
         .map(sum_counter_metric)
         .sum()
 }
 
 fn sum_counter_metric(metric: &Metric) -> u64 {
-    match metric.data() {
-        AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
-            .data_points()
-            .map(opentelemetry_sdk::metrics::data::SumDataPoint::value)
-            .sum(),
-        _ => 0,
-    }
+    metric
+        .data
+        .as_any()
+        .downcast_ref::<Sum<u64>>()
+        .map(|sum| sum.data_points.iter().map(|point| point.value).sum())
+        .unwrap_or_default()
 }
 
 fn sum_histogram_ms(snapshot: &ResourceMetrics, name: &str) -> u64 {
     snapshot
-        .scope_metrics()
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .filter(|metric| metric.name() == name)
+        .scope_metrics
+        .iter()
+        .flat_map(|scope_metrics| scope_metrics.metrics.iter())
+        .filter(|metric| metric.name == name)
         .map(sum_histogram_metric_ms)
         .sum()
 }
 
 fn sum_histogram_metric_ms(metric: &Metric) -> u64 {
-    match metric.data() {
-        AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
-            .data_points()
-            .map(|point| f64_to_u64(point.sum()))
-            .sum(),
-        _ => 0,
-    }
+    metric
+        .data
+        .as_any()
+        .downcast_ref::<Histogram<f64>>()
+        .map(|histogram| {
+            histogram
+                .data_points
+                .iter()
+                .map(|point| f64_to_u64(point.sum))
+                .sum()
+        })
+        .unwrap_or_default()
 }
 
 fn f64_to_u64(value: f64) -> u64 {

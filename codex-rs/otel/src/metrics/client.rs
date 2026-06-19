@@ -21,8 +21,6 @@ use opentelemetry_otlp::Protocol;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::WithTonicConfig;
-use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
-use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::InstrumentKind;
 use opentelemetry_sdk::metrics::ManualReader;
@@ -39,6 +37,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
 use std::time::Duration;
+use tonic::metadata::MetadataMap;
+use tonic::transport::ClientTlsConfig;
 use tracing::debug;
 
 const ENV_ATTRIBUTE: &str = "env";
@@ -77,7 +77,7 @@ impl MetricReader for SharedManualReader {
         self.inner.register_pipeline(pipeline);
     }
 
-    fn collect(&self, rm: &mut ResourceMetrics) -> opentelemetry_sdk::error::OTelSdkResult {
+    fn collect(&self, rm: &mut ResourceMetrics) -> opentelemetry_sdk::metrics::MetricResult<()> {
         self.inner.collect(rm)
     }
 
@@ -85,8 +85,8 @@ impl MetricReader for SharedManualReader {
         self.inner.force_flush()
     }
 
-    fn shutdown_with_timeout(&self, timeout: Duration) -> opentelemetry_sdk::error::OTelSdkResult {
-        self.inner.shutdown_with_timeout(timeout)
+    fn shutdown(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+        self.inner.shutdown()
     }
 
     fn temporality(&self, kind: InstrumentKind) -> Temporality {
@@ -402,7 +402,10 @@ impl MetricsClient {
         let Some(reader) = &self.0.runtime_reader else {
             return Err(MetricsError::RuntimeSnapshotUnavailable);
         };
-        let mut snapshot = ResourceMetrics::default();
+        let mut snapshot = ResourceMetrics {
+            resource: Resource::builder_empty().build(),
+            scope_metrics: Vec::new(),
+        };
         reader
             .collect(&mut snapshot)
             .map_err(|source| MetricsError::RuntimeSnapshotCollect { source })?;

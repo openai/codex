@@ -38,7 +38,6 @@ opentelemetry-otlp = { workspace = true, features = [
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
     "experimental_trace_batch_span_processor_with_async_runtime",
-    "experimental_metrics_custom_reader",
     "logs",
     "metrics",
     "rt-tokio",
@@ -54,13 +53,13 @@ strum_macros = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tonic = { workspace = true, features = ["tls", "tls-roots", "transport"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 opentelemetry_sdk = { workspace = true, features = [
-    "experimental_metrics_custom_reader",
     "testing",
 ] }
 pretty_assertions = { workspace = true }

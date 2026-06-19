@@ -1,5 +1,6 @@
 use crate::harness::attributes_to_map;
 use crate::harness::find_metric;
+use crate::harness::sum_u64;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::Result;
@@ -8,8 +9,6 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -35,17 +34,9 @@ fn snapshot_collects_metrics_without_shutdown() -> Result<()> {
     let snapshot = metrics.snapshot()?;
 
     let metric = find_metric(&snapshot, "codex.tool.call").expect("counter metric missing");
-    let attrs = match metric.data() {
-        AggregatedMetrics::U64(data) => match data {
-            MetricData::Sum(sum) => {
-                let points: Vec<_> = sum.data_points().collect();
-                assert_eq!(points.len(), 1);
-                attributes_to_map(points[0].attributes())
-            }
-            _ => panic!("unexpected counter aggregation"),
-        },
-        _ => panic!("unexpected counter data type"),
-    };
+    let sum = sum_u64(metric);
+    assert_eq!(sum.data_points.len(), 1);
+    let attrs = attributes_to_map(sum.data_points[0].attributes.iter());
 
     let expected = BTreeMap::from([
         ("service".to_string(), "codex-cli".to_string()),
@@ -91,17 +82,9 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
 
     let snapshot = manager.snapshot_metrics()?;
     let metric = find_metric(&snapshot, "codex.tool.call").expect("counter metric missing");
-    let attrs = match metric.data() {
-        AggregatedMetrics::U64(data) => match data {
-            MetricData::Sum(sum) => {
-                let points: Vec<_> = sum.data_points().collect();
-                assert_eq!(points.len(), 1);
-                attributes_to_map(points[0].attributes())
-            }
-            _ => panic!("unexpected counter aggregation"),
-        },
-        _ => panic!("unexpected counter data type"),
-    };
+    let sum = sum_u64(metric);
+    assert_eq!(sum.data_points.len(), 1);
+    let attrs = attributes_to_map(sum.data_points[0].attributes.iter());
 
     let expected = BTreeMap::from([
         (

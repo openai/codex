@@ -1,6 +1,7 @@
 use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::histogram_data;
+use crate::harness::histogram_f64;
 use crate::harness::latest_metrics;
 use codex_otel::Result;
 use pretty_assertions::assert_eq;
@@ -27,8 +28,8 @@ fn record_duration_records_histogram() -> Result<()> {
     assert_eq!(count, 1);
     let metric = crate::harness::find_metric(&resource_metrics, "codex.request_latency")
         .expect("codex.request_latency metric should exist");
-    assert_eq!(metric.unit(), "ms");
-    assert_eq!(metric.description(), "Duration in milliseconds.");
+    assert_eq!(metric.unit.as_ref(), "ms");
+    assert_eq!(metric.description.as_ref(), "Duration in milliseconds.");
 
     Ok(())
 }
@@ -68,9 +69,9 @@ fn record_duration_seconds_uses_fractional_seconds_and_scaled_buckets() -> Resul
     assert_eq!(count, 3);
     let metric = crate::harness::find_metric(&resource_metrics, "codex.request_duration_seconds")
         .expect("codex.request_duration_seconds metric should exist");
-    assert_eq!(metric.unit(), "s");
+    assert_eq!(metric.unit.as_ref(), "s");
     assert_eq!(
-        metric.description(),
+        metric.description.as_ref(),
         "Duration of Codex requests in seconds."
     );
 
@@ -97,20 +98,19 @@ fn timer_result_records_success() -> Result<()> {
     assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
     let metric = crate::harness::find_metric(&resource_metrics, "codex.request_latency")
         .expect("codex.request_latency metric should exist");
-    assert_eq!(metric.unit(), "ms");
-    assert_eq!(metric.description(), "Duration in milliseconds.");
-    let attrs = attributes_to_map(
+    assert_eq!(metric.unit.as_ref(), "ms");
+    assert_eq!(metric.description.as_ref(), "Duration in milliseconds.");
+    let histogram = histogram_f64(
         crate::harness::find_metric(&resource_metrics, "codex.request_latency")
-            .and_then(|metric| match metric.data() {
-                opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(
-                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram),
-                ) => histogram
-                    .data_points()
-                    .next()
-                    .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::attributes),
-                _ => None,
-            })
-            .expect("codex.request_latency attributes should exist"),
+            .expect("codex.request_latency metric should exist"),
+    );
+    let attrs = attributes_to_map(
+        histogram
+            .data_points
+            .first()
+            .expect("codex.request_latency attributes should exist")
+            .attributes
+            .iter(),
     );
     assert_eq!(attrs.get("route").map(String::as_str), Some("chat"));
 

@@ -2,6 +2,7 @@ use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::latest_metrics;
+use crate::harness::sum_u64;
 use codex_otel::PLUGIN_INSTALL_ELICITATION_SENT_METRIC;
 use codex_otel::PLUGIN_INSTALL_SUGGESTION_METRIC;
 use codex_otel::Result;
@@ -9,8 +10,6 @@ use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -42,17 +41,9 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
     let resource_metrics = latest_metrics(&exporter);
     let metric =
         find_metric(&resource_metrics, "codex.session_started").expect("counter metric missing");
-    let attrs = match metric.data() {
-        AggregatedMetrics::U64(data) => match data {
-            MetricData::Sum(sum) => {
-                let points: Vec<_> = sum.data_points().collect();
-                assert_eq!(points.len(), 1);
-                attributes_to_map(points[0].attributes())
-            }
-            _ => panic!("unexpected counter aggregation"),
-        },
-        _ => panic!("unexpected counter data type"),
-    };
+    let sum = sum_u64(metric);
+    assert_eq!(sum.data_points.len(), 1);
+    let attrs = attributes_to_map(sum.data_points[0].attributes.iter());
 
     let expected = BTreeMap::from([
         (
@@ -102,17 +93,9 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
     let resource_metrics = latest_metrics(&exporter);
     let metric =
         find_metric(&resource_metrics, "codex.session_started").expect("counter metric missing");
-    let attrs = match metric.data() {
-        AggregatedMetrics::U64(data) => match data {
-            MetricData::Sum(sum) => {
-                let points: Vec<_> = sum.data_points().collect();
-                assert_eq!(points.len(), 1);
-                attributes_to_map(points[0].attributes())
-            }
-            _ => panic!("unexpected counter aggregation"),
-        },
-        _ => panic!("unexpected counter data type"),
-    };
+    let sum = sum_u64(metric);
+    assert_eq!(sum.data_points.len(), 1);
+    let attrs = attributes_to_map(sum.data_points[0].attributes.iter());
 
     let expected = BTreeMap::from([("source".to_string(), "tui".to_string())]);
     assert_eq!(attrs, expected);
@@ -144,17 +127,9 @@ fn manager_attaches_optional_service_name_tag() -> Result<()> {
     let resource_metrics = latest_metrics(&exporter);
     let metric =
         find_metric(&resource_metrics, "codex.session_started").expect("counter metric missing");
-    let attrs = match metric.data() {
-        AggregatedMetrics::U64(data) => match data {
-            MetricData::Sum(sum) => {
-                let points: Vec<_> = sum.data_points().collect();
-                assert_eq!(points.len(), 1);
-                attributes_to_map(points[0].attributes())
-            }
-            _ => panic!("unexpected counter aggregation"),
-        },
-        _ => panic!("unexpected counter data type"),
-    };
+    let sum = sum_u64(metric);
+    assert_eq!(sum.data_points.len(), 1);
+    let attrs = attributes_to_map(sum.data_points[0].attributes.iter());
 
     assert_eq!(
         attrs.get("service_name"),
@@ -194,17 +169,9 @@ fn manager_records_plugin_install_suggestion_metric() -> Result<()> {
     let resource_metrics = latest_metrics(&exporter);
     let metric = find_metric(&resource_metrics, PLUGIN_INSTALL_SUGGESTION_METRIC)
         .expect("plugin install suggestion metric missing");
-    let attrs = match metric.data() {
-        AggregatedMetrics::U64(data) => match data {
-            MetricData::Sum(sum) => {
-                let points: Vec<_> = sum.data_points().collect();
-                assert_eq!(points.len(), 1);
-                attributes_to_map(points[0].attributes())
-            }
-            _ => panic!("unexpected counter aggregation"),
-        },
-        _ => panic!("unexpected counter data type"),
-    };
+    let sum = sum_u64(metric);
+    assert_eq!(sum.data_points.len(), 1);
+    let attrs = attributes_to_map(sum.data_points[0].attributes.iter());
 
     assert_eq!(
         attrs,
@@ -241,17 +208,9 @@ fn manager_records_plugin_install_elicitation_sent_metric() -> Result<()> {
     let resource_metrics = latest_metrics(&exporter);
     let metric = find_metric(&resource_metrics, PLUGIN_INSTALL_ELICITATION_SENT_METRIC)
         .expect("plugin install elicitation sent metric missing");
-    let attrs = match metric.data() {
-        AggregatedMetrics::U64(data) => match data {
-            MetricData::Sum(sum) => {
-                let points: Vec<_> = sum.data_points().collect();
-                assert_eq!(points.len(), 1);
-                attributes_to_map(points[0].attributes())
-            }
-            _ => panic!("unexpected counter aggregation"),
-        },
-        _ => panic!("unexpected counter data type"),
-    };
+    let sum = sum_u64(metric);
+    assert_eq!(sum.data_points.len(), 1);
+    let attrs = attributes_to_map(sum.data_points[0].attributes.iter());
 
     assert_eq!(
         attrs,
