@@ -1,6 +1,7 @@
-# What: use a working Windows direct linker for `rules_rs` exec toolchains and
+# What: use Rust's bundled direct linker for Windows MSVC exec toolchains and
 # preserve the Windows stdlib link flags the stable wrapper was dropping.
-# Scope: Windows-only linker metadata for the generated `rules_rs` toolchains.
+# Scope: Windows-only linker metadata for the generated `rules_rs` toolchains;
+# Windows gnullvm keeps using the selected hermetic C++ toolchain driver.
 
 diff --git a/rs/experimental/toolchains/declare_rustc_toolchains.bzl b/rs/experimental/toolchains/declare_rustc_toolchains.bzl
 --- a/rs/experimental/toolchains/declare_rustc_toolchains.bzl
@@ -9,8 +10,8 @@ diff --git a/rs/experimental/toolchains/declare_rustc_toolchains.bzl b/rs/experi
          rust_toolchain(
              name = rust_toolchain_name,
              rust_doc = "{}rustdoc".format(rustc_repo_label),
-+            linker = "{}rust-lld".format(rustc_repo_label) if exec_triple.system == "windows" else None,
-+            linker_type = "direct" if exec_triple.system == "windows" else None,
++            linker = "{}rust-lld".format(rustc_repo_label) if exec_triple.abi == "msvc" else None,
++            linker_type = "direct" if exec_triple.abi == "msvc" else None,
              rust_std = select(rust_std_select),
              rustc = "{}rustc".format(rustc_repo_label),
              cargo = "{}cargo".format(cargo_repo_label),
@@ -39,7 +40,7 @@ diff --git a/rs/experimental/toolchains/declare_rustc_toolchains.bzl b/rs/experi
 diff --git a/rs/private/rustc_repository.bzl b/rs/private/rustc_repository.bzl
 --- a/rs/private/rustc_repository.bzl
 +++ b/rs/private/rustc_repository.bzl
-@@ -7,10 +7,24 @@ load(
+@@ -7,10 +7,26 @@ load(
  )
  load(":rust_repository_utils.bzl", "RUST_REPOSITORY_COMMON_ATTR", "download_and_extract")
 +
@@ -55,11 +56,13 @@ diff --git a/rs/private/rustc_repository.bzl b/rs/private/rustc_repository.bzl
      exec_triple = triple(rctx.attr.triple)
      download_and_extract(rctx, "rustc", "rustc", exec_triple)
      build_content = [BUILD_for_compiler(exec_triple)]
-+    if exec_triple.system == "windows":
-+        lld_link = rctx.which("lld-link.exe")
-+        if lld_link == None:
-+            fail("lld-link.exe not found on PATH")
-+        rctx.symlink(lld_link, "bin/lld-link.exe")
++    if exec_triple.abi == "msvc":
++        # Keep the `lld-link.exe` basename so the multi-call Rust LLD binary
++        # selects its COFF driver without importing a linker from PATH.
++        rctx.symlink(
++            "lib/rustlib/{}/bin/rust-lld.exe".format(exec_triple.str),
++            "bin/lld-link.exe",
++        )
 +        build_content.append(_WINDOWS_EXEC_LINKER_BUILD)
      if includes_rust_analyzer_proc_macro_srv(rctx.attr.version, rctx.attr.iso_date):
          build_content.append(BUILD_for_rust_analyzer_proc_macro_srv(exec_triple))
