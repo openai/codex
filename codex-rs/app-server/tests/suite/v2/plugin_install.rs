@@ -1331,6 +1331,97 @@ async fn plugin_install_starts_mcp_oauth_with_formerly_disallowed_plugin_app() -
 }
 
 #[tokio::test]
+async fn plugin_install_starts_mcp_oauth_through_protected_resource_metadata() -> Result<()> {
+    let resource_server = MockServer::start().await;
+    let authorization_server = MockServer::start().await;
+    let resource_metadata_url = format!("{}/oauth-resource", resource_server.uri());
+    let challenge = format!("Bearer resource_metadata=\"{resource_metadata_url}\"");
+    Mock::given(method("GET"))
+        .and(path("/mcp"))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("WWW-Authenticate", challenge.as_str()),
+        )
+        .mount(&resource_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/oauth-resource"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "resource": resource_server.uri(),
+            "authorization_servers": [authorization_server.uri()],
+        })))
+        .mount(&resource_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "authorization_endpoint": format!("{}/oauth/authorize", authorization_server.uri()),
+            "token_endpoint": format!("{}/oauth/token", authorization_server.uri()),
+            "registration_endpoint": format!("{}/oauth/register", authorization_server.uri()),
+            "response_types_supported": ["code"],
+            "code_challenge_methods_supported": ["S256"],
+        })))
+        .mount(&authorization_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/register"))
+        .respond_with(ResponseTemplate::new(400))
+        .mount(&authorization_server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nplugins = true\n",
+    )?;
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    write_plugin_mcp_config(repo_root.path(), "sample-plugin", &resource_server.uri())?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: PluginInstallResponse = to_response(response)?;
+    wait_for_remote_plugin_request_count(
+        &authorization_server,
+        "POST",
+        "/oauth/register",
+        /*expected_count*/ 1,
+    )
+    .await?;
+
+    let resource_metadata_requested = resource_server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .any(|request| request.url.path() == "/oauth-resource");
+    assert!(resource_metadata_requested);
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_install_starts_mcp_oauth_for_api_key_dual_surface_plugin() -> Result<()> {
     let oauth_server = MockServer::start().await;
     let codex_home = TempDir::new()?;
