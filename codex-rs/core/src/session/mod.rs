@@ -3410,17 +3410,19 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
-    ) {
-        self.record_token_usage_info(turn_context, token_usage)
+    ) -> CodexResult<()> {
+        let result = self
+            .record_token_usage_info(turn_context, token_usage)
             .await;
         self.send_token_count_event(turn_context).await;
+        result
     }
 
     pub(crate) async fn record_token_usage_info(
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
-    ) {
+    ) -> CodexResult<()> {
         if let Some(token_usage) = token_usage {
             let token_info = {
                 let mut state = self.state.lock().await;
@@ -3434,7 +3436,7 @@ impl Session {
                 }
                 state.token_info()
             };
-            self.record_rollout_budget_usage(token_usage);
+            let budget_result = self.record_rollout_budget_usage(token_usage);
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
                     contributor
@@ -3447,7 +3449,9 @@ impl Session {
                         .await;
                 }
             }
+            budget_result?;
         }
+        Ok(())
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {

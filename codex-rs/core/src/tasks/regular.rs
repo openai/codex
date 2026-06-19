@@ -14,6 +14,7 @@ use tracing::trace_span;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::SessionTaskResult;
 
 #[derive(Default)]
 pub(crate) struct RegularTask;
@@ -39,7 +40,7 @@ impl SessionTask for RegularTask {
         ctx: Arc<TurnContext>,
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> SessionTaskResult {
         let sess = session.clone_session();
         let turn_extension_data = session.turn_extension_data();
         let run_turn_span = trace_span!("run_turn");
@@ -61,7 +62,7 @@ impl SessionTask for RegularTask {
         .instrument(trace_span!("regular_task.prepare_run_turn"))
         .await;
         let prewarmed_client_session = match prewarmed_client_session {
-            SessionStartupPrewarmResolution::Cancelled => return None,
+            SessionStartupPrewarmResolution::Cancelled => return Ok(None),
             SessionStartupPrewarmResolution::Unavailable { .. } => None,
             SessionStartupPrewarmResolution::Ready(prewarmed_client_session) => {
                 Some(*prewarmed_client_session)
@@ -79,9 +80,9 @@ impl SessionTask for RegularTask {
                 cancellation_token.child_token(),
             )
             .instrument(run_turn_span.clone())
-            .await;
+            .await?;
             if !sess.input_queue.has_pending_input(&sess.active_turn).await {
-                return last_agent_message;
+                return Ok(last_agent_message);
             }
             next_input = Vec::new();
         }

@@ -165,6 +165,9 @@ async fn run_remote_compact_task_inner(
     attempt
         .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
+    if matches!(&result, Err(CodexErr::TurnAborted)) {
+        return result;
+    }
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
         let event = EventMsg::Error(
@@ -281,7 +284,7 @@ async fn run_remote_compact_task_inner_impl(
         token_usage,
     } = compaction_output_result?;
     if let Some(token_usage) = token_usage {
-        sess.record_rollout_budget_usage(&token_usage);
+        sess.record_rollout_budget_usage(&token_usage)?;
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
         analytics_details.compaction_summary_tokens = Some(token_usage.output_tokens);
         analytics_details.cached_input_tokens = Some(token_usage.cached_input_tokens);

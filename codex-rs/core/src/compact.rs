@@ -254,8 +254,8 @@ async fn run_compact_task_inner_impl(
             Ok(()) => {
                 break;
             }
-            Err(CodexErr::Interrupted) => {
-                return Err(CodexErr::Interrupted);
+            Err(err @ (CodexErr::Interrupted | CodexErr::TurnAborted)) => {
+                return Err(err);
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input_len > 1 {
@@ -657,7 +657,7 @@ async fn drain_to_completed(
             }
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await;
+                    .await?;
                 return Ok(());
             }
             Ok(_) => continue,

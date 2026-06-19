@@ -144,7 +144,7 @@ pub(crate) async fn run_turn(
     input: Vec<TurnInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
-) -> Option<String> {
+) -> CodexResult<Option<String>> {
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
@@ -152,25 +152,31 @@ pub(crate) async fn run_turn(
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
     if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+        if matches!(err, CodexErr::TurnAborted) {
+            return Err(err);
+        }
         let error = err.to_codex_protocol_error();
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
         error!("Failed to run pre-sampling compact");
-        return None;
+        return Ok(None);
     }
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
-    let (injection_items, explicitly_enabled_connectors) =
-        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await?;
+    let Some((injection_items, explicitly_enabled_connectors)) =
+        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await
+    else {
+        return Ok(None);
+    };
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return None;
+        return Ok(None);
     }
     let mut can_drain_pending_input = input.is_empty();
     if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
-        return None;
+        return Ok(None);
     }
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
@@ -336,10 +342,13 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
+                        if matches!(err, CodexErr::TurnAborted) {
+                            return Err(err);
+                        }
                         let error = err.to_codex_protocol_error();
                         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                             .await;
-                        return None;
+                        return Ok(None);
                     }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
@@ -386,15 +395,14 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        return None;
+                        return Ok(None);
                     }
                     break;
                 }
                 continue;
             }
-            Err(CodexErr::TurnAborted) => {
-                // Aborted turn is reported via a different event.
-                break;
+            Err(err @ CodexErr::TurnAborted) => {
+                return Err(err);
             }
             Err(codex_error @ CodexErr::InvalidImageRequest()) => {
                 {
@@ -433,7 +441,7 @@ pub(crate) async fn run_turn(
         }
     }
 
-    last_agent_message
+    Ok(last_agent_message)
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -2197,10 +2205,14 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
-                sess.record_token_usage_info(&turn_context, token_usage.as_ref())
+                let budget_result = sess
+                    .record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_token_count = true;
                 should_emit_turn_diff = true;
+                if let Err(err) = budget_result {
+                    break Err(err);
+                }
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
                 }

@@ -70,6 +70,7 @@ use crate::state::ActiveTurn;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::SessionTaskResult;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::execute_user_shell_command;
 use crate::tools::ToolRouter;
@@ -2150,10 +2151,12 @@ async fn record_token_usage_info_notifies_extension_contributors() {
 
     session
         .record_token_usage_info(&turn_context, Some(&first_usage))
-        .await;
+        .await
+        .expect("first usage should be recorded");
     session
         .record_token_usage_info(&turn_context, Some(&second_usage))
-        .await;
+        .await
+        .expect("second usage should be recorded");
 
     let mut expected_total_usage = first_usage.clone();
     expected_total_usage.add_assign(&second_usage);
@@ -6474,13 +6477,13 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
             _ctx: Arc<TurnContext>,
             _input: Vec<TurnInput>,
             _cancellation_token: CancellationToken,
-        ) -> Option<String> {
+        ) -> SessionTaskResult {
             let mut trace = self
                 .captured_trace
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *trace = current_span_w3c_trace_context();
-            None
+            Ok(None)
         }
     }
 
@@ -8676,8 +8679,8 @@ impl SessionTask for CompletingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         _cancellation_token: CancellationToken,
-    ) -> Option<String> {
-        None
+    ) -> SessionTaskResult {
+        Ok(None)
     }
 }
 
@@ -8702,10 +8705,10 @@ impl SessionTask for NeverEndingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> SessionTaskResult {
         if self.listen_to_cancellation_token {
             cancellation_token.cancelled().await;
-            return None;
+            return Ok(None);
         }
         loop {
             sleep(Duration::from_secs(60)).await;
@@ -8731,14 +8734,14 @@ impl SessionTask for GuardianDeniedApprovalTask {
         ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> SessionTaskResult {
         let session = session.clone_session();
         for _ in 0..3 {
             crate::guardian::record_guardian_denial_for_test(&session, &ctx, &ctx.sub_id).await;
         }
 
         cancellation_token.cancelled().await;
-        None
+        Ok(None)
     }
 }
 
@@ -8961,7 +8964,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     .await
     .expect("steer pending input into active turn");
 
-    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+    sess.on_task_finished(Arc::clone(&tc), /*task_result*/ Ok(None))
         .await;
 
     let history = sess.clone_history().await;
