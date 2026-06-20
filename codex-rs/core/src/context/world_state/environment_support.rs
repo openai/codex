@@ -5,26 +5,30 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::collections::HashSet;
+use indexmap::IndexMap;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FileSystemContext {
-    workspace_roots: Vec<String>,
+    workspace_roots: IndexMap<String, bool>,
     permission_profile: FileSystemPermissionProfileContext,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum FileSystemPermissionProfileContext {
     Managed(ManagedFileSystemContext),
     Disabled,
     External,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum ManagedFileSystemContext {
     Restricted {
-        entries: Vec<FileSystemSandboxEntry>,
+        entries: IndexMap<String, FileSystemSandboxEntry>,
         glob_scan_max_depth: Option<usize>,
     },
     Unrestricted,
@@ -40,7 +44,7 @@ impl FileSystemContext {
             .materialize_project_roots_with_workspace_roots(workspace_roots);
         let workspace_roots = workspace_roots
             .iter()
-            .map(|root| root.to_string_lossy().into_owned())
+            .map(|root| (root.to_string_lossy().into_owned(), true))
             .collect();
         let permission_profile = match permission_profile {
             PermissionProfile::Managed { file_system, .. } => {
@@ -61,7 +65,7 @@ impl FileSystemContext {
         let mut rendered = "<filesystem>".to_string();
         if !self.workspace_roots.is_empty() {
             rendered.push_str("<workspace_roots>");
-            for root in &self.workspace_roots {
+            for root in self.workspace_roots.keys() {
                 push_text_element(&mut rendered, "root", root);
             }
             rendered.push_str("</workspace_roots>");
@@ -76,15 +80,15 @@ impl From<ManagedFileSystemPermissions> for ManagedFileSystemContext {
     fn from(file_system: ManagedFileSystemPermissions) -> Self {
         match file_system {
             ManagedFileSystemPermissions::Restricted {
-                mut entries,
+                entries,
                 glob_scan_max_depth,
-            } => {
-                dedupe_file_system_entries(&mut entries);
-                Self::Restricted {
-                    entries,
-                    glob_scan_max_depth: glob_scan_max_depth.map(usize::from),
-                }
-            }
+            } => Self::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(|entry| (file_system_entry_key(&entry), entry))
+                    .collect(),
+                glob_scan_max_depth: glob_scan_max_depth.map(usize::from),
+            },
             ManagedFileSystemPermissions::Unrestricted => Self::Unrestricted,
         }
     }
@@ -129,7 +133,7 @@ impl ManagedFileSystemContext {
                     rendered.push_str(&format!(" glob_scan_max_depth=\"{glob_scan_max_depth}\""));
                 }
                 rendered.push('>');
-                for entry in entries {
+                for entry in entries.values() {
                     render_file_system_entry(rendered, entry);
                 }
                 rendered.push_str("</file_system>");
@@ -186,9 +190,13 @@ fn render_special_path_with_subpath(base: &str, subpath: &Option<PathBuf>) -> St
     }
 }
 
-fn dedupe_file_system_entries(entries: &mut Vec<FileSystemSandboxEntry>) {
-    let mut seen = HashSet::new();
-    entries.retain(|entry| seen.insert(entry.clone()));
+fn file_system_entry_key(entry: &FileSystemSandboxEntry) -> String {
+    let path = match &entry.path {
+        FileSystemPath::Path { path } => format!("path:{}", path.to_string_lossy()),
+        FileSystemPath::GlobPattern { pattern } => format!("glob:{pattern}"),
+        FileSystemPath::Special { value } => format!("special:{}", render_special_path(value)),
+    };
+    format!("{}:{path}", entry.access)
 }
 
 fn push_text_element(rendered: &mut String, name: &str, value: &str) {
@@ -210,35 +218,61 @@ pub(super) fn push_xml_escaped_text(rendered: &mut String, value: &str) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) struct NetworkContext {
-    allowed_domains: Vec<String>,
-    denied_domains: Vec<String>,
+    domains: IndexMap<String, NetworkDomainAccess>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum NetworkDomainAccess {
+    Allow,
+    Deny,
 }
 
 impl NetworkContext {
     pub(crate) fn new(allowed_domains: Vec<String>, denied_domains: Vec<String>) -> Self {
         Self {
-            allowed_domains,
-            denied_domains,
+            domains: allowed_domains
+                .into_iter()
+                .map(|domain| (domain, NetworkDomainAccess::Allow))
+                .chain(
+                    denied_domains
+                        .into_iter()
+                        .map(|domain| (domain, NetworkDomainAccess::Deny)),
+                )
+                .collect(),
         }
     }
 
     pub(super) fn render(&self) -> String {
         let mut rendered = "<network enabled=\"true\">".to_string();
-        Self::push_rendered_domain_element(&mut rendered, "allowed", &self.allowed_domains);
-        Self::push_rendered_domain_element(&mut rendered, "denied", &self.denied_domains);
+        self.push_rendered_domain_element(&mut rendered, "allowed", NetworkDomainAccess::Allow);
+        self.push_rendered_domain_element(&mut rendered, "denied", NetworkDomainAccess::Deny);
         rendered.push_str("</network>");
         rendered
     }
 
-    fn push_rendered_domain_element(rendered_network: &mut String, name: &str, domains: &[String]) {
-        if domains.is_empty() {
+    fn push_rendered_domain_element(
+        &self,
+        rendered_network: &mut String,
+        name: &str,
+        access: NetworkDomainAccess,
+    ) {
+        let mut domains = self
+            .domains
+            .iter()
+            .filter_map(|(domain, current_access)| (*current_access == access).then_some(domain));
+        let Some(first) = domains.next() else {
             return;
-        }
+        };
 
         rendered_network.push_str(&format!("<{name}>"));
-        rendered_network.push_str(&domains.join(","));
+        rendered_network.push_str(first);
+        for domain in domains {
+            rendered_network.push(',');
+            rendered_network.push_str(domain);
+        }
         rendered_network.push_str(&format!("</{name}>"));
     }
 }

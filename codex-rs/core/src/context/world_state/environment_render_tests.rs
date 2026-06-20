@@ -55,7 +55,6 @@ fn environment_state(
         network,
         filesystem: None,
         subagents,
-        turn_context_values_comparable: true,
     }
 }
 
