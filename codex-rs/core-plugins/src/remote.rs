@@ -27,6 +27,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+use tracing::instrument;
 use url::Url;
 
 mod catalog_cache;
@@ -79,7 +80,11 @@ const OPENAI_CURATED_REMOTE_COLLECTION_KEY: &str = "vertical";
 const OAI_PRODUCT_SKU_HEADER: &str = "OAI-Product-Sku";
 const CODEX_PRODUCT_SKU: &str = "codex";
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+const RECOMMENDED_PLUGINS_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
+const MAX_RECOMMENDED_PLUGINS: usize = 50;
+const MAX_RECOMMENDED_PLUGIN_NAME_LEN: usize = 64;
+const MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN: usize = 64;
 const MAX_REMOTE_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
@@ -235,6 +240,20 @@ pub struct RemoteDiscoverablePlugin {
     pub app_ids: Vec<String>,
     pub install_policy: PluginInstallPolicy,
     pub availability: PluginAvailability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecommendedPlugin {
+    pub config_id: String,
+    pub remote_plugin_id: String,
+    pub display_name: String,
+    pub app_connector_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecommendedPluginsMode {
+    Legacy,
+    Endpoint { plugins: Vec<RecommendedPlugin> },
 }
 
 pub fn is_valid_remote_plugin_id(plugin_id: &str) -> bool {
@@ -569,6 +588,32 @@ struct RemotePluginListResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RecommendedPluginsResponse {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    plugins: Vec<RecommendedPluginItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RecommendedPluginItem {
+    id: String,
+    name: String,
+    #[serde(default)]
+    status: Option<PluginAvailability>,
+    #[serde(default)]
+    installation_policy: Option<PluginInstallPolicy>,
+    release: RecommendedPluginRelease,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RecommendedPluginRelease {
+    display_name: String,
+    #[serde(default)]
+    app_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginInstalledResponse {
     plugins: Vec<RemotePluginInstalledItem>,
     pagination: RemotePluginPagination,
@@ -759,6 +804,87 @@ pub async fn fetch_and_cache_global_remote_plugin_catalog(
         fetch_directory_plugins_for_scope(config, auth, RemotePluginScope::Global).await?;
     catalog_cache::write_cached_global_directory_plugins(codex_home, config, auth, &plugins);
     Ok(())
+}
+
+#[instrument(level = "trace", skip_all)]
+pub async fn fetch_recommended_plugins(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+) -> Result<RecommendedPluginsMode, RemotePluginCatalogError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let url = format!("{base_url}/ps/plugins/suggested");
+    let client = build_reqwest_client();
+    let request = authenticated_request(client.get(&url), auth)?
+        .timeout(RECOMMENDED_PLUGINS_TIMEOUT)
+        .query(&[("scope", "GLOBAL")]);
+    let response: RecommendedPluginsResponse = send_and_decode(request, &url).await?;
+    Ok(recommended_plugins_mode(response))
+}
+
+fn recommended_plugins_mode(response: RecommendedPluginsResponse) -> RecommendedPluginsMode {
+    if response.enabled != Some(true) {
+        return RecommendedPluginsMode::Legacy;
+    }
+
+    let mut plugins = BTreeMap::new();
+    for plugin in response.plugins {
+        if !is_valid_remote_plugin_id(&plugin.id)
+            || plugin.name.chars().count() > MAX_RECOMMENDED_PLUGIN_NAME_LEN
+            || plugin
+                .status
+                .is_some_and(|status| status != PluginAvailability::Available)
+            || plugin
+                .installation_policy
+                .is_some_and(|policy| policy != PluginInstallPolicy::Available)
+        {
+            continue;
+        }
+        let plugin_id = match PluginId::new(
+            plugin.name.clone(),
+            REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(),
+        ) {
+            Ok(plugin_id) => plugin_id,
+            Err(err) => {
+                tracing::warn!(
+                    plugin_name = plugin.name,
+                    error = %err,
+                    "ignoring invalid recommended plugin"
+                );
+                continue;
+            }
+        };
+        let RecommendedPluginRelease {
+            display_name,
+            app_ids,
+        } = plugin.release;
+        let display_name = non_empty_string(Some(&display_name))
+            .unwrap_or_else(|| plugin.name.clone())
+            .chars()
+            .take(MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN)
+            .collect();
+        let mut seen_app_ids = HashSet::new();
+        let app_connector_ids = app_ids
+            .into_iter()
+            .filter(|app_id| !app_id.is_empty() && seen_app_ids.insert(app_id.clone()))
+            .collect();
+        let config_id = plugin_id.as_key();
+        plugins
+            .entry(config_id.clone())
+            .or_insert(RecommendedPlugin {
+                config_id,
+                remote_plugin_id: plugin.id,
+                display_name,
+                app_connector_ids,
+            });
+    }
+
+    RecommendedPluginsMode::Endpoint {
+        plugins: plugins
+            .into_values()
+            .take(MAX_RECOMMENDED_PLUGINS)
+            .collect(),
+    }
 }
 
 pub fn has_cached_global_remote_plugin_catalog(

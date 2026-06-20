@@ -22,6 +22,7 @@ use codex_tools::build_request_plugin_install_elicitation_request;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_tools::verified_connector_install_completed;
 use rmcp::model::RequestId;
+use serde::Deserialize;
 use serde_json::Value;
 use tracing::warn;
 
@@ -37,14 +38,29 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::router::ToolSuggestPresentation;
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct RecommendedPluginInstallArgs {
+    #[serde(alias = "tool_id")]
+    plugin_id: String,
+    suggest_reason: String,
+}
 
 pub struct RequestPluginInstallHandler {
     discoverable_tools: Vec<DiscoverableTool>,
+    presentation: ToolSuggestPresentation,
 }
 
 impl RequestPluginInstallHandler {
-    pub(crate) fn new(discoverable_tools: Vec<DiscoverableTool>) -> Self {
-        Self { discoverable_tools }
+    pub(crate) fn new(
+        discoverable_tools: Vec<DiscoverableTool>,
+        presentation: ToolSuggestPresentation,
+    ) -> Self {
+        Self {
+            discoverable_tools,
+            presentation,
+        }
     }
 }
 
@@ -54,7 +70,7 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_request_plugin_install_tool()
+        create_request_plugin_install_tool(self.presentation)
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
@@ -88,20 +104,30 @@ impl RequestPluginInstallHandler {
             }
         };
 
-        let args: RequestPluginInstallArgs = parse_arguments(&arguments)?;
-        let suggest_reason = args.suggest_reason.trim();
+        let (requested_tool_id, requested_tool_type, suggest_reason) = match self.presentation {
+            ToolSuggestPresentation::ListTool => {
+                let args: RequestPluginInstallArgs = parse_arguments(&arguments)?;
+                if args.action_type != DiscoverableToolAction::Install {
+                    return Err(FunctionCallError::RespondToModel(
+                        "plugin install requests currently support only action_type=\"install\""
+                            .to_string(),
+                    ));
+                }
+                (args.tool_id, Some(args.tool_type), args.suggest_reason)
+            }
+            ToolSuggestPresentation::RecommendationContext => {
+                let args: RecommendedPluginInstallArgs = parse_arguments(&arguments)?;
+                (args.plugin_id, None, args.suggest_reason)
+            }
+        };
+        let suggest_reason = suggest_reason.trim();
         if suggest_reason.is_empty() {
             return Err(FunctionCallError::RespondToModel(
                 "suggest_reason must not be empty".to_string(),
             ));
         }
-        if args.action_type != DiscoverableToolAction::Install {
-            return Err(FunctionCallError::RespondToModel(
-                "plugin install requests currently support only action_type=\"install\""
-                    .to_string(),
-            ));
-        }
-        if args.tool_type == DiscoverableToolType::Plugin
+        if (requested_tool_type == Some(DiscoverableToolType::Plugin)
+            || self.presentation == ToolSuggestPresentation::RecommendationContext)
             && turn.app_server_client_name.as_deref() == Some("codex-tui")
         {
             return Err(FunctionCallError::RespondToModel(
@@ -116,19 +142,41 @@ impl RequestPluginInstallHandler {
 
         let tool = discoverable_tools
             .into_iter()
-            .find(|tool| tool.tool_type() == args.tool_type && tool.id() == args.tool_id)
+            .find(|tool| {
+                tool.id() == requested_tool_id
+                    && match self.presentation {
+                        ToolSuggestPresentation::ListTool => {
+                            Some(tool.tool_type()) == requested_tool_type
+                        }
+                        ToolSuggestPresentation::RecommendationContext => {
+                            matches!(tool, DiscoverableTool::Plugin(_))
+                        }
+                    }
+            })
             .ok_or_else(|| {
+                let (argument_name, source) = match self.presentation {
+                    ToolSuggestPresentation::ListTool => (
+                        "tool_id",
+                        format!(
+                            "the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
+                        ),
+                    ),
+                    ToolSuggestPresentation::RecommendationContext => (
+                        "plugin_id",
+                        "the entries in the <recommended_plugins> list".to_string(),
+                    ),
+                };
                 FunctionCallError::RespondToModel(format!(
-                    "tool_id must match one of the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
+                    "{argument_name} must match one of {source}"
                 ))
             })?;
+        let tool_type = tool.tool_type();
 
         let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
         let params = build_request_plugin_install_elicitation_request(
             CODEX_APPS_MCP_SERVER_NAME,
             session.thread_id.to_string(),
             turn.sub_id.clone(),
-            &args,
             suggest_reason,
             &tool,
         );
@@ -157,7 +205,7 @@ impl RequestPluginInstallHandler {
         }
 
         if elicitation.sent {
-            let tool_type = match args.tool_type {
+            let tool_type = match tool_type {
                 DiscoverableToolType::Connector => "connector",
                 DiscoverableToolType::Plugin => "plugin",
             };
@@ -180,8 +228,8 @@ impl RequestPluginInstallHandler {
         let content = serde_json::to_string(&RequestPluginInstallResult {
             completed,
             user_confirmed,
-            tool_type: args.tool_type,
-            action_type: args.action_type,
+            tool_type,
+            action_type: DiscoverableToolAction::Install,
             tool_id: tool.id().to_string(),
             tool_name: tool.name().to_string(),
             suggest_reason: suggest_reason.to_string(),
@@ -280,7 +328,27 @@ async fn verify_request_plugin_install_completed(
         }),
         DiscoverableTool::Plugin(plugin) => {
             if is_remote_plugin_install_suggestion(&plugin.id) {
-                return true;
+                let (_, accessible_connectors) = tokio::join!(
+                    refresh_remote_installed_plugins_cache_after_install(
+                        session,
+                        turn,
+                        auth,
+                        plugin.id.as_str(),
+                    ),
+                    refresh_missing_requested_connectors(
+                        session,
+                        turn,
+                        auth,
+                        &plugin.app_connector_ids,
+                        plugin.id.as_str(),
+                    )
+                );
+                return accessible_connectors.is_some_and(|accessible_connectors| {
+                    all_requested_connectors_picked_up(
+                        &plugin.app_connector_ids,
+                        &accessible_connectors,
+                    )
+                });
             }
 
             session.reload_user_config_layer().await;
@@ -300,6 +368,29 @@ async fn verify_request_plugin_install_completed(
             .await;
             completed
         }
+    }
+}
+
+async fn refresh_remote_installed_plugins_cache_after_install(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    auth: Option<&codex_login::CodexAuth>,
+    tool_id: &str,
+) {
+    let plugins_manager = &session.services.plugins_manager;
+    let plugins_config = turn.config.plugins_config_input();
+    if let Err(err) = plugins_manager
+        .build_and_cache_remote_installed_plugin_marketplaces(
+            &plugins_config,
+            auth,
+            &[REMOTE_GLOBAL_MARKETPLACE_NAME],
+            /*on_effective_plugins_changed*/ None,
+        )
+        .await
+    {
+        warn!(
+            "failed to refresh remote installed plugins cache after plugin install request for {tool_id}: {err:#}"
+        );
     }
 }
 

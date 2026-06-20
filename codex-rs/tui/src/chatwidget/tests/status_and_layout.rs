@@ -1410,33 +1410,97 @@ async fn streaming_final_answer_keeps_task_running_state() {
 #[tokio::test]
 async fn ctrl_c_interrupt_pauses_active_goal_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = start_active_goal_turn(&mut chat);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_interrupt_op(&mut op_rx);
+    assert_goal_paused_event(&mut rx, thread_id);
+}
+
+#[tokio::test]
+async fn esc_interrupt_pauses_active_goal_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    let thread_id = start_active_goal_turn(&mut chat);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
+    assert_goal_paused_event(&mut rx, thread_id);
+
+    update_thread_goal(&mut chat, thread_id, AppThreadGoalStatus::Paused);
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw goal paused footer");
+    let snapshot = normalized_backend_snapshot(terminal.backend());
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        assert_chatwidget_snapshot!("esc_interrupt_goal_paused_footer", snapshot);
+    });
+    #[cfg(not(target_os = "windows"))]
+    assert_chatwidget_snapshot!("esc_interrupt_goal_paused_footer", snapshot);
+}
+
+#[tokio::test]
+async fn request_user_input_interrupt_pauses_active_goal_turn() {
+    for key_event in [
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    ] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let thread_id = start_active_goal_turn(&mut chat);
+        chat.handle_request_user_input_now(ToolRequestUserInputParams {
+            thread_id: thread_id.to_string(),
+            item_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: Vec::new(),
+            auto_resolution_ms: None,
+        });
+
+        chat.handle_key_event(key_event);
+
+        assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
+        assert_goal_paused_event(&mut rx, thread_id);
+    }
+}
+
+fn start_active_goal_turn(chat: &mut ChatWidget) -> ThreadId {
     let thread_id = ThreadId::new();
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(thread_id);
+    update_thread_goal(chat, thread_id, AppThreadGoalStatus::Active);
+    chat.on_task_started();
+    thread_id
+}
+
+fn update_thread_goal(chat: &mut ChatWidget, thread_id: ThreadId, status: AppThreadGoalStatus) {
     let mut goal = test_thread_goal(
-        codex_app_server_protocol::ThreadGoalStatus::Active,
+        status,
         /*token_budget*/ Some(50_000),
         /*tokens_used*/ 40_000,
     );
-    goal.thread_id = thread_id.to_string();
+    let thread_id = thread_id.to_string();
+    goal.thread_id = thread_id.clone();
     chat.handle_server_notification(
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
-                thread_id: thread_id.to_string(),
+                thread_id,
                 turn_id: None,
                 goal,
             },
         ),
         /*replay_kind*/ None,
     );
-    chat.on_task_started();
+}
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-
-    match op_rx.try_recv() {
-        Ok(Op::Interrupt { .. }) => {}
-        other => panic!("expected Op::Interrupt, got {other:?}"),
-    }
+fn assert_goal_paused_event(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    thread_id: ThreadId,
+) {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::SetThreadGoalStatus {
@@ -1864,6 +1928,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         call_id: "call-approve-exec".into(),
         approval_id: Some("call-approve-exec".into()),
         turn_id: "turn-approve-exec".into(),
+        environment_id: None,
         command: vec!["echo".into(), "hello world".into()],
         cwd: test_path_buf("/tmp").abs(),
         reason: Some(
@@ -3613,7 +3678,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         AppServerThreadItem::CommandExecution {
             id: "c1".into(),
             command: codex_shell_command::parse_command::shlex_join(&command),
-            cwd: cwd.clone(),
+            cwd: cwd.clone().into(),
             process_id: None,
             source: ExecCommandSource::Agent,
             status: AppServerCommandExecutionStatus::InProgress,
@@ -3628,7 +3693,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         AppServerThreadItem::CommandExecution {
             id: "c1".into(),
             command: codex_shell_command::parse_command::shlex_join(&command),
-            cwd,
+            cwd: cwd.into(),
             process_id: None,
             source: ExecCommandSource::Agent,
             status: AppServerCommandExecutionStatus::Completed,

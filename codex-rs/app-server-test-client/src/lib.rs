@@ -1668,6 +1668,7 @@ impl CodexClient {
                             .map(|method| (*method).to_string())
                             .collect(),
                     ),
+                    mcp_server_openai_form_elicitation: false,
                 }),
             },
         };
@@ -2058,6 +2059,7 @@ impl CodexClient {
             item_id,
             started_at_ms: _,
             approval_id,
+            environment_id,
             reason,
             network_approval_context,
             command,
@@ -2075,6 +2077,9 @@ impl CodexClient {
         );
         self.command_approval_count += 1;
         self.command_approval_item_ids.push(item_id.clone());
+        if let Some(environment_id) = environment_id.as_deref() {
+            println!("< environment: {environment_id}");
+        }
         if let Some(reason) = reason.as_deref() {
             println!("< reason: {reason}");
         }
@@ -2088,7 +2093,7 @@ impl CodexClient {
             println!("< command: {command}");
         }
         if let Some(cwd) = cwd.as_ref() {
-            println!("< cwd: {}", cwd.display());
+            println!("< cwd: {cwd}");
         }
         if let Some(command_actions) = command_actions.as_ref()
             && !command_actions.is_empty()

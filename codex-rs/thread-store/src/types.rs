@@ -160,6 +160,8 @@ pub enum ThreadSortKey {
     CreatedAt,
     /// Sort by the thread last-update timestamp.
     UpdatedAt,
+    /// Sort by the thread's product recency timestamp.
+    RecencyAt,
 }
 
 /// The direction to use when listing stored threads.
@@ -332,13 +334,13 @@ pub struct TurnPage {
     pub backwards_cursor: Option<String>,
 }
 
-/// Parameters for listing persisted items within a single turn.
+/// Parameters for listing persisted items within a thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListItemsParams {
     /// Thread id to read.
     pub thread_id: ThreadId,
-    /// Turn id to hydrate.
-    pub turn_id: String,
+    /// Optional turn id to filter by. When omitted, returns items across the thread.
+    pub turn_id: Option<String>,
     /// Whether archived threads are eligible.
     pub include_archived: bool,
     /// Opaque cursor returned by a previous list call.
@@ -359,7 +361,7 @@ pub struct StoredThreadItem {
     pub materialized_thread_item_json: Vec<u8>,
 }
 
-/// A page of persisted items within a turn.
+/// A page of persisted items within a thread, optionally filtered to a turn.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ItemPage {
     /// Items returned for this page.
@@ -397,6 +399,8 @@ pub struct StoredThread {
     pub created_at: DateTime<Utc>,
     /// Thread last-update timestamp.
     pub updated_at: DateTime<Utc>,
+    /// Thread product-recency timestamp.
+    pub recency_at: DateTime<Utc>,
     /// Thread archive timestamp, if archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// Working directory captured for the thread.
@@ -504,6 +508,8 @@ pub struct ThreadMetadataPatch {
     pub created_at: Option<DateTime<Utc>>,
     /// Last update timestamp for this metadata observation.
     pub updated_at: Option<DateTime<Utc>>,
+    /// Advance product recency to at least this timestamp.
+    pub advance_recency_at: Option<DateTime<Utc>>,
     /// Session source.
     pub source: Option<SessionSource>,
     /// Optional analytics source classification.
@@ -586,6 +592,9 @@ impl ThreadMetadataPatch {
         if next.updated_at.is_some() {
             self.updated_at = next.updated_at;
         }
+        if next.advance_recency_at.is_some() {
+            self.advance_recency_at = next.advance_recency_at;
+        }
         if next.source.is_some() {
             self.source = next.source;
         }
@@ -639,6 +648,7 @@ impl ThreadMetadataPatch {
             && self.reasoning_effort.is_none()
             && self.created_at.is_none()
             && self.updated_at.is_none()
+            && self.advance_recency_at.is_none()
             && self.source.is_none()
             && self.thread_source.is_none()
             && self.agent_nickname.is_none()

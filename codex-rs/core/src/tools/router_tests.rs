@@ -114,9 +114,9 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -182,6 +182,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: Some(vec![
                 mcp_tool_info(
@@ -197,7 +198,6 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
                     "query_with_delay",
                 ),
             ]),
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -231,9 +231,9 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -286,9 +286,9 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: &dynamic_tools,
         },
@@ -349,9 +349,9 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: extension_tool_executors(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },

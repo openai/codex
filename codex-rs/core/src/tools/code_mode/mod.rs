@@ -26,6 +26,7 @@ use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
+use crate::tools::effective_tool_mode;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
@@ -116,7 +117,8 @@ impl CodeModeService {
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
-        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
+        let tool_mode = effective_tool_mode(turn);
+        if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
             || self.session.is_none()
         {
             return None;

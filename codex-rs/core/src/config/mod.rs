@@ -58,6 +58,8 @@ use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::CodeModeConfigToml;
+use codex_features::CurrentTimeReminderConfigToml;
+use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -245,11 +247,9 @@ All agents share the same directory. In detail:
 - All agents use the same current working directory.
 - As a result, edits made by one agent are immediately visible to all other agents.
 "#;
-const DEFAULT_MULTI_AGENT_V2_NO_SPAWN_HINT_TEXT: &str = "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work.";
-
 fn default_multi_agent_v2_usage_hint_text(usage_hint_text: &str, max_concurrency: usize) -> String {
     format!(
-        "{usage_hint_text}\n{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\nThere are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you.\n\n{DEFAULT_MULTI_AGENT_V2_NO_SPAWN_HINT_TEXT}"
+        "{usage_hint_text}\n{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\nThere are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."
     )
 }
 
@@ -690,6 +690,12 @@ pub struct Config {
     /// Whether to inject the `<skills_instructions>` developer block.
     pub include_skill_instructions: bool,
 
+    /// Whether orchestrator-owned skills are exposed to the model.
+    pub orchestrator_skills_enabled: bool,
+
+    /// Whether orchestrator-owned MCP tools are exposed to the model.
+    pub orchestrator_mcp_enabled: bool,
+
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
 
@@ -947,6 +953,9 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Whether Codex-owned clients should respect host system proxy settings.
+    pub respect_system_proxy: bool,
+
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
 
@@ -1017,6 +1026,11 @@ pub struct Config {
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
+    /// Shared token budget for the root thread and its sub-agents.
+    pub rollout_budget: Option<RolloutBudgetConfig>,
+    /// Current-time reminder configuration, when enabled.
+    pub current_time_reminder: Option<CurrentTimeReminderConfig>,
+
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
 
@@ -1058,6 +1072,30 @@ pub struct Config {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct CodeModeConfig {
     pub excluded_tool_namespaces: Vec<String>,
+    pub direct_only_tool_namespaces: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct RolloutBudgetConfig {
+    pub limit_tokens: i64,
+    pub reminder_interval_tokens: i64,
+    pub sampling_token_weight: f64,
+    pub prefill_token_weight: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CurrentTimeReminderConfig {
+    pub reminder_interval_model_requests: u64,
+    pub clock_source: CurrentTimeSource,
+}
+
+impl Default for CurrentTimeReminderConfig {
+    fn default() -> Self {
+        Self {
+            reminder_interval_model_requests: 1,
+            clock_source: CurrentTimeSource::System,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2393,12 +2431,22 @@ fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> 
         .is_none_or(|config| config.enabled)
 }
 
+fn resolve_orchestrator_feature_enabled(
+    feature: Option<&codex_config::config_toml::OrchestratorFeatureToml>,
+) -> bool {
+    feature.and_then(|feature| feature.enabled).unwrap_or(true)
+}
+
 fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
     let base = code_mode_toml_config(config_toml.features.as_ref());
 
     CodeModeConfig {
         excluded_tool_namespaces: base
             .and_then(|config| config.excluded_tool_namespaces.as_ref())
+            .cloned()
+            .unwrap_or_default(),
+        direct_only_tool_namespaces: base
+            .and_then(|config| config.direct_only_tool_namespaces.as_ref())
             .cloned()
             .unwrap_or_default(),
     }
@@ -2461,6 +2509,93 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     }
 }
 
+fn resolve_rollout_budget_config(
+    config_toml: &ConfigToml,
+    features: &ManagedFeatures,
+) -> std::io::Result<Option<RolloutBudgetConfig>> {
+    if !features.enabled(Feature::RolloutBudget) {
+        return Ok(None);
+    }
+    let missing_limit_error = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.rollout_budget.limit_tokens is required when rollout_budget is enabled",
+        )
+    };
+    let Some(FeatureToml::Config(config)) = config_toml
+        .features
+        .as_ref()
+        .and_then(|features| features.rollout_budget.as_ref())
+    else {
+        return Err(missing_limit_error());
+    };
+    let Some(limit_tokens) = config.limit_tokens else {
+        return Err(missing_limit_error());
+    };
+    if limit_tokens <= 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.rollout_budget.limit_tokens must be positive",
+        ));
+    }
+    let reminder_interval_tokens = config
+        .reminder_interval_tokens
+        .unwrap_or_else(|| (limit_tokens / 10).max(1));
+    if reminder_interval_tokens <= 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.rollout_budget.reminder_interval_tokens must be positive",
+        ));
+    }
+    let sampling_token_weight = config.sampling_token_weight.unwrap_or(1.0);
+    let prefill_token_weight = config.prefill_token_weight.unwrap_or(1.0);
+    for (field, weight) in [
+        ("sampling_token_weight", sampling_token_weight),
+        ("prefill_token_weight", prefill_token_weight),
+    ] {
+        if !weight.is_finite() || weight < 0.0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("features.rollout_budget.{field} must be finite and non-negative"),
+            ));
+        }
+    }
+    Ok(Some(RolloutBudgetConfig {
+        limit_tokens,
+        reminder_interval_tokens,
+        sampling_token_weight,
+        prefill_token_weight,
+    }))
+}
+
+fn resolve_current_time_reminder_config(
+    config_toml: &ConfigToml,
+    features: &ManagedFeatures,
+) -> std::io::Result<Option<CurrentTimeReminderConfig>> {
+    if !features.enabled(Feature::CurrentTimeReminder) {
+        return Ok(None);
+    }
+
+    let base = current_time_reminder_toml_config(config_toml.features.as_ref());
+    let default = CurrentTimeReminderConfig::default();
+    let reminder_interval_model_requests = base
+        .and_then(|config| config.reminder_interval_model_requests)
+        .unwrap_or(default.reminder_interval_model_requests);
+    if reminder_interval_model_requests == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.current_time_reminder.reminder_interval_model_requests must be positive",
+        ));
+    }
+
+    Ok(Some(CurrentTimeReminderConfig {
+        reminder_interval_model_requests,
+        clock_source: base
+            .and_then(|config| config.clock_source)
+            .unwrap_or(default.clock_source),
+    }))
+}
+
 fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
     let Some(tui) = config_toml.tui.as_ref() else {
         return TerminalResizeReflowConfig::default();
@@ -2500,11 +2635,41 @@ fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiA
     }
 }
 
+fn current_time_reminder_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&CurrentTimeReminderConfigToml> {
+    match features?.current_time_reminder.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
 fn network_proxy_toml_config(features: Option<&FeaturesToml>) -> Option<&NetworkProxyConfigToml> {
     match features?.network_proxy.as_ref()? {
         FeatureToml::Enabled(_) => None,
         FeatureToml::Config(config) => Some(config),
     }
+}
+
+/// Bootstrap-only resolver for the cloud-config fetch.
+///
+/// Call before a cloud-config bundle is available. Final [`Config`] loading
+/// resolves the effective feature value after all layers are available.
+pub fn resolve_bootstrap_respect_system_proxy(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<bool> {
+    let configured_features = Features::from_sources(
+        FeatureConfigSource {
+            features: cfg.features.as_ref(),
+            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    let features =
+        ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
+    Ok(features.get().enabled(Feature::RespectSystemProxy))
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(
@@ -2514,7 +2679,7 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     let preferred = web_search_mode.value();
 
     if matches!(permission_profile, PermissionProfile::Disabled)
-        && preferred != WebSearchMode::Disabled
+        && !matches!(preferred, WebSearchMode::Disabled | WebSearchMode::Indexed)
     {
         for mode in [
             WebSearchMode::Live,
@@ -2659,6 +2824,11 @@ impl Config {
 
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        let orchestrator = cfg.orchestrator.as_ref();
+        let orchestrator_skills_enabled =
+            resolve_orchestrator_feature_enabled(orchestrator.and_then(|value| value.skills.as_ref()));
+        let orchestrator_mcp_enabled =
+            resolve_orchestrator_feature_enabled(orchestrator.and_then(|value| value.mcp.as_ref()));
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {
@@ -2770,6 +2940,7 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
+        let respect_system_proxy = features.enabled(Feature::RespectSystemProxy);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
         // Keep the configured mode separate so a requirement-constrained mode
@@ -3116,6 +3287,8 @@ impl Config {
             resolve_experimental_request_user_input_enabled(&cfg);
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
+        let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
+        let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
         let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
@@ -3532,6 +3705,8 @@ impl Config {
             include_apps_instructions,
             include_collaboration_mode_instructions,
             include_skill_instructions,
+            orchestrator_skills_enabled,
+            orchestrator_mcp_enabled,
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -3617,6 +3792,7 @@ impl Config {
             chatgpt_base_url: cfg
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            respect_system_proxy,
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
             realtime_audio: cfg
                 .audio
@@ -3633,7 +3809,6 @@ impl Config {
                 .map_or_else(RealtimeConfig::default, |realtime| {
                     let defaults = RealtimeConfig::default();
                     RealtimeConfig {
-                        architecture: realtime.architecture.unwrap_or(defaults.architecture),
                         version: realtime.version.unwrap_or(defaults.version),
                         session_type: realtime.session_type.unwrap_or(defaults.session_type),
                         transport: realtime.transport.unwrap_or(defaults.transport),
@@ -3655,6 +3830,8 @@ impl Config {
             background_terminal_max_timeout,
             ghost_snapshot,
             multi_agent_v2,
+            rollout_budget,
+            current_time_reminder,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
@@ -3848,7 +4025,7 @@ impl Config {
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {
-        crate::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
+        crate::skills::service::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
 }
 

@@ -16,7 +16,7 @@ use codex_protocol::mcp_approval_meta::TOOL_DESCRIPTION_KEY as MCP_ELICITATION_T
 use codex_protocol::mcp_approval_meta::TOOL_NAME_KEY as MCP_ELICITATION_TOOL_NAME_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_ELICITATION_TOOL_PARAMS_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_ELICITATION_TOOL_TITLE_KEY;
-use rmcp::model::CreateElicitationRequestParams;
+use codex_rmcp_client::Elicitation;
 use rmcp::model::ElicitationAction;
 use rmcp::model::Meta;
 use serde_json::Map;
@@ -143,6 +143,15 @@ impl Session {
                     requested_schema,
                 }
             }
+            McpServerElicitationRequest::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
+            } => codex_protocol::approvals::ElicitationRequest::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
+            },
             McpServerElicitationRequest::Url {
                 meta,
                 message,
@@ -318,17 +327,18 @@ impl Session {
         )
         .await;
         let environment_manager = self.services.turn_environments.environment_manager();
-        let mcp_runtime_context = match turn_context.environments.primary() {
-            Some(turn_environment) => McpRuntimeContext::new(
-                Arc::clone(&environment_manager),
-                turn_environment.cwd().to_path_buf(),
-            ),
-            None => McpRuntimeContext::new(
-                environment_manager,
+        // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
+        // values can be used without falling back to the legacy host cwd.
+        let cwd = turn_context
+            .environments
+            .primary()
+            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+            .map(|cwd| cwd.to_path_buf())
+            .unwrap_or_else(|| {
                 #[allow(deprecated)]
-                turn_context.cwd.to_path_buf(),
-            ),
-        };
+                turn_context.cwd.to_path_buf()
+            });
+        let mcp_runtime_context = McpRuntimeContext::new(environment_manager, cwd);
         let mcp_startup_cancellation_token = {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
@@ -352,6 +362,9 @@ impl Session {
             host_owned_codex_apps_enabled,
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
+            self.services
+                .supports_openai_form_elicitation
+                .load(std::sync::atomic::Ordering::Relaxed),
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,
@@ -416,6 +429,34 @@ impl Session {
             elicitation_reviewer,
         )
         .await;
+    }
+
+    pub(crate) async fn set_openai_form_elicitation_support(
+        &self,
+        supported: bool,
+    ) -> anyhow::Result<()> {
+        if self
+            .services
+            .supports_openai_form_elicitation
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == supported
+        {
+            return Ok(());
+        }
+
+        let config = self.get_config().await;
+        let refresh_config = McpServerRefreshConfig {
+            mcp_servers: serde_json::to_value(config.mcp_servers.get())?,
+            mcp_oauth_credentials_store_mode: serde_json::to_value(
+                config.mcp_oauth_credentials_store_mode,
+            )?,
+            auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())?,
+        };
+        self.services
+            .supports_openai_form_elicitation
+            .store(supported, std::sync::atomic::Ordering::Relaxed);
+        *self.pending_mcp_server_refresh_config.lock().await = Some(refresh_config);
+        Ok(())
     }
 
     pub(crate) async fn refresh_mcp_servers_now(
@@ -509,12 +550,15 @@ fn guardian_elicitation_review_request(
     request: &ElicitationReviewRequest,
 ) -> GuardianElicitationReview {
     let (meta, requested_schema) = match &request.elicitation {
-        CreateElicitationRequestParams::FormElicitationParams {
+        Elicitation::Mcp(rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
             meta,
             requested_schema,
             ..
-        } => (meta, Some(requested_schema)),
-        CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => {
+        }) => (meta, Some(requested_schema)),
+        Elicitation::Mcp(rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+            meta,
+            ..
+        }) => {
             return if meta_requests_approval_request(meta) {
                 GuardianElicitationReview::Decline(
                     "guardian MCP elicitation review only supports form elicitations",
@@ -523,6 +567,7 @@ fn guardian_elicitation_review_request(
                 GuardianElicitationReview::NotRequested
             };
         }
+        Elicitation::OpenAiForm { .. } => return GuardianElicitationReview::NotRequested,
     };
 
     let Some(meta) = meta.as_ref().map(|meta| &meta.0) else {
@@ -584,13 +629,10 @@ fn guardian_elicitation_review_request(
     ))
 }
 
-fn elicitation_connector_id(elicitation: &CreateElicitationRequestParams) -> Option<&str> {
-    match elicitation {
-        CreateElicitationRequestParams::FormElicitationParams { meta, .. }
-        | CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta
-            .as_ref()
-            .and_then(|meta| metadata_str(&meta.0, MCP_ELICITATION_CONNECTOR_ID_KEY)),
-    }
+fn elicitation_connector_id(elicitation: &Elicitation) -> Option<&str> {
+    elicitation
+        .meta()
+        .and_then(|meta| metadata_str(meta, MCP_ELICITATION_CONNECTOR_ID_KEY))
 }
 
 fn meta_requests_approval_request(meta: &Option<Meta>) -> bool {

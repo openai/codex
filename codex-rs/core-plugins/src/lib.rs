@@ -18,6 +18,7 @@ pub mod store;
 #[cfg(test)]
 mod test_support;
 pub mod toggles;
+mod tool_suggest_metadata;
 
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_API_CURATED_MARKETPLACE_NAME: &str = "openai-api-curated";
@@ -49,8 +50,11 @@ pub use manager::PluginReadRequest;
 pub use manager::PluginUninstallError;
 pub use manager::PluginsConfigInput;
 pub use manager::PluginsManager;
+pub use manager::RecommendedPluginCandidatesInput;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketplaceUpgradeError;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
 pub use provider::ExecutorPluginProvider;
 pub use provider::ExecutorPluginProviderError;
 pub use provider::ResolvedExecutorPlugin;
+pub use remote::RecommendedPlugin;
+pub use remote::RecommendedPluginsMode;

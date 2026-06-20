@@ -15,7 +15,9 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::CloudConfigBundleLoader;
 use codex_core::CodexThread;
+use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
+use codex_core::TimeProvider;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_core::shell::Shell;
@@ -39,6 +41,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
@@ -55,6 +58,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::TempDirExt;
+use crate::TestEnvironment;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cloud_config_bundle;
@@ -176,7 +180,20 @@ pub async fn test_env() -> Result<TestEnv> {
                     /*sandbox*/ None,
                 )
                 .await?;
-            let cwd = cwd_uri.to_abs_path()?;
+            let cwd = if remote_env == TestEnvironment::WineExec {
+                // TODO(anp): Convert `Config::cwd` to `LegacyAppPathString` and remove this
+                // compatibility projection.
+                // `Config::cwd` still requires `AbsolutePathBuf`. Preserve the test harness's
+                // Linux-absolute `/C:/...` compatibility spelling so converting it back to a
+                // `PathUri` recovers the remote Windows convention. Production conversions stay
+                // strict: `PathUri::to_abs_path` intentionally rejects foreign paths.
+                let path = cwd_uri.to_url().to_file_path().map_err(|()| {
+                    anyhow!("remote test cwd URI cannot be projected onto the host: {cwd_uri}")
+                })?;
+                AbsolutePathBuf::try_from(path)?
+            } else {
+                cwd_uri.to_abs_path()?
+            };
             Ok(TestEnv {
                 environment,
                 exec_server_url: Some(websocket_url),
@@ -258,6 +275,8 @@ pub struct TestCodexBuilder {
     exec_server_url: Option<String>,
     extensions: Arc<ExtensionRegistry<Config>>,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
+    supports_openai_form_elicitation: bool,
+    external_time_provider: Option<Arc<dyn TimeProvider>>,
 }
 
 impl TestCodexBuilder {
@@ -351,6 +370,16 @@ impl TestCodexBuilder {
         provider: Arc<dyn UserInstructionsProvider>,
     ) -> Self {
         self.user_instructions_provider = Some(provider);
+        self
+    }
+
+    pub fn with_openai_form_elicitation(mut self) -> Self {
+        self.supports_openai_form_elicitation = true;
+        self
+    }
+
+    pub fn with_external_time_provider(mut self, provider: Arc<dyn TimeProvider>) -> Self {
+        self.external_time_provider = Some(provider);
         self
     }
 
@@ -560,6 +589,7 @@ impl TestCodexBuilder {
             state_db.clone(),
             installation_id,
             /*attestation_provider*/ None,
+            /*external_time_provider*/ self.external_time_provider.clone(),
         );
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
@@ -574,6 +604,7 @@ impl TestCodexBuilder {
                         path,
                         auth_manager,
                         user_shell_override,
+                        self.supports_openai_form_elicitation,
                     ),
                 )
                 .await?
@@ -585,6 +616,7 @@ impl TestCodexBuilder {
                     path,
                     auth_manager,
                     /*parent_trace*/ None,
+                    self.supports_openai_form_elicitation,
                 ))
                 .await?
             }
@@ -594,11 +626,30 @@ impl TestCodexBuilder {
                         thread_manager.as_ref(),
                         config.clone(),
                         user_shell_override,
+                        self.supports_openai_form_elicitation,
                     ),
                 )
                 .await?
             }
-            (None, None) => Box::pin(thread_manager.start_thread(config.clone())).await?,
+            (None, None) => {
+                let environments = thread_manager.default_environment_selections(&config.cwd);
+                Box::pin(
+                    thread_manager.start_thread_with_options(StartThreadOptions {
+                        config: config.clone(),
+                        initial_history: InitialHistory::New,
+                        session_source: None,
+                        thread_source: None,
+                        dynamic_tools: Vec::new(),
+                        metrics_service_name: None,
+                        multi_agent_mode: None,
+                        parent_trace: None,
+                        environments,
+                        thread_extension_init: Default::default(),
+                        supports_openai_form_elicitation: self.supports_openai_form_elicitation,
+                    }),
+                )
+                .await?
+            }
         };
 
         Ok(TestCodex {
@@ -1143,6 +1194,8 @@ pub fn test_codex() -> TestCodexBuilder {
         exec_server_url: None,
         extensions: empty_extension_registry(),
         user_instructions_provider: None,
+        supports_openai_form_elicitation: false,
+        external_time_provider: None,
     }
 }
 

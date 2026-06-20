@@ -226,6 +226,7 @@ impl App {
                         .approval_id
                         .clone()
                         .unwrap_or_else(|| params.item_id.clone()),
+                    environment_id: params.environment_id.clone(),
                     command: params
                         .command
                         .as_deref()
@@ -291,7 +292,10 @@ impl App {
                                 message: message.clone(),
                             },
                         )),
-                        codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
+                        codex_app_server_protocol::McpServerElicitationRequest::OpenAiForm {
+                            ..
+                        }
+                        | codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
                             self.app_event_tx.resolve_elicitation(
                                 thread_id,
                                 params.server_name.clone(),

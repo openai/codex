@@ -130,11 +130,22 @@
       ],
       "type": "string"
     },
+    "LegacyAppPathString": {
+      "type": "string"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
         "default"
+      ],
+      "type": "string"
+    },
+    "MultiAgentMode": {
+      "description": "Controls whether the model should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help.",
+      "enum": [
+        "explicitRequestOnly",
+        "proactive"
       ],
       "type": "string"
     },
@@ -331,7 +342,7 @@
     "TurnEnvironmentParams": {
       "properties": {
         "cwd": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "$ref": "#/definitions/LegacyAppPathString"
         },
         "environmentId": {
           "type": "string"

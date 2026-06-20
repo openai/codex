@@ -2418,6 +2418,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "codex-agent-identity",
  "codex-backend-client",
  "codex-config",
  "codex-core",
@@ -2760,6 +2761,7 @@ dependencies = [
  "codex-otel",
  "codex-plugin",
  "codex-protocol",
+ "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "codex-utils-plugins",
@@ -3288,6 +3290,7 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-utils-path-uri",
  "codex-utils-plugins",
  "futures",
  "pretty_assertions",
@@ -3791,7 +3794,9 @@ dependencies = [
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-home-dir",
  "codex-utils-path-uri",
+ "codex-windows-sandbox",
  "dunce",
  "libc",
  "pretty_assertions",
@@ -4267,7 +4272,6 @@ name = "codex-utils-plugins"
 version = "0.0.0"
 dependencies = [
  "codex-exec-server",
- "codex-login",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "serde",
@@ -13599,7 +13603,7 @@ dependencies = [
 [[package]]
 name = "tokio-tungstenite"
 version = "0.28.0"
-source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=132f5b39c862e3a970f731d709608b3e6276d5f6#132f5b39c862e3a970f731d709608b3e6276d5f6"
+source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=e5e64b86722c5453c4038131c3193faa49a648ad#e5e64b86722c5453c4038131c3193faa49a648ad"
 dependencies = [
  "futures-util",
  "log",

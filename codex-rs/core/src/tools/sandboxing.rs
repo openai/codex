@@ -394,7 +394,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
         None
     }
 
-    fn sandbox_cwd<'a>(&self, _req: &'a Req) -> Option<&'a AbsolutePathBuf> {
+    fn sandbox_cwd<'a>(&self, _req: &'a Req) -> Option<&'a PathUri> {
         None
     }
 
@@ -426,6 +426,7 @@ impl<'a> SandboxAttempt<'a> {
         command: SandboxCommand,
         options: ExecOptions,
         network: Option<&NetworkProxy>,
+        environment_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
         let request = self
             .manager
@@ -434,11 +435,43 @@ impl<'a> SandboxAttempt<'a> {
                 permissions: self.permissions,
                 sandbox: self.sandbox,
                 enforce_managed_network: self.enforce_managed_network,
+                environment_id,
                 network,
                 sandbox_policy_cwd: self.sandbox_cwd,
                 codex_linux_sandbox_exe: self
                     .codex_linux_sandbox_exe
                     .map(std::path::PathBuf::as_path),
+                use_legacy_landlock: self.use_legacy_landlock,
+                windows_sandbox_level: self.windows_sandbox_level,
+                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            })
+            .map_err(CodexErr::from)?;
+        Ok(crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+            request,
+            options,
+            self.workspace_roots.to_vec(),
+        ))
+    }
+
+    pub fn env_for_exec_server(
+        &self,
+        command: SandboxCommand,
+        options: ExecOptions,
+        network: Option<&NetworkProxy>,
+        environment_id: Option<&str>,
+    ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
+        let request = self
+            .manager
+            .transform(SandboxTransformRequest {
+                command,
+                permissions: self.permissions,
+                // The exec-server must receive the native command, not this host's wrapper.
+                sandbox: SandboxType::None,
+                enforce_managed_network: self.enforce_managed_network,
+                environment_id,
+                network,
+                sandbox_policy_cwd: self.sandbox_cwd,
+                codex_linux_sandbox_exe: None,
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,

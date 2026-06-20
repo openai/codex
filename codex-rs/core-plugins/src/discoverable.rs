@@ -1,8 +1,8 @@
 use anyhow::Context;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_login::CodexAuth;
-use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use std::collections::HashSet;
 use tracing::warn;
@@ -76,17 +76,24 @@ impl PluginsManager {
             return Ok(Vec::new());
         }
 
+        let use_remote_global_catalog =
+            input.plugins.remote_plugin_enabled && auth.is_some_and(CodexAuth::uses_codex_backend);
         let marketplaces = self
-            .list_marketplaces_for_config(&input.plugins, &[], /*include_openai_curated*/ true)
+            .list_marketplaces_for_config(
+                &input.plugins,
+                &[],
+                /*include_openai_curated*/ !use_remote_global_catalog,
+            )
             .context("failed to list plugin marketplaces for tool suggestions")?
             .marketplaces;
-        let remote_installed_marketplaces = if input.plugins.remote_plugin_enabled {
+        let remote_installed_marketplaces = if use_remote_global_catalog {
             self.build_remote_installed_plugin_marketplaces_from_cache(&[
                 REMOTE_GLOBAL_MARKETPLACE_NAME,
             ])
         } else {
             None
         };
+        let skill_config_rules = skill_config_rules_from_stack(&input.plugins.config_layer_stack);
 
         let mut discoverable_plugins = Vec::<ToolSuggestDiscoverablePlugin>::new();
         for marketplace in marketplaces {
@@ -104,17 +111,15 @@ impl PluginsManager {
                 }
 
                 let plugin_id = plugin.id.clone();
-
                 match self
-                    .read_plugin_detail_for_marketplace_plugin(
-                        &input.plugins,
+                    .tool_suggest_metadata_for_marketplace_plugin(
                         &marketplace_name,
-                        plugin,
+                        &plugin,
+                        &skill_config_rules,
                     )
                     .await
                 {
                     Ok(plugin) => {
-                        let plugin: PluginCapabilitySummary = plugin.into();
                         discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
                             id: plugin.config_name,
                             remote_plugin_id: None,

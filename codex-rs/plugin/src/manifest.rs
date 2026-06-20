@@ -17,10 +17,17 @@ pub struct PluginManifest<Resource> {
 /// Component resources declared by a plugin manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManifestPaths<Resource> {
-    pub skills: Option<Resource>,
-    pub mcp_servers: Option<Resource>,
+    pub skills: Vec<Resource>,
+    pub mcp_servers: Option<PluginManifestMcpServers<Resource>>,
     pub apps: Option<Resource>,
     pub hooks: Option<PluginManifestHooks<Resource>>,
+}
+
+/// MCP server declarations embedded in or referenced by a plugin manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginManifestMcpServers<Resource> {
+    Path(Resource),
+    Object(String),
 }
 
 /// Hook declarations embedded in or referenced by a plugin manifest.
@@ -109,6 +116,15 @@ impl<Resource> PluginManifest<Resource> {
             Some(PluginManifestHooks::Inline(hooks)) => Some(PluginManifestHooks::Inline(hooks)),
             None => None,
         };
+        let mcp_servers = match mcp_servers {
+            Some(PluginManifestMcpServers::Path(path)) => {
+                Some(PluginManifestMcpServers::Path(map(path)?))
+            }
+            Some(PluginManifestMcpServers::Object(servers)) => {
+                Some(PluginManifestMcpServers::Object(servers))
+            }
+            None => None,
+        };
         let interface = match interface {
             Some(interface) => {
                 let PluginManifestInterface {
@@ -156,8 +172,11 @@ impl<Resource> PluginManifest<Resource> {
             description,
             keywords,
             paths: PluginManifestPaths {
-                skills: skills.map(&mut map).transpose()?,
-                mcp_servers: mcp_servers.map(&mut map).transpose()?,
+                skills: skills
+                    .into_iter()
+                    .map(&mut map)
+                    .collect::<Result<Vec<_>, _>>()?,
+                mcp_servers,
                 apps: apps.map(&mut map).transpose()?,
                 hooks,
             },

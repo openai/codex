@@ -27,7 +27,7 @@
         "read": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/ApiPathString"
+            "$ref": "#/definitions/LegacyAppPathString"
           },
           "type": [
             "array",
@@ -37,7 +37,7 @@
         "write": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/ApiPathString"
+            "$ref": "#/definitions/LegacyAppPathString"
           },
           "type": [
             "array",
@@ -83,9 +83,6 @@
         }
       },
       "type": "object"
-    },
-    "ApiPathString": {
-      "type": "string"
     },
     "CommandAction": {
       "oneOf": [
@@ -289,7 +286,7 @@
         {
           "properties": {
             "path": {
-              "$ref": "#/definitions/ApiPathString"
+              "$ref": "#/definitions/LegacyAppPathString"
             },
             "type": {
               "enum": [
@@ -472,6 +469,9 @@
         }
       ]
     },
+    "LegacyAppPathString": {
+      "type": "string"
+    },
     "NetworkApprovalContext": {
       "properties": {
         "host": {
@@ -547,13 +547,21 @@
     "cwd": {
       "anyOf": [
         {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "$ref": "#/definitions/LegacyAppPathString"
         },
         {
           "type": "null"
         }
       ],
       "description": "The command's working directory."
+    },
+    "environmentId": {
+      "default": null,
+      "description": "Environment in which the command will run.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "itemId": {
       "type": "string"

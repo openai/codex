@@ -69,13 +69,16 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
+use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -1326,7 +1329,10 @@ async fn turn_start_rejects_unknown_environment_before_starting_turn() -> Result
             }],
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "missing".to_string(),
-                cwd: codex_home.path().to_path_buf().try_into()?,
+                cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                    codex_home.path().to_path_buf(),
+                )?
+                .into(),
             }]),
             ..Default::default()
         })
@@ -1746,6 +1752,217 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_accepts_multi_agent_mode_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([
+            (Feature::MultiAgentV2, true),
+            (Feature::MultiAgentMode, true),
+        ]),
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            multi_agent_mode: Some(MultiAgentMode::Proactive),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let developer_texts = response_mock
+        .single_request()
+        .message_input_texts("developer");
+    assert!(developer_texts.iter().any(|text| {
+        text.contains("<multi_agent_mode>")
+            && text.contains("Proactive multi-agent delegation is active.")
+    }));
+    assert!(!developer_texts.iter().any(|text| {
+        text.contains("Do not spawn sub-agents unless the user explicitly asks for sub-agents")
+    }));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([
+            (Feature::MultiAgentV2, true),
+            (Feature::MultiAgentMode, true),
+        ]),
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            multi_agent_mode: Some(MultiAgentMode::Proactive),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread,
+        multi_agent_mode,
+        ..
+    } = to_response::<ThreadStartResponse>(thread_resp)?;
+    assert_eq!(multi_agent_mode, Some(MultiAgentMode::Proactive));
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let developer_texts = response_mock
+        .single_request()
+        .message_input_texts("developer");
+    assert!(
+        developer_texts.iter().any(|text| {
+            text.contains(MULTI_AGENT_MODE_OPEN_TAG)
+                && text.contains("Proactive multi-agent delegation is active.")
+        }),
+        "expected proactive multi-agent mode instructions in developer input, got {developer_texts:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_reports_selected_multi_agent_mode() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let cases = [
+        (
+            BTreeMap::from([(Feature::MultiAgentV2, true)]),
+            Some(MultiAgentMode::Proactive),
+            Some(MultiAgentMode::Proactive),
+        ),
+        (
+            BTreeMap::new(),
+            Some(MultiAgentMode::Proactive),
+            Some(MultiAgentMode::Proactive),
+        ),
+        (
+            BTreeMap::from([
+                (Feature::MultiAgentV2, true),
+                (Feature::MultiAgentMode, true),
+            ]),
+            None,
+            None,
+        ),
+    ];
+
+    for (features, requested_multi_agent_mode, expected_multi_agent_mode) in cases {
+        let server = responses::start_mock_server().await;
+        let codex_home = TempDir::new()?;
+        create_config_toml(codex_home.path(), &server.uri(), "never", &features)?;
+
+        let mut mcp = TestAppServer::new(codex_home.path()).await?;
+        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+        let thread_req = mcp
+            .send_thread_start_request(ThreadStartParams {
+                model: Some("mock-model".to_string()),
+                multi_agent_mode: requested_multi_agent_mode,
+                ..Default::default()
+            })
+            .await?;
+        let thread_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+        )
+        .await??;
+        let response = to_response::<ThreadStartResponse>(thread_resp)?;
+
+        assert_eq!(response.multi_agent_mode, expected_multi_agent_mode);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2063,6 +2280,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         panic!("expected CommandExecutionRequestApproval request");
     };
     assert_eq!(params.item_id, "call1");
+    assert_eq!(params.environment_id.as_deref(), Some("local"));
     let resolved_request_id = request_id.clone();
 
     // Approve and wait for task completion
@@ -2362,6 +2580,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
+            multi_agent_mode: None,
         })
         .await?;
     timeout(
@@ -2401,6 +2620,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
+            multi_agent_mode: None,
         })
         .await?;
     timeout(
@@ -2435,7 +2655,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     else {
         unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(cwd.as_path(), second_cwd.as_path());
+    assert_eq!(cwd.as_str(), second_cwd.to_string_lossy().as_ref());
     let expected_command = format_with_current_shell_display("echo second turn");
     assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);
@@ -2669,7 +2889,7 @@ async fn run_environment_selection_case(
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
-            environments: environment_params(case.sticky, workspace)?,
+            environments: environment_params(case.sticky, workspace),
             ..Default::default()
         })
         .await?;
@@ -2688,7 +2908,7 @@ async fn run_environment_selection_case(
                 text: format!("run {}", case.name),
                 text_elements: Vec::new(),
             }],
-            environments: environment_params(case.turn, workspace)?,
+            environments: environment_params(case.turn, workspace),
             cwd: Some(workspace.to_path_buf()),
             model: Some("mock-model".to_string()),
             ..Default::default()
@@ -2735,21 +2955,15 @@ async fn run_environment_selection_case(
     Ok(())
 }
 
-fn environment_params(
-    ids: Option<&[&str]>,
-    cwd: &Path,
-) -> Result<Option<Vec<TurnEnvironmentParams>>> {
+fn environment_params(ids: Option<&[&str]>, cwd: &Path) -> Option<Vec<TurnEnvironmentParams>> {
     ids.map(|ids| {
         ids.iter()
-            .map(|id| {
-                Ok(TurnEnvironmentParams {
-                    environment_id: (*id).to_string(),
-                    cwd: cwd.to_path_buf().try_into()?,
-                })
+            .map(|id| TurnEnvironmentParams {
+                environment_id: (*id).to_string(),
+                cwd: cwd.abs().into(),
             })
             .collect()
     })
-    .transpose()
 }
 
 #[tokio::test]

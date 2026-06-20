@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
+use crate::current_time::app_server_time_provider;
 use crate::error_code::invalid_request;
 use crate::extensions::ThreadExtensionDependencies;
 use crate::extensions::app_server_extension_event_sink;
@@ -91,6 +92,8 @@ use tokio::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
+
+use crate::models_refresh_worker::ModelsRefreshWorker;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
@@ -182,6 +185,7 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    models_refresh_worker: ModelsRefreshWorker,
     skills_watcher: Arc<SkillsWatcher>,
     account_processor: AccountRequestProcessor,
     apps_processor: AppsRequestProcessor,
@@ -220,6 +224,7 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) app_server_client_name: String,
     pub(crate) client_version: String,
     pub(crate) request_attestation: bool,
+    pub(crate) supports_openai_form_elicitation: bool,
 }
 
 impl Default for ConnectionSessionState {
@@ -271,6 +276,11 @@ impl ConnectionSessionState {
             .is_some_and(|session| session.request_attestation)
     }
 
+    pub(crate) fn supports_openai_form_elicitation(&self) -> bool {
+        self.initialized
+            .get()
+            .is_some_and(|session| session.supports_openai_form_elicitation)
+    }
     pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
         self.initialized.set(session).map_err(|_| ())
     }
@@ -369,12 +379,18 @@ impl MessageProcessor {
                     outgoing.clone(),
                     thread_state_manager.clone(),
                 )),
+                Some(app_server_time_provider(
+                    outgoing.clone(),
+                    thread_state_manager.clone(),
+                )),
             )
         });
+        let models_manager = thread_manager.get_models_manager();
+        let models_refresh_worker = crate::models_refresh_worker::spawn(&models_manager);
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
-        let skills_watcher = SkillsWatcher::new(thread_manager.skills_manager(), outgoing.clone());
+        let skills_watcher = SkillsWatcher::new(thread_manager.skills_service(), outgoing.clone());
 
         let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
         let thread_watch_manager =
@@ -510,7 +526,7 @@ impl MessageProcessor {
             outgoing.clone(),
             config_manager.clone(),
             thread_manager.clone(),
-            analytics_events_client,
+            analytics_events_client.clone(),
         );
         let external_agent_config_processor =
             ExternalAgentConfigRequestProcessor::new(ExternalAgentConfigRequestProcessorArgs {
@@ -520,6 +536,7 @@ impl MessageProcessor {
                 config_manager: config_manager.clone(),
                 config_processor: config_processor.clone(),
                 state_db,
+                analytics_events_client,
                 arg0_paths,
                 codex_home: config.codex_home.to_path_buf(),
             });
@@ -537,6 +554,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            models_refresh_worker,
             skills_watcher,
             account_processor,
             apps_processor,
@@ -566,6 +584,7 @@ impl MessageProcessor {
     pub(crate) fn clear_runtime_references(&self) {
         self.account_processor.clear_external_auth();
         self.apps_processor.shutdown();
+        self.models_refresh_worker.shutdown();
         self.skills_watcher.shutdown();
     }
 
@@ -742,6 +761,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn drain_background_tasks(&self) {
+        self.models_refresh_worker.shutdown();
         self.thread_processor.drain_background_tasks().await;
     }
 
@@ -875,6 +895,7 @@ impl MessageProcessor {
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
+        let supports_openai_form_elicitation = session.supports_openai_form_elicitation();
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -890,6 +911,7 @@ impl MessageProcessor {
                         request_context,
                         app_server_client_name,
                         client_version,
+                        supports_openai_form_elicitation,
                     )
                     .await;
                 if let Err(error) = result {
@@ -919,6 +941,7 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
+        supports_openai_form_elicitation: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -1071,6 +1094,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        supports_openai_form_elicitation,
                         request_context,
                     )
                     .await
@@ -1087,6 +1111,8 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        /*supports_openai_form_elicitation*/
+                        supports_openai_form_elicitation,
                     )
                     .await
             }
@@ -1097,6 +1123,8 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        /*supports_openai_form_elicitation*/
+                        supports_openai_form_elicitation,
                     )
                     .await
             }
@@ -1296,6 +1324,8 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        /*supports_openai_form_elicitation*/
+                        supports_openai_form_elicitation,
                     )
                     .await
             }
