@@ -267,7 +267,7 @@ class WindowsBazelHermeticityAuditTest(unittest.TestCase):
                 encoding="utf-8",
             )
         (root / ".github/scripts/sanitize-bazel-windows-environment.sh").write_text(
-            r'export BAZEL_SH="${ProgramFiles//\\//}/Git/usr/bin/bash.exe"' + "\n",
+            'export BAZEL_SH="C:/Program Files/Git/usr/bin/bash.exe"\n',
             encoding="utf-8",
         )
         (root / "BUILD.bazel").write_text(build_contents, encoding="utf-8")

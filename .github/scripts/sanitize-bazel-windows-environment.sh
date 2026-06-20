@@ -11,11 +11,6 @@ sanitize_bazel_windows_environment() {
   if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
     return
   fi
-  if [[ -z "${ProgramFiles:-}" ]]; then
-    echo "ProgramFiles must be set for the Windows Bazel shell substrate." >&2
-    return 1
-  fi
-
   unset \
     AR ARFLAGS AS BAZEL_LLVM BAZEL_LLVM_COV BAZEL_LLVM_PROFDATA BAZEL_VC \
     BAZEL_VC_FULL_VERSION BAZEL_VS BAZEL_WINSDK_FULL_VERSION CC CFLAGS CL \
@@ -87,5 +82,5 @@ sanitize_bazel_windows_environment() {
     return 1
   fi
   export PATH="${sanitized_client_path}"
-  export BAZEL_SH="${ProgramFiles//\\//}/Git/usr/bin/bash.exe"
+  export BAZEL_SH="C:/Program Files/Git/usr/bin/bash.exe"
 }

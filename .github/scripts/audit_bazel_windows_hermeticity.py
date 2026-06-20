@@ -822,7 +822,7 @@ def audit_source_tree(repo_root: Path = REPO_ROOT) -> None:
     sanitizer_call = "sanitize_bazel_windows_environment"
     sanitizer_path = Path(".github/scripts/sanitize-bazel-windows-environment.sh")
     sanitizer_text = (repo_root / sanitizer_path).read_text(encoding="utf-8")
-    frozen_bazel_shell = r'export BAZEL_SH="${ProgramFiles//\\//}/Git/usr/bin/bash.exe"'
+    frozen_bazel_shell = 'export BAZEL_SH="C:/Program Files/Git/usr/bin/bash.exe"'
     if sanitizer_text.count(frozen_bazel_shell) != 1:
         errors.append(
             f"{sanitizer_path} must freeze BAZEL_SH to the Git workflow shell"

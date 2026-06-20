@@ -58,8 +58,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             "'/msys64/', '/mingw32/', '/mingw64/')\n"
             "    if any(path in normalized_path for path in forbidden_paths):\n"
             "        raise SystemExit(f'compiler path was not cleared: {normalized_path}')\n"
-            "    expected_bazel_sh = os.environ['ProgramFiles'].replace('\\\\', '/') "
-            "+ '/Git/usr/bin/bash.exe'\n"
+            "    expected_bazel_sh = 'C:/Program Files/Git/usr/bin/bash.exe'\n"
             "    if os.environ.get('BAZEL_SH') != expected_bazel_sh:\n"
             "        raise SystemExit(f'BAZEL_SH is not frozen: {os.environ.get(\"BAZEL_SH\")}')\n"
             "print(json.dumps(sys.argv[1:]))\n",
@@ -229,7 +228,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                     "CODEX_BAZEL_WINDOWS_EXECUTION_PATH": r"C:\substrate\bin",
                     "CODEX_BAZEL_WINDOWS_TEST_PATH": r"C:\runtime\bin",
                     "INCLUDE": r"C:\Visual Studio\include",
-                    "ProgramFiles": r"C:\Program Files",
+                    "ProgramFiles": "",
                     "RUNNER_OS": "Windows",
                 },
                 "--windows-hybrid-execution",
