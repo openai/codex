@@ -40,11 +40,11 @@ fn renders_full_environment_state() -> Result<()> {
         vec![user_message(
             r#"<environment_context>
   <environments>
-    <environment id="devbox" status="available">
+    <environment id="devbox">
       <cwd>/workspace</cwd>
       <shell>bash</shell>
     </environment>
-    <environment id="laptop" status="available">
+    <environment id="laptop">
       <cwd>/repo</cwd>
       <shell>zsh</shell>
     </environment>
@@ -96,7 +96,7 @@ fn renders_only_changed_environments() -> Result<()> {
         vec![user_message(
             r#"<environment_context>
   <environments>
-    <environment id="laptop" status="available">
+    <environment id="laptop">
       <cwd>/new-repo</cwd>
       <shell>zsh</shell>
     </environment>

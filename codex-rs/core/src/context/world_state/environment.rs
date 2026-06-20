@@ -237,10 +237,8 @@ impl ContextualUserFragment for RenderedEnvironments {
                         rendered.push_str("    <environment id=\"");
                         push_xml_escaped_text(&mut rendered, id);
                         rendered.push('"');
-                        if let Some(status) = environment.status {
-                            rendered.push_str(" status=\"");
-                            rendered.push_str(status.as_str());
-                            rendered.push('"');
+                        if matches!(environment.status, Some(EnvironmentStatus::Starting)) {
+                            rendered.push_str(" status=\"starting\"");
                         }
                         rendered.push_str(">\n");
                         push_environment_values(&mut rendered, environment, "      ");
@@ -327,15 +325,6 @@ impl Eq for EnvironmentState {}
 enum EnvironmentStatus {
     Starting,
     Available,
-}
-
-impl EnvironmentStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Starting => "starting",
-            Self::Available => "available",
-        }
-    }
 }
 
 fn is_legacy_single(environments: &BTreeMap<String, EnvironmentState>) -> bool {
