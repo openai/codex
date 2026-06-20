@@ -4263,6 +4263,8 @@ fn read_compacted_resume_prefix_items(
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file.take(byte_len));
     let mut prefix_items = Vec::with_capacity(3);
+    let mut latest_metadata_candidates = Vec::new();
+    let mut latest_metadata_before_checkpoint = Vec::new();
     let mut saw_session_meta = false;
     let mut saw_user_event = false;
     let mut saw_user_response_item = false;
@@ -4284,33 +4286,54 @@ fn read_compacted_resume_prefix_items(
                 Ok(rollout_line) => rollout_line,
                 Err(_) => return Ok(None),
             };
+        let is_reconstruction_checkpoint =
+            rollout_item_is_reconstruction_checkpoint(&rollout_line.item);
         match &rollout_line.item {
             RolloutItem::SessionMeta(meta_line)
                 if meta_line.meta.id == expected_thread_id && !saw_session_meta =>
             {
                 saw_session_meta = true;
-                prefix_items.push(rollout_line.item);
+                prefix_items.push(rollout_line.item.clone());
             }
             RolloutItem::SessionMeta(_) => return Ok(None),
             RolloutItem::EventMsg(EventMsg::UserMessage(_)) if !saw_user_event => {
                 saw_user_event = true;
-                prefix_items.push(rollout_line.item);
+                prefix_items.push(rollout_line.item.clone());
             }
             RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Message {
                 role,
                 ..
             }) if role == "user" && !saw_user_response_item => {
                 saw_user_response_item = true;
-                prefix_items.push(rollout_line.item);
+                prefix_items.push(rollout_line.item.clone());
             }
-            item if rollout_item_needs_full_resume_load(item) => return Ok(None),
+            item if rollout_item_needs_full_resume_load(item) => {
+                return Ok(None);
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => return Ok(None),
+            RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_)) => {
+                latest_metadata_candidates.retain(|item| {
+                    !matches!(item, RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_)))
+                });
+                latest_metadata_candidates.push(rollout_line.item.clone());
+            }
+            RolloutItem::EventMsg(EventMsg::TokenCount(_)) => {
+                latest_metadata_candidates
+                    .retain(|item| !matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))));
+                latest_metadata_candidates.push(rollout_line.item.clone());
+            }
             _ => {}
         }
-        if saw_session_meta && saw_user_event && saw_user_response_item {
-            return Ok(Some(prefix_items));
+        if is_reconstruction_checkpoint {
+            latest_metadata_before_checkpoint = latest_metadata_candidates.clone();
         }
     }
-    Ok(saw_session_meta.then_some(prefix_items))
+    if saw_session_meta {
+        prefix_items.extend(latest_metadata_before_checkpoint);
+        Ok(Some(prefix_items))
+    } else {
+        Ok(None)
+    }
 }
 
 fn read_compacted_resume_suffix_items(
@@ -4320,6 +4343,7 @@ fn read_compacted_resume_suffix_items(
     let mut suffix_items = Vec::new();
     let mut found_checkpoint = false;
     let mut found_checkpoint_turn_context = false;
+    let mut found_checkpoint_user_boundary = false;
     let mut should_fallback = false;
 
     read_rollout_lines_from_end(path, byte_len, |line| {
@@ -4335,12 +4359,29 @@ fn read_compacted_resume_suffix_items(
                     return Ok(false);
                 }
             };
+        if found_checkpoint
+            && matches!(
+                &rollout_line.item,
+                RolloutItem::EventMsg(
+                    EventMsg::ThreadRolledBack(_)
+                        | EventMsg::ThreadGoalUpdated(_)
+                        | EventMsg::TokenCount(_)
+                )
+            )
+        {
+            should_fallback = true;
+            return Ok(false);
+        }
         if rollout_item_needs_full_resume_load(&rollout_line.item) {
             should_fallback = true;
             return Ok(false);
         }
         let is_checkpoint = rollout_item_is_reconstruction_checkpoint(&rollout_line.item);
         let is_turn_context = matches!(&rollout_line.item, RolloutItem::TurnContext(_));
+        let is_user_boundary = matches!(
+            &rollout_line.item,
+            RolloutItem::EventMsg(EventMsg::UserMessage(_))
+        );
         suffix_items.push(rollout_line.item);
         if is_checkpoint {
             found_checkpoint = true;
@@ -4348,12 +4389,20 @@ fn read_compacted_resume_suffix_items(
         }
         if found_checkpoint && is_turn_context {
             found_checkpoint_turn_context = true;
+            return Ok(true);
+        }
+        if found_checkpoint && is_user_boundary {
+            found_checkpoint_user_boundary = true;
             return Ok(false);
         }
         Ok(true)
     })?;
 
-    if should_fallback || !found_checkpoint || !found_checkpoint_turn_context {
+    if should_fallback
+        || !found_checkpoint
+        || !found_checkpoint_turn_context
+        || !found_checkpoint_user_boundary
+    {
         return Ok(None);
     }
 
@@ -4433,60 +4482,89 @@ fn rollout_item_needs_full_resume_load(item: &RolloutItem) -> bool {
     }
 }
 
+const RECENT_NOT_LOADED_SUFFIX_SCAN_LIMIT_BYTES: usize = 2 * 1024 * 1024;
+
 fn read_recent_not_loaded_rollout_items(
     path: &Path,
     page_size: usize,
 ) -> std::io::Result<Option<RecentRolloutItems>> {
-    let contents = std::fs::read_to_string(path)?;
-    if contents
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .is_some_and(rollout_line_has_fork_parent_rollout_ref)
-    {
+    let metadata = std::fs::metadata(path)?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Ok(None);
+    }
+    if rollout_head_has_fork_parent_rollout_ref(path)? {
         return Ok(None);
     }
     let desired_turns = page_size.saturating_add(1);
-    let mut record_index_after = contents
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .count();
-    let mut suffix_start_index = record_index_after;
     let mut suffix_items = Vec::new();
-    let mut turn_openings = 0usize;
+    let mut explicit_turn_starts = 0usize;
+    let mut scanned_bytes = 0usize;
+    let mut should_fallback = false;
 
-    for line in contents.lines().rev() {
+    read_rollout_lines_from_end(path, metadata.len(), |line| {
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            continue;
+            return Ok(true);
         }
-        record_index_after = record_index_after.saturating_sub(1);
+        scanned_bytes = scanned_bytes.saturating_add(line.len()).saturating_add(1);
+        if scanned_bytes > RECENT_NOT_LOADED_SUFFIX_SCAN_LIMIT_BYTES
+            && explicit_turn_starts < desired_turns
+        {
+            should_fallback = true;
+            return Ok(false);
+        }
         let rollout_line =
             match serde_json::from_str::<codex_protocol::protocol::RolloutLine>(trimmed) {
                 Ok(rollout_line) => rollout_line,
-                Err(_) => return Ok(None),
+                Err(_) => {
+                    should_fallback = true;
+                    return Ok(false);
+                }
             };
-        if rollout_item_disables_recent_not_loaded_fast_path(&rollout_line.item) {
-            return Ok(None);
+        if !is_persisted_rollout_item(&rollout_line.item)
+            || rollout_item_disables_recent_not_loaded_fast_path(&rollout_line.item)
+        {
+            should_fallback = true;
+            return Ok(false);
         }
-        if rollout_item_opens_implicit_turn(&rollout_line.item) {
-            turn_openings = turn_openings.saturating_add(1);
+        if rollout_item_starts_explicit_turn(&rollout_line.item) {
+            explicit_turn_starts = explicit_turn_starts.saturating_add(1);
         }
-        suffix_start_index = record_index_after;
         suffix_items.push(rollout_line.item);
-        if turn_openings >= desired_turns {
-            break;
+        if explicit_turn_starts >= desired_turns {
+            return Ok(false);
         }
+        Ok(true)
+    })?;
+
+    if should_fallback || explicit_turn_starts == 0 {
+        return Ok(None);
     }
 
     suffix_items.reverse();
     Ok(Some(RecentRolloutItems {
-        initial_rollout_index: suffix_start_index,
+        initial_rollout_index: 0,
         items: suffix_items,
     }))
 }
 
-fn rollout_item_opens_implicit_turn(item: &RolloutItem) -> bool {
-    matches!(item, RolloutItem::EventMsg(EventMsg::UserMessage(_)))
+fn rollout_head_has_fork_parent_rollout_ref(path: &Path) -> std::io::Result<bool> {
+    use std::io::BufRead;
+
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            return Ok(rollout_line_has_fork_parent_rollout_ref(trimmed));
+        }
+    }
+    Ok(false)
+}
+
+fn rollout_item_starts_explicit_turn(item: &RolloutItem) -> bool {
+    matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_)))
 }
 
 fn rollout_item_disables_recent_not_loaded_fast_path(item: &RolloutItem) -> bool {
