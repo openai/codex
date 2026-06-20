@@ -7,6 +7,7 @@ use tracing::warn;
 
 use super::PeriodicRefreshWorker;
 use super::periodic;
+use super::periodic::InitialRefresh;
 use super::periodic::RefreshControl;
 use crate::config_manager::ConfigManager;
 
@@ -36,7 +37,7 @@ fn spawn_with_interval(
 ) -> PeriodicRefreshWorker {
     let plugins_manager = Arc::downgrade(plugins_manager);
     let auth_manager = Arc::downgrade(auth_manager);
-    periodic::spawn(refresh_interval, move || {
+    periodic::spawn(refresh_interval, InitialRefresh::Immediate, move || {
         let plugins_manager = plugins_manager.clone();
         let auth_manager = auth_manager.clone();
         let config_manager = config_manager.clone();
