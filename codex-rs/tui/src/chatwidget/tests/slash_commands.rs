@@ -337,7 +337,11 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
     assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
-async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_popup_text: &str) {
+async fn assert_cancelled_queued_menu_drains_next_input(
+    command: &str,
+    expected_popup_text: &str,
+    cancel_key: KeyEvent,
+) {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
@@ -355,7 +359,7 @@ async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(cancel_key);
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
@@ -379,49 +383,67 @@ async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_
 
 #[tokio::test]
 async fn queued_slash_menu_cancel_drains_next_input() {
-    assert_cancelled_queued_menu_drains_next_input("/model", "Select Model").await;
-    assert_cancelled_queued_menu_drains_next_input("/permissions", "Update Model Permissions")
-        .await;
+    assert_cancelled_queued_menu_drains_next_input(
+        "/model",
+        "Select Model",
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .await;
+    assert_cancelled_queued_menu_drains_next_input(
+        "/permissions",
+        "Update Model Permissions",
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn queued_settings_selection_applies_before_next_input() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_personality(Personality::Friendly);
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset.supported_reasoning_efforts.truncate(1);
+    let selected_effort = preset.supported_reasoning_efforts[0].effort.clone();
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
     handle_turn_started(&mut chat, "turn-1");
 
-    queue_composer_text_with_tab(&mut chat, "/personality");
+    queue_composer_text_with_tab(&mut chat, "/model");
     queue_composer_text_with_tab(&mut chat, "hello after selection");
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Select Personality"),
-        "expected personality menu to open; popup:\n{popup}"
+        popup.contains("Select Model and Effort"),
+        "expected model menu to open; popup:\n{popup}"
     );
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
     while let Ok(event) = rx.try_recv() {
         match event {
-            AppEvent::UpdatePersonality(personality) => chat.set_personality(personality),
+            AppEvent::OpenReasoningPopup { model } => chat.open_reasoning_popup(model),
+            AppEvent::UpdateModel(model) => chat.set_model(&model),
+            AppEvent::UpdateReasoningEffort(effort) => chat.set_reasoning_effort(effort),
             AppEvent::SettingsSelectionClosed => {
-                chat.set_queue_autosend_suppressed(/*suppressed*/ false);
-                chat.maybe_send_next_queued_input();
+                chat.app_event_tx.send(AppEvent::SettingsSelectionSettled);
+            }
+            AppEvent::SettingsSelectionSettled => {
+                if chat.no_modal_or_popup_active() {
+                    chat.set_queue_autosend_suppressed(/*suppressed*/ false);
+                    chat.maybe_send_next_queued_input();
+                }
             }
             _ => {}
         }
     }
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
-        other => panic!("expected queued message with updated personality, got {other:?}"),
+        Op::UserTurn { model, effort, .. } => assert_eq!(
+            (model, effort),
+            ("gpt-5.4".to_string(), Some(selected_effort))
+        ),
+        other => panic!("expected queued message with updated model, got {other:?}"),
     }
     assert!(chat.input_queue.queued_user_messages.is_empty());
 }

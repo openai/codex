@@ -76,6 +76,14 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn on_modal_or_popup_closed(&mut self) {
+        if self.input_queue.suppress_queue_autosend {
+            self.app_event_tx.send(AppEvent::SettingsSelectionClosed);
+        } else {
+            self.maybe_send_next_queued_input();
+        }
+    }
+
     pub(super) fn queue_user_message(&mut self, user_message: UserMessage) {
         self.queue_user_message_with_options(user_message, QueuedInputAction::Plain, Vec::new());
     }

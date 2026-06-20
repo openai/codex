@@ -893,6 +893,9 @@ impl App {
                     .await;
             }
             AppEvent::SettingsSelectionClosed => {
+                self.app_event_tx.send(AppEvent::SettingsSelectionSettled);
+            }
+            AppEvent::SettingsSelectionSettled => {
                 if self.chat_widget.no_modal_or_popup_active() {
                     self.chat_widget
                         .set_queue_autosend_suppressed(/*suppressed*/ false);
