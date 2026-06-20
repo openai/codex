@@ -93,6 +93,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+use crate::background_refresh::PeriodicRefreshWorker;
 use crate::models_refresh_worker::ModelsRefreshWorker;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -186,6 +187,7 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     models_refresh_worker: ModelsRefreshWorker,
+    plugins_refresh_worker: Option<PeriodicRefreshWorker>,
     skills_watcher: Arc<SkillsWatcher>,
     account_processor: AccountRequestProcessor,
     apps_processor: AppsRequestProcessor,
@@ -510,18 +512,25 @@ impl MessageProcessor {
             thread_list_state_permit,
             Arc::clone(&skills_watcher),
         );
-        if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
-            // Keep plugin startup warmups aligned at app-server startup.
-            let on_effective_plugins_changed =
-                plugin_processor.effective_plugins_changed_callback();
-            thread_manager
-                .plugins_manager()
-                .maybe_start_plugin_startup_tasks_for_config(
+        let plugins_refresh_worker =
+            if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
+                // Keep plugin startup warmups aligned at app-server startup.
+                let on_effective_plugins_changed =
+                    plugin_processor.effective_plugins_changed_callback();
+                let plugins_manager = thread_manager.plugins_manager();
+                plugins_manager.maybe_start_plugin_startup_tasks_for_config(
                     &config.plugins_config_input(),
-                    auth_manager,
-                    Some(on_effective_plugins_changed),
+                    Arc::clone(&auth_manager),
                 );
-        }
+                Some(crate::background_refresh::spawn_plugins_refresh_worker(
+                    &plugins_manager,
+                    &auth_manager,
+                    config_manager.clone(),
+                    on_effective_plugins_changed,
+                ))
+            } else {
+                None
+            };
         let config_processor = ConfigRequestProcessor::new(
             outgoing.clone(),
             config_manager.clone(),
@@ -555,6 +564,7 @@ impl MessageProcessor {
         Self {
             outgoing,
             models_refresh_worker,
+            plugins_refresh_worker,
             skills_watcher,
             account_processor,
             apps_processor,
@@ -585,6 +595,9 @@ impl MessageProcessor {
         self.account_processor.clear_external_auth();
         self.apps_processor.shutdown();
         self.models_refresh_worker.shutdown();
+        if let Some(plugins_refresh_worker) = &self.plugins_refresh_worker {
+            plugins_refresh_worker.shutdown();
+        }
         self.skills_watcher.shutdown();
     }
 
@@ -762,6 +775,9 @@ impl MessageProcessor {
 
     pub(crate) async fn drain_background_tasks(&self) {
         self.models_refresh_worker.shutdown();
+        if let Some(plugins_refresh_worker) = &self.plugins_refresh_worker {
+            plugins_refresh_worker.shutdown();
+        }
         self.thread_processor.drain_background_tasks().await;
     }
 
