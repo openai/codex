@@ -1,6 +1,7 @@
 use crate::types::AccountsCheckResponse;
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::ConfigBundleResponse;
+use crate::types::ListCredentialRoutesResponse;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitReachedKind as BackendRateLimitReachedKind;
 use crate::types::RateLimitStatusPayload;
@@ -430,6 +431,20 @@ impl Client {
             .map_err(RequestError::from)
     }
 
+    pub async fn list_credential_routes(&self) -> Result<ListCredentialRoutesResponse> {
+        let url = self.credential_routes_url();
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        self.decode_json(&url, &ct, &body)
+    }
+
+    pub fn credential_routes_proxy_url(&self) -> String {
+        match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/credential_routes/proxy", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/ps/credential_routes/proxy", self.base_url),
+        }
+    }
+
     /// Create a new task (user turn) by POSTing to the appropriate backend path
     /// based on `path_style`. Returns the created task id.
     pub async fn create_task(&self, request_body: serde_json::Value) -> Result<String> {
@@ -567,6 +582,13 @@ impl Client {
                     self.base_url
                 )
             }
+        }
+    }
+
+    fn credential_routes_url(&self) -> String {
+        match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/credential_routes", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/ps/credential_routes", self.base_url),
         }
     }
 

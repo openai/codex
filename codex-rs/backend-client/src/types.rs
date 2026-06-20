@@ -19,6 +19,29 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ListCredentialRoutesResponse {
+    pub routes: Vec<ResolvedCredentialRoute>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ResolvedCredentialRoute {
+    pub connector_id: String,
+    pub link_id: String,
+    pub auth_type: CredentialRouteAuthType,
+    pub base_url: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub enum CredentialRouteAuthType {
+    #[serde(rename = "API_KEY")]
+    ApiKey,
+    #[serde(rename = "OAUTH")]
+    OAuth,
+    #[serde(rename = "NONE")]
+    None,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct RateLimitResetCreditsSummary {
     pub available_count: i64,
 }
