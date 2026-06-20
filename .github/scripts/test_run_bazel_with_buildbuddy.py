@@ -159,9 +159,14 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 }
             )
 
+            bash = "bash"
+            if os.name == "nt":
+                bash = str(Path(os.environ["ProgramFiles"]) / "Git" / "bin" / "bash.exe")
+                self.assertTrue(Path(bash).is_file(), bash)
+
             result = subprocess.run(
                 [
-                    "bash",
+                    bash,
                     str(Path(__file__).with_name("run-bazel-ci.sh")),
                     "--",
                     "build",
