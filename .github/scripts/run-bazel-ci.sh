@@ -255,6 +255,15 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
+if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+  for arg in "${bazel_args[@]}"; do
+    if [[ "$arg" == "--config=argument-comment-lint" ]]; then
+      ci_config=ci-windows-argument-lint
+      break
+    fi
+  done
+fi
+
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
   # Windows cross-compilation depends on authenticated RBE. Preserve the local
   # Windows build shape when credentials are unavailable.

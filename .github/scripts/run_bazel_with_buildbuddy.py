@@ -20,6 +20,7 @@ REMOTE_EXECUTION_CONFIGS = {
     "--config=ci-linux",
     "--config=ci-macos",
     "--config=ci-v8",
+    "--config=ci-windows-argument-lint",
     "--config=ci-windows-cross",
 }
 # Honor either explicit setting so the wrapper never overrides the caller's

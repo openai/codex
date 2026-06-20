@@ -98,6 +98,27 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             ],
         )
 
+    def test_windows_argument_lint_configuration_uses_remote_execution(self) -> None:
+        env = {"BUILDBUDDY_API_KEY": "fork-token"}
+
+        self.assertEqual(
+            run_bazel_with_buildbuddy.bazel_args_with_remote_config(
+                [
+                    "build",
+                    "--config=ci-windows-argument-lint",
+                    "//codex-rs/cli:codex",
+                ],
+                env,
+            ),
+            [
+                "build",
+                "--config=buildbuddy-generic-rbe",
+                "--remote_header=x-buildbuddy-api-key=fork-token",
+                "--config=ci-windows-argument-lint",
+                "//codex-rs/cli:codex",
+            ],
+        )
+
     def test_query_remote_configuration_is_inserted_before_expression(self) -> None:
         expression = 'kind("rust_library rule", //codex-rs/...)'
         env = {"BUILDBUDDY_API_KEY": "fork-token"}
