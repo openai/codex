@@ -21,10 +21,10 @@ diff --git a/rs/experimental/toolchains/declare_rustc_toolchains.bzl b/rs/experi
                  "@platforms//os:ios": ["-lSystem", "-lobjc", "-Wl,-framework,Security", "-Wl,-framework,Foundation", "-lresolv"],
 -                # TODO: windows
 +                "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": [
-+                    "advapi32.lib",
-+                    "ws2_32.lib",
-+                    "userenv.lib",
-+                    "Bcrypt.lib",
++                    "-ladvapi32",
++                    "-lws2_32",
++                    "-luserenv",
++                    "-lbcrypt",
 +                ],
 +                "@rules_rs//rs/experimental/platforms/constraints:windows_msvc": [
 +                    "advapi32.lib",

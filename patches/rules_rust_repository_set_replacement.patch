@@ -1,0 +1,24 @@
+# What: replace a default repository set by its documented repository name.
+# Why: changing the exec triple (for example, MSVC to gnullvm) also changes the
+# lookup key, so matching by both the old triple and name leaves the default
+# toolchain registered and lets it win toolchain resolution.
+
+diff --git a/rust/extensions.bzl b/rust/extensions.bzl
+--- a/rust/extensions.bzl
++++ b/rust/extensions.bzl
+@@ -100,8 +100,13 @@ def _rust_impl(module_ctx):
+             **repository_set
+         )
+         extra_toolchain_infos.update(**toolchain_infos)
+-        if toolchain_triples.get(repository_set["exec_triple"]) == repository_set["name"]:
+-            toolchain_triples.pop(repository_set["exec_triple"], None)
++        replaced_exec_triples = [
++            exec_triple
++            for exec_triple, name in toolchain_triples.items()
++            if name == repository_set["name"]
++        ]
++        for exec_triple in replaced_exec_triples:
++            toolchain_triples.pop(exec_triple)
+ 
+     toolchains = root.tags.toolchain
+     if not toolchains and rules_rust:

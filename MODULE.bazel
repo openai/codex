@@ -112,6 +112,7 @@ rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_r
 # `libssp_nonshared`, so strip the forwarded stack-protector flags there.
 rules_rust.patch(
     patches = [
+        "//patches:rules_rust_repository_set_replacement.patch",
         "//patches:rules_rust_windows_gnullvm_build_script.patch",
         "//patches:rules_rust_windows_exec_msvc_build_script_env.patch",
         "//patches:rules_rust_windows_bootstrap_process_wrapper_linker.patch",
@@ -140,7 +141,7 @@ nightly_rust.toolchain(
 # ABI so proc macros, build scripts, and the lint driver share one hermetic
 # LLVM/MinGW toolchain.
 nightly_rust.repository_set(
-    name = "rust_windows_x86_64_gnullvm",
+    name = "rust_windows_x86_64",
     dev_components = True,
     edition = "2024",
     exec_compatible_with = [
