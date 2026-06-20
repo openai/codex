@@ -7491,8 +7491,16 @@ model = "gpt-5.2"
     .await?;
 
     let mut startup_warnings = Vec::new();
-    let roles = agent_roles::load_plugin_agent_roles(
+    let roles = agent_roles::load_agent_roles_with_plugins(
         LOCAL_FS.as_ref(),
+        BTreeMap::from([(
+            "personal".to_string(),
+            AgentRoleConfig {
+                description: Some("Personal role".to_string()),
+                config_file: None,
+                nickname_candidates: None,
+            },
+        )]),
         vec![PluginAgentRoot {
             path: agents_dir.abs(),
             plugin_id: "fallback@test".to_string(),
@@ -7503,6 +7511,12 @@ model = "gpt-5.2"
     .await?;
 
     assert_eq!(startup_warnings, Vec::<String>::new());
+    assert_eq!(
+        roles
+            .get("personal")
+            .and_then(|role| role.description.as_deref()),
+        Some("Personal role")
+    );
     assert_eq!(
         roles.get("sample-plugin:researcher").map(|role| (
             role.description.as_deref(),

@@ -117,12 +117,15 @@ pub(crate) async fn load_agent_roles(
     Ok(roles)
 }
 
-pub(crate) async fn load_plugin_agent_roles(
+/// Returns the configured agent roles plus all valid plugin roles.
+///
+/// Configured roles keep precedence when a plugin produces the same fully-qualified role name.
+pub(crate) async fn load_agent_roles_with_plugins(
     fs: &dyn ExecutorFileSystem,
+    mut roles: BTreeMap<String, AgentRoleConfig>,
     plugin_agent_roots: Vec<PluginAgentRoot>,
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
-    let mut roles = BTreeMap::new();
     for plugin_agent_root in plugin_agent_roots {
         let discovered_roles = discover_agent_roles_in_dir(
             fs,
@@ -157,7 +160,7 @@ pub(crate) async fn load_plugin_agent_roles(
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         format!(
-                            "duplicate plugin agent role name `{namespaced_role_name}` discovered in {}",
+                            "duplicate agent role name `{namespaced_role_name}` discovered in plugin agents root {}",
                             plugin_agent_root.path.as_path().display()
                         ),
                     ),

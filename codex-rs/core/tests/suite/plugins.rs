@@ -93,6 +93,19 @@ developer_instructions = "Research the sample data carefully"
     .expect("write plugin agent role");
 }
 
+fn write_personal_agent_role(home: &TempDir) {
+    let agents_dir = home.path().join("agents");
+    std::fs::create_dir_all(&agents_dir).expect("create personal agents dir");
+    std::fs::write(
+        agents_dir.join("personal.toml"),
+        r#"name = "personal"
+description = "Inspect personal data"
+developer_instructions = "Inspect personal data carefully"
+"#,
+    )
+    .expect("write personal agent role");
+}
+
 fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
     let plugin_root = write_sample_plugin_manifest_and_config(home);
     std::fs::write(
@@ -312,6 +325,7 @@ async fn plugin_agent_roles_are_available_to_spawn_agent() -> Result<()> {
 
     let codex_home = Arc::new(TempDir::new()?);
     write_plugin_agent_plugin(codex_home.as_ref());
+    write_personal_agent_role(codex_home.as_ref());
     let mut builder = test_codex().with_home(codex_home).with_config(|config| {
         config
             .features
@@ -331,6 +345,10 @@ async fn plugin_agent_roles_are_available_to_spawn_agent() -> Result<()> {
     assert!(
         agent_type_description.contains("sample:researcher: {\nResearch sample data\n}"),
         "expected plugin agent role in spawn_agent description: {agent_type_description:?}"
+    );
+    assert!(
+        agent_type_description.contains("personal: {\nInspect personal data\n}"),
+        "expected personal agent role in spawn_agent description: {agent_type_description:?}"
     );
 
     Ok(())

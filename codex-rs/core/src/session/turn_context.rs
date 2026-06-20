@@ -722,17 +722,16 @@ impl Session {
             .plugins_for_config(&plugins_input)
             .await;
         let mut plugin_agent_role_warnings = Vec::new();
-        match crate::config::agent_roles::load_plugin_agent_roles(
+        match crate::config::agent_roles::load_agent_roles_with_plugins(
             LOCAL_FS.as_ref(),
+            per_turn_config.agent_roles.clone(),
             plugin_outcome.effective_plugin_agent_roots(),
             &mut plugin_agent_role_warnings,
         )
         .await
         {
-            Ok(plugin_agent_roles) => {
-                for (role_name, role) in plugin_agent_roles {
-                    per_turn_config.agent_roles.entry(role_name).or_insert(role);
-                }
+            Ok(agent_roles) => {
+                per_turn_config.agent_roles = agent_roles;
             }
             Err(err) => {
                 plugin_agent_role_warnings
