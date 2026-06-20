@@ -1,6 +1,7 @@
 use super::*;
 use crate::context::world_state::WorldState;
 use anyhow::Result;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -114,9 +115,12 @@ fn renders_only_changed_environments() -> Result<()> {
 #[test]
 fn persisted_turn_context_values_render_a_diff() -> Result<()> {
     let environments = EnvironmentsState {
-        environments: [("laptop".to_string(), available("file:///repo", "zsh")?)]
-            .into_iter()
-            .collect(),
+        environments: [(
+            LOCAL_ENVIRONMENT_ID.to_string(),
+            available("file:///repo", "zsh")?,
+        )]
+        .into_iter()
+        .collect(),
         ..Default::default()
     };
     let mut previous = WorldState::default();
@@ -165,21 +169,52 @@ fn persisted_turn_context_values_render_a_diff() -> Result<()> {
 }
 
 #[test]
-fn single_environment_diff_ignores_id_and_shell() -> Result<()> {
+fn single_environment_diff_ignores_shell() -> Result<()> {
     let previous = EnvironmentsState {
-        environments: [(String::new(), available("file:///repo", "bash")?)]
-            .into_iter()
-            .collect(),
+        environments: [(
+            LOCAL_ENVIRONMENT_ID.to_string(),
+            available("file:///repo", "bash")?,
+        )]
+        .into_iter()
+        .collect(),
         ..Default::default()
     };
     let current = EnvironmentsState {
-        environments: [("local".to_string(), available("file:///repo", "zsh")?)]
-            .into_iter()
-            .collect(),
+        environments: [(
+            LOCAL_ENVIRONMENT_ID.to_string(),
+            available("file:///repo", "zsh")?,
+        )]
+        .into_iter()
+        .collect(),
         ..Default::default()
     };
 
     assert_eq!(None, current.render_diff(&previous));
+    Ok(())
+}
+
+#[test]
+fn removed_legacy_environment_renders_unavailable() -> Result<()> {
+    let previous = EnvironmentsState {
+        environments: [(
+            LOCAL_ENVIRONMENT_ID.to_string(),
+            available("file:///repo", "bash")?,
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        Some(user_message(
+            r#"<environment_context>
+  <environments>
+    <environment id="local" status="unavailable" />
+  </environments>
+</environment_context>"#,
+        )),
+        EnvironmentsState::default().render_diff(&previous),
+    );
     Ok(())
 }
 
