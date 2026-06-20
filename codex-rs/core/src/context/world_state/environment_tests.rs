@@ -3,6 +3,7 @@ use crate::context::world_state::WorldState;
 use anyhow::Result;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -29,6 +30,7 @@ fn renders_full_environment_state() -> Result<()> {
             &[],
         )),
         subagents: Some("task_1: running\ntask_2: completed".to_string()),
+        turn_context_values_comparable: true,
     };
 
     let mut world_state = WorldState::default();
@@ -111,7 +113,7 @@ fn renders_only_changed_environments() -> Result<()> {
 }
 
 #[test]
-fn unchanged_environments_do_not_render_a_diff() -> Result<()> {
+fn persisted_turn_context_values_render_a_diff() -> Result<()> {
     let environments = EnvironmentsState {
         environments: [("laptop".to_string(), available("file:///repo", "zsh")?)]
             .into_iter()
@@ -130,7 +132,7 @@ fn unchanged_environments_do_not_render_a_diff() -> Result<()> {
             &PermissionProfile::Disabled,
             &[],
         )),
-        subagents: Some("task_1: running".to_string()),
+        turn_context_values_comparable: true,
         ..environments.clone()
     });
     let mut current = WorldState::default();
@@ -141,12 +143,27 @@ fn unchanged_environments_do_not_render_a_diff() -> Result<()> {
             vec!["new.example.com".to_string()],
             vec!["blocked.example.com".to_string()],
         )),
-        filesystem: None,
-        subagents: Some("task_1: completed".to_string()),
+        filesystem: Some(FileSystemContext::from_permission_profile(
+            &PermissionProfile::External {
+                network: NetworkSandboxPolicy::Restricted,
+            },
+            &[],
+        )),
+        turn_context_values_comparable: true,
         ..environments
     });
 
-    assert_eq!(Vec::<ResponseItem>::new(), current.render_diff(&previous));
+    assert_eq!(
+        vec![user_message(
+            r#"<environment_context>
+  <current_date>2026-06-20</current_date>
+  <timezone>America/Los_Angeles</timezone>
+  <network enabled="true"><allowed>new.example.com</allowed><denied>blocked.example.com</denied></network>
+  <filesystem><permission_profile type="external"><file_system type="external" /></permission_profile></filesystem>
+</environment_context>"#,
+        )],
+        current.render_diff(&previous),
+    );
     Ok(())
 }
 
@@ -189,6 +206,7 @@ fn loaded_environment_state_produces_no_diff_with_live_state() -> Result<()> {
             &[],
         )),
         subagents: Some("task_1: running".to_string()),
+        turn_context_values_comparable: true,
     };
 
     let stored = serde_json::to_value(&live_state)?;

@@ -28,6 +28,10 @@ pub(crate) struct EnvironmentsState {
     filesystem: Option<FileSystemContext>,
     #[serde(skip)]
     subagents: Option<String>,
+    /// Whether the render-only values came from a `TurnContext` or persisted
+    /// `TurnContextItem` and can participate in turn-to-turn comparison.
+    #[serde(skip)]
+    turn_context_values_comparable: bool,
 }
 
 impl PartialEq for EnvironmentsState {
@@ -67,6 +71,7 @@ impl EnvironmentsState {
                 &turn_context.config.effective_workspace_roots(),
             )),
             subagents: None,
+            turn_context_values_comparable: true,
         };
         for environment in &turn_context.environments.starting {
             state
@@ -101,6 +106,7 @@ impl EnvironmentsState {
                 &workspace_roots_from_turn_context_item(turn_context_item),
             )),
             subagents: None,
+            turn_context_values_comparable: true,
         }
     }
 
@@ -140,8 +146,15 @@ impl WorldStateSection for EnvironmentsState {
     fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
         let legacy_single =
             is_legacy_single(&self.environments) && previous.environments.len() <= 1;
+        let turn_context_values_changed = self.turn_context_values_comparable
+            && previous.turn_context_values_comparable
+            && (self.current_date != previous.current_date
+                || self.timezone != previous.timezone
+                || self.network != previous.network
+                || self.filesystem != previous.filesystem);
         if legacy_single
             && self.environments.values().next() == previous.environments.values().next()
+            && !turn_context_values_changed
         {
             return None;
         }
@@ -160,7 +173,7 @@ impl WorldStateSection for EnvironmentsState {
                     .map(|id| (id.clone(), EnvironmentUpdate::Unavailable)),
             );
         }
-        (!updates.is_empty()).then(|| {
+        (!updates.is_empty() || turn_context_values_changed).then(|| {
             ContextualUserFragment::into(RenderedEnvironments {
                 updates,
                 legacy_single,
