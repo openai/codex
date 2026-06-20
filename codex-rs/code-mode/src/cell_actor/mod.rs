@@ -22,23 +22,19 @@ use self::conversions::output_item;
 use self::conversions::runtime_request;
 use self::types::CellCommand;
 pub(crate) use self::types::CellError;
-pub(crate) use self::types::CellEvent;
 pub(crate) use self::types::CellEventFuture;
 pub(crate) use self::types::CellHandle;
 pub(crate) use self::types::CellHost;
-pub(crate) use self::types::CellImageDetail;
-pub(crate) use self::types::CellOutputItem;
-pub(crate) use self::types::CellRequest;
 pub(crate) use self::types::CellToolCall;
-pub(crate) use self::types::CellToolDefinition;
-pub(crate) use self::types::CellToolKind;
-pub(crate) use self::types::CellToolName;
-pub(crate) use self::types::ObserveMode;
 use crate::runtime::PendingRuntimeMode;
 use crate::runtime::RuntimeCommand;
 use crate::runtime::RuntimeControlCommand;
 use crate::runtime::RuntimeEvent;
 use crate::runtime::spawn_runtime;
+use crate::session_runtime::CellEvent;
+use crate::session_runtime::CreateCellRequest as CellRequest;
+use crate::session_runtime::ObserveMode;
+use crate::session_runtime::ToolName as CellToolName;
 
 pub(crate) struct CellActor;
 
