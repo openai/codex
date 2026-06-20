@@ -6,10 +6,10 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use uuid::Uuid;
 
 use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
+use super::auto_compact_window::AutoCompactWindowIds;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
@@ -152,15 +152,19 @@ impl SessionState {
         self.auto_compact_window.window_number()
     }
 
-    pub(crate) fn auto_compact_window_id(&self) -> Uuid {
-        self.auto_compact_window.window_id()
+    pub(crate) fn auto_compact_window_ids(&self) -> AutoCompactWindowIds {
+        self.auto_compact_window.ids()
     }
 
-    pub(crate) fn restore_auto_compact_window(&mut self, window_number: u64, window_id: Uuid) {
-        self.auto_compact_window.restore(window_number, window_id);
+    pub(crate) fn restore_auto_compact_window(
+        &mut self,
+        window_number: u64,
+        ids: AutoCompactWindowIds,
+    ) {
+        self.auto_compact_window.restore(window_number, ids);
     }
 
-    pub(crate) fn advance_auto_compact_window(&mut self) -> (u64, Uuid) {
+    pub(crate) fn advance_auto_compact_window(&mut self) -> (u64, AutoCompactWindowIds) {
         self.auto_compact_window.advance()
     }
 
@@ -168,7 +172,9 @@ impl SessionState {
         self.auto_compact_window.request_new_context_window();
     }
 
-    pub(crate) fn start_new_context_window_if_requested(&mut self) -> Option<(u64, Uuid)> {
+    pub(crate) fn start_new_context_window_if_requested(
+        &mut self,
+    ) -> Option<(u64, AutoCompactWindowIds)> {
         if !self.auto_compact_window.take_new_context_window_request() {
             return None;
         }

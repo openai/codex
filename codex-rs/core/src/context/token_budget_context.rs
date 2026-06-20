@@ -5,14 +5,24 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TokenBudgetContext {
     thread_id: ThreadId,
+    first_window_id: Uuid,
+    previous_window_id: Option<Uuid>,
     window_id: Uuid,
     tokens_left: i64,
 }
 
 impl TokenBudgetContext {
-    pub(crate) fn new(thread_id: ThreadId, window_id: Uuid, tokens_left: i64) -> Self {
+    pub(crate) fn new(
+        thread_id: ThreadId,
+        first_window_id: Uuid,
+        previous_window_id: Option<Uuid>,
+        window_id: Uuid,
+        tokens_left: i64,
+    ) -> Self {
         Self {
             thread_id,
+            first_window_id,
+            previous_window_id,
             window_id,
             tokens_left,
         }
@@ -34,10 +44,14 @@ impl ContextualUserFragment for TokenBudgetContext {
 
     fn body(&self) -> String {
         let thread_id = self.thread_id;
+        let first_window_id = self.first_window_id;
+        let previous_window_id = self
+            .previous_window_id
+            .map_or_else(|| "none".to_string(), |window_id| window_id.to_string());
         let window_id = self.window_id;
         let tokens_left = self.tokens_left;
         format!(
-            "Thread id {thread_id}.\nCurrent context window id {window_id}.\nYou have {tokens_left} tokens left in this context window."
+            "Thread id {thread_id}.\nFirst context window id {first_window_id}.\nPrevious context window id {previous_window_id}.\nCurrent context window id {window_id}.\nYou have {tokens_left} tokens left in this context window."
         )
     }
 }
