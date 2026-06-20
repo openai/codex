@@ -3,6 +3,9 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ExtensionData;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::ImageGenerationItem;
@@ -30,6 +33,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_rollout::state_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use codex_utils_stream_parser::strip_proposed_plan_blocks;
 use futures::Future;
 use tracing::debug;
@@ -109,6 +113,7 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
 }
 
 async fn save_image_generation_result(
+    fs: &dyn ExecutorFileSystem,
     codex_home: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
@@ -121,9 +126,15 @@ async fn save_image_generation_result(
         })?;
     let path = image_generation_artifact_path(codex_home, session_id, call_id);
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        fs.create_directory(
+            &PathUri::from_abs_path(&parent),
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
     }
-    tokio::fs::write(&path, bytes).await?;
+    fs.write_file(&PathUri::from_abs_path(&path), bytes, /*sandbox*/ None)
+        .await?;
     Ok(path)
 }
 
@@ -135,6 +146,7 @@ pub(crate) async fn persist_image_generation_item(
     image_item.saved_path = None;
     let session_id = sess.thread_id.to_string();
     match save_image_generation_result(
+        LOCAL_FS.as_ref(),
         &turn_context.config.codex_home,
         &session_id,
         &image_item.id,
