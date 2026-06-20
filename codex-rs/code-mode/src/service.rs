@@ -74,8 +74,6 @@ impl CodeModeSessionDelegate for NoopCodeModeSessionDelegate {
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
     }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 #[derive(Default)]
@@ -112,8 +110,14 @@ impl CodeModeService {
     }
 
     pub fn with_delegate(delegate: Arc<dyn CodeModeSessionDelegate>) -> Self {
+        #[cfg(not(test))]
+        let runtime = Arc::new(SessionRuntime::new(Arc::new(ProtocolDelegate { delegate })));
+        #[cfg(test)]
+        let runtime = Arc::new(SessionRuntime::new_for_test(Arc::new(ProtocolDelegate {
+            delegate,
+        })));
         Self {
-            runtime: Arc::new(SessionRuntime::new(Arc::new(ProtocolDelegate { delegate }))),
+            runtime,
             observations: Mutex::new(HashMap::new()),
             #[cfg(test)]
             pending_generations: Mutex::new(HashMap::new()),
@@ -179,7 +183,7 @@ impl CodeModeService {
             .ok_or_else(|| "observation ended before producing a result".to_string())?
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     async fn begin_observe(
         &self,
         request: ObserveRequest,
@@ -397,10 +401,6 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
                 cancellation_token,
             )
             .await
-    }
-
-    fn cell_closed(&self, cell_id: &runtime::CellId) {
-        self.delegate.cell_closed(&protocol_cell_id(cell_id));
     }
 }
 

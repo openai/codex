@@ -9,30 +9,32 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use serde_json::Value as JsonValue;
+use sha2::Digest;
+use sha2::Sha256;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-pub(crate) use self::types::Cell;
-pub(crate) use self::types::CellEvent;
+pub use self::types::Cell;
+pub use self::types::CellEvent;
 pub(crate) use self::types::CellExecutionPolicy;
-pub(crate) use self::types::CellId;
-pub(crate) use self::types::CellKind;
-pub(crate) use self::types::CreateCellRequest;
-pub(crate) use self::types::Error;
-pub(crate) use self::types::ImageDetail;
-pub(crate) use self::types::NestedToolCall;
-pub(crate) use self::types::OutputItem;
-pub(crate) use self::types::PausableCell;
-pub(crate) use self::types::PausableCellEvent;
-pub(crate) use self::types::PendingFrontier;
-pub(crate) use self::types::PendingGeneration;
-pub(crate) use self::types::ResumeOutcome;
-pub(crate) use self::types::SessionRuntimeDelegate;
-pub(crate) use self::types::ToolDefinition;
-pub(crate) use self::types::ToolKind;
-pub(crate) use self::types::ToolName;
+pub use self::types::CellId;
+pub use self::types::CellKind;
+pub use self::types::CreateCellRequest;
+pub use self::types::Error;
+pub use self::types::ImageDetail;
+pub use self::types::NestedToolCall;
+pub use self::types::OutputItem;
+pub use self::types::PausableCell;
+pub use self::types::PausableCellEvent;
+pub use self::types::PendingFrontier;
+pub use self::types::PendingGeneration;
+pub use self::types::ResumeOutcome;
+pub use self::types::SessionRuntimeDelegate;
+pub use self::types::ToolDefinition;
+pub use self::types::ToolKind;
+pub use self::types::ToolName;
 use crate::cell_actor::ActorEvent;
 use crate::cell_actor::CellActor;
 use crate::cell_actor::CellError;
@@ -45,12 +47,14 @@ use crate::cell_actor::CompletionCommit;
 use crate::cell_actor::ObserveMode;
 
 type RuntimeEventFuture = Pin<Box<dyn Future<Output = Result<CellEvent, Error>> + Send + 'static>>;
-#[allow(dead_code)]
 type PausableRuntimeEventFuture =
     Pin<Box<dyn Future<Output = Result<PausableCellEvent, Error>> + Send + 'static>>;
 
+const CELL_ID_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
+const CELL_ID_LENGTH: usize = 16;
+
 /// Owns all cells and shared state for one transport-neutral code-mode session.
-pub(crate) struct SessionRuntime<D: SessionRuntimeDelegate> {
+pub struct SessionRuntime<D: SessionRuntimeDelegate> {
     inner: Arc<Inner<D>>,
 }
 
@@ -61,6 +65,7 @@ struct Inner<D: SessionRuntimeDelegate> {
     cell_tasks: TaskTracker,
     shutdown_token: CancellationToken,
     delegate: Arc<D>,
+    cell_id_namespace: CellIdNamespace,
     next_cell_id: AtomicU64,
 }
 
@@ -91,8 +96,23 @@ impl RegisteredCell {
     }
 }
 
+enum CellIdNamespace {
+    Runtime(uuid::Uuid),
+    #[cfg(test)]
+    Unscoped,
+}
+
 impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
-    pub(crate) fn new(delegate: Arc<D>) -> Self {
+    pub fn new(delegate: Arc<D>) -> Self {
+        Self::with_cell_id_namespace(delegate, CellIdNamespace::Runtime(uuid::Uuid::new_v4()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(delegate: Arc<D>) -> Self {
+        Self::with_cell_id_namespace(delegate, CellIdNamespace::Unscoped)
+    }
+
+    fn with_cell_id_namespace(delegate: Arc<D>, cell_id_namespace: CellIdNamespace) -> Self {
         Self {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
@@ -101,16 +121,17 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
                 cell_tasks: TaskTracker::new(),
                 shutdown_token: CancellationToken::new(),
                 delegate,
+                cell_id_namespace,
                 next_cell_id: AtomicU64::new(1),
             }),
         }
     }
 
-    pub(crate) fn is_alive(&self) -> bool {
+    pub fn is_alive(&self) -> bool {
         !self.inner.shutdown_token.is_cancelled()
     }
 
-    pub(crate) async fn create_cell(&self, request: CreateCellRequest) -> Result<Cell, Error> {
+    pub async fn create_cell(&self, request: CreateCellRequest) -> Result<Cell, Error> {
         let id = self
             .create_idempotent_cell(
                 request,
@@ -121,8 +142,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         Ok(Cell::new(id))
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn create_pausable_cell(
+    pub async fn create_pausable_cell(
         &self,
         request: CreateCellRequest,
     ) -> Result<PausableCell, Error> {
@@ -136,16 +156,11 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         Ok(PausableCell::new(id))
     }
 
-    #[cfg(test)]
-    pub(crate) async fn wait(
-        &self,
-        cell: &Cell,
-        yield_after: Duration,
-    ) -> Result<CellEvent, Error> {
+    pub async fn wait(&self, cell: &Cell, yield_after: Duration) -> Result<CellEvent, Error> {
         self.begin_wait(cell, yield_after).await?.event().await
     }
 
-    pub(crate) async fn begin_wait(
+    pub async fn begin_wait(
         &self,
         cell: &Cell,
         yield_after: Duration,
@@ -159,11 +174,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         })
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn wait_to_pending(
-        &self,
-        cell: &PausableCell,
-    ) -> Result<PausableCellEvent, Error> {
+    pub async fn wait_to_pending(&self, cell: &PausableCell) -> Result<PausableCellEvent, Error> {
         let handle = self.pausable_handle(cell.id()).await?;
         map_pausable_event(
             cell.id().clone(),
@@ -172,8 +183,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         .await
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn resume(
+    pub async fn resume(
         &self,
         cell: &PausableCell,
         generation: PendingGeneration,
@@ -196,7 +206,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         Ok(PausableCell::new(cell_id.clone()))
     }
 
-    pub(crate) async fn terminate(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
+    pub async fn terminate(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
         let cell = self
             .inner
             .cells
@@ -212,7 +222,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             .map_err(|error| actor_error(cell_id, error))
     }
 
-    pub(crate) async fn shutdown(&self) -> Result<(), Error> {
+    pub async fn shutdown(&self) -> Result<(), Error> {
         self.begin_shutdown();
         // Taking the registry lock ensures every cell that passed the shutdown
         // check has registered its actor with the tracker before we wait.
@@ -224,12 +234,29 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     }
 
     fn allocate_cell_id(&self) -> CellId {
-        CellId::new(
-            self.inner
-                .next_cell_id
-                .fetch_add(1, Ordering::Relaxed)
-                .to_string(),
-        )
+        let sequence = self.inner.next_cell_id.fetch_add(1, Ordering::Relaxed);
+        let value = match &self.inner.cell_id_namespace {
+            CellIdNamespace::Runtime(runtime_id) => {
+                let digest = Sha256::new()
+                    .chain_update(runtime_id.as_bytes())
+                    .chain_update(sequence.to_be_bytes())
+                    .finalize();
+                let mut encoded = String::with_capacity(CELL_ID_LENGTH);
+                for chunk in digest[..10].chunks_exact(5) {
+                    let chunk_bits = chunk
+                        .iter()
+                        .fold(0_u64, |value, byte| (value << 8) | u64::from(*byte));
+                    for shift in (0..40).step_by(5).rev() {
+                        let index = ((chunk_bits >> shift) & 0x1f) as usize;
+                        encoded.push(char::from(CELL_ID_ALPHABET[index]));
+                    }
+                }
+                encoded
+            }
+            #[cfg(test)]
+            CellIdNamespace::Unscoped => sequence.to_string(),
+        };
+        CellId::new(value)
     }
 
     async fn start_cell(
@@ -303,7 +330,6 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         self.handle_for_kind(cell_id, CellKind::Continuing).await
     }
 
-    #[allow(dead_code)]
     async fn pausable_handle(&self, cell_id: &CellId) -> Result<CellHandle, Error> {
         self.handle_for_kind(cell_id, CellKind::Pausable).await
     }
@@ -341,12 +367,12 @@ impl<D: SessionRuntimeDelegate> Drop for SessionRuntime<D> {
 }
 
 /// An admitted cell event that has not reached its requested frontier yet.
-pub(crate) struct PendingEvent {
+pub struct PendingEvent {
     event: RuntimeEventFuture,
 }
 
 impl PendingEvent {
-    pub(crate) async fn event(self) -> Result<CellEvent, Error> {
+    pub async fn event(self) -> Result<CellEvent, Error> {
         self.event.await
     }
 }
@@ -411,7 +437,6 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
 
     async fn closed(&self) {
         self.inner.cells.lock().await.remove(&self.cell_id);
-        self.inner.delegate.cell_closed(&self.cell_id);
     }
 }
 
@@ -434,7 +459,6 @@ fn map_cell_event(cell_id: CellId, event: CellEventFuture) -> RuntimeEventFuture
     })
 }
 
-#[allow(dead_code)]
 fn map_pausable_event(cell_id: CellId, event: CellEventFuture) -> PausableRuntimeEventFuture {
     Box::pin(async move {
         match event.await.map_err(|error| actor_error(&cell_id, error))? {

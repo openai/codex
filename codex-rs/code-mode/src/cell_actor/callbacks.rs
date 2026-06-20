@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -7,6 +8,8 @@ use tracing::warn;
 use super::CellHost;
 use super::CellToolCall;
 use crate::runtime::RuntimeCommand;
+
+const CALLBACK_CANCELLATION_GRACE: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy)]
 pub(super) enum CallbackCompletion {
@@ -53,10 +56,13 @@ pub(super) async fn finish_callbacks(
 ) {
     if matches!(completion, CallbackCompletion::Cancel) {
         cancellation_token.cancel();
+        finish_cancelled_tasks(notification_tasks, "notification").await;
+        finish_cancelled_tasks(tool_tasks, "tool").await;
+        return;
     }
     drain_tasks(notification_tasks, "notification").await;
     cancellation_token.cancel();
-    drain_tasks(tool_tasks, "tool").await;
+    finish_cancelled_tasks(tool_tasks, "tool").await;
 }
 
 pub(super) fn log_task_result(
@@ -73,5 +79,19 @@ pub(super) fn log_task_result(
 async fn drain_tasks(tasks: &mut JoinSet<()>, description: &str) {
     while let Some(result) = tasks.join_next().await {
         log_task_result(Some(result), description);
+    }
+}
+
+async fn abort_tasks(tasks: &mut JoinSet<()>, description: &str) {
+    tasks.abort_all();
+    drain_tasks(tasks, description).await;
+}
+
+async fn finish_cancelled_tasks(tasks: &mut JoinSet<()>, description: &str) {
+    if tokio::time::timeout(CALLBACK_CANCELLATION_GRACE, drain_tasks(tasks, description))
+        .await
+        .is_err()
+    {
+        abort_tasks(tasks, description).await;
     }
 }

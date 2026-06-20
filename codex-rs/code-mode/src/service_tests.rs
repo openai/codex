@@ -1,4 +1,6 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use super::CellId;
@@ -11,9 +13,17 @@ use super::ObserveRequest;
 use super::ObserveToPendingOutcome;
 use super::ObserveToPendingRequest;
 use super::PendingOutcome;
+use super::ProtocolDelegate;
 use super::RuntimeResponse;
 use super::TerminateOutcome;
 use super::ToolInvocationFuture;
+use super::missing_cell_response;
+use super::observe_outcome;
+use super::pending_outcome;
+use super::protocol_cell_id;
+use super::runtime;
+use super::runtime_cell_id;
+use super::runtime_request;
 use crate::CodeModeToolKind;
 use crate::CreateCellRequest;
 use crate::FunctionCallOutputContentItem;
@@ -21,6 +31,7 @@ use crate::ToolDefinition;
 use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
+use serde_json::json;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -58,8 +69,88 @@ impl CodeModeSessionDelegate for ReleasableToolDelegate {
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
     }
+}
 
-    fn cell_closed(&self, _cell_id: &CellId) {}
+#[derive(Debug, PartialEq)]
+enum RecordedDelegateCall {
+    Tool {
+        invocation: CodeModeNestedToolCall,
+        cancellation_requested: bool,
+    },
+    Notification {
+        call_id: String,
+        cell_id: CellId,
+        text: String,
+        cancellation_requested: bool,
+    },
+}
+
+struct RecordingDelegate {
+    calls: Mutex<Vec<RecordedDelegateCall>>,
+    tool_results: Mutex<VecDeque<Result<JsonValue, String>>>,
+    notification_results: Mutex<VecDeque<Result<(), String>>>,
+}
+
+impl RecordingDelegate {
+    fn new(
+        tool_results: Vec<Result<JsonValue, String>>,
+        notification_results: Vec<Result<(), String>>,
+    ) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            tool_results: Mutex::new(tool_results.into()),
+            notification_results: Mutex::new(notification_results.into()),
+        }
+    }
+
+    fn take_calls(&self) -> Vec<RecordedDelegateCall> {
+        std::mem::take(&mut *self.calls.lock().unwrap())
+    }
+}
+
+impl CodeModeSessionDelegate for RecordingDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        invocation: CodeModeNestedToolCall,
+        cancellation_token: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        Box::pin(async move {
+            self.calls.lock().unwrap().push(RecordedDelegateCall::Tool {
+                invocation,
+                cancellation_requested: cancellation_token.is_cancelled(),
+            });
+            self.tool_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("test must provide one result per tool call")
+        })
+    }
+
+    fn notify<'a>(
+        &'a self,
+        call_id: String,
+        cell_id: CellId,
+        text: String,
+        cancellation_token: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        Box::pin(async move {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(RecordedDelegateCall::Notification {
+                    call_id,
+                    cell_id,
+                    text,
+                    cancellation_requested: cancellation_token.is_cancelled(),
+                });
+            self.notification_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("test must provide one result per notification")
+        })
+    }
 }
 
 fn execute_request(source: &str) -> CreateCellRequest {
@@ -996,6 +1087,306 @@ async fn observe_reports_missing_cell_separately_from_runtime_results() {
         response,
         ObserveOutcome::Missing {
             cell_id: cell_id("missing"),
+        }
+    );
+}
+
+#[test]
+fn protocol_requests_map_to_runtime_requests_field_for_field() {
+    let request = CreateCellRequest {
+        idempotency_key: "thread-3:response-call-7".to_string(),
+        tool_call_id: "response-call-7".to_string(),
+        enabled_tools: vec![
+            ToolDefinition {
+                name: "mcp__search__query".to_string(),
+                tool_name: ToolName::namespaced("search", "query"),
+                description: "Search indexed documents".to_string(),
+                kind: CodeModeToolKind::Function,
+                input_schema: Some(json!({"type": "object"})),
+                output_schema: None,
+            },
+            ToolDefinition {
+                name: "apply_patch".to_string(),
+                tool_name: ToolName::plain("apply_patch"),
+                description: "Apply a patch".to_string(),
+                kind: CodeModeToolKind::Freeform,
+                input_schema: None,
+                output_schema: Some(json!({"type": "string"})),
+            },
+        ],
+        source: "await tools.mcp__search__query({ q: 'rust' });".to_string(),
+    };
+
+    assert_eq!(
+        runtime_request(request),
+        runtime::CreateCellRequest {
+            idempotency_key: "thread-3:response-call-7".to_string(),
+            tool_call_id: "response-call-7".to_string(),
+            enabled_tools: vec![
+                runtime::ToolDefinition {
+                    name: "mcp__search__query".to_string(),
+                    tool_name: runtime::ToolName {
+                        name: "query".to_string(),
+                        namespace: Some("search".to_string()),
+                    },
+                    description: "Search indexed documents".to_string(),
+                    kind: runtime::ToolKind::Function,
+                },
+                runtime::ToolDefinition {
+                    name: "apply_patch".to_string(),
+                    tool_name: runtime::ToolName {
+                        name: "apply_patch".to_string(),
+                        namespace: None,
+                    },
+                    description: "Apply a patch".to_string(),
+                    kind: runtime::ToolKind::Freeform,
+                },
+            ],
+            source: "await tools.mcp__search__query({ q: 'rust' });".to_string(),
+        }
+    );
+
+    let protocol_id = cell_id("cell-a7");
+    assert_eq!(
+        protocol_cell_id(&runtime_cell_id(&protocol_id)),
+        protocol_id
+    );
+}
+
+#[tokio::test]
+async fn protocol_delegate_maps_callbacks_cancellation_and_errors_field_for_field() {
+    let delegate = Arc::new(RecordingDelegate::new(
+        vec![
+            Ok(json!({"matches": 3})),
+            Err("freeform tool failed".to_string()),
+        ],
+        vec![Err("notification failed".to_string())],
+    ));
+    let adapter = ProtocolDelegate {
+        delegate: delegate.clone(),
+    };
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+
+    assert_eq!(
+        runtime::SessionRuntimeDelegate::invoke_tool(
+            &adapter,
+            runtime::NestedToolCall {
+                cell_id: runtime::CellId::new("cell-a7"),
+                runtime_tool_call_id: "runtime-call-1".to_string(),
+                tool_name: runtime::ToolName {
+                    name: "query".to_string(),
+                    namespace: Some("search".to_string()),
+                },
+                tool_kind: runtime::ToolKind::Function,
+                input: Some(json!({"q": "rust"})),
+            },
+            CancellationToken::new(),
+        )
+        .await,
+        Ok(json!({"matches": 3}))
+    );
+    assert_eq!(
+        runtime::SessionRuntimeDelegate::invoke_tool(
+            &adapter,
+            runtime::NestedToolCall {
+                cell_id: runtime::CellId::new("cell-b9"),
+                runtime_tool_call_id: "runtime-call-2".to_string(),
+                tool_name: runtime::ToolName {
+                    name: "apply_patch".to_string(),
+                    namespace: None,
+                },
+                tool_kind: runtime::ToolKind::Freeform,
+                input: None,
+            },
+            cancelled.clone(),
+        )
+        .await,
+        Err("freeform tool failed".to_string())
+    );
+    assert_eq!(
+        runtime::SessionRuntimeDelegate::notify(
+            &adapter,
+            "notification-1".to_string(),
+            runtime::CellId::new("cell-c3"),
+            "progress".to_string(),
+            cancelled,
+        )
+        .await,
+        Err("notification failed".to_string())
+    );
+
+    assert_eq!(
+        delegate.take_calls(),
+        vec![
+            RecordedDelegateCall::Tool {
+                invocation: CodeModeNestedToolCall {
+                    cell_id: cell_id("cell-a7"),
+                    runtime_tool_call_id: "runtime-call-1".to_string(),
+                    tool_name: ToolName::namespaced("search", "query"),
+                    tool_kind: CodeModeToolKind::Function,
+                    input: Some(json!({"q": "rust"})),
+                },
+                cancellation_requested: false,
+            },
+            RecordedDelegateCall::Tool {
+                invocation: CodeModeNestedToolCall {
+                    cell_id: cell_id("cell-b9"),
+                    runtime_tool_call_id: "runtime-call-2".to_string(),
+                    tool_name: ToolName::plain("apply_patch"),
+                    tool_kind: CodeModeToolKind::Freeform,
+                    input: None,
+                },
+                cancellation_requested: true,
+            },
+            RecordedDelegateCall::Notification {
+                call_id: "notification-1".to_string(),
+                cell_id: cell_id("cell-c3"),
+                text: "progress".to_string(),
+                cancellation_requested: true,
+            },
+        ]
+    );
+}
+
+#[test]
+fn runtime_events_map_to_protocol_outcomes_field_for_field() {
+    let output_items = vec![
+        runtime::OutputItem::Text {
+            text: "before".to_string(),
+        },
+        runtime::OutputItem::Image {
+            image_url: "data:image/png;base64,auto".to_string(),
+            detail: Some(runtime::ImageDetail::Auto),
+        },
+        runtime::OutputItem::Image {
+            image_url: "data:image/png;base64,low".to_string(),
+            detail: Some(runtime::ImageDetail::Low),
+        },
+        runtime::OutputItem::Image {
+            image_url: "data:image/png;base64,high".to_string(),
+            detail: Some(runtime::ImageDetail::High),
+        },
+        runtime::OutputItem::Image {
+            image_url: "data:image/png;base64,original".to_string(),
+            detail: Some(runtime::ImageDetail::Original),
+        },
+        runtime::OutputItem::Image {
+            image_url: "data:image/png;base64,default".to_string(),
+            detail: None,
+        },
+    ];
+    let expected_output_items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "before".to_string(),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "data:image/png;base64,auto".to_string(),
+            detail: Some(crate::ImageDetail::Auto),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "data:image/png;base64,low".to_string(),
+            detail: Some(crate::ImageDetail::Low),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "data:image/png;base64,high".to_string(),
+            detail: Some(crate::ImageDetail::High),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "data:image/png;base64,original".to_string(),
+            detail: Some(crate::ImageDetail::Original),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "data:image/png;base64,default".to_string(),
+            detail: None,
+        },
+    ];
+
+    assert_eq!(
+        observe_outcome(
+            &cell_id("cell-a7"),
+            runtime::CellEvent::Yielded {
+                content_items: output_items,
+            },
+        ),
+        ObserveOutcome::Yielded {
+            cell_id: cell_id("cell-a7"),
+            content_items: expected_output_items,
+        }
+    );
+    assert_eq!(
+        observe_outcome(
+            &cell_id("cell-b9"),
+            runtime::CellEvent::Completed {
+                content_items: vec![runtime::OutputItem::Text {
+                    text: "failed".to_string(),
+                }],
+                error_text: Some("tool failed".to_string()),
+            },
+        ),
+        ObserveOutcome::Completed {
+            cell_id: cell_id("cell-b9"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "failed".to_string(),
+            }],
+            error_text: Some("tool failed".to_string()),
+        }
+    );
+    assert_eq!(
+        observe_outcome(
+            &cell_id("cell-c3"),
+            runtime::CellEvent::Terminated {
+                content_items: vec![runtime::OutputItem::Text {
+                    text: "partial".to_string(),
+                }],
+            },
+        ),
+        ObserveOutcome::Terminated {
+            cell_id: cell_id("cell-c3"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "partial".to_string(),
+            }],
+        }
+    );
+    assert_eq!(
+        pending_outcome(
+            &cell_id("cell-d4"),
+            runtime::PausableCellEvent::Pending(runtime::PendingFrontier {
+                generation: runtime::PendingGeneration::new(/*value*/ 1),
+                content_items: vec![runtime::OutputItem::Text {
+                    text: "waiting".to_string(),
+                }],
+                pending_tool_call_ids: vec!["runtime-call-1".to_string()],
+            }),
+        ),
+        Ok(PendingOutcome::Pending {
+            cell_id: cell_id("cell-d4"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "waiting".to_string(),
+            }],
+            pending_tool_call_ids: vec!["runtime-call-1".to_string()],
+        })
+    );
+    assert_eq!(
+        pending_outcome(
+            &cell_id("cell-e5"),
+            runtime::PausableCellEvent::Completed {
+                content_items: Vec::new(),
+                error_text: None,
+            },
+        ),
+        Ok(PendingOutcome::Completed(RuntimeResponse::Result {
+            cell_id: cell_id("cell-e5"),
+            content_items: Vec::new(),
+            error_text: None,
+        }))
+    );
+    assert_eq!(
+        missing_cell_response(cell_id("missing")),
+        RuntimeResponse::Result {
+            cell_id: cell_id("missing"),
+            content_items: Vec::new(),
+            error_text: Some("exec cell missing not found".to_string()),
         }
     );
 }

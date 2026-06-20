@@ -26,6 +26,10 @@ struct BlockingToolDelegate {
     release: Arc<Semaphore>,
 }
 
+struct NonCooperativeToolDelegate {
+    invocations_tx: mpsc::UnboundedSender<()>,
+}
+
 impl SessionRuntimeDelegate for RecordingDelegate {
     async fn invoke_tool(
         &self,
@@ -44,8 +48,6 @@ impl SessionRuntimeDelegate for RecordingDelegate {
     ) -> Result<(), String> {
         Ok(())
     }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 impl SessionRuntimeDelegate for ImmediateToolDelegate {
@@ -67,8 +69,6 @@ impl SessionRuntimeDelegate for ImmediateToolDelegate {
     ) -> Result<(), String> {
         Ok(())
     }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 impl SessionRuntimeDelegate for BlockingToolDelegate {
@@ -95,8 +95,27 @@ impl SessionRuntimeDelegate for BlockingToolDelegate {
     ) -> Result<(), String> {
         Ok(())
     }
+}
 
-    fn cell_closed(&self, _cell_id: &CellId) {}
+impl SessionRuntimeDelegate for NonCooperativeToolDelegate {
+    async fn invoke_tool(
+        &self,
+        _invocation: NestedToolCall,
+        _cancellation_token: CancellationToken,
+    ) -> Result<JsonValue, String> {
+        let _ = self.invocations_tx.send(());
+        std::future::pending().await
+    }
+
+    async fn notify(
+        &self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 fn tool_definition(name: &str) -> ToolDefinition {
@@ -666,7 +685,6 @@ async fn drop_terminates_cells_when_the_registry_is_locked() {
         .create_cell(execute_request("while (true) {}"))
         .await
         .unwrap();
-    assert_eq!(cell.id(), &CellId::new("1"));
     assert_eq!(
         runtime
             .wait(&cell, Duration::from_millis(/*millis*/ 1))
@@ -685,4 +703,87 @@ async fn drop_terminates_cells_when_the_registry_is_locked() {
         .await
         .unwrap();
     assert!(inner.cell_tasks.is_empty());
+}
+
+#[tokio::test]
+async fn termination_aborts_a_non_cooperative_tool_callback() {
+    let (invocations_tx, mut invocations_rx) = mpsc::unbounded_channel();
+    let runtime = SessionRuntime::new(Arc::new(NonCooperativeToolDelegate { invocations_tx }));
+    let cell = runtime
+        .create_cell(CreateCellRequest {
+            idempotency_key: "non-cooperative-termination".to_string(),
+            tool_call_id: "call-1".to_string(),
+            enabled_tools: vec![tool_definition("blocked")],
+            source: "await tools.blocked({});".to_string(),
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), invocations_rx.recv())
+        .await
+        .expect("tool invocation timed out")
+        .expect("tool invocation channel closed");
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), runtime.terminate(cell.id()))
+            .await
+            .expect("termination waited for a non-cooperative callback"),
+        Ok(CellEvent::Terminated {
+            content_items: Vec::new(),
+        })
+    );
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_aborts_a_non_cooperative_tool_callback() {
+    let (invocations_tx, mut invocations_rx) = mpsc::unbounded_channel();
+    let runtime = SessionRuntime::new(Arc::new(NonCooperativeToolDelegate { invocations_tx }));
+    runtime
+        .create_cell(CreateCellRequest {
+            idempotency_key: "non-cooperative-shutdown".to_string(),
+            tool_call_id: "call-1".to_string(),
+            enabled_tools: vec![tool_definition("blocked")],
+            source: "await tools.blocked({});".to_string(),
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), invocations_rx.recv())
+        .await
+        .expect("tool invocation timed out")
+        .expect("tool invocation channel closed");
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), runtime.shutdown())
+            .await
+            .expect("shutdown waited for a non-cooperative callback"),
+        Ok(())
+    );
+}
+
+#[tokio::test]
+async fn cell_ids_are_unique_across_runtime_instances() {
+    let first_runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
+    let second_runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
+    let first_cell_id = first_runtime
+        .create_cell(execute_request("await new Promise(() => {});"))
+        .await
+        .unwrap();
+    let second_cell_id = second_runtime
+        .create_cell(execute_request("await new Promise(() => {});"))
+        .await
+        .unwrap();
+
+    assert_ne!(first_cell_id, second_cell_id);
+    for cell in [&first_cell_id, &second_cell_id] {
+        assert_eq!(cell.id().as_str().len(), CELL_ID_LENGTH);
+        assert!(
+            cell.id()
+                .as_str()
+                .bytes()
+                .all(|byte| CELL_ID_ALPHABET.contains(&byte))
+        );
+    }
+
+    first_runtime.shutdown().await.unwrap();
+    second_runtime.shutdown().await.unwrap();
 }
