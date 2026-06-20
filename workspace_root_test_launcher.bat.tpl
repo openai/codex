@@ -128,10 +128,12 @@ for %%R in ("%RUNFILES_DIR%" "%TEST_SRCDIR%") do (
   set "runfiles_root=%%~R"
   if defined runfiles_root (
     if exist "!runfiles_root!\!native_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\!native_logical_path!" & exit /b 0
+      set "resolved_runfile=!runfiles_root!\!native_logical_path!"
+      goto :resolve_runfile_found
     )
     if exist "!runfiles_root!\!native_workspace_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\!native_workspace_logical_path!" & exit /b 0
+      set "resolved_runfile=!runfiles_root!\!native_workspace_logical_path!"
+      goto :resolve_runfile_found
     )
   )
 )
@@ -150,31 +152,35 @@ if defined manifest if exist "%manifest%" (
   rem link exists, and never report success with an empty resolved path.
   for /f "usebackq tokens=1,* delims= " %%A in ("%manifest%") do (
     if "%%A"=="%logical_path%" (
-      if not "%%B"=="" (
-        endlocal & set "%~1=%%B" & exit /b 0
+      if not "%%B"=="" if exist "%%B" (
+        set "resolved_runfile=%%B"
+        goto :resolve_runfile_found
       )
       if exist "!native_logical_path!" (
-        for %%P in ("!native_logical_path!") do (
-          endlocal
-          set "%~1=%%~fP"
-          exit /b 0
-        )
+        set "resolved_runfile=!native_logical_path!"
+        goto :resolve_runfile_found
       )
     )
     if "%%A"=="%workspace_logical_path%" (
-      if not "%%B"=="" (
-        endlocal & set "%~1=%%B" & exit /b 0
+      if not "%%B"=="" if exist "%%B" (
+        set "resolved_runfile=%%B"
+        goto :resolve_runfile_found
       )
       if exist "!native_workspace_logical_path!" (
-        for %%P in ("!native_workspace_logical_path!") do (
-          endlocal
-          set "%~1=%%~fP"
-          exit /b 0
-        )
+        set "resolved_runfile=!native_workspace_logical_path!"
+        goto :resolve_runfile_found
       )
     )
   )
 )
 
+:resolve_runfile_not_found
 >&2 echo failed to resolve runfile: %logical_path%
 endlocal & exit /b 1
+
+:resolve_runfile_found
+if not defined resolved_runfile goto :resolve_runfile_not_found
+if not exist "!resolved_runfile!" goto :resolve_runfile_not_found
+for %%P in ("!resolved_runfile!") do set "resolved_runfile=%%~fP"
+if not defined resolved_runfile goto :resolve_runfile_not_found
+endlocal & set "%~1=%resolved_runfile%" & exit /b 0
