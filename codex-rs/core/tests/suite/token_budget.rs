@@ -144,7 +144,7 @@ async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
                 .expect("test config should allow token budget");
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
-                "mcp_history".to_string(),
+                "notes".to_string(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
@@ -176,7 +176,7 @@ async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
         })
         .build(&server)
         .await?;
-    wait_for_mcp_server(&test.codex, "mcp_history").await?;
+    wait_for_mcp_server(&test.codex, "notes").await?;
     let responses = mount_sse_sequence(
         &server,
         vec![sse(vec![
@@ -194,7 +194,7 @@ async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
     assert_eq!(token_budgets.len(), 1);
     let captures = assert_regex_match(
         &format!(
-            r"^<token_budget>\nThread id {thread_id}\.\nFirst context window id ([0-9a-f-]{{36}})\.\nPrevious context window id none\.\nCurrent context window id ([0-9a-f-]{{36}})\.\nmanual history hint for thread {thread_id}\nunstructured mcp_history/thread_hint fixture result\n</token_budget>$"
+            r"^<token_budget>\nThread id {thread_id}\.\nFirst context window id ([0-9a-f-]{{36}})\.\nPrevious context window id none\.\nCurrent context window id ([0-9a-f-]{{36}})\.\nmanual history hint for thread {thread_id}\nunstructured notes/thread_hint fixture result\n</token_budget>$"
         ),
         &token_budgets[0],
     );
@@ -205,7 +205,7 @@ async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
     assert!(
         !tool_names(&request)
             .iter()
-            .any(|name| name == "mcp__mcp_history__thread_hint"),
+            .any(|name| name == "mcp__notes__thread_hint"),
         "thread_hint should be hidden from model tool exposure"
     );
 

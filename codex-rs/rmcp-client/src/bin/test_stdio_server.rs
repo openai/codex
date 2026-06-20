@@ -569,9 +569,7 @@ impl ServerHandler for TestToolServer {
                     rmcp::model::Content::text(format!(
                         "manual history hint for thread {thread_id}"
                     )),
-                    rmcp::model::Content::text(
-                        "unstructured mcp_history/thread_hint fixture result",
-                    ),
+                    rmcp::model::Content::text("unstructured notes/thread_hint fixture result"),
                 ]))
             }
             "echo" | "echo-tool" => {

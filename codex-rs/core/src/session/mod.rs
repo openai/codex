@@ -3220,7 +3220,7 @@ impl Session {
         {
             let mcp_result = self
                 .call_tool(
-                    "mcp_history",
+                    "notes",
                     "thread_hint",
                     /*arguments*/ None,
                     Some(serde_json::json!({
