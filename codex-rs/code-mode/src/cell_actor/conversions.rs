@@ -1,5 +1,5 @@
 use codex_code_mode_protocol::CodeModeToolKind;
-use codex_code_mode_protocol::ExecuteRequest;
+use codex_code_mode_protocol::CreateCellRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
 use codex_code_mode_protocol::ToolDefinition;
@@ -10,8 +10,8 @@ use crate::session_runtime::ImageDetail as CellImageDetail;
 use crate::session_runtime::OutputItem as CellOutputItem;
 use crate::session_runtime::ToolKind as CellToolKind;
 
-pub(super) fn runtime_request(request: CellRequest) -> ExecuteRequest {
-    ExecuteRequest {
+pub(super) fn runtime_request(request: CellRequest) -> CreateCellRequest {
+    CreateCellRequest {
         tool_call_id: request.tool_call_id,
         enabled_tools: request
             .enabled_tools
@@ -32,8 +32,6 @@ pub(super) fn runtime_request(request: CellRequest) -> ExecuteRequest {
             })
             .collect(),
         source: request.source,
-        yield_time_ms: None,
-        max_output_tokens: None,
     }
 }
 

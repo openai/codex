@@ -31,6 +31,7 @@ pub(crate) enum CellExecutionPolicy {
     #[default]
     ContinueWhenUnblocked,
     /// Remain paused at a pending frontier until an explicit resume advances it.
+    #[allow(dead_code)]
     PauseAtPendingFrontier,
 }
 
@@ -52,10 +53,12 @@ impl Cell {
 
 /// A cell that remains paused at each pending frontier until explicitly resumed.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[allow(dead_code)]
 pub(crate) struct PausableCell {
     id: CellId,
 }
 
+#[allow(dead_code)]
 impl PausableCell {
     pub(super) fn new(id: CellId) -> Self {
         Self { id }
@@ -120,6 +123,7 @@ pub(crate) enum CellEvent {
 
 /// An observable lifecycle event for a pausable cell.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(dead_code)]
 pub(crate) enum PausableCellEvent {
     Pending(PendingFrontier),
     Completed {

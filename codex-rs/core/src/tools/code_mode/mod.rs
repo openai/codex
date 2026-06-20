@@ -63,6 +63,63 @@ pub(crate) struct CodeModeService {
     dispatch_broker: Arc<CodeModeDispatchBroker>,
 }
 
+struct InitialObservationGuard {
+    session: Arc<dyn CodeModeSession>,
+    dispatch_broker: Arc<CodeModeDispatchBroker>,
+    cell_id: Option<CellId>,
+    code_cell_trace: codex_rollout_trace::CodeCellTraceContext,
+}
+
+impl InitialObservationGuard {
+    fn new(
+        service: &CodeModeService,
+        cell_id: CellId,
+        code_cell_trace: codex_rollout_trace::CodeCellTraceContext,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            session: Arc::clone(service.session()?),
+            dispatch_broker: Arc::clone(&service.dispatch_broker),
+            cell_id: Some(cell_id),
+            code_cell_trace,
+        })
+    }
+
+    fn finish_with_error(&mut self, error_text: &str) {
+        let Some(cell_id) = self.cell_id.take() else {
+            return;
+        };
+        let response = RuntimeResponse::Result {
+            cell_id: cell_id.clone(),
+            content_items: Vec::new(),
+            error_text: Some(error_text.to_string()),
+        };
+        self.code_cell_trace.record_initial_response(&response);
+        self.code_cell_trace.record_ended(&response);
+        self.dispatch_broker.close_cell(&cell_id);
+
+        let session = Arc::clone(&self.session);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!("unable to terminate code-mode cell {cell_id}: no Tokio runtime");
+            return;
+        };
+        let _termination_task = runtime.spawn(async move {
+            if let Err(error) = session.terminate(cell_id.clone()).await {
+                tracing::warn!("failed to terminate code-mode cell {cell_id}: {error}");
+            }
+        });
+    }
+
+    fn disarm(&mut self) {
+        self.cell_id = None;
+    }
+}
+
+impl Drop for InitialObservationGuard {
+    fn drop(&mut self) {
+        self.finish_with_error("initial code-mode observation cancelled");
+    }
+}
+
 impl CodeModeService {
     pub(crate) fn new() -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
@@ -74,24 +131,24 @@ impl CodeModeService {
         }
     }
 
-    pub(crate) async fn execute(
+    pub(crate) async fn create_cell(
         &self,
-        request: codex_code_mode::ExecuteRequest,
-    ) -> Result<codex_code_mode::StartedCell, String> {
-        self.session()?.execute(request).await
+        request: codex_code_mode::CreateCellRequest,
+    ) -> Result<CellId, String> {
+        self.session()?.create_cell(request).await
     }
 
-    pub(crate) async fn wait(
+    pub(crate) async fn observe(
         &self,
-        request: codex_code_mode::WaitRequest,
-    ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session()?.wait(request).await
+        request: codex_code_mode::ObserveRequest,
+    ) -> Result<codex_code_mode::ObserveOutcome, String> {
+        self.session()?.observe(request).await
     }
 
     pub(crate) async fn terminate(
         &self,
         cell_id: CellId,
-    ) -> Result<codex_code_mode::WaitOutcome, String> {
+    ) -> Result<codex_code_mode::TerminateOutcome, String> {
         self.session()?.terminate(cell_id).await
     }
 
@@ -322,13 +379,67 @@ fn build_freeform_tool_payload(
 
 #[cfg(test)]
 mod tests {
+    use super::CodeModeDispatchBroker;
+    use super::InitialObservationGuard;
     use super::build_nested_tool_payload;
     use super::truncate_code_mode_result;
     use crate::tools::context::ToolPayload;
+    use codex_code_mode::CellId;
+    use codex_code_mode::CodeModeSession;
+    use codex_code_mode::CodeModeSessionResultFuture;
     use codex_code_mode::CodeModeToolKind;
+    use codex_code_mode::CreateCellRequest;
+    use codex_code_mode::ObserveOutcome;
+    use codex_code_mode::ObserveRequest;
+    use codex_code_mode::TerminateOutcome;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_tools::ToolName;
     use serde_json::json;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    struct RecordingCodeModeSession {
+        terminated_cells: Mutex<Vec<CellId>>,
+        termination: tokio::sync::Notify,
+    }
+
+    impl CodeModeSession for RecordingCodeModeSession {
+        fn is_alive(&self) -> bool {
+            true
+        }
+
+        fn create_cell<'a>(
+            &'a self,
+            _request: CreateCellRequest,
+        ) -> CodeModeSessionResultFuture<'a, CellId> {
+            Box::pin(async { panic!("unexpected cell creation") })
+        }
+
+        fn observe<'a>(
+            &'a self,
+            _request: ObserveRequest,
+        ) -> CodeModeSessionResultFuture<'a, ObserveOutcome> {
+            Box::pin(async { panic!("unexpected cell observation") })
+        }
+
+        fn terminate<'a>(
+            &'a self,
+            cell_id: CellId,
+        ) -> CodeModeSessionResultFuture<'a, TerminateOutcome> {
+            Box::pin(async move {
+                self.terminated_cells
+                    .lock()
+                    .expect("terminated-cell lock should not be poisoned")
+                    .push(cell_id.clone());
+                self.termination.notify_one();
+                Ok(TerminateOutcome::Missing { cell_id })
+            })
+        }
+
+        fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
 
     #[test]
     fn build_nested_tool_payload_uses_function_kind() {
@@ -380,6 +491,41 @@ mod tests {
                 )
                 .to_string(),
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_initial_observation_guard_terminates_the_cell() {
+        let session = Arc::new(RecordingCodeModeSession {
+            terminated_cells: Mutex::new(Vec::new()),
+            termination: tokio::sync::Notify::new(),
+        });
+        let session_trait: Arc<dyn CodeModeSession> = session.clone();
+        let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
+        let cell_id = CellId::new("cell-1".to_string());
+        dispatch_broker.mark_cell_ready_for_dispatch(&cell_id);
+        let code_cell_trace = codex_rollout_trace::ThreadTraceContext::disabled()
+            .code_cell_trace_context("turn-1", cell_id.as_str());
+
+        drop(InitialObservationGuard {
+            session: session_trait,
+            dispatch_broker,
+            cell_id: Some(cell_id.clone()),
+            code_cell_trace,
+        });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            session.termination.notified(),
+        )
+        .await
+        .expect("guard should schedule cell termination");
+        assert_eq!(
+            *session
+                .terminated_cells
+                .lock()
+                .expect("terminated-cell lock should not be poisoned"),
+            vec![cell_id]
         );
     }
 }

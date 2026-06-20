@@ -10,26 +10,45 @@ use codex_code_mode_protocol::CodeModeSessionProvider;
 use codex_code_mode_protocol::CodeModeSessionProviderFuture;
 use codex_code_mode_protocol::CodeModeSessionResultFuture;
 use codex_code_mode_protocol::CodeModeToolKind;
-use codex_code_mode_protocol::DEFAULT_EXEC_YIELD_TIME_MS;
-use codex_code_mode_protocol::ExecuteRequest;
-use codex_code_mode_protocol::ExecuteToPendingOutcome;
+use codex_code_mode_protocol::CreateCellRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
 use codex_code_mode_protocol::NotificationFuture;
+use codex_code_mode_protocol::ObserveOutcome;
+use codex_code_mode_protocol::ObserveRequest;
+#[cfg(test)]
 use codex_code_mode_protocol::RuntimeResponse;
-use codex_code_mode_protocol::StartedCell;
+use codex_code_mode_protocol::TerminateOutcome;
 use codex_code_mode_protocol::ToolInvocationFuture;
-use codex_code_mode_protocol::WaitOutcome;
-use codex_code_mode_protocol::WaitRequest;
-use codex_code_mode_protocol::WaitToPendingOutcome;
-use codex_code_mode_protocol::WaitToPendingRequest;
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::session_runtime as runtime;
 use crate::session_runtime::SessionRuntime;
+
+#[cfg(test)]
+struct ObserveToPendingRequest {
+    cell_id: CellId,
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq)]
+enum PendingOutcome {
+    Pending {
+        cell_id: CellId,
+        content_items: Vec<FunctionCallOutputContentItem>,
+        pending_tool_call_ids: Vec<String>,
+    },
+    Completed(RuntimeResponse),
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq)]
+enum ObserveToPendingOutcome {
+    LiveCell(PendingOutcome),
+    MissingCell(RuntimeResponse),
+}
 
 pub struct NoopCodeModeSessionDelegate;
 
@@ -91,60 +110,34 @@ impl CodeModeService {
         }
     }
 
-    pub async fn execute(&self, request: ExecuteRequest) -> Result<StartedCell, String> {
-        let yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
+    pub async fn create_cell(&self, request: CreateCellRequest) -> Result<CellId, String> {
         let cell = self
             .runtime
             .create_cell(runtime_request(request))
             .await
             .map_err(|error| error.to_string())?;
-        let pending_event = self
-            .runtime
-            .begin_wait(&cell, Duration::from_millis(yield_time_ms))
-            .await
-            .map_err(|error| error.to_string())?;
-        let cell_id = protocol_cell_id(cell.id());
-        let response_cell_id = cell_id.clone();
-        let (response_tx, response_rx) = oneshot::channel();
-        tokio::spawn(async move {
-            let response = pending_event
-                .event()
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|event| runtime_response(&response_cell_id, event));
-            let _ = response_tx.send(response);
-        });
-        Ok(StartedCell::from_result_receiver(cell_id, response_rx))
+        Ok(protocol_cell_id(cell.id()))
     }
 
-    pub async fn execute_to_pending(
-        &self,
-        request: ExecuteRequest,
-    ) -> Result<ExecuteToPendingOutcome, String> {
+    #[cfg(test)]
+    async fn create_pausable_cell(&self, request: CreateCellRequest) -> Result<CellId, String> {
         let cell = self
             .runtime
             .create_pausable_cell(runtime_request(request))
             .await
             .map_err(|error| error.to_string())?;
-        let cell_id = protocol_cell_id(cell.id());
-        let event = self
-            .runtime
-            .wait_to_pending(&cell)
-            .await
-            .map_err(|error| error.to_string())?;
-        self.record_pending_generation(cell.id(), &event).await;
-        pending_outcome(&cell_id, event)
+        Ok(protocol_cell_id(cell.id()))
     }
 
-    pub async fn wait(&self, request: WaitRequest) -> Result<WaitOutcome, String> {
-        self.begin_wait(request).await.await
+    pub async fn observe(&self, request: ObserveRequest) -> Result<ObserveOutcome, String> {
+        self.begin_observe(request).await.await
     }
 
-    async fn begin_wait(
+    async fn begin_observe(
         &self,
-        request: WaitRequest,
-    ) -> CodeModeSessionResultFuture<'static, WaitOutcome> {
-        let WaitRequest {
+        request: ObserveRequest,
+    ) -> CodeModeSessionResultFuture<'static, ObserveOutcome> {
+        let ObserveRequest {
             cell_id,
             yield_time_ms,
         } = request;
@@ -152,7 +145,7 @@ impl CodeModeService {
         let cell = match self.runtime.cell(&runtime_cell_id).await {
             Ok(cell) => cell,
             Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
-                return missing_wait(cell_id);
+                return missing_observation(cell_id);
             }
             Err(error) => return Box::pin(async move { Err(error.to_string()) }),
         };
@@ -163,26 +156,26 @@ impl CodeModeService {
         {
             Ok(pending_event) => Box::pin(async move {
                 match pending_event.event().await {
-                    Ok(event) => Ok(WaitOutcome::LiveCell(runtime_response(&cell_id, event)?)),
+                    Ok(event) => Ok(observe_outcome(&cell_id, event)),
                     Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
-                        Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)))
+                        Ok(ObserveOutcome::Missing { cell_id })
                     }
                     Err(error) => Err(error.to_string()),
                 }
             }),
             Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
-                missing_wait(cell_id)
+                missing_observation(cell_id)
             }
             Err(error) => Box::pin(async move { Err(error.to_string()) }),
         }
     }
 
-    pub async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {
+    pub async fn terminate(&self, cell_id: CellId) -> Result<TerminateOutcome, String> {
         let runtime_cell_id = runtime_cell_id(&cell_id);
         let outcome = match self.runtime.terminate(&runtime_cell_id).await {
-            Ok(event) => Ok(WaitOutcome::LiveCell(runtime_response(&cell_id, event)?)),
+            Ok(event) => terminate_outcome(&cell_id, event),
             Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
-                Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)))
+                Ok(TerminateOutcome::Missing { cell_id })
             }
             Err(error) => Err(error.to_string()),
         };
@@ -193,16 +186,17 @@ impl CodeModeService {
         outcome
     }
 
-    pub async fn wait_to_pending(
+    #[cfg(test)]
+    async fn observe_to_pending(
         &self,
-        request: WaitToPendingRequest,
-    ) -> Result<WaitToPendingOutcome, String> {
+        request: ObserveToPendingRequest,
+    ) -> Result<ObserveToPendingOutcome, String> {
         let cell_id = request.cell_id;
         let runtime_cell_id = runtime_cell_id(&cell_id);
         let cell = match self.runtime.pausable_cell(&runtime_cell_id).await {
             Ok(cell) => cell,
             Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
-                return Ok(WaitToPendingOutcome::MissingCell(missing_cell_response(
+                return Ok(ObserveToPendingOutcome::MissingCell(missing_cell_response(
                     cell_id,
                 )));
             }
@@ -225,17 +219,18 @@ impl CodeModeService {
             Ok(event) => {
                 self.record_pending_generation(&runtime_cell_id, &event)
                     .await;
-                Ok(WaitToPendingOutcome::LiveCell(pending_outcome(
+                Ok(ObserveToPendingOutcome::LiveCell(pending_outcome(
                     &cell_id, event,
                 )?))
             }
             Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => Ok(
-                WaitToPendingOutcome::MissingCell(missing_cell_response(cell_id)),
+                ObserveToPendingOutcome::MissingCell(missing_cell_response(cell_id)),
             ),
             Err(error) => Err(error.to_string()),
         }
     }
 
+    #[cfg(test)]
     async fn record_pending_generation(
         &self,
         cell_id: &runtime::CellId,
@@ -275,18 +270,24 @@ impl CodeModeSession for CodeModeService {
         self.runtime.is_alive()
     }
 
-    fn execute<'a>(
+    fn create_cell<'a>(
         &'a self,
-        request: ExecuteRequest,
-    ) -> CodeModeSessionResultFuture<'a, StartedCell> {
-        Box::pin(CodeModeService::execute(self, request))
+        request: CreateCellRequest,
+    ) -> CodeModeSessionResultFuture<'a, CellId> {
+        Box::pin(CodeModeService::create_cell(self, request))
     }
 
-    fn wait<'a>(&'a self, request: WaitRequest) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
-        Box::pin(CodeModeService::wait(self, request))
+    fn observe<'a>(
+        &'a self,
+        request: ObserveRequest,
+    ) -> CodeModeSessionResultFuture<'a, ObserveOutcome> {
+        Box::pin(CodeModeService::observe(self, request))
     }
 
-    fn terminate<'a>(&'a self, cell_id: CellId) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+    fn terminate<'a>(
+        &'a self,
+        cell_id: CellId,
+    ) -> CodeModeSessionResultFuture<'a, TerminateOutcome> {
         Box::pin(CodeModeService::terminate(self, cell_id))
     }
 
@@ -347,7 +348,7 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
     }
 }
 
-fn runtime_request(request: ExecuteRequest) -> runtime::CreateCellRequest {
+fn runtime_request(request: CreateCellRequest) -> runtime::CreateCellRequest {
     let idempotency_key = format!("{}:{}", request.tool_call_id, request.source);
     runtime::CreateCellRequest {
         idempotency_key,
@@ -380,16 +381,17 @@ fn protocol_cell_id(cell_id: &runtime::CellId) -> CellId {
     CellId::new(cell_id.as_str().to_string())
 }
 
+#[cfg(test)]
 fn pending_outcome(
     cell_id: &CellId,
     event: runtime::PausableCellEvent,
-) -> Result<ExecuteToPendingOutcome, String> {
+) -> Result<PendingOutcome, String> {
     match event {
         runtime::PausableCellEvent::Pending(runtime::PendingFrontier {
             content_items,
             pending_tool_call_ids,
             ..
-        }) => Ok(ExecuteToPendingOutcome::Pending {
+        }) => Ok(PendingOutcome::Pending {
             cell_id: cell_id.clone(),
             content_items: content_items.into_iter().map(output_item).collect(),
             pending_tool_call_ids,
@@ -397,40 +399,58 @@ fn pending_outcome(
         runtime::PausableCellEvent::Completed {
             content_items,
             error_text,
-        } => Ok(ExecuteToPendingOutcome::Completed(
-            RuntimeResponse::Result {
+        } => Ok(PendingOutcome::Completed(RuntimeResponse::Result {
+            cell_id: cell_id.clone(),
+            content_items: content_items.into_iter().map(output_item).collect(),
+            error_text,
+        })),
+        runtime::PausableCellEvent::Terminated { content_items } => {
+            Ok(PendingOutcome::Completed(RuntimeResponse::Terminated {
                 cell_id: cell_id.clone(),
                 content_items: content_items.into_iter().map(output_item).collect(),
-                error_text,
-            },
-        )),
-        runtime::PausableCellEvent::Terminated { content_items } => Ok(
-            ExecuteToPendingOutcome::Completed(RuntimeResponse::Terminated {
-                cell_id: cell_id.clone(),
-                content_items: content_items.into_iter().map(output_item).collect(),
-            }),
-        ),
+            }))
+        }
     }
 }
 
-fn runtime_response(
-    cell_id: &CellId,
-    event: runtime::CellEvent,
-) -> Result<RuntimeResponse, String> {
+fn observe_outcome(cell_id: &CellId, event: runtime::CellEvent) -> ObserveOutcome {
     match event {
-        runtime::CellEvent::Yielded { content_items } => Ok(RuntimeResponse::Yielded {
+        runtime::CellEvent::Yielded { content_items } => ObserveOutcome::Yielded {
             cell_id: cell_id.clone(),
             content_items: content_items.into_iter().map(output_item).collect(),
-        }),
+        },
         runtime::CellEvent::Completed {
             content_items,
             error_text,
-        } => Ok(RuntimeResponse::Result {
+        } => ObserveOutcome::Completed {
+            cell_id: cell_id.clone(),
+            content_items: content_items.into_iter().map(output_item).collect(),
+            error_text,
+        },
+        runtime::CellEvent::Terminated { content_items } => ObserveOutcome::Terminated {
+            cell_id: cell_id.clone(),
+            content_items: content_items.into_iter().map(output_item).collect(),
+        },
+    }
+}
+
+fn terminate_outcome(
+    cell_id: &CellId,
+    event: runtime::CellEvent,
+) -> Result<TerminateOutcome, String> {
+    match event {
+        runtime::CellEvent::Yielded { .. } => Err(format!(
+            "termination of code-mode cell {cell_id} unexpectedly yielded"
+        )),
+        runtime::CellEvent::Completed {
+            content_items,
+            error_text,
+        } => Ok(TerminateOutcome::Completed {
             cell_id: cell_id.clone(),
             content_items: content_items.into_iter().map(output_item).collect(),
             error_text,
         }),
-        runtime::CellEvent::Terminated { content_items } => Ok(RuntimeResponse::Terminated {
+        runtime::CellEvent::Terminated { content_items } => Ok(TerminateOutcome::Terminated {
             cell_id: cell_id.clone(),
             content_items: content_items.into_iter().map(output_item).collect(),
         }),
@@ -454,6 +474,7 @@ fn output_item(item: runtime::OutputItem) -> FunctionCallOutputContentItem {
     }
 }
 
+#[cfg(test)]
 fn missing_cell_response(cell_id: CellId) -> RuntimeResponse {
     RuntimeResponse::Result {
         error_text: Some(format!("exec cell {cell_id} not found")),
@@ -462,8 +483,8 @@ fn missing_cell_response(cell_id: CellId) -> RuntimeResponse {
     }
 }
 
-fn missing_wait(cell_id: CellId) -> CodeModeSessionResultFuture<'static, WaitOutcome> {
-    Box::pin(async move { Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id))) })
+fn missing_observation(cell_id: CellId) -> CodeModeSessionResultFuture<'static, ObserveOutcome> {
+    Box::pin(async move { Ok(ObserveOutcome::Missing { cell_id }) })
 }
 
 #[cfg(test)]

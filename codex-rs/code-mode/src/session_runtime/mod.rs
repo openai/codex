@@ -45,6 +45,7 @@ use crate::cell_actor::CompletionCommit;
 use crate::cell_actor::ObserveMode;
 
 type RuntimeEventFuture = Pin<Box<dyn Future<Output = Result<CellEvent, Error>> + Send + 'static>>;
+#[allow(dead_code)]
 type PausableRuntimeEventFuture =
     Pin<Box<dyn Future<Output = Result<PausableCellEvent, Error>> + Send + 'static>>;
 
@@ -120,6 +121,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         Ok(Cell::new(id))
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn create_pausable_cell(
         &self,
         request: CreateCellRequest,
@@ -157,6 +159,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         })
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn wait_to_pending(
         &self,
         cell: &PausableCell,
@@ -169,6 +172,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         .await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn resume(
         &self,
         cell: &PausableCell,
@@ -186,6 +190,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         Ok(Cell::new(cell_id.clone()))
     }
 
+    #[cfg(test)]
     pub(crate) async fn pausable_cell(&self, cell_id: &CellId) -> Result<PausableCell, Error> {
         self.pausable_handle(cell_id).await?;
         Ok(PausableCell::new(cell_id.clone()))
@@ -298,6 +303,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         self.handle_for_kind(cell_id, CellKind::Continuing).await
     }
 
+    #[allow(dead_code)]
     async fn pausable_handle(&self, cell_id: &CellId) -> Result<CellHandle, Error> {
         self.handle_for_kind(cell_id, CellKind::Pausable).await
     }
@@ -428,6 +434,7 @@ fn map_cell_event(cell_id: CellId, event: CellEventFuture) -> RuntimeEventFuture
     })
 }
 
+#[allow(dead_code)]
 fn map_pausable_event(cell_id: CellId, event: CellEventFuture) -> PausableRuntimeEventFuture {
     Box::pin(async move {
         match event.await.map_err(|error| actor_error(&cell_id, error))? {

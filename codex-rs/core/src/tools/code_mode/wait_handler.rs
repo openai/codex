@@ -79,30 +79,45 @@ impl CodeModeWaitHandler {
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
                 let cell_id = codex_code_mode::CellId::new(args.cell_id);
-                let wait_response = if args.terminate {
-                    exec.session
+                let (response, cell_was_present) = if args.terminate {
+                    let outcome = exec
+                        .session
                         .services
                         .code_mode_service
                         .terminate(cell_id)
                         .await
+                        .map_err(FunctionCallError::RespondToModel)?;
+                    let cell_was_present =
+                        !matches!(outcome, codex_code_mode::TerminateOutcome::Missing { .. });
+                    (
+                        codex_code_mode::RuntimeResponse::from(outcome),
+                        cell_was_present,
+                    )
                 } else {
-                    exec.session
+                    let outcome = exec
+                        .session
                         .services
                         .code_mode_service
-                        .wait(codex_code_mode::WaitRequest {
+                        .observe(codex_code_mode::ObserveRequest {
                             cell_id,
                             yield_time_ms: args.yield_time_ms,
                         })
                         .await
-                }
-                .map_err(FunctionCallError::RespondToModel)?;
-                if let codex_code_mode::WaitOutcome::LiveCell(response) = &wait_response
+                        .map_err(FunctionCallError::RespondToModel)?;
+                    let cell_was_present =
+                        !matches!(outcome, codex_code_mode::ObserveOutcome::Missing { .. });
+                    (
+                        codex_code_mode::RuntimeResponse::from(outcome),
+                        cell_was_present,
+                    )
+                };
+                if cell_was_present
                     && !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. })
                 {
-                    // Only a live-cell wait can close a CodeCell. A missing
+                    // Only an outcome from a present cell can close a CodeCell. A missing
                     // cell is still an ordinary `wait` tool result, but there
                     // is no runtime object for the reducer to complete.
-                    let runtime_cell_id = match response {
+                    let runtime_cell_id = match &response {
                         codex_code_mode::RuntimeResponse::Yielded { cell_id, .. }
                         | codex_code_mode::RuntimeResponse::Terminated { cell_id, .. }
                         | codex_code_mode::RuntimeResponse::Result { cell_id, .. } => cell_id,
@@ -114,13 +129,13 @@ impl CodeModeWaitHandler {
                             exec.turn.sub_id.as_str(),
                             runtime_cell_id.as_str(),
                         )
-                        .record_ended(response);
+                        .record_ended(&response);
                     exec.session
                         .services
                         .code_mode_service
                         .finish_cell_dispatch(runtime_cell_id);
                 }
-                handle_runtime_response(&exec, wait_response.into(), args.max_tokens, started_at)
+                handle_runtime_response(&exec, response, args.max_tokens, started_at)
                     .await
                     .map(boxed_tool_output)
                     .map_err(FunctionCallError::RespondToModel)

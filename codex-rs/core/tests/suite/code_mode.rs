@@ -2531,6 +2531,131 @@ text({ json: true });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_observes_a_synchronously_completed_cell() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec to return immediately",
+        r#"text("created before observation");"#,
+    )
+    .await?;
+
+    let request = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec call failed unexpectedly: {output}"
+    );
+    assert_eq!(output, "created before observation");
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupting_the_initial_exec_observation_terminates_the_created_cell() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::CodeMode);
+    });
+    let test = builder.build(&server).await?;
+    let started_marker = test.workspace_path("code-mode-initial-observation-started");
+    let started_marker_quoted = shlex::try_join([started_marker.to_string_lossy().as_ref()])?;
+    let start_command = format!("printf started > {started_marker_quoted}");
+    let code = format!(
+        r#"// @exec: {{"yield_time_ms": 60000}}
+await tools.exec_command({{ cmd: {start_command:?} }});
+store("initial_observation_cancel_probe", "leaked");
+await new Promise((resolve) => setTimeout(resolve, 2000));
+"#
+    );
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", &code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let cwd = test.config.cwd.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "start an exec whose initial observation will be interrupted".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !started_marker.exists() {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+    })
+    .await?;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+
+    // The sentinel is already pending when the observation is interrupted. Without the guard
+    // around create + initial observe, the detached cell finishes this timer and commits it after
+    // the interrupted turn has gone away.
+    tokio::time::sleep(Duration::from_millis(/*millis*/ 2_250)).await;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_custom_tool_call(
+                "call-2",
+                "exec",
+                r#"text(String(load("initial_observation_cancel_probe")));"#,
+            ),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let probe_completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("check whether the interrupted cell committed state")
+        .await?;
+    let request = probe_completion.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-2");
+    assert_ne!(success, Some(false), "probe exec failed: {output}");
+    assert_eq!(output, "undefined");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_resume_after_set_timeout() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

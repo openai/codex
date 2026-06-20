@@ -20,6 +20,7 @@ use crate::session_runtime::ToolName;
 pub(crate) type CellEventFuture =
     Pin<Box<dyn Future<Output = Result<CellEvent, CellError>> + Send + 'static>>;
 
+#[allow(dead_code)]
 pub(crate) type ResumeFuture =
     Pin<Box<dyn Future<Output = Result<ResumeOutcome, CellError>> + Send + 'static>>;
 
@@ -121,6 +122,7 @@ impl CellHandle {
         response_event(response_rx)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn resume(&self, generation: PendingGeneration) -> ResumeFuture {
         if !self.state.accepting_observations() {
             return closed_resume();
@@ -503,6 +505,7 @@ pub(super) enum CellCommand {
         mode: ObserveMode,
         response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
     },
+    #[allow(dead_code)]
     Resume {
         generation: PendingGeneration,
         response_tx: oneshot::Sender<Result<ResumeOutcome, CellError>>,
@@ -521,6 +524,7 @@ fn closed_event() -> CellEventFuture {
     Box::pin(async { Err(CellError::Closed) })
 }
 
+#[allow(dead_code)]
 fn closed_resume() -> ResumeFuture {
     Box::pin(async { Err(CellError::Closed) })
 }

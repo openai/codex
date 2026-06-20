@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
-use codex_code_mode_protocol::ExecuteRequest;
+use codex_code_mode_protocol::CreateCellRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
@@ -120,12 +120,10 @@ fn spawn_cell_actor_harness_with_policy<H: CellHost>(
     let (runtime_event_tx, runtime_event_rx) = mpsc::unbounded_channel();
     let (runtime_tx, runtime_pause_tx, runtime_terminate_handle) = spawn_runtime(
         HashMap::new(),
-        ExecuteRequest {
+        CreateCellRequest {
             tool_call_id: "call-1".to_string(),
             enabled_tools: Vec::new(),
             source: "await new Promise(() => {});".to_string(),
-            yield_time_ms: None,
-            max_output_tokens: None,
         },
         runtime_event_tx,
         PendingRuntimeMode::PauseUntilResumed,

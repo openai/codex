@@ -2517,7 +2517,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
- "tokio",
  "tokio-util",
 ]
 

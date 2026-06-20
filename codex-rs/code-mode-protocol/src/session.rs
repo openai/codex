@@ -6,14 +6,13 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::CodeModeNestedToolCall;
-use crate::ExecuteRequest;
-use crate::RuntimeResponse;
-use crate::WaitOutcome;
-use crate::WaitRequest;
+use crate::CreateCellRequest;
+use crate::ObserveOutcome;
+use crate::ObserveRequest;
+use crate::TerminateOutcome;
 
 pub type CodeModeSessionResultFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
@@ -24,6 +23,7 @@ pub type ToolInvocationFuture<'a> =
 pub type NotificationFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct CellId(String);
 
 impl CellId {
@@ -48,42 +48,6 @@ impl fmt::Display for CellId {
     }
 }
 
-pub struct StartedCell {
-    pub cell_id: CellId,
-    initial_response: CodeModeSessionResultFuture<'static, RuntimeResponse>,
-}
-
-impl StartedCell {
-    pub fn new(cell_id: CellId, initial_response_rx: oneshot::Receiver<RuntimeResponse>) -> Self {
-        Self {
-            cell_id,
-            initial_response: Box::pin(async move {
-                initial_response_rx
-                    .await
-                    .map_err(|_| "exec runtime ended unexpectedly".to_string())
-            }),
-        }
-    }
-
-    pub fn from_result_receiver(
-        cell_id: CellId,
-        initial_response_rx: oneshot::Receiver<Result<RuntimeResponse, String>>,
-    ) -> Self {
-        Self {
-            cell_id,
-            initial_response: Box::pin(async move {
-                initial_response_rx
-                    .await
-                    .map_err(|_| "exec runtime ended unexpectedly".to_string())?
-            }),
-        }
-    }
-
-    pub async fn initial_response(self) -> Result<RuntimeResponse, String> {
-        self.initial_response.await
-    }
-}
-
 /// Host callbacks used by a code-mode session while cells are executing.
 pub trait CodeModeSessionDelegate: Send + Sync {
     fn invoke_tool<'a>(
@@ -104,11 +68,13 @@ pub trait CodeModeSessionDelegate: Send + Sync {
     fn cell_closed(&self, cell_id: &CellId);
 }
 
-/// A durable code-mode session owned by one Codex thread.
+/// A stateful code-mode session owned by one Codex thread.
 ///
 /// Cells executed in the same session share stored values. Separate sessions
 /// must keep those values isolated. Implementations may execute cells
-/// in-process or remotely.
+/// in-process or remotely. Implementations should surface lost connections or
+/// protocol desynchronization, but do not need to preserve cells or stored
+/// values across process failure or restart.
 pub trait CodeModeSession: Send + Sync {
     /// Returns whether the session can still accept requests.
     ///
@@ -116,14 +82,20 @@ pub trait CodeModeSession: Send + Sync {
     /// connection fails so callers can create a fresh session for later work.
     fn is_alive(&self) -> bool;
 
-    fn execute<'a>(
+    fn create_cell<'a>(
         &'a self,
-        request: ExecuteRequest,
-    ) -> CodeModeSessionResultFuture<'a, StartedCell>;
+        request: CreateCellRequest,
+    ) -> CodeModeSessionResultFuture<'a, CellId>;
 
-    fn wait<'a>(&'a self, request: WaitRequest) -> CodeModeSessionResultFuture<'a, WaitOutcome>;
+    fn observe<'a>(
+        &'a self,
+        request: ObserveRequest,
+    ) -> CodeModeSessionResultFuture<'a, ObserveOutcome>;
 
-    fn terminate<'a>(&'a self, cell_id: CellId) -> CodeModeSessionResultFuture<'a, WaitOutcome>;
+    fn terminate<'a>(
+        &'a self,
+        cell_id: CellId,
+    ) -> CodeModeSessionResultFuture<'a, TerminateOutcome>;
 
     fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()>;
 }
@@ -138,7 +110,3 @@ pub trait CodeModeSessionProvider: Send + Sync {
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a>;
 }
-
-#[cfg(test)]
-#[path = "session_tests.rs"]
-mod tests;
