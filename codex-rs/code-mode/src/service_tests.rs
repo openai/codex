@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::CellId;
@@ -7,7 +6,6 @@ use super::CodeModeNestedToolCall;
 use super::CodeModeService;
 use super::CodeModeSessionDelegate;
 use super::NotificationFuture;
-use super::ObserveMode;
 use super::RuntimeResponse;
 use super::ToolInvocationFuture;
 use super::WaitOutcome;
@@ -216,20 +214,15 @@ async fn shutdown_interrupts_cpu_bound_cells() {
 #[tokio::test]
 async fn start_cell_rejects_new_cell_after_shutdown_begins() {
     let service = CodeModeService::new();
-    service.inner.shutting_down.store(true, Ordering::Release);
+    service.shutdown().await.unwrap();
 
     let error = service
-        .start_cell(
-            cell_id("late-cell"),
-            execute_request(""),
-            ObserveMode::YieldAfter(Duration::from_millis(1)),
-        )
+        .execute(execute_request("text('late');"))
         .await
         .err()
         .unwrap();
 
     assert_eq!(error, "code mode session is shutting down".to_string());
-    assert!(service.inner.cells.lock().await.is_empty());
 }
 
 #[tokio::test]
