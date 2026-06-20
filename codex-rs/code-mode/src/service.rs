@@ -16,6 +16,7 @@ use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
 use codex_code_mode_protocol::NotificationFuture;
 use codex_code_mode_protocol::RuntimeResponse;
+use codex_code_mode_protocol::StartedCell;
 use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
@@ -83,18 +84,25 @@ impl CodeModeService {
         }
     }
 
-    pub async fn execute(&self, request: ExecuteRequest) -> Result<RuntimeResponse, String> {
+    pub async fn execute(&self, request: ExecuteRequest) -> Result<StartedCell, String> {
         let yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
         let cell_id = request.cell_id.clone();
-        let event = self
+        let pending_event = self
             .runtime
-            .execute(
+            .begin_execute(
                 runtime_request(request),
                 runtime::ObserveMode::YieldAfter(Duration::from_millis(yield_time_ms)),
             )
             .await
             .map_err(|error| error.to_string())?;
-        runtime_response(&cell_id, event)
+        let response_cell_id = cell_id.clone();
+        Ok(StartedCell::new(cell_id, async move {
+            let event = pending_event
+                .event()
+                .await
+                .map_err(|error| error.to_string())?;
+            runtime_response(&response_cell_id, event)
+        }))
     }
 
     pub async fn execute_to_pending(
@@ -203,7 +211,7 @@ impl CodeModeSession for CodeModeService {
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,
-    ) -> CodeModeSessionResultFuture<'a, RuntimeResponse> {
+    ) -> CodeModeSessionResultFuture<'a, StartedCell> {
         Box::pin(CodeModeService::execute(self, request))
     }
 

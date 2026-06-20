@@ -86,7 +86,13 @@ fn echo_tool() -> ToolDefinition {
 }
 
 async fn execute(service: &CodeModeService, request: ExecuteRequest) -> RuntimeResponse {
-    service.execute(request).await.unwrap()
+    service
+        .execute(request)
+        .await
+        .unwrap()
+        .initial_response()
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -184,13 +190,14 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
 async fn shutdown_interrupts_cpu_bound_cells() {
     let service = CodeModeService::new();
 
-    let response = service
-        .execute(ExecuteRequest {
+    let response = execute(
+        &service,
+        ExecuteRequest {
             source: "while (true) {}".to_string(),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await;
     assert_eq!(
         response,
         RuntimeResponse::Yielded {

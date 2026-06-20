@@ -73,10 +73,23 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         request: ExecuteRequest,
         initial_observe_mode: ObserveMode,
     ) -> Result<CellEvent, Error> {
+        self.begin_execute(request, initial_observe_mode)
+            .await?
+            .event()
+            .await
+    }
+
+    pub async fn begin_execute(
+        &self,
+        request: ExecuteRequest,
+        initial_observe_mode: ObserveMode,
+    ) -> Result<PendingEvent, Error> {
         if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
-        self.start_cell(request, initial_observe_mode).await?.await
+        Ok(PendingEvent {
+            event: self.start_cell(request, initial_observe_mode).await?,
+        })
     }
 
     pub async fn observe(&self, cell_id: &CellId, mode: ObserveMode) -> Result<CellEvent, Error> {
@@ -170,7 +183,7 @@ impl<D: SessionRuntimeDelegate> Drop for SessionRuntime<D> {
     }
 }
 
-/// An admitted observation that has not reached its requested frontier yet.
+/// An admitted cell event that has not reached its requested frontier yet.
 pub struct PendingEvent {
     event: RuntimeEventFuture,
 }

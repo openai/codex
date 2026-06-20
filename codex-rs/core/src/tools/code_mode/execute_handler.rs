@@ -51,7 +51,17 @@ impl CodeModeExecuteHandler {
                 call_id.as_str(),
                 args.code.as_str(),
             );
-        let response = match exec
+        let execution_error = |error: String| {
+            let response = codex_code_mode::RuntimeResponse::Result {
+                cell_id: cell_id.clone(),
+                content_items: Vec::new(),
+                error_text: Some(error.clone()),
+            };
+            code_cell_trace.record_initial_response(&response);
+            code_cell_trace.record_ended(&response);
+            FunctionCallError::RespondToModel(error)
+        };
+        let started_cell = match exec
             .session
             .services
             .code_mode_service
@@ -65,17 +75,13 @@ impl CodeModeExecuteHandler {
             })
             .await
         {
+            Ok(started_cell) => started_cell,
+            Err(error) => return Err(execution_error(error)),
+        };
+        debug_assert_eq!(started_cell.cell_id, cell_id);
+        let response = match started_cell.initial_response().await {
             Ok(response) => response,
-            Err(error) => {
-                let response = codex_code_mode::RuntimeResponse::Result {
-                    cell_id,
-                    content_items: Vec::new(),
-                    error_text: Some(error.clone()),
-                };
-                code_cell_trace.record_initial_response(&response);
-                code_cell_trace.record_ended(&response);
-                return Err(FunctionCallError::RespondToModel(error));
-            }
+            Err(error) => return Err(execution_error(error)),
         };
         // Record the raw runtime boundary. The model-visible custom-tool output
         // is produced by `handle_runtime_response` and later linked through

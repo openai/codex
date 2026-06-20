@@ -47,6 +47,31 @@ impl fmt::Display for CellId {
     }
 }
 
+/// Acknowledges that an exec cell was admitted by the session.
+///
+/// The initial runtime response is delivered separately so callers can act on
+/// the cell ID while execution continues.
+pub struct StartedCell {
+    pub cell_id: CellId,
+    initial_response: CodeModeSessionResultFuture<'static, RuntimeResponse>,
+}
+
+impl StartedCell {
+    pub fn new(
+        cell_id: CellId,
+        initial_response: impl Future<Output = Result<RuntimeResponse, String>> + Send + 'static,
+    ) -> Self {
+        Self {
+            cell_id,
+            initial_response: Box::pin(initial_response),
+        }
+    }
+
+    pub async fn initial_response(self) -> Result<RuntimeResponse, String> {
+        self.initial_response.await
+    }
+}
+
 /// Host callbacks used by a code-mode session while cells are executing.
 pub trait CodeModeSessionDelegate: Send + Sync {
     fn invoke_tool<'a>(
@@ -79,7 +104,7 @@ pub trait CodeModeSession: Send + Sync {
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,
-    ) -> CodeModeSessionResultFuture<'a, RuntimeResponse>;
+    ) -> CodeModeSessionResultFuture<'a, StartedCell>;
 
     fn wait<'a>(&'a self, request: WaitRequest) -> CodeModeSessionResultFuture<'a, WaitOutcome>;
 

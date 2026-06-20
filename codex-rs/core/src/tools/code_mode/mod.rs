@@ -89,7 +89,7 @@ impl CodeModeService {
     pub(crate) async fn execute(
         &self,
         request: codex_code_mode::ExecuteRequest,
-    ) -> Result<codex_code_mode::RuntimeResponse, String> {
+    ) -> Result<codex_code_mode::StartedCell, String> {
         self.session()?.execute(request).await
     }
 

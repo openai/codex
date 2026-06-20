@@ -214,6 +214,16 @@ fn execute_request(source: &str) -> ExecuteRequest {
     }
 }
 
+async fn execute(service: &CodeModeService, request: ExecuteRequest) -> RuntimeResponse {
+    service
+        .execute(request)
+        .await
+        .unwrap()
+        .initial_response()
+        .await
+        .unwrap()
+}
+
 fn blocking_tool() -> ToolDefinition {
     ToolDefinition {
         name: "block".to_string(),
@@ -236,8 +246,9 @@ async fn next_event(events_rx: &mut mpsc::UnboundedReceiver<DelegateEvent>) -> D
 async fn yields_and_resumes() {
     let (delegate, mut events_rx) = ReleasableNotificationDelegate::new();
     let service = CodeModeService::with_delegate(delegate.clone());
-    let cell = service
-        .execute(ExecuteRequest {
+    let cell = execute(
+        &service,
+        ExecuteRequest {
             source: r#"
 text("before");
 yield_control();
@@ -247,9 +258,9 @@ notify("resumed");
             .to_string(),
             yield_time_ms: Some(60_000),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await;
 
     assert_eq!(
         cell,
@@ -334,12 +345,11 @@ text("after");
 #[tokio::test]
 async fn buffered_natural_completion_wins_over_termination() {
     let service = CodeModeService::new();
-    let cell = service
-        .execute(execute_request(
-            r#"yield_control(); store("finished", true); text("done");"#,
-        ))
-        .await
-        .unwrap();
+    let cell = execute(
+        &service,
+        execute_request(r#"yield_control(); store("finished", true); text("done");"#),
+    )
+    .await;
 
     assert_eq!(
         cell,
@@ -350,13 +360,14 @@ async fn buffered_natural_completion_wins_over_termination() {
     );
     tokio::time::timeout(Duration::from_secs(1), async {
         for cell_number in 2.. {
-            let response = service
-                .execute(ExecuteRequest {
+            let response = execute(
+                &service,
+                ExecuteRequest {
                     cell_id: cell_id(&cell_number.to_string()),
                     ..execute_request(r#"text(String(load("finished")));"#)
-                })
-                .await
-                .unwrap();
+                },
+            )
+            .await;
             let RuntimeResponse::Result { content_items, .. } = response else {
                 panic!("expected stored-value probe to complete");
             };
@@ -388,12 +399,11 @@ async fn buffered_natural_completion_wins_over_termination() {
 async fn termination_discards_pending_callbacks_before_responding() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
     let service = CodeModeService::with_delegate(delegate.clone());
-    let cell = service
-        .execute(execute_request(
-            r#"notify("pending"); await new Promise(() => {});"#,
-        ))
-        .await
-        .unwrap();
+    let cell = execute(
+        &service,
+        execute_request(r#"notify("pending"); await new Promise(() => {});"#),
+    )
+    .await;
 
     assert_eq!(
         next_event(&mut events_rx).await,
@@ -419,10 +429,11 @@ async fn termination_discards_pending_callbacks_before_responding() {
 async fn shutdown_cancels_a_non_cooperative_notification() {
     let (delegate, mut events_rx) = NeverResolvingNotificationDelegate::new();
     let service = Arc::new(CodeModeService::with_delegate(delegate));
-    service
-        .execute(execute_request(r#"yield_control(); notify("pending");"#))
-        .await
-        .unwrap();
+    execute(
+        &service,
+        execute_request(r#"yield_control(); notify("pending");"#),
+    )
+    .await;
 
     assert_eq!(
         next_event(&mut events_rx).await,
@@ -442,10 +453,11 @@ async fn shutdown_cancels_a_non_cooperative_notification() {
 async fn termination_cancels_a_non_cooperative_notification() {
     let (delegate, mut events_rx) = NeverResolvingNotificationDelegate::new();
     let service = CodeModeService::with_delegate(delegate);
-    service
-        .execute(execute_request(r#"yield_control(); notify("pending");"#))
-        .await
-        .unwrap();
+    execute(
+        &service,
+        execute_request(r#"yield_control(); notify("pending");"#),
+    )
+    .await;
 
     assert_eq!(
         next_event(&mut events_rx).await,
@@ -467,17 +479,15 @@ async fn termination_cancels_a_non_cooperative_notification() {
 }
 
 #[tokio::test]
-async fn natural_completion_waits_for_notifications_before_responding() {
+async fn execute_acknowledges_before_natural_completion() {
     let (delegate, mut events_rx) = ReleasableNotificationDelegate::new();
     let service = CodeModeService::with_delegate(delegate.clone());
-    let mut initial_response = Box::pin(service.execute(execute_request(r#"notify("pending");"#)));
-    std::future::poll_fn(|context| match initial_response.as_mut().poll(context) {
-        std::task::Poll::Pending => std::task::Poll::Ready(()),
-        std::task::Poll::Ready(result) => {
-            panic!("execute returned before the notification was released: {result:?}")
-        }
-    })
-    .await;
+    let started_cell = service
+        .execute(execute_request(r#"notify("pending");"#))
+        .await
+        .unwrap();
+    assert_eq!(started_cell.cell_id, cell_id("1"));
+    let mut initial_response = Box::pin(started_cell.initial_response());
 
     assert_eq!(
         next_event(&mut events_rx).await,
@@ -508,17 +518,46 @@ async fn natural_completion_waits_for_notifications_before_responding() {
 }
 
 #[tokio::test]
-async fn termination_discards_pending_tools_before_responding() {
-    let (delegate, mut events_rx) = BlockingDelegate::new();
-    let service = CodeModeService::with_delegate(delegate.clone());
-    let cell = service
+async fn acknowledged_cell_can_be_terminated_before_its_initial_response() {
+    let service = CodeModeService::new();
+    let started_cell = service
         .execute(ExecuteRequest {
-            enabled_tools: vec![blocking_tool()],
-            source: r#"await tools.block({});"#.to_string(),
+            source: "await new Promise(() => {});".to_string(),
+            yield_time_ms: Some(60_000),
             ..execute_request("")
         })
         .await
         .unwrap();
+
+    assert_eq!(started_cell.cell_id, cell_id("1"));
+    let (termination, initial_response) = tokio::join!(
+        service.terminate(cell_id("1")),
+        started_cell.initial_response()
+    );
+    let terminated = RuntimeResponse::Terminated {
+        cell_id: cell_id("1"),
+        content_items: Vec::new(),
+    };
+    assert_eq!(
+        termination.unwrap(),
+        WaitOutcome::LiveCell(terminated.clone())
+    );
+    assert_eq!(initial_response.unwrap(), terminated);
+}
+
+#[tokio::test]
+async fn termination_discards_pending_tools_before_responding() {
+    let (delegate, mut events_rx) = BlockingDelegate::new();
+    let service = CodeModeService::with_delegate(delegate.clone());
+    let cell = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![blocking_tool()],
+            source: r#"await tools.block({});"#.to_string(),
+            ..execute_request("")
+        },
+    )
+    .await;
 
     assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
     assert_eq!(
@@ -542,14 +581,15 @@ async fn termination_discards_pending_tools_before_responding() {
 async fn shutdown_completes_when_a_nested_tool_ignores_cancellation() {
     let (delegate, mut events_rx) = NeverResolvingToolDelegate::new();
     let service = Arc::new(CodeModeService::with_delegate(delegate));
-    service
-        .execute(ExecuteRequest {
+    execute(
+        &service,
+        ExecuteRequest {
             enabled_tools: vec![blocking_tool()],
             source: r#"await tools.block({});"#.to_string(),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await;
 
     assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
 
@@ -565,10 +605,7 @@ async fn shutdown_completes_when_a_nested_tool_ignores_cancellation() {
 #[tokio::test]
 async fn second_observer_is_rejected_without_displacing_the_first() {
     let service = CodeModeService::new();
-    let cell = service
-        .execute(execute_request("await new Promise(() => {});"))
-        .await
-        .unwrap();
+    let cell = execute(&service, execute_request("await new Promise(() => {});")).await;
 
     assert_eq!(
         cell,
@@ -612,12 +649,11 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
 #[tokio::test]
 async fn dropping_a_wait_allows_a_later_wait_to_observe_the_cell() {
     let service = CodeModeService::new();
-    let cell = service
-        .execute(execute_request(
-            "yield_control(); await new Promise(() => {});",
-        ))
-        .await
-        .unwrap();
+    let cell = execute(
+        &service,
+        execute_request("yield_control(); await new Promise(() => {});"),
+    )
+    .await;
 
     assert_eq!(
         cell,
