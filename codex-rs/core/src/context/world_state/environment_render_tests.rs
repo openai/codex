@@ -330,11 +330,11 @@ fn serialize_environment_context_with_multiple_selected_environments() {
     let expected = format!(
         r#"<environment_context>
   <environments>
-    <environment id="local" status="available">
+    <environment id="local">
       <cwd>{}</cwd>
       <shell>bash</shell>
     </environment>
-    <environment id="remote" status="available">
+    <environment id="remote">
       <cwd>{}</cwd>
       <shell>bash</shell>
     </environment>
@@ -371,11 +371,11 @@ fn serialize_environment_context_prefers_environment_shell_when_present() {
     let expected = format!(
         r#"<environment_context>
   <environments>
-    <environment id="local" status="available">
+    <environment id="local">
       <cwd>{}</cwd>
       <shell>powershell</shell>
     </environment>
-    <environment id="remote" status="available">
+    <environment id="remote">
       <cwd>{}</cwd>
       <shell>cmd</shell>
     </environment>
