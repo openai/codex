@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/sanitize-bazel-windows-environment.sh"
+sanitize_bazel_windows_environment
+
 print_failed_bazel_test_logs=0
 print_failed_bazel_action_summary=0
 remote_download_toplevel=0
@@ -280,6 +284,10 @@ if [[ "${RUNNER_OS:-}" == "Windows" && -n "${BUILDBUDDY_API_KEY:-}" && ( $window
     # hybrid execution keeps its gnullvm host platform for local Rust actions.
     post_config_bazel_args+=(--host_platform=//:rbe)
   fi
+fi
+
+if [[ "${RUNNER_OS:-}" == "Windows" && ! ( -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || "$ci_config" == "ci-windows-argument-lint" ) ) ]]; then
+  post_config_bazel_args+=("--shell_executable=${BAZEL_SH}")
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then

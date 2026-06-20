@@ -6,8 +6,8 @@ load("//bazel/rules/testing:foreign_platform_binary.bzl", "foreign_platform_bina
 load("//bazel/rules/testing:hermetic_test_python.bzl", "HermeticTestPythonInfo")
 load("//bazel/rules/testing/wine:wine_runtime.bzl", "WINE_TEST_TARGET_COMPATIBLE_WITH", "wine_test_runtime")
 
-# Match Cargo's Windows linker behavior so Bazel-built binaries and tests use
-# the same stack reserve on both Windows ABIs and resolve UCRT imports on MSVC.
+# Match Cargo's Windows linker behavior so gnullvm-built binaries and tests use
+# the same stack reserve as Cargo builds.
 WINDOWS_GNULLVM_RUSTC_LINK_FLAGS = [
     "-C",
     "link-arg=-Wl,--stack,8388608",  # 8 MiB
@@ -15,14 +15,6 @@ WINDOWS_GNULLVM_RUSTC_LINK_FLAGS = [
 
 WINDOWS_RUSTC_LINK_FLAGS = select({
     "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": WINDOWS_GNULLVM_RUSTC_LINK_FLAGS,
-    "@rules_rs//rs/experimental/platforms/constraints:windows_msvc": [
-        "-C",
-        "link-arg=/STACK:8388608",  # 8 MiB
-        "-C",
-        "link-arg=/NODEFAULTLIB:libucrt.lib",
-        "-C",
-        "link-arg=ucrt.lib",
-    ],
     "//conditions:default": [],
 })
 

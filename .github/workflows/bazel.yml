@@ -407,6 +407,13 @@ jobs:
             -- \
             "${bazel_targets[@]}"
 
+      - name: Audit Windows Bazel toolchain hermeticity
+        if: runner.os == 'Windows'
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: ./.github/scripts/run-bazel-windows-hermeticity-audit.sh
+
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true

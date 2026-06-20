@@ -22,7 +22,46 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         fake_bazel_impl.write_text(
             "#!/usr/bin/env python3\n"
             "import json\n"
+            "import os\n"
             "import sys\n"
+            "if os.environ.get('RUNNER_OS') == 'Windows':\n"
+            "    forbidden = {'AR', 'ARFLAGS', 'AS', 'BAZEL_LLVM', "
+            "'BAZEL_LLVM_COV', 'BAZEL_LLVM_PROFDATA', 'BAZEL_VC', "
+            "'BAZEL_VC_FULL_VERSION', 'BAZEL_VS', 'BAZEL_WINSDK_FULL_VERSION', "
+            "'CC', 'CFLAGS', 'CL', 'CMAKE', 'CPPFLAGS', 'CXX', 'CXXFLAGS', "
+            "'DEVENVDIR', 'DLLTOOL', 'EXTENSIONSDKDIR', 'FRAMEWORKDIR', "
+            "'FRAMEWORKDIR32', 'FRAMEWORKVERSION', 'FRAMEWORKVERSION32', "
+            "'GO', 'INCLUDE', 'LD', 'LDFLAGS', 'LIB', 'LIBPATH', 'LINK', "
+            "'MAKE', 'MESON', 'NASM', 'NETFXSDKDIR', 'NINJA', 'NM', "
+            "'OBJCOPY', 'OBJDUMP', 'PERL', 'PERL5LIB', 'PKG_CONFIG', "
+            "'PROTOC', 'RANLIB', 'RC', 'RUSTC', 'RUSTDOC', 'RUSTFLAGS', "
+            "'STRIP', 'UCRTVERSION', 'UNIVERSALCRTSDKDIR', 'USE_CLANG_CL', "
+            "'VCIDEINSTALLDIR', "
+            "'USE_CLANG_CL', 'VCINSTALLDIR', 'VISUALSTUDIOVERSION', 'VSINSTALLDIR', "
+            "'WINDRES', 'WINDOWSLIBPATH', 'YASM', '_CL_', '_LINK_'}\n"
+            "    tool_affixes = ('AR', 'AS', 'CC', 'CFLAGS', 'CXX', "
+            "'CXXFLAGS', 'LD')\n"
+            "    present = []\n"
+            "    for name in os.environ:\n"
+            "        upper = name.upper()\n"
+            "        if (upper in forbidden or upper.startswith(('CMAKE_', "
+            "'LLVM_', 'MINGW', 'MSVC', 'VCTOOLS', 'VSCMD_', 'WINDOWSSDK')) "
+            "or (upper.startswith('CARGO_TARGET_') and upper.endswith('_LINKER')) "
+            "or any(upper.startswith(f'{tool}_') or upper.endswith(f'_{tool}') "
+            "for tool in tool_affixes)):\n"
+            "            present.append(name)\n"
+            "    if present:\n"
+            "        raise SystemExit(f'compiler environment was not cleared: {present}')\n"
+            "    normalized_path = os.environ.get('PATH', '').lower().replace('\\\\', '/')\n"
+            "    forbidden_paths = ('/microsoft visual studio/', '/windows kits/', "
+            "'/microsoft sdks/', '/program files/llvm/', '/program files (x86)/llvm/', "
+            "'/msys64/', '/mingw32/', '/mingw64/')\n"
+            "    if any(path in normalized_path for path in forbidden_paths):\n"
+            "        raise SystemExit(f'compiler path was not cleared: {normalized_path}')\n"
+            "    expected_bazel_sh = os.environ['ProgramFiles'].replace('\\\\', '/') "
+            "+ '/Git/usr/bin/bash.exe'\n"
+            "    if os.environ.get('BAZEL_SH') != expected_bazel_sh:\n"
+            "        raise SystemExit(f'BAZEL_SH is not frozen: {os.environ.get(\"BAZEL_SH\")}')\n"
             "print(json.dumps(sys.argv[1:]))\n",
             encoding="utf-8",
         )
@@ -190,6 +229,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                     "CODEX_BAZEL_WINDOWS_EXECUTION_PATH": r"C:\substrate\bin",
                     "CODEX_BAZEL_WINDOWS_TEST_PATH": r"C:\runtime\bin",
                     "INCLUDE": r"C:\Visual Studio\include",
+                    "ProgramFiles": r"C:\Program Files",
                     "RUNNER_OS": "Windows",
                 },
                 "--windows-hybrid-execution",
@@ -222,7 +262,12 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 {
                     "CODEX_BAZEL_WINDOWS_EXECUTION_PATH": r"C:\substrate\bin",
                     "CODEX_BAZEL_WINDOWS_TEST_PATH": r"C:\runtime\bin",
+                    "CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER": "system-linker",
+                    "cc_x86_64_pc_windows_gnullvm": "system-cc",
+                    "DevEnvDir": r"C:\Visual Studio\Common7\IDE",
                     "INCLUDE": r"C:\Visual Studio\include",
+                    "PATH": os.environ["PATH"] + r":C:\Program Files\LLVM\bin",
+                    "ProgramFiles": r"C:\Program Files",
                     "RUNNER_OS": "Windows",
                 },
                 "--windows-cross-compile",
@@ -233,6 +278,9 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             )
 
             self.assertIn("--jobs=8", command)
+            self.assertIn(
+                "--shell_executable=C:/Program Files/Git/usr/bin/bash.exe", command
+            )
             self.assertIn("--host_platform=//:local_windows", command)
             self.assertIn("--platforms=//:windows_x86_64_gnullvm", command)
             self.assertIn(

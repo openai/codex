@@ -1,0 +1,23 @@
+# What: preserve the Windows system-library link flags that the stable wrapper
+# was dropping for gnullvm Rust toolchains.
+# Scope: Windows-gnullvm-only linker metadata for generated `rules_rs`
+# toolchains; the selected hermetic C++ toolchain remains the linker driver.
+
+diff --git a/rs/experimental/toolchains/declare_rustc_toolchains.bzl b/rs/experimental/toolchains/declare_rustc_toolchains.bzl
+--- a/rs/experimental/toolchains/declare_rustc_toolchains.bzl
++++ b/rs/experimental/toolchains/declare_rustc_toolchains.bzl
+@@ -104,7 +104,13 @@ def declare_rustc_toolchains(
+                 "@platforms//os:nixos": ["-ldl", "-lpthread"],
+                 "@platforms//os:openbsd": ["-lpthread"],
+                 "@platforms//os:ios": ["-lSystem", "-lobjc", "-Wl,-framework,Security", "-Wl,-framework,Foundation", "-lresolv"],
+-                # TODO: windows
++                "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": [
++                    "-ladvapi32",
++                    "-lws2_32",
++                    "-luserenv",
++                    "-lbcrypt",
++                ],
++                # TODO: other platforms
+                 "//conditions:default": [],
+             }),
+             default_edition = edition,

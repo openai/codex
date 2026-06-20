@@ -1,8 +1,7 @@
 # What: expose an exec-side Rust standard library alongside the target stdlib.
-# Why: mixed Windows toolchains compile repo crates for `windows-gnullvm`, but
-# exec-side helper binaries (build.rs, runners) may need the host MSVC stdlib.
-# The toolchain sysroot must therefore carry both stdlib trees so rustc can
-# resolve the correct one for each `--target`.
+# Why: Windows-gnullvm targets can use either Windows-gnullvm or Linux-RBE exec
+# configurations. Helper binaries (build.rs, runners, and proc macros) need the
+# exec triple's stdlib, so the sysroot must carry both trees when they differ.
 
 diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
 --- a/rust/toolchain.bzl

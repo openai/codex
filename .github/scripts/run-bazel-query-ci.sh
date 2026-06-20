@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/sanitize-bazel-windows-environment.sh"
+sanitize_bazel_windows_environment
+
 # Run target-discovery queries with the same startup settings as the main
 # build/test invocation so they can reuse the same Bazel server. Queries only
 # enumerate labels, so they intentionally do not select a CI build/test config

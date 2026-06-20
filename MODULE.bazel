@@ -108,7 +108,7 @@ single_version_override(
     patches = [
         "//patches:rules_rs_build_script_deps_annotation.patch",
         "//patches:rules_rs_windows_gnullvm_exec.patch",
-        "//patches:rules_rs_windows_exec_linker.patch",
+        "//patches:rules_rs_windows_gnullvm_link_flags.patch",
     ],
     version = "0.0.58",
 )
@@ -117,12 +117,7 @@ rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_r
 rules_rust.patch(
     patches = [
         "//patches:rules_rust_repository_set_replacement.patch",
-        "//patches:rules_rust_windows_gnullvm_build_script.patch",
-        "//patches:rules_rust_windows_exec_msvc_build_script_env.patch",
-        "//patches:rules_rust_windows_bootstrap_process_wrapper_linker.patch",
         "//patches:rules_rust_windows_build_script_runner_paths.patch",
-        "//patches:rules_rust_windows_msvc_direct_link_args.patch",
-        "//patches:rules_rust_windows_process_wrapper_skip_temp_outputs.patch",
         "//patches:rules_rust_windows_exec_bin_target.patch",
         "//patches:rules_rust_windows_exec_std.patch",
         "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
@@ -220,17 +215,6 @@ bazel_dep(name = "zstd", version = "1.5.7")
 crate.annotation(
     crate = "zstd-sys",
     gen_build_script = "on",
-    patch_args = ["-p1"],
-    patches = [
-        "//patches:zstd-sys_windows_msvc_include_dirs.patch",
-    ],
-)
-crate.annotation(
-    crate = "ring",
-    patch_args = ["-p1"],
-    patches = [
-        "//patches:ring_windows_msvc_include_dirs.patch",
-    ],
 )
 crate.annotation(
     build_script_env = {
@@ -240,8 +224,7 @@ crate.annotation(
     patch_args = ["-p1"],
     patches = [
         "//patches:aws-lc-sys_memcmp_check.patch",
-        "//patches:aws-lc-sys_windows_msvc_prebuilt_nasm.patch",
-        "//patches:aws-lc-sys_windows_msvc_memcmp_probe.patch",
+        "//patches:aws-lc-sys_windows_bazel_prebuilt_nasm.patch",
     ],
 )
 crate.annotation(
