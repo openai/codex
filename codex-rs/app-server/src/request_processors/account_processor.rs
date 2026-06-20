@@ -1,6 +1,5 @@
 use super::*;
 use chrono::DateTime;
-use codex_protocol::account::PlanType as AccountPlanType;
 
 mod rate_limit_resets;
 
@@ -970,15 +969,6 @@ impl AccountRequestProcessor {
             ));
         }
 
-        if !workspace_messages_allowed_for_plan(auth.account_plan_type()) {
-            return Self::workspace_messages_response(
-                BackendWorkspaceMessagesResponse {
-                    messages: Vec::new(),
-                },
-                /*feature_enabled*/ true,
-            );
-        }
-
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
         let messages = tokio::time::timeout(
@@ -1128,13 +1118,6 @@ fn workspace_message_type_from_backend(
         BackendWorkspaceMessageType::Announcement => WorkspaceMessageType::Announcement,
         BackendWorkspaceMessageType::Unknown => WorkspaceMessageType::Unknown,
     }
-}
-
-fn workspace_messages_allowed_for_plan(plan_type: Option<AccountPlanType>) -> bool {
-    matches!(
-        plan_type,
-        Some(AccountPlanType::Enterprise | AccountPlanType::EnterpriseCbpUsageBased)
-    )
 }
 
 fn workspace_messages_feature_disabled(err: &BackendRequestError) -> bool {

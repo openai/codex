@@ -2042,7 +2042,7 @@ Field notes:
 - `noCredit` means the account has no earned reset credits available.
 - Refetch `account/rateLimits/read` after consuming a reset instead of inferring updated windows from this response.
 
-### 9) Workspace messages (ChatGPT Enterprise)
+### 9) Workspace messages (ChatGPT)
 
 ```json
 { "method": "account/workspaceMessages/read", "id": 9 }
@@ -2051,7 +2051,7 @@ Field notes:
 ] } }
 ```
 
-When the upstream workspace-message feature is disabled, `featureEnabled` is `false` and `messages` is empty. Non-enterprise plans receive an empty enabled response.
+When the upstream workspace-message feature is disabled, `featureEnabled` is `false` and `messages` is empty.
 
 ### 10) Notify a workspace owner about a limit
 
