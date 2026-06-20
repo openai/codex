@@ -1,5 +1,4 @@
 mod environment;
-mod environment_support;
 
 use codex_protocol::models::ResponseItem;
 use indexmap::IndexMap;

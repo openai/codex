@@ -205,7 +205,7 @@ fn push_text_element(rendered: &mut String, name: &str, value: &str) {
     rendered.push_str(&format!("</{name}>"));
 }
 
-pub(super) fn push_xml_escaped_text(rendered: &mut String, value: &str) {
+pub(crate) fn push_xml_escaped_text(rendered: &mut String, value: &str) {
     for ch in value.chars() {
         match ch {
             '&' => rendered.push_str("&amp;"),
