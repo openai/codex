@@ -119,6 +119,76 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             ],
         )
 
+    def test_windows_argument_lint_separates_remote_build_and_test_environments(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            fake_bazel = Path(temp_dir) / "fake-bazel"
+            fake_bazel.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "import sys\n"
+                "print(json.dumps(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+
+            env = os.environ.copy()
+            for name in (
+                "GITHUB_ACTIONS",
+                "GITHUB_EVENT_NAME",
+                "GITHUB_EVENT_PATH",
+                "GITHUB_REPOSITORY",
+            ):
+                env.pop(name, None)
+            env.update(
+                {
+                    "BUILDBUDDY_API_KEY": "token",
+                    "CODEX_BAZEL_BIN": str(fake_bazel),
+                    "CODEX_BAZEL_WINDOWS_PATH": r"C:\runtime\bin",
+                    "INCLUDE": r"C:\Visual Studio\include",
+                    "RUNNER_OS": "Windows",
+                }
+            )
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(Path(__file__).with_name("run-bazel-ci.sh")),
+                    "--",
+                    "build",
+                    "--config=argument-comment-lint",
+                    "--",
+                    "//codex-rs/arg0:arg0",
+                ],
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            command = next(
+                json.loads(line)
+                for line in result.stdout.splitlines()
+                if line.startswith("[")
+            )
+            self.assertIn("--config=ci-windows-argument-lint", command)
+            self.assertIn("--shell_executable=/bin/bash", command)
+            self.assertIn("--action_env=PATH=/usr/bin:/bin", command)
+            self.assertIn("--host_action_env=PATH=/usr/bin:/bin", command)
+            self.assertIn(r"--test_env=PATH=C:\runtime\bin", command)
+            self.assertNotIn("--host_platform=//:rbe", command)
+            self.assertNotIn("--action_env=INCLUDE", command)
+            self.assertNotIn("--host_action_env=INCLUDE", command)
+            self.assertFalse(
+                any(
+                    arg.startswith("--action_env=PATH=C:")
+                    or arg.startswith("--host_action_env=PATH=C:")
+                    for arg in command
+                )
+            )
+
     def test_query_remote_configuration_is_inserted_before_expression(self) -> None:
         expression = 'kind("rust_library rule", //codex-rs/...)'
         env = {"BUILDBUDDY_API_KEY": "fork-token"}

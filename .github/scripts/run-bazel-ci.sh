@@ -296,16 +296,18 @@ if [[ $remote_download_toplevel -eq 1 ]]; then
   post_config_bazel_args+=(--remote_download_toplevel)
 fi
 
-if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-  # `--enable_platform_specific_config` expands `common:windows` on Windows
-  # hosts after ordinary rc configs, which can override `ci-windows-cross`'s
-  # RBE host platform. Repeat the host platform on the command line so V8 and
-  # other genrules execute on Linux RBE workers instead of Git Bash locally.
-  #
-  # Bazel also derives the default genrule shell from the client host. Without
-  # an explicit shell executable, remote Linux actions can be asked to run
-  # `C:\Program Files\Git\usr\bin\bash.exe`.
-  post_config_bazel_args+=(--host_platform=//:rbe --shell_executable=/bin/bash)
+if [[ "${RUNNER_OS:-}" == "Windows" && -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || "$ci_config" == "ci-windows-argument-lint" ) ]]; then
+  # Bazel derives the default genrule shell from the client host. Remote Linux
+  # actions must not be asked to run Git Bash from the Windows runner.
+  post_config_bazel_args+=(--shell_executable=/bin/bash)
+
+  if [[ $windows_cross_compile -eq 1 ]]; then
+    # `--enable_platform_specific_config` expands `common:windows` on Windows
+    # hosts after ordinary rc configs, which can override `ci-windows-cross`'s
+    # RBE host platform. Repeat it on the command line for cross builds. The
+    # argument-lint lane keeps its gnullvm host platform for local Rust actions.
+    post_config_bazel_args+=(--host_platform=//:rbe)
+  fi
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
@@ -334,10 +336,10 @@ fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   pass_windows_build_env=1
-  if [[ $windows_cross_compile -eq 1 && -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-    # Remote build actions execute on Linux RBE workers. Passing the Windows
-    # runner's build environment there makes Bazel genrules try to execute
-    # C:\Program Files\Git\usr\bin\bash.exe on Linux.
+  if [[ -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || "$ci_config" == "ci-windows-argument-lint" ) ]]; then
+    # Generic build actions execute on Linux RBE workers. Passing the Windows
+    # runner's compiler environment there leaks VS/SDK paths and makes genrules
+    # try to execute tools that do not exist on the worker.
     pass_windows_build_env=0
   fi
 
@@ -374,10 +376,10 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
       "--action_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}"
       "--host_action_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}"
     )
-  elif [[ $windows_cross_compile -eq 1 ]]; then
+  else
     # Remote build actions run on Linux RBE workers. Give their shell snippets
-    # a Linux PATH while preserving CODEX_BAZEL_WINDOWS_PATH below for local
-    # Windows test execution.
+    # a frozen Linux PATH while preserving CODEX_BAZEL_WINDOWS_PATH below only
+    # for local Windows test execution.
     post_config_bazel_args+=(
       "--action_env=PATH=/usr/bin:/bin"
       "--host_action_env=PATH=/usr/bin:/bin"
