@@ -5,6 +5,7 @@ use std::ffi::c_void;
 use std::path::Path;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -29,6 +30,7 @@ use windows_sys::Win32::Security::GENERIC_MAPPING;
 use windows_sys::Win32::Security::GetAce;
 use windows_sys::Win32::Security::GetAclInformation;
 use windows_sys::Win32::Security::MapGenericMask;
+use windows_sys::Win32::Security::WRITE_DAC;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
@@ -59,11 +61,11 @@ const DENY_ACCESS: i32 = 3;
 ///
 /// # Safety
 /// Caller must free the returned security descriptor with `LocalFree` and pass an existing path.
-pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> {
+unsafe fn open_file_for_security_info(path: &Path, desired_access: u32) -> Result<HANDLE> {
     let wpath = to_wide(path);
     let h = CreateFileW(
         wpath.as_ptr(),
-        READ_CONTROL,
+        desired_access,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         std::ptr::null_mut(),
         OPEN_EXISTING,
@@ -73,6 +75,15 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> 
     if h == INVALID_HANDLE_VALUE {
         return Err(anyhow!("CreateFileW failed for {}", path.display()));
     }
+    Ok(h)
+}
+
+/// Fetch DACL via handle-based query; caller must LocalFree the returned SD.
+///
+/// # Safety
+/// Caller must free the returned security descriptor with `LocalFree` and pass an existing path.
+pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> {
+    let h = open_file_for_security_info(path, READ_CONTROL)?;
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
     let code = GetSecurityInfo(
@@ -310,7 +321,27 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     allow_mask: u32,
     inheritance: u32,
 ) -> Result<bool> {
-    let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
+    let h = open_file_for_security_info(path, READ_CONTROL | WRITE_DAC)?;
+    let mut p_sd: *mut c_void = std::ptr::null_mut();
+    let mut p_dacl: *mut ACL = std::ptr::null_mut();
+    let code = GetSecurityInfo(
+        h,
+        1, // SE_FILE_OBJECT
+        DACL_SECURITY_INFORMATION,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        &mut p_dacl,
+        std::ptr::null_mut(),
+        &mut p_sd,
+    );
+    if code != ERROR_SUCCESS {
+        CloseHandle(h);
+        return Err(anyhow!(
+            "GetSecurityInfo failed for {}: {}",
+            path.display(),
+            code
+        ));
+    }
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
     for sid in sids {
         if dacl_mask_allows(p_dacl, &[*sid], allow_mask, /*require_all_bits*/ true) {
@@ -339,9 +370,9 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
             &mut p_new_dacl,
         );
         if code2 == ERROR_SUCCESS {
-            let code3 = SetNamedSecurityInfoW(
-                to_wide(path).as_ptr() as *mut u16,
-                1,
+            let code3 = SetSecurityInfo(
+                h,
+                1, // SE_FILE_OBJECT
                 DACL_SECURITY_INFORMATION,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -354,21 +385,24 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
                     LocalFree(p_new_dacl as HLOCAL);
                 }
             } else {
+                CloseHandle(h);
                 if !p_new_dacl.is_null() {
                     LocalFree(p_new_dacl as HLOCAL);
                 }
                 if !p_sd.is_null() {
                     LocalFree(p_sd as HLOCAL);
                 }
-                return Err(anyhow!("SetNamedSecurityInfoW failed: {code3}"));
+                return Err(anyhow!("SetSecurityInfo failed: {code3}"));
             }
         } else {
+            CloseHandle(h);
             if !p_sd.is_null() {
                 LocalFree(p_sd as HLOCAL);
             }
             return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
         }
     }
+    CloseHandle(h);
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
