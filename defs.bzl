@@ -486,7 +486,10 @@ def codex_rust_crate(
                 ],
                 rustc_env = rustc_env,
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
-                tags = test_tags + ["manual"],
+                tags = test_tags + [
+                    "manual",
+                    "windows-gnullvm-incompatible",
+                ],
             )
 
             workspace_root_test(
@@ -500,7 +503,7 @@ def codex_rust_crate(
                 test_bin = ":" + integration_test_binary,
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
-                tags = test_tags,
+                tags = test_tags + ["windows-gnullvm-incompatible"],
                 **test_kwargs
             )
         else:
@@ -526,7 +529,7 @@ def codex_rust_crate(
                 rustc_env = rustc_env,
                 env = integration_test_cargo_env,
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
-                tags = test_tags,
+                tags = test_tags + ["windows-gnullvm-incompatible"],
                 **test_kwargs
             )
 

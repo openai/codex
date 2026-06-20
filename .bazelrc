@@ -207,8 +207,8 @@ common:ci-windows-cross --test_env=RUST_TEST_THREADS=1
 # the hidden dynamic-tool callback test, which currently times out on Windows.
 common:ci-windows-cross --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=powershell,suite::code_mode::code_mode_can_call_hidden_dynamic_tools
 common:ci-windows-cross --platforms=//:windows_x86_64_gnullvm
-common:ci-windows-cross --extra_execution_platforms=//:rbe,//:windows_x86_64_msvc
-common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain
+common:ci-windows-cross --extra_execution_platforms=//:rbe,//:windows_x86_64_gnullvm
+common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_gnullvm_host_toolchain
 
 # Linux-only V8 CI config.
 common:ci-v8 --config=ci

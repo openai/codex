@@ -1,0 +1,12 @@
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+cc_test(
+    name = "stack-protector-probe",
+    srcs = ["stack_protector_probe.c"],
+    copts = ["-fstack-protector-all"],
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
+    ],
+)

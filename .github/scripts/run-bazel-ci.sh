@@ -5,7 +5,6 @@ set -euo pipefail
 print_failed_bazel_test_logs=0
 print_failed_bazel_action_summary=0
 remote_download_toplevel=0
-windows_msvc_host_platform=0
 windows_cross_compile=0
 windows_hybrid_execution=0
 
@@ -21,10 +20,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --remote-download-toplevel)
       remote_download_toplevel=1
-      shift
-      ;;
-    --windows-msvc-host-platform)
-      windows_msvc_host_platform=1
       shift
       ;;
     --windows-cross-compile)
@@ -47,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--print-failed-action-summary] [--remote-download-toplevel] [--windows-msvc-host-platform] [--windows-cross-compile] [--windows-hybrid-execution] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--print-failed-test-logs] [--print-failed-action-summary] [--remote-download-toplevel] [--windows-cross-compile] [--windows-hybrid-execution] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -102,9 +97,7 @@ print_bazel_test_log_tails() {
   local -a bazel_info_args=(info)
   if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
     # `bazel info` needs the same CI config as the failed test invocation so
-    # platform-specific output roots match. On Windows, omitting `ci-windows`
-    # would point at `local_windows-fastbuild` even when the test ran with the
-    # MSVC host platform under `local_windows_msvc-fastbuild`.
+    # platform-specific output roots match.
     bazel_info_args+=("--config=${ci_config}")
   fi
 
@@ -113,7 +106,7 @@ print_bazel_test_log_tails() {
   # mode can make `bazel info` fail, which would hide the real test log path.
   for arg in "${post_config_bazel_args[@]}"; do
     case "$arg" in
-      --host_platform=* | --repo_contents_cache=* | --repository_cache=*)
+      --host_platform=* | --platforms=* | --repo_contents_cache=* | --repository_cache=*)
         bazel_info_args+=("$arg")
         ;;
     esac
@@ -267,31 +260,7 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
-if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
-  # Windows cross-compilation depends on authenticated RBE. Preserve the local
-  # Windows build shape when credentials are unavailable.
-  ci_config=ci-windows
-  windows_msvc_host_platform=1
-fi
-
 post_config_bazel_args=()
-if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; then
-  has_host_platform_override=0
-  for arg in "${bazel_args[@]}"; do
-    if [[ "$arg" == --host_platform=* ]]; then
-      has_host_platform_override=1
-      break
-    fi
-  done
-
-  if [[ $has_host_platform_override -eq 0 ]]; then
-    # Use the MSVC Windows platform for jobs that need helper binaries like
-    # Rust test wrappers and V8 generators to resolve a compatible toolchain.
-    # Callers that need a different Windows target platform should pass an
-    # explicit `--platforms=...` flag.
-    post_config_bazel_args+=("--host_platform=//:local_windows_msvc")
-  fi
-fi
 
 if [[ $remote_download_toplevel -eq 1 ]]; then
   # Override the CI config's remote_download_minimal setting when callers need
@@ -308,16 +277,22 @@ if [[ "${RUNNER_OS:-}" == "Windows" && -n "${BUILDBUDDY_API_KEY:-}" && ( $window
     # `--enable_platform_specific_config` expands `common:windows` on Windows
     # hosts after ordinary rc configs, which can override `ci-windows-cross`'s
     # RBE host platform. Repeat it on the command line for cross builds. The
-    # Hybrid execution keeps its gnullvm host platform for local Rust actions.
+    # hybrid execution keeps its gnullvm host platform for local Rust actions.
     post_config_bazel_args+=(--host_platform=//:rbe)
   fi
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
   # The Windows cross-compile config depends on authenticated remote
-  # execution. When credentials are unavailable, keep the local build shape
-  # and its lower concurrency cap.
-  post_config_bazel_args+=(--jobs=8)
+  # execution. When credentials are unavailable, spell out the equivalent
+  # local gnullvm platforms and keep the lower concurrency cap.
+  post_config_bazel_args+=(
+    --host_platform=//:local_windows
+    --platforms=//:windows_x86_64_gnullvm
+    --extra_execution_platforms=//:windows_x86_64_gnullvm
+    --extra_toolchains=//:windows_gnullvm_tests_on_gnullvm_host_toolchain
+    --jobs=8
+  )
 fi
 
 if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
@@ -338,57 +313,28 @@ if [[ -n "${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR:-}" ]]; then
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-  pass_windows_build_env=1
-  if [[ -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || $windows_hybrid_execution -eq 1 ) ]]; then
-    # Generic build actions execute on Linux RBE workers. Passing the Windows
-    # runner's compiler environment there leaks VS/SDK paths and makes genrules
-    # try to execute tools that do not exist on the worker.
-    pass_windows_build_env=0
+  if [[ -z "${CODEX_BAZEL_WINDOWS_EXECUTION_PATH:-}" ]]; then
+    echo "CODEX_BAZEL_WINDOWS_EXECUTION_PATH must be set for Windows Bazel CI." >&2
+    exit 1
   fi
-
-  if [[ $pass_windows_build_env -eq 1 ]]; then
-    windows_action_env_vars=(
-      INCLUDE
-      LIB
-      LIBPATH
-      UCRTVersion
-      UniversalCRTSdkDir
-      VCINSTALLDIR
-      VCToolsInstallDir
-      WindowsLibPath
-      WindowsSdkBinPath
-      WindowsSdkDir
-      WindowsSDKLibVersion
-      WindowsSDKVersion
-    )
-
-    for env_var in "${windows_action_env_vars[@]}"; do
-      if [[ -n "${!env_var:-}" ]]; then
-        post_config_bazel_args+=("--action_env=${env_var}" "--host_action_env=${env_var}")
-      fi
-    done
-  fi
-
-  if [[ -z "${CODEX_BAZEL_WINDOWS_PATH:-}" ]]; then
-    echo "CODEX_BAZEL_WINDOWS_PATH must be set for Windows Bazel CI." >&2
+  if [[ -z "${CODEX_BAZEL_WINDOWS_TEST_PATH:-}" ]]; then
+    echo "CODEX_BAZEL_WINDOWS_TEST_PATH must be set for Windows Bazel CI." >&2
     exit 1
   fi
 
-  if [[ $pass_windows_build_env -eq 1 ]]; then
-    post_config_bazel_args+=(
-      "--action_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}"
-      "--host_action_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}"
-    )
-  else
+  windows_execution_path="${CODEX_BAZEL_WINDOWS_EXECUTION_PATH}"
+  if [[ -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || $windows_hybrid_execution -eq 1 ) ]]; then
     # Remote build actions run on Linux RBE workers. Give their shell snippets
-    # a frozen Linux PATH while preserving CODEX_BAZEL_WINDOWS_PATH below only
-    # for local Windows test execution.
-    post_config_bazel_args+=(
-      "--action_env=PATH=/usr/bin:/bin"
-      "--host_action_env=PATH=/usr/bin:/bin"
-    )
+    # a frozen Linux execution-substrate path. Windows Rust and build-script
+    # actions receive the same value, which intentionally cannot discover
+    # runner-installed Windows compilers or SDK tools.
+    windows_execution_path="/usr/bin:/bin"
   fi
-  post_config_bazel_args+=("--test_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}")
+  post_config_bazel_args+=(
+    "--action_env=PATH=${windows_execution_path}"
+    "--host_action_env=PATH=${windows_execution_path}"
+    "--test_env=PATH=${CODEX_BAZEL_WINDOWS_TEST_PATH}"
+  )
 fi
 
 bazel_console_log="$(mktemp)"

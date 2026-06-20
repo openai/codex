@@ -12,6 +12,66 @@ import run_bazel_with_buildbuddy
 
 
 class RunBazelWithBuildBuddyTest(unittest.TestCase):
+    def run_bazel_ci(
+        self,
+        temp_dir: str,
+        env_overrides: dict[str, str],
+        *args: str,
+    ) -> list[str]:
+        fake_bazel_impl = Path(temp_dir) / "fake-bazel.py"
+        fake_bazel_impl.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import sys\n"
+            "print(json.dumps(sys.argv[1:]))\n",
+            encoding="utf-8",
+        )
+        if os.name == "nt":
+            fake_bazel = Path(temp_dir) / "fake-bazel.cmd"
+            fake_bazel.write_text(
+                f'@"{sys.executable}" "{fake_bazel_impl}" %*\n',
+                encoding="utf-8",
+            )
+        else:
+            fake_bazel = fake_bazel_impl
+            fake_bazel.chmod(0o755)
+
+        env = os.environ.copy()
+        for name in (
+            "BUILDBUDDY_API_KEY",
+            "GITHUB_ACTIONS",
+            "GITHUB_EVENT_NAME",
+            "GITHUB_EVENT_PATH",
+            "GITHUB_REPOSITORY",
+        ):
+            env.pop(name, None)
+        env.update(env_overrides)
+        env["CODEX_BAZEL_BIN"] = str(fake_bazel)
+
+        bash = "bash"
+        if os.name == "nt":
+            bash = str(Path(os.environ["ProgramFiles"]) / "Git" / "bin" / "bash.exe")
+            self.assertTrue(Path(bash).is_file(), bash)
+
+        result = subprocess.run(
+            [
+                bash,
+                str(Path(__file__).with_name("run-bazel-ci.sh")),
+                *args,
+            ],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return next(
+            json.loads(line)
+            for line in result.stdout.splitlines()
+            if line.startswith("[")
+        )
+
     def github_env(
         self,
         temp_dir: str,
@@ -123,69 +183,21 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         self,
     ) -> None:
         with TemporaryDirectory() as temp_dir:
-            fake_bazel_impl = Path(temp_dir) / "fake-bazel.py"
-            fake_bazel_impl.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json\n"
-                "import sys\n"
-                "print(json.dumps(sys.argv[1:]))\n",
-                encoding="utf-8",
-            )
-            if os.name == "nt":
-                fake_bazel = Path(temp_dir) / "fake-bazel.cmd"
-                fake_bazel.write_text(
-                    f'@"{sys.executable}" "{fake_bazel_impl}" %*\n',
-                    encoding="utf-8",
-                )
-            else:
-                fake_bazel = fake_bazel_impl
-                fake_bazel.chmod(0o755)
-
-            env = os.environ.copy()
-            for name in (
-                "GITHUB_ACTIONS",
-                "GITHUB_EVENT_NAME",
-                "GITHUB_EVENT_PATH",
-                "GITHUB_REPOSITORY",
-            ):
-                env.pop(name, None)
-            env.update(
+            command = self.run_bazel_ci(
+                temp_dir,
                 {
                     "BUILDBUDDY_API_KEY": "token",
-                    "CODEX_BAZEL_BIN": str(fake_bazel),
-                    "CODEX_BAZEL_WINDOWS_PATH": r"C:\runtime\bin",
+                    "CODEX_BAZEL_WINDOWS_EXECUTION_PATH": r"C:\substrate\bin",
+                    "CODEX_BAZEL_WINDOWS_TEST_PATH": r"C:\runtime\bin",
                     "INCLUDE": r"C:\Visual Studio\include",
                     "RUNNER_OS": "Windows",
-                }
-            )
-
-            bash = "bash"
-            if os.name == "nt":
-                bash = str(Path(os.environ["ProgramFiles"]) / "Git" / "bin" / "bash.exe")
-                self.assertTrue(Path(bash).is_file(), bash)
-
-            result = subprocess.run(
-                [
-                    bash,
-                    str(Path(__file__).with_name("run-bazel-ci.sh")),
-                    "--windows-hybrid-execution",
-                    "--",
-                    "build",
-                    "--config=argument-comment-lint",
-                    "--",
-                    "//codex-rs/arg0:arg0",
-                ],
-                env=env,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            command = next(
-                json.loads(line)
-                for line in result.stdout.splitlines()
-                if line.startswith("[")
+                },
+                "--windows-hybrid-execution",
+                "--",
+                "build",
+                "--config=argument-comment-lint",
+                "--",
+                "//codex-rs/arg0:arg0",
             )
             self.assertIn("--config=ci-windows-hybrid", command)
             self.assertIn("--shell_executable=/bin/bash", command)
@@ -202,6 +214,40 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                     for arg in command
                 )
             )
+
+    def test_keyless_windows_cross_build_uses_gnullvm_substrate(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            command = self.run_bazel_ci(
+                temp_dir,
+                {
+                    "CODEX_BAZEL_WINDOWS_EXECUTION_PATH": r"C:\substrate\bin",
+                    "CODEX_BAZEL_WINDOWS_TEST_PATH": r"C:\runtime\bin",
+                    "INCLUDE": r"C:\Visual Studio\include",
+                    "RUNNER_OS": "Windows",
+                },
+                "--windows-cross-compile",
+                "--",
+                "build",
+                "--",
+                "//codex-rs/arg0:arg0",
+            )
+
+            self.assertIn("--jobs=8", command)
+            self.assertIn("--host_platform=//:local_windows", command)
+            self.assertIn("--platforms=//:windows_x86_64_gnullvm", command)
+            self.assertIn(
+                "--extra_execution_platforms=//:windows_x86_64_gnullvm", command
+            )
+            self.assertIn(
+                "--extra_toolchains=//:windows_gnullvm_tests_on_gnullvm_host_toolchain",
+                command,
+            )
+            self.assertIn(r"--action_env=PATH=C:\substrate\bin", command)
+            self.assertIn(r"--host_action_env=PATH=C:\substrate\bin", command)
+            self.assertIn(r"--test_env=PATH=C:\runtime\bin", command)
+            self.assertFalse(any("msvc" in arg.lower() for arg in command))
+            self.assertNotIn("--action_env=INCLUDE", command)
+            self.assertNotIn("--host_action_env=INCLUDE", command)
 
     def test_query_remote_configuration_is_inserted_before_expression(self) -> None:
         expression = 'kind("rust_library rule", //codex-rs/...)'

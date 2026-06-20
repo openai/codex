@@ -49,11 +49,11 @@ platform(
 )
 
 toolchain(
-    name = "windows_gnullvm_tests_on_msvc_host_toolchain",
+    name = "windows_gnullvm_tests_on_gnullvm_host_toolchain",
     exec_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
-        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
     ],
     target_compatible_with = [
         "@platforms//cpu:x86_64",

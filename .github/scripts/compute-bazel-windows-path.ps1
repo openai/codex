@@ -1,113 +1,59 @@
 <#
-BuildBuddy cache keys include the action and test environment, so Bazel should
-not inherit the full hosted-runner PATH on Windows. That PATH includes volatile
-tool entries, such as Maven, that can change independently of this repo and
-cause avoidable cache misses.
-
-This script derives a smaller, cache-stable PATH that keeps the Windows
-toolchain entries Bazel-backed CI tasks need: MSVC and Windows SDK paths,
-MinGW runtime DLL paths for gnullvm-built tests, Git, PowerShell, Node, Python,
-DotSlash, and the standard Windows system directories.
-`setup-bazel-ci` runs this after exporting the MSVC environment, and the script
-publishes the result via `GITHUB_ENV` as `CODEX_BAZEL_WINDOWS_PATH` so later
-steps can pass that explicit PATH to Bazel.
+Bazel build actions must not inherit the hosted-runner PATH. Keep their
+execution substrate fixed to Windows and the Git-for-Windows shell utilities
+that Bazel genrules already use. Test actions get a separate fixed path with
+the product runtimes exercised by Windows tests (Git, PowerShell, and
+DotSlash). Compiler, SDK, MinGW, hosted Python, and hosted Node directories are
+intentionally absent from both values.
 #>
 
-$stablePathEntries = New-Object System.Collections.Generic.List[string]
-$seenEntries = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-$windowsAppsPath = if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-  $null
-} else {
-  "$($env:LOCALAPPDATA)\Microsoft\WindowsApps"
-}
 $windowsDir = if ($env:WINDIR) {
   $env:WINDIR
 } elseif ($env:SystemRoot) {
   $env:SystemRoot
 } else {
-  $null
+  throw 'WINDIR or SystemRoot must be set.'
 }
 
-function Add-StablePathEntry {
-  param([string]$PathEntry)
-
-  if ([string]::IsNullOrWhiteSpace($PathEntry)) {
-    return
-  }
-
-  if ($seenEntries.Add($PathEntry)) {
-    [void]$stablePathEntries.Add($PathEntry)
-  }
+if ([string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+  throw 'ProgramFiles must be set.'
 }
-
-foreach ($pathEntry in ($env:PATH -split ';')) {
-  if ([string]::IsNullOrWhiteSpace($pathEntry)) {
-    continue
-  }
-
-  if (
-    $pathEntry -like '*Microsoft Visual Studio*' -or
-    $pathEntry -like '*Windows Kits*' -or
-    $pathEntry -like '*Microsoft SDKs*' -or
-    $pathEntry -eq 'C:\mingw64\bin' -or
-    $pathEntry -like 'C:\msys64\*\bin' -or
-    $pathEntry -like 'C:\Program Files\Git\*' -or
-    $pathEntry -like 'C:\Program Files\PowerShell\*' -or
-    $pathEntry -like 'C:\hostedtoolcache\windows\node\*' -or
-    $pathEntry -like 'C:\hostedtoolcache\windows\Python\*' -or
-    $pathEntry -eq 'D:\a\_temp\install-dotslash\bin' -or
-    ($windowsDir -and ($pathEntry -eq $windowsDir -or $pathEntry -like "${windowsDir}\*"))
-  ) {
-    Add-StablePathEntry $pathEntry
-  }
+if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+  throw 'LOCALAPPDATA must be set.'
 }
-
-$gitCommand = Get-Command git -ErrorAction SilentlyContinue
-if ($gitCommand) {
-  Add-StablePathEntry (Split-Path $gitCommand.Source -Parent)
-}
-
-$nodeCommand = Get-Command node -ErrorAction SilentlyContinue
-if ($nodeCommand) {
-  Add-StablePathEntry (Split-Path $nodeCommand.Source -Parent)
-}
-
-$python3Command = Get-Command python3 -ErrorAction SilentlyContinue
-if ($python3Command) {
-  Add-StablePathEntry (Split-Path $python3Command.Source -Parent)
-}
-
-$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-if ($pythonCommand) {
-  Add-StablePathEntry (Split-Path $pythonCommand.Source -Parent)
-}
-
-$pwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
-if ($pwshCommand) {
-  Add-StablePathEntry (Split-Path $pwshCommand.Source -Parent)
-}
-
-foreach ($mingwPath in @('C:\mingw64\bin', 'C:\msys64\mingw64\bin', 'C:\msys64\ucrt64\bin')) {
-  if (Test-Path $mingwPath) {
-    Add-StablePathEntry $mingwPath
-  }
-}
-
-if ($windowsAppsPath) {
-  Add-StablePathEntry $windowsAppsPath
-}
-
-if ($stablePathEntries.Count -eq 0) {
-  throw 'Failed to derive cache-stable Windows PATH.'
-}
-
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) {
   throw 'GITHUB_ENV must be set.'
 }
 
-$stablePath = $stablePathEntries -join ';'
-Write-Host 'Derived CODEX_BAZEL_WINDOWS_PATH entries:'
-foreach ($pathEntry in $stablePathEntries) {
-  Write-Host "  $pathEntry"
+$gitRoot = Join-Path $env:ProgramFiles 'Git'
+$executionPathEntries = @(
+  (Join-Path $gitRoot 'usr\bin'),
+  (Join-Path $windowsDir 'System32'),
+  $windowsDir
+)
+$testPathEntries = @(
+  (Join-Path $env:ProgramFiles 'PowerShell\7'),
+  (Join-Path $gitRoot 'bin'),
+  (Join-Path $gitRoot 'usr\bin'),
+  (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'),
+  (Join-Path $windowsDir 'System32'),
+  $windowsDir
+)
+
+$requiredPathEntries = ($executionPathEntries + $testPathEntries) | Select-Object -Unique
+foreach ($pathEntry in $requiredPathEntries) {
+  if (-not (Test-Path $pathEntry)) {
+    throw "Required Windows Bazel substrate path does not exist: $pathEntry"
+  }
 }
-"CODEX_BAZEL_WINDOWS_PATH=$stablePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+$executionPath = $executionPathEntries -join ';'
+$testPath = $testPathEntries -join ';'
+
+Write-Host 'Frozen CODEX_BAZEL_WINDOWS_EXECUTION_PATH entries:'
+$executionPathEntries | ForEach-Object { Write-Host "  $_" }
+Write-Host 'Frozen CODEX_BAZEL_WINDOWS_TEST_PATH entries:'
+$testPathEntries | ForEach-Object { Write-Host "  $_" }
+
+"CODEX_BAZEL_WINDOWS_EXECUTION_PATH=$executionPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+"CODEX_BAZEL_WINDOWS_TEST_PATH=$testPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

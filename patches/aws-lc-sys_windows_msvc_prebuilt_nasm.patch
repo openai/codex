@@ -73,12 +73,12 @@ diff --git a/builder/main.rs b/builder/main.rs
 index 51a9bc1..e714ba4 100644
 --- a/builder/main.rs
 +++ b/builder/main.rs
-@@ -723,14 +723,31 @@ fn get_crate_cflags() -> Option<String> {
+@@ -723,14 +723,35 @@ fn get_crate_cflags() -> Option<String> {
          .or(optional_env_optional_crate_target("CFLAGS"))
  }
  
-+pub(crate) fn is_bazel_windows_msvc_build_script() -> bool {
-+    if !target().ends_with("windows-msvc") {
++pub(crate) fn is_bazel_windows_build_script() -> bool {
++    if target_os() != "windows" {
 +        return false;
 +    }
 +
@@ -93,8 +93,12 @@ index 51a9bc1..e714ba4 100644
 +        .any(|component| component.as_os_str() == "bazel-out")
 +}
 +
++pub(crate) fn is_bazel_windows_msvc_build_script() -> bool {
++    target().ends_with("windows-msvc") && is_bazel_windows_build_script()
++}
++
  fn use_prebuilt_nasm() -> bool {
-+    let use_prebuilt_for_bazel_windows_msvc = is_bazel_windows_msvc_build_script();
++    let use_prebuilt_for_bazel_windows = is_bazel_windows_build_script();
      target_os() == "windows"
          && target_arch() == "x86_64"
          && !is_no_asm()
@@ -102,17 +106,17 @@ index 51a9bc1..e714ba4 100644
          && Some(false) != allow_prebuilt_nasm() // not prevented by environment
          && !is_disable_prebuilt_nasm() // not prevented by feature
          // permitted by environment or by feature
-+        && (use_prebuilt_for_bazel_windows_msvc || !test_nasm_command())
++        && (use_prebuilt_for_bazel_windows || !test_nasm_command())
          && (Some(true) == allow_prebuilt_nasm() || is_prebuilt_nasm())
  }
  
-@@ -817,8 +834,12 @@ fn main() {
+@@ -817,8 +838,12 @@ fn main() {
      initialize();
      prepare_cargo_cfg();
  
 -    let manifest_dir = current_dir();
 -    let manifest_dir = dunce::canonicalize(Path::new(&manifest_dir)).unwrap();
-+    let manifest_dir = if is_bazel_windows_msvc_build_script() {
++    let manifest_dir = if is_bazel_windows_build_script() {
 +        PathBuf::from(cargo_env("CARGO_MANIFEST_DIR"))
 +    } else {
 +        let manifest_dir = current_dir();
