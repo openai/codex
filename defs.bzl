@@ -3,6 +3,7 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
 load("//bazel/rules/testing:foreign_platform_binary.bzl", "foreign_platform_binary")
+load("//bazel/rules/testing:hermetic_test_python.bzl", "HermeticTestPythonInfo")
 load("//bazel/rules/testing/wine:wine_runtime.bzl", "WINE_TEST_TARGET_COMPATIBLE_WITH", "wine_test_runtime")
 
 # Match Cargo's Windows linker behavior so Bazel-built binaries and tests use
@@ -75,6 +76,10 @@ def _workspace_root_test_impl(ctx):
         runfile = _runfile_env_file(runfile_dep)
         runfiles = runfiles.merge(ctx.runfiles(files = [runfile]))
         runfiles = runfiles.merge(runfile_dep[DefaultInfo].default_runfiles)
+    if ctx.attr.hermetic_test_python != None:
+        test_python = ctx.attr.hermetic_test_python[HermeticTestPythonInfo].interpreter
+        runfiles = runfiles.merge(ctx.runfiles(files = [test_python]))
+        runfiles = runfiles.merge(ctx.attr.hermetic_test_python[DefaultInfo].default_runfiles)
 
     location_targets = {}
     for target in (
@@ -112,6 +117,10 @@ def _windows_runfile_env_exports(ctx):
         runfile = _runfile_env_file(runfile_dep)
         lines.append('call :resolve_runfile {} "{}"'.format(env_var, _runfile_logical_path(runfile)))
         lines.append("if errorlevel 1 exit /b 1")
+    if ctx.attr.hermetic_test_python != None:
+        test_python = ctx.attr.hermetic_test_python[HermeticTestPythonInfo].interpreter
+        lines.append('call :resolve_runfile CODEX_BAZEL_TEST_PYTHON "{}"'.format(_runfile_logical_path(test_python)))
+        lines.append("if errorlevel 1 exit /b 1")
     return "\n".join(lines)
 
 def _runfile_env_file(target):
@@ -138,7 +147,7 @@ def _windows_workspace_root_setup(ctx):
     return """set "INSTA_WORKSPACE_ROOT=%workspace_root%"
 cd /d "%workspace_root%" || exit /b 1"""
 
-workspace_root_test = rule(
+_workspace_root_test = rule(
     implementation = _workspace_root_test_impl,
     test = True,
     toolchains = ["@bazel_tools//tools/test:default_test_toolchain_type"],
@@ -150,6 +159,10 @@ workspace_root_test = rule(
             allow_files = True,
         ),
         "env": attr.string_dict(),
+        "hermetic_test_python": attr.label(
+            cfg = "target",
+            providers = [HermeticTestPythonInfo],
+        ),
         "runfile_env": attr.label_keyed_string_dict(
             cfg = "target",
         ),
@@ -176,6 +189,16 @@ workspace_root_test = rule(
         ),
     },
 )
+
+def workspace_root_test(name, **kwargs):
+    _workspace_root_test(
+        name = name,
+        hermetic_test_python = select({
+            "@platforms//os:windows": "//bazel/rules/testing:hermetic_test_python",
+            "//conditions:default": None,
+        }),
+        **kwargs
+    )
 
 def codex_rust_crate(
         name,

@@ -2,7 +2,15 @@ module(name = "codex")
 
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_python", version = "1.7.0")
 bazel_dep(name = "llvm", version = "0.7.9")
+
+# Rust tests exercise hook commands that invoke Python. Keep that runtime in
+# the Bazel input closure instead of inheriting hosted Python from the runner.
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.defaults(python_version = "3.11.14")
+python.toolchain(python_version = "3.11.14")
+use_repo(python, "python_3_11_14")
 
 # Patch hermetic LLVM for Codex's custom libc++ and Windows gnullvm runtime
 # needs that have not landed upstream.

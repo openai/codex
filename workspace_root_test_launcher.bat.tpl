@@ -12,6 +12,26 @@ if errorlevel 1 exit /b 1
 
 __RUNFILE_ENV_EXPORTS__
 
+if not defined CODEX_BAZEL_TEST_PYTHON (
+  >&2 echo CODEX_BAZEL_TEST_PYTHON must resolve to the hermetic Bazel test interpreter
+  exit /b 1
+)
+if not exist "%CODEX_BAZEL_TEST_PYTHON%" (
+  >&2 echo hermetic Bazel test interpreter does not exist: %CODEX_BAZEL_TEST_PYTHON%
+  exit /b 1
+)
+if not defined TEST_TMPDIR (
+  >&2 echo TEST_TMPDIR must be set for the hermetic Bazel test Python shim
+  exit /b 1
+)
+set "CODEX_BAZEL_TEST_PYTHON_SHIM_DIR=%TEST_TMPDIR%\codex-bazel-test-python"
+if not exist "%CODEX_BAZEL_TEST_PYTHON_SHIM_DIR%" (
+  mkdir "%CODEX_BAZEL_TEST_PYTHON_SHIM_DIR%" || exit /b 1
+)
+> "%CODEX_BAZEL_TEST_PYTHON_SHIM_DIR%\python3.cmd" echo @echo off
+>> "%CODEX_BAZEL_TEST_PYTHON_SHIM_DIR%\python3.cmd" echo "%CODEX_BAZEL_TEST_PYTHON%" %%*
+set "PATH=%CODEX_BAZEL_TEST_PYTHON_SHIM_DIR%;%PATH%"
+
 __WORKSPACE_ROOT_SETUP__
 
 set "TOTAL_SHARDS=%RULES_RUST_TEST_TOTAL_SHARDS%"
