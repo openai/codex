@@ -123,15 +123,23 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         self,
     ) -> None:
         with TemporaryDirectory() as temp_dir:
-            fake_bazel = Path(temp_dir) / "fake-bazel"
-            fake_bazel.write_text(
+            fake_bazel_impl = Path(temp_dir) / "fake-bazel.py"
+            fake_bazel_impl.write_text(
                 "#!/usr/bin/env python3\n"
                 "import json\n"
                 "import sys\n"
                 "print(json.dumps(sys.argv[1:]))\n",
                 encoding="utf-8",
             )
-            fake_bazel.chmod(0o755)
+            if os.name == "nt":
+                fake_bazel = Path(temp_dir) / "fake-bazel.cmd"
+                fake_bazel.write_text(
+                    f'@"{sys.executable}" "{fake_bazel_impl}" %*\n',
+                    encoding="utf-8",
+                )
+            else:
+                fake_bazel = fake_bazel_impl
+                fake_bazel.chmod(0o755)
 
             env = os.environ.copy()
             for name in (
@@ -167,7 +175,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 text=True,
             )
 
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             command = next(
                 json.loads(line)
                 for line in result.stdout.splitlines()
