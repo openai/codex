@@ -6,26 +6,22 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use indexmap::IndexMap;
-use serde::Deserialize;
-use serde::Serialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileSystemContext {
     workspace_roots: IndexMap<String, bool>,
     permission_profile: FileSystemPermissionProfileContext,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum FileSystemPermissionProfileContext {
     Managed(ManagedFileSystemContext),
     Disabled,
     External,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ManagedFileSystemContext {
     Restricted {
         entries: IndexMap<String, FileSystemSandboxEntry>,
@@ -218,13 +214,12 @@ pub(crate) fn push_xml_escaped_text(rendered: &mut String, value: &str) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct NetworkContext {
     domains: IndexMap<String, NetworkDomainAccess>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NetworkDomainAccess {
     Allow,
     Deny,

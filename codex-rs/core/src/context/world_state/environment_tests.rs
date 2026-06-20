@@ -6,7 +6,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 
 #[test]
 fn renders_full_environment_state() -> Result<()> {
@@ -214,66 +213,6 @@ fn removed_legacy_environment_renders_unavailable() -> Result<()> {
 </environment_context>"#,
         )),
         EnvironmentsState::default().render_diff(&previous),
-    );
-    Ok(())
-}
-
-#[test]
-fn loaded_environment_state_produces_no_diff_with_live_state() -> Result<()> {
-    let live_state = EnvironmentsState {
-        environments: [
-            ("laptop".to_string(), available("file:///repo", "zsh")?),
-            ("devbox".to_string(), starting("file:///workspace")?),
-        ]
-        .into_iter()
-        .collect(),
-        current_date: Some("2026-06-20".to_string()),
-        timezone: Some("America/Los_Angeles".to_string()),
-        network: Some(NetworkContext::new(
-            vec!["api.example.com".to_string()],
-            vec!["blocked.example.com".to_string()],
-        )),
-        filesystem: Some(FileSystemContext::from_permission_profile(
-            &PermissionProfile::Disabled,
-            &[],
-        )),
-        subagents: Some("task_1: running".to_string()),
-    };
-
-    let stored = serde_json::to_value(&live_state)?;
-    assert_eq!(
-        json!({
-            "environments": {
-                "devbox": {
-                    "cwd": "file:///workspace",
-                },
-                "laptop": {
-                    "cwd": "file:///repo",
-                },
-            },
-            "current_date": "2026-06-20",
-            "timezone": "America/Los_Angeles",
-            "network": {
-                "domains": {
-                    "api.example.com": "allow",
-                    "blocked.example.com": "deny",
-                },
-            },
-            "filesystem": {
-                "workspace_roots": {},
-                "permission_profile": "disabled",
-            },
-        }),
-        stored,
-    );
-    let loaded_state = serde_json::from_value::<EnvironmentsState>(stored)?;
-    let mut live_world = WorldState::default();
-    live_world.add_section(live_state);
-    let mut loaded_world = WorldState::default();
-    loaded_world.add_section(loaded_state);
-    assert_eq!(
-        Vec::<ResponseItem>::new(),
-        live_world.render_diff(&loaded_world),
     );
     Ok(())
 }

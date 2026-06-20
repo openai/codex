@@ -10,23 +10,16 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
-use serde::Deserialize;
-use serde::Serialize;
 use std::collections::BTreeMap;
 
 /// Environment values visible to the model.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct EnvironmentsState {
     environments: BTreeMap<String, EnvironmentState>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     current_date: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     timezone: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     network: Option<NetworkContext>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     filesystem: Option<FileSystemContext>,
-    #[serde(skip)]
     subagents: Option<String>,
 }
 
@@ -139,8 +132,6 @@ impl EnvironmentsState {
 }
 
 impl WorldStateSection for EnvironmentsState {
-    const NAME: &'static str = "environments";
-
     fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
         let turn_context_values_changed = self.current_date != previous.current_date
             || self.timezone != previous.timezone
@@ -304,12 +295,10 @@ fn push_optional_element(rendered: &mut String, name: &str, value: Option<&str>)
     rendered.push_str(">\n");
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 struct EnvironmentState {
     cwd: PathUri,
-    #[serde(skip)]
     status: Option<EnvironmentStatus>,
-    #[serde(skip)]
     shell: Option<String>,
 }
 
