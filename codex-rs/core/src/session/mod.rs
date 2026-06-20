@@ -3218,6 +3218,18 @@ impl Session {
         if turn_context.config.features.enabled(Feature::TokenBudget)
             && let Some(model_context_window) = turn_context.model_context_window()
         {
+            let mcp_result = self
+                .call_tool(
+                    "mcp_history",
+                    "thread_hint",
+                    /*arguments*/ None,
+                    Some(serde_json::json!({
+                        "threadId": self.thread_id().to_string(),
+                    })),
+                )
+                .await
+                .ok()
+                .and_then(|result| serde_json::to_string(&result.content).ok());
             developer_sections.push(
                 crate::context::TokenBudgetContext::new(
                     self.thread_id(),
@@ -3225,6 +3237,7 @@ impl Session {
                     auto_compact_window_ids.previous_window_id,
                     auto_compact_window_ids.window_id,
                     model_context_window,
+                    mcp_result,
                 )
                 .render(),
             );
