@@ -1,4 +1,3 @@
-load("@rules_python//python:defs.bzl", "py_binary")
 load(":hermetic_test_python.bzl", "hermetic_test_python")
 
 package(default_visibility = ["//visibility:public"])
@@ -7,14 +6,6 @@ exports_files([
     "foreign_platform_binary.bzl",
     "hermetic_test_python.bzl",
 ])
-
-py_binary(
-    name = "_hermetic_test_python",
-    testonly = True,
-    srcs = ["hermetic_test_python.py"],
-    main = "hermetic_test_python.py",
-    visibility = ["//visibility:private"],
-)
 
 hermetic_test_python(
     name = "hermetic_test_python",

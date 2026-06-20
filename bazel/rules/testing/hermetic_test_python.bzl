@@ -1,43 +1,32 @@
-"""Exposes a fixed hermetic Python forwarder to Bazel tests."""
+"""Exposes the fixed hermetic target Python runtime to Bazel tests."""
 
 HermeticTestPythonInfo = provider(
-    doc = "The fixed forwarding executable backed by the hermetic target Python toolchain.",
+    doc = "The fixed interpreter from the hermetic target Python toolchain.",
     fields = {
-        "executable": "The main-repository Python forwarding executable.",
+        "executable": "The hermetic target Python interpreter.",
     },
 )
 
 def _hermetic_test_python_impl(ctx):
-    launcher_info = ctx.attr._launcher[DefaultInfo]
-    files_to_run = launcher_info.files_to_run
-    executable = files_to_run.executable
-    if executable == None:
-        fail("the hermetic Python forwarder must provide an executable")
+    runtime = ctx.toolchains["@rules_python//python:toolchain_type"].py3_runtime
+    if runtime == None:
+        fail("the hermetic Python toolchain must provide a Python 3 runtime")
 
-    support_files = [executable]
-    if files_to_run.runfiles_manifest != None:
-        support_files.append(files_to_run.runfiles_manifest)
-    if files_to_run.repo_mapping_manifest != None:
-        support_files.append(files_to_run.repo_mapping_manifest)
+    executable = runtime.interpreter
+    if executable == None:
+        fail("the hermetic Python 3 runtime must provide an interpreter file")
+
+    files = depset([executable], transitive = [runtime.files])
 
     return [
         DefaultInfo(
-            files = launcher_info.files,
-            runfiles = ctx.runfiles(
-                files = support_files,
-                transitive_files = launcher_info.files,
-            ).merge(launcher_info.default_runfiles),
+            files = files,
+            runfiles = ctx.runfiles(transitive_files = files),
         ),
         HermeticTestPythonInfo(executable = executable),
     ]
 
 hermetic_test_python = rule(
     implementation = _hermetic_test_python_impl,
-    attrs = {
-        "_launcher": attr.label(
-            cfg = "target",
-            default = "//bazel/rules/testing:_hermetic_test_python",
-            executable = True,
-        ),
-    },
+    toolchains = ["@rules_python//python:toolchain_type"],
 )

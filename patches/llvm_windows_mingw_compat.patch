@@ -1,24 +1,6 @@
-# What: provide MinGW compile and link compatibility required by Windows gnullvm.
-# Why: Bazel's Windows launcher needs the UCRT secure-random declaration, while
-# clang and prebuilt MSVC archives request libraries the hermetic runtime does
-# not publish by default.
-
-diff --git a/toolchain/args/BUILD.bazel b/toolchain/args/BUILD.bazel
---- a/toolchain/args/BUILD.bazel
-+++ b/toolchain/args/BUILD.bazel
-@@ -765,5 +765,12 @@ cc_args(
-         # provided as part of the compiler toolchain repository.
-         "-nostdlibinc",
--    ],
-+    ] + select({
-+        # MinGW exposes rand_s only when this UCRT feature macro is defined.
-+        # Bazel's native Windows launcher uses rand_s unconditionally, so make
-+        # the declaration available to every hermetic Windows compile.
-+        "//platforms/config:windows_aarch64": ["-D_CRT_RAND_S="],
-+        "//platforms/config:windows_x86_64": ["-D_CRT_RAND_S="],
-+        "//conditions:default": [],
-+    }),
- )
+# What: provide MinGW link compatibility required by Windows gnullvm.
+# Why: Clang and prebuilt MSVC archives request libraries the hermetic runtime
+# does not publish by default.
 
 diff --git a/runtimes/mingw/BUILD.bazel b/runtimes/mingw/BUILD.bazel
 --- a/runtimes/mingw/BUILD.bazel
