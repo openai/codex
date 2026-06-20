@@ -1668,19 +1668,17 @@ impl Session {
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
-        // context (shell, exec policy, feature gates, previous-turn bridge) should be persisted
+        // context (exec policy, feature gates, previous-turn bridge) should be persisted
         // state or explicit non-state replay events.
         let previous_turn_settings = {
             let state = self.state.lock().await;
             state.previous_turn_settings()
         };
-        let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
             previous_turn_settings.as_ref(),
             current_context,
-            shell.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
         )
@@ -3217,14 +3215,13 @@ impl Session {
             );
         }
         if turn_context.config.include_environment_context {
-            let shell = self.user_shell();
             let subagents = self
                 .services
                 .agent_control
                 .format_environment_context_subagents(self.thread_id)
                 .await;
             contextual_user_sections.push(
-                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                crate::context::EnvironmentsState::from_turn_context(turn_context)
                     .with_subagents(subagents)
                     .render(),
             );

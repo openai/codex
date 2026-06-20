@@ -8,34 +8,31 @@ use serde_json::json;
 
 #[test]
 fn renders_full_environment_state() -> Result<()> {
-    let mut context = EnvironmentContext::new(
-        vec![
-            EnvironmentContextEnvironment {
-                id: "laptop".to_string(),
-                cwd: PathUri::parse("file:///repo")?,
-                shell: "zsh".to_string(),
-            },
-            EnvironmentContextEnvironment {
-                id: "devbox".to_string(),
-                cwd: PathUri::parse("file:///workspace")?,
-                shell: "bash".to_string(),
-            },
-        ],
-        Some("2026-06-20".to_string()),
-        Some("America/Los_Angeles".to_string()),
-        Some(NetworkContext::new(
+    let context = EnvironmentsState {
+        environments: [
+            ("laptop".to_string(), available("file:///repo", "zsh")?),
+            (
+                "devbox".to_string(),
+                available("file:///workspace", "bash")?,
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        current_date: Some("2026-06-20".to_string()),
+        timezone: Some("America/Los_Angeles".to_string()),
+        network: Some(NetworkContext::new(
             vec!["api.example.com".to_string()],
             vec!["blocked.example.com".to_string()],
         )),
-        Some("task_1: running\ntask_2: completed".to_string()),
-    );
-    context.filesystem = Some(FileSystemContext::from_permission_profile(
-        &PermissionProfile::Disabled,
-        &[],
-    ));
+        filesystem: Some(FileSystemContext::from_permission_profile(
+            &PermissionProfile::Disabled,
+            &[],
+        )),
+        subagents: Some("task_1: running\ntask_2: completed".to_string()),
+    };
 
     let mut world_state = WorldState::default();
-    world_state.add_section(EnvironmentsState::from_environment_context(&context));
+    world_state.add_section(context);
 
     assert_eq!(
         vec![user_message(
@@ -150,6 +147,25 @@ fn unchanged_environments_do_not_render_a_diff() -> Result<()> {
     });
 
     assert_eq!(Vec::<ResponseItem>::new(), current.render_diff(&previous));
+    Ok(())
+}
+
+#[test]
+fn single_environment_diff_ignores_id_and_shell() -> Result<()> {
+    let previous = EnvironmentsState {
+        environments: [(String::new(), available("file:///repo", "bash")?)]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    let current = EnvironmentsState {
+        environments: [("local".to_string(), available("file:///repo", "zsh")?)]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+
+    assert_eq!(None, current.render_diff(&previous));
     Ok(())
 }
 

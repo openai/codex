@@ -1,6 +1,6 @@
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
-use crate::context::EnvironmentContext;
+use crate::context::EnvironmentsState;
 use crate::context::ModelSwitchInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::PermissionsInstructions;
@@ -10,7 +10,6 @@ use crate::context::RealtimeStartInstructions;
 use crate::context::RealtimeStartWithInstructions;
 use crate::session::PreviousTurnSettings;
 use crate::session::turn_context::TurnContext;
-use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
 use codex_protocol::config_types::MultiAgentMode;
@@ -23,22 +22,14 @@ use codex_protocol::protocol::TurnContextItem;
 fn build_environment_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
-    shell: &Shell,
 ) -> Option<ResponseItem> {
     if !next.config.include_environment_context {
         return None;
     }
 
     let prev = previous?;
-    let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string());
-    let next_context = EnvironmentContext::from_turn_context(next, shell);
-    if prev_context.equals_except_shell(&next_context) {
-        return None;
-    }
-
-    Some(ContextualUserFragment::into(
-        EnvironmentContext::diff_from_turn_context_item(prev, &next_context),
-    ))
+    let previous = EnvironmentsState::from_turn_context_item(prev);
+    EnvironmentsState::from_turn_context(next).render_diff(&previous)
 }
 
 fn build_permissions_update_item(
@@ -242,7 +233,6 @@ pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
     next: &TurnContext,
-    shell: &Shell,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
@@ -250,7 +240,7 @@ pub(crate) fn build_settings_update_items(
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
-    let contextual_user_message = build_environment_update_item(previous, next, shell);
+    let contextual_user_message = build_environment_update_item(previous, next);
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
