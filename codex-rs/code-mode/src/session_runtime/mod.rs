@@ -67,22 +67,13 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         !self.inner.shutdown_token.is_cancelled()
     }
 
-    pub(crate) async fn execute(
-        &self,
-        request: CreateCellRequest,
-        initial_observe_mode: ObserveMode,
-    ) -> Result<StartedCell, Error> {
+    pub(crate) async fn create_cell(&self, request: CreateCellRequest) -> Result<CellId, Error> {
         if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
         let cell_id = self.allocate_cell_id();
-        let initial_event = self
-            .start_cell(cell_id.clone(), request, initial_observe_mode)
-            .await?;
-        Ok(StartedCell {
-            cell_id,
-            initial_event,
-        })
+        self.start_cell(cell_id.clone(), request).await?;
+        Ok(cell_id)
     }
 
     pub(crate) async fn observe(
@@ -146,12 +137,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         )
     }
 
-    async fn start_cell(
-        &self,
-        cell_id: CellId,
-        request: CreateCellRequest,
-        initial_observe_mode: ObserveMode,
-    ) -> Result<RuntimeEventFuture, Error> {
+    async fn start_cell(&self, cell_id: CellId, request: CreateCellRequest) -> Result<(), Error> {
         let stored_values = self.inner.stored_values.lock().await.clone();
         let host = Arc::new(RuntimeCellHost {
             cell_id: cell_id.clone(),
@@ -165,18 +151,12 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             return Err(Error::DuplicateCell(cell_id));
         }
         let cell_state = Arc::new(CellState::new(self.inner.shutdown_token.child_token()));
-        let (handle, initial_event, task) = CellActor::prepare(
-            request,
-            stored_values,
-            host,
-            initial_observe_mode,
-            cell_state,
-        )
-        .map_err(Error::Runtime)?;
+        let (handle, task) =
+            CellActor::prepare(request, stored_values, host, cell_state).map_err(Error::Runtime)?;
         cells.insert(cell_id.clone(), handle);
         self.inner.cell_tasks.spawn(task);
         drop(cells);
-        Ok(map_actor_event(cell_id, initial_event))
+        Ok(())
     }
 
     fn begin_shutdown(&self) {
@@ -191,19 +171,7 @@ impl<D: SessionRuntimeDelegate> Drop for SessionRuntime<D> {
     }
 }
 
-/// A cell admitted by [`SessionRuntime::execute`].
-pub(crate) struct StartedCell {
-    pub(crate) cell_id: CellId,
-    initial_event: RuntimeEventFuture,
-}
-
-impl StartedCell {
-    pub(crate) async fn initial_event(self) -> Result<CellEvent, Error> {
-        self.initial_event.await
-    }
-}
-
-/// An admitted observation that has not reached its requested frontier yet.
+/// An admitted cell event that has not reached its requested frontier yet.
 pub(crate) struct PendingEvent {
     event: RuntimeEventFuture,
 }
@@ -263,7 +231,7 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
         let mut stored_values = tokio::select! {
             biased;
             _ = cancellation_token.cancelled() => {
-                return CompletionCommit::Rejected(event);
+                return CompletionCommit::rejected(event, pending_initial_yield_items);
             }
             stored_values = self.inner.stored_values.lock() => stored_values,
         };

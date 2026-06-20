@@ -385,6 +385,60 @@ async fn termination_discards_pending_callbacks_before_responding() {
 }
 
 #[tokio::test]
+async fn termination_discards_stored_writes_before_the_next_cell_can_load_them() {
+    let (delegate, mut events_rx) = BlockingDelegate::new();
+    let service = CodeModeService::with_delegate(delegate.clone());
+    let cell = service
+        .execute(ExecuteRequest {
+            enabled_tools: vec![blocking_tool()],
+            source: r#"
+store("candidate", "leaked");
+await tools.block({});
+"#
+            .to_string(),
+            yield_time_ms: Some(60_000),
+            ..execute_request("")
+        })
+        .await
+        .unwrap();
+
+    // Reaching the delegate proves that the store ran before execution became gated.
+    assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
+    assert_eq!(
+        service.terminate(cell.cell_id).await.unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+        })
+    );
+    delegate.release_tool();
+    assert_eq!(
+        next_event(&mut events_rx).await,
+        DelegateEvent::CellClosed(cell_id("1"))
+    );
+
+    assert_eq!(
+        service
+            .execute(ExecuteRequest {
+                yield_time_ms: Some(60_000),
+                ..execute_request(r#"text(String(load("candidate")));"#)
+            })
+            .await
+            .unwrap()
+            .initial_response()
+            .await
+            .unwrap(),
+        RuntimeResponse::Result {
+            cell_id: cell_id("2"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "undefined".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn shutdown_does_not_await_notifications_during_natural_completion() {
     let (delegate, mut events_rx) = NeverResolvingNotificationDelegate::new();
     let service = Arc::new(CodeModeService::with_delegate(delegate));

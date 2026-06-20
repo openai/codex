@@ -88,18 +88,17 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
     );
 
     let reader = runtime
-        .execute(
-            CreateCellRequest {
-                tool_call_id: "reader".to_string(),
-                enabled_tools: Vec::new(),
-                source: r#"text(String(load("candidate")));"#.to_string(),
-            },
-            ObserveMode::YieldAfter(Duration::from_secs(1)),
-        )
+        .create_cell(CreateCellRequest {
+            tool_call_id: "reader".to_string(),
+            enabled_tools: Vec::new(),
+            source: r#"text(String(load("candidate")));"#.to_string(),
+        })
         .await
         .unwrap();
     assert_eq!(
-        reader.initial_event().await,
+        runtime
+            .observe(&reader, ObserveMode::YieldAfter(Duration::from_secs(1)))
+            .await,
         Ok(CellEvent::Completed {
             content_items: vec![OutputItem::Text {
                 text: "undefined".to_string(),
@@ -127,16 +126,13 @@ async fn shutdown_rejects_cell_admission_queued_before_the_registry_lock() {
     let runtime = Arc::new(SessionRuntime::new(Arc::new(RecordingDelegate)));
     let cells = runtime.inner.cells.lock().await;
 
-    let execution = runtime.execute(
-        execute_request("while (true) {}"),
-        ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
-    );
-    tokio::pin!(execution);
-    std::future::poll_fn(|context| match execution.as_mut().poll(context) {
+    let creation = runtime.create_cell(execute_request("while (true) {}"));
+    tokio::pin!(creation);
+    std::future::poll_fn(|context| match creation.as_mut().poll(context) {
         Poll::Pending => Poll::Ready(()),
-        Poll::Ready(Ok(_)) => panic!("execution completed before the registry lock was released"),
+        Poll::Ready(Ok(_)) => panic!("creation completed before the registry lock was released"),
         Poll::Ready(Err(error)) => {
-            panic!("execution failed before the registry lock was released: {error}")
+            panic!("creation failed before the registry lock was released: {error}")
         }
     })
     .await;
@@ -154,23 +150,25 @@ async fn shutdown_rejects_cell_admission_queued_before_the_registry_lock() {
 
     assert!(!runtime.is_alive());
     drop(cells);
-    assert!(matches!(execution.await, Err(Error::ShuttingDown)));
+    assert!(matches!(creation.await, Err(Error::ShuttingDown)));
     assert_eq!(shutdown.await, Ok(()));
 }
 
 #[tokio::test]
 async fn drop_terminates_cells_when_the_registry_is_locked() {
     let runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
-    let started = runtime
-        .execute(
-            execute_request("while (true) {}"),
-            ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
-        )
+    let cell_id = runtime
+        .create_cell(execute_request("while (true) {}"))
         .await
         .unwrap();
-    assert_eq!(started.cell_id, CellId::new("1"));
+    assert_eq!(cell_id, CellId::new("1"));
     assert_eq!(
-        started.initial_event().await,
+        runtime
+            .observe(
+                &cell_id,
+                ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
+            )
+            .await,
         Ok(CellEvent::Yielded {
             content_items: Vec::new(),
         })

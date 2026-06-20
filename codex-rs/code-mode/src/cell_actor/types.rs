@@ -138,6 +138,15 @@ pub(crate) enum CompletionCommit {
     Rejected(CellEvent),
 }
 
+impl CompletionCommit {
+    pub(crate) fn rejected(
+        event: CellEvent,
+        pending_initial_yield_items: Option<Vec<OutputItem>>,
+    ) -> Self {
+        Self::Rejected(prepend_initial_yield(event, pending_initial_yield_items))
+    }
+}
+
 pub(crate) enum ObservationDelivery {
     Running(oneshot::Sender<Result<CellEvent, CellError>>),
     Delivered,
@@ -208,7 +217,7 @@ impl CellState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !matches!(*phase, CellPhase::Running) || self.cancellation_token.is_cancelled() {
-            return CompletionCommit::Rejected(event);
+            return CompletionCommit::rejected(event, pending_initial_yield_items);
         }
         commit();
         *phase = CellPhase::Completed {
@@ -220,7 +229,7 @@ impl CellState {
 
     pub(crate) fn deliver_completion(
         &self,
-        response_tx: Option<oneshot::Sender<Result<CellEvent, CellError>>>,
+        observer: Option<(ObserveMode, oneshot::Sender<Result<CellEvent, CellError>>)>,
     ) -> CompletionDelivery {
         let mut phase = self
             .phase
@@ -234,16 +243,38 @@ impl CellState {
                 } => (pending_initial_yield_items, event),
                 previous => {
                     *phase = previous;
-                    return CompletionDelivery::Rejected(response_tx);
+                    return CompletionDelivery::Rejected(
+                        observer.map(|(_mode, response_tx)| response_tx),
+                    );
                 }
             };
-        let Some(response_tx) = response_tx else {
+        let Some((mode, response_tx)) = observer else {
             *phase = CellPhase::Completed {
                 pending_initial_yield_items,
                 event,
             };
             return CompletionDelivery::Buffered;
         };
+        if matches!(mode, ObserveMode::PendingFrontier) && pending_initial_yield_items.is_some() {
+            let delivered_event =
+                prepend_initial_yield(event.clone(), pending_initial_yield_items.clone());
+            return match response_tx.send(Ok(delivered_event)) {
+                Ok(()) => {
+                    self.cancellation_token.cancel();
+                    CompletionDelivery::Delivered
+                }
+                Err(Ok(_)) => {
+                    *phase = CellPhase::Completed {
+                        pending_initial_yield_items,
+                        event,
+                    };
+                    CompletionDelivery::Buffered
+                }
+                Err(Err(error)) => {
+                    panic!("completion delivery unexpectedly carried an actor error: {error:?}")
+                }
+            };
+        }
         match response_tx.send(Ok(event)) {
             Ok(()) => {
                 self.cancellation_token.cancel();
