@@ -416,6 +416,34 @@ mod thread_processor_behavior_tests {
         })
     }
 
+    fn compacted_resume_test_token_count() -> RolloutItem {
+        RolloutItem::EventMsg(EventMsg::TokenCount(
+            codex_protocol::protocol::TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            },
+        ))
+    }
+
+    fn compacted_resume_test_goal_update(thread_id: ThreadId) -> RolloutItem {
+        RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(
+            codex_protocol::protocol::ThreadGoalUpdatedEvent {
+                thread_id,
+                turn_id: None,
+                goal: codex_protocol::protocol::ThreadGoal {
+                    thread_id,
+                    objective: "finish the task".to_string(),
+                    status: codex_protocol::protocol::ThreadGoalStatus::Active,
+                    token_budget: None,
+                    tokens_used: 0,
+                    time_used_seconds: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            },
+        ))
+    }
+
     fn compacted_resume_test_rollout_contents(items: Vec<RolloutItem>) -> Result<String> {
         let mut contents = String::new();
         for item in items {
@@ -462,20 +490,24 @@ mod thread_processor_behavior_tests {
         let items = read_compacted_resume_rollout_items(path.as_path(), thread_id, byte_len)?
             .expect("compacted resume items");
 
-        assert_eq!(items.len(), 6);
+        assert_eq!(items.len(), 7);
         assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
         assert!(matches!(
             items[1],
             RolloutItem::EventMsg(EventMsg::UserMessage(_))
         ));
         assert!(matches!(items[2], RolloutItem::ResponseItem(_)));
-        assert!(matches!(items[3], RolloutItem::TurnContext(_)));
+        assert!(matches!(
+            items[3],
+            RolloutItem::EventMsg(EventMsg::UserMessage(_))
+        ));
+        assert!(matches!(items[4], RolloutItem::TurnContext(_)));
         assert_eq!(
-            compacted_resume_test_replacement_text(&items[4]),
+            compacted_resume_test_replacement_text(&items[5]),
             Some("latest checkpoint")
         );
         assert!(matches!(
-            &items[5],
+            &items[6],
             RolloutItem::EventMsg(EventMsg::AgentMessage(event))
                 if event.message == large_tail_message
         ));
@@ -485,6 +517,67 @@ mod thread_processor_behavior_tests {
                 .filter(|item| matches!(item, RolloutItem::Compacted(_)))
                 .count(),
             1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compacted_resume_rollout_items_carries_metadata_before_checkpoint() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+        let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let contents = compacted_resume_test_rollout_contents(vec![
+            compacted_resume_test_session(thread_id),
+            compacted_resume_test_user_event("first user event"),
+            RolloutItem::ResponseItem(compacted_resume_test_message("user", "first user response")),
+            compacted_resume_test_token_count(),
+            compacted_resume_test_goal_update(thread_id),
+            compacted_resume_test_user_event("middle user event"),
+            compacted_resume_test_turn_context(),
+            compacted_resume_test_compaction("latest checkpoint", /*window_id*/ 2),
+            compacted_resume_test_agent_event("tail"),
+        ])?;
+        std::fs::write(&path, contents)?;
+
+        let byte_len = std::fs::metadata(path.as_path())?.len();
+        let items = read_compacted_resume_rollout_items(path.as_path(), thread_id, byte_len)?
+            .expect("compacted resume items");
+
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))))
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_))))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compacted_resume_rollout_items_falls_back_on_rollback_before_checkpoint() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+        let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let contents = compacted_resume_test_rollout_contents(vec![
+            compacted_resume_test_session(thread_id),
+            compacted_resume_test_user_event("first user event"),
+            RolloutItem::ResponseItem(compacted_resume_test_message("user", "first user response")),
+            compacted_resume_test_user_event("middle user event"),
+            compacted_resume_test_turn_context(),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+                codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            )),
+            compacted_resume_test_compaction("rolled back checkpoint", /*window_id*/ 2),
+            compacted_resume_test_agent_event("tail"),
+        ])?;
+        std::fs::write(&path, contents)?;
+
+        let byte_len = std::fs::metadata(path.as_path())?.len();
+        assert!(
+            read_compacted_resume_rollout_items(path.as_path(), thread_id, byte_len)?.is_none()
         );
         Ok(())
     }
@@ -566,6 +659,12 @@ mod thread_processor_behavior_tests {
             recent
                 .items
                 .iter()
+                .any(|item| { matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))) })
+        );
+        assert!(
+            recent
+                .items
+                .iter()
                 .any(|item| { matches!(item, RolloutItem::EventMsg(EventMsg::TurnComplete(_))) })
         );
         let page = build_recent_not_loaded_turns_page_response(
@@ -585,6 +684,50 @@ mod thread_processor_behavior_tests {
             page.data[0].status,
             codex_app_server_protocol::TurnStatus::Completed
         );
+        Ok(())
+    }
+
+    #[test]
+    fn recent_not_loaded_rollout_items_falls_back_without_explicit_turn_starts() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+        let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let contents = compacted_resume_test_rollout_contents(vec![
+            compacted_resume_test_session(thread_id),
+            compacted_resume_test_user_event("first user event"),
+            compacted_resume_test_agent_event("first agent event"),
+        ])?;
+        std::fs::write(&path, contents)?;
+
+        assert!(read_recent_not_loaded_rollout_items(path.as_path(), /*page_size*/ 1)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn recent_not_loaded_rollout_items_falls_back_on_non_persisted_suffix_item() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+        let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let contents = compacted_resume_test_rollout_contents(vec![
+            compacted_resume_test_session(thread_id),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: "turn-a".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            )),
+            compacted_resume_test_user_event("first user event"),
+            RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::CompactionTrigger {
+                metadata: None,
+            }),
+            compacted_resume_test_agent_event("first agent event"),
+        ])?;
+        std::fs::write(&path, contents)?;
+
+        assert!(read_recent_not_loaded_rollout_items(path.as_path(), /*page_size*/ 1)?.is_none());
         Ok(())
     }
 
