@@ -13,33 +13,31 @@ pub const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL: usize = 10_000;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct ExecuteRequest {
+pub struct CreateCellRequest {
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,
-    pub yield_time_ms: Option<u64>,
-    pub max_output_tokens: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct WaitRequest {
+pub struct ObserveRequest {
     pub cell_id: CellId,
     pub yield_time_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct WaitToPendingRequest {
+pub struct ObserveToPendingRequest {
     pub cell_id: CellId,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub enum WaitOutcome {
+pub enum CellOutcome {
     LiveCell(RuntimeResponse),
     MissingCell(RuntimeResponse),
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub enum ExecuteToPendingOutcome {
+pub enum PendingOutcome {
     Pending {
         cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
@@ -49,15 +47,15 @@ pub enum ExecuteToPendingOutcome {
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub enum WaitToPendingOutcome {
-    LiveCell(ExecuteToPendingOutcome),
+pub enum ObserveToPendingOutcome {
+    LiveCell(PendingOutcome),
     MissingCell(RuntimeResponse),
 }
 
-impl From<WaitOutcome> for RuntimeResponse {
-    fn from(outcome: WaitOutcome) -> Self {
+impl From<CellOutcome> for RuntimeResponse {
+    fn from(outcome: CellOutcome) -> Self {
         match outcome {
-            WaitOutcome::LiveCell(response) | WaitOutcome::MissingCell(response) => response,
+            CellOutcome::LiveCell(response) | CellOutcome::MissingCell(response) => response,
         }
     }
 }
@@ -87,3 +85,7 @@ pub struct CodeModeNestedToolCall {
     pub tool_kind: CodeModeToolKind,
     pub input: Option<JsonValue>,
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;

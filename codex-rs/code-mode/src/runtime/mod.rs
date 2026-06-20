@@ -10,8 +10,8 @@ use std::sync::mpsc as std_mpsc;
 use std::thread;
 
 use codex_code_mode_protocol::CodeModeToolKind;
+use codex_code_mode_protocol::CreateCellRequest;
 use codex_code_mode_protocol::EnabledToolMetadata;
-use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::enabled_tool_metadata;
 use codex_protocol::ToolName;
@@ -67,7 +67,7 @@ pub(crate) enum RuntimeEvent {
 
 pub(crate) fn spawn_runtime(
     stored_values: HashMap<String, JsonValue>,
-    request: ExecuteRequest,
+    request: CreateCellRequest,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     pending_mode: PendingRuntimeMode,
 ) -> Result<
@@ -330,7 +330,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
 
-    use super::ExecuteRequest;
+    use super::CreateCellRequest;
     use super::PendingRuntimeMode;
     use super::RuntimeCommand;
     use super::RuntimeControlCommand;
@@ -338,13 +338,11 @@ mod tests {
     use super::spawn_runtime;
     use crate::FunctionCallOutputContentItem;
 
-    fn execute_request(source: &str) -> ExecuteRequest {
-        ExecuteRequest {
+    fn execute_request(source: &str) -> CreateCellRequest {
+        CreateCellRequest {
             tool_call_id: "call_1".to_string(),
             enabled_tools: Vec::new(),
             source: source.to_string(),
-            yield_time_ms: Some(1),
-            max_output_tokens: None,
         }
     }
 

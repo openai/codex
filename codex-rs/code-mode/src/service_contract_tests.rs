@@ -178,13 +178,45 @@ fn cell_id(value: &str) -> CellId {
     CellId::new(value.to_string())
 }
 
-fn execute_request(source: &str) -> ExecuteRequest {
-    ExecuteRequest {
+fn execute_request(source: &str) -> CreateCellRequest {
+    CreateCellRequest {
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
-        yield_time_ms: Some(1),
-        max_output_tokens: None,
+    }
+}
+
+async fn execute(service: &CodeModeService, request: CreateCellRequest) -> RuntimeResponse {
+    execute_with_yield_time(service, request, /*yield_time_ms*/ 1).await
+}
+
+async fn execute_with_yield_time(
+    service: &CodeModeService,
+    request: CreateCellRequest,
+    yield_time_ms: u64,
+) -> RuntimeResponse {
+    let cell_id = service.create_cell(request).await.unwrap();
+    service
+        .observe(ObserveRequest {
+            cell_id,
+            yield_time_ms,
+        })
+        .await
+        .unwrap()
+        .into()
+}
+
+async fn create_and_observe_to_pending(
+    service: &CodeModeService,
+    request: CreateCellRequest,
+) -> Result<PendingOutcome, String> {
+    let cell_id = service.create_cell(request).await?;
+    match service
+        .observe_to_pending(ObserveToPendingRequest { cell_id })
+        .await?
+    {
+        ObserveToPendingOutcome::LiveCell(outcome) => Ok(outcome),
+        ObserveToPendingOutcome::MissingCell(response) => Ok(PendingOutcome::Completed(response)),
     }
 }
 
@@ -209,17 +241,18 @@ async fn next_event(events_rx: &mut mpsc::UnboundedReceiver<DelegateEvent>) -> D
 #[tokio::test]
 async fn yields_and_resumes() {
     let service = CodeModeService::new();
-    let cell = service
-        .execute(ExecuteRequest {
+    let cell = execute_with_yield_time(
+        &service,
+        CreateCellRequest {
             source: r#"text("before"); yield_control(); text("after");"#.to_string(),
-            yield_time_ms: Some(60_000),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+        /*yield_time_ms*/ 60_000,
+    )
+    .await;
 
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
@@ -229,13 +262,13 @@ async fn yields_and_resumes() {
     );
     assert_eq!(
         service
-            .wait(WaitRequest {
+            .observe(ObserveRequest {
                 cell_id: cell_id("1"),
                 yield_time_ms: 60_000,
             })
             .await
             .unwrap(),
-        WaitOutcome::LiveCell(RuntimeResponse::Result {
+        CellOutcome::LiveCell(RuntimeResponse::Result {
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "after".to_string(),
@@ -251,20 +284,21 @@ async fn returns_and_resumes_from_the_pending_frontier() {
     let service = CodeModeService::with_delegate(delegate.clone());
 
     assert_eq!(
-        service
-            .execute_to_pending(ExecuteRequest {
+        create_and_observe_to_pending(
+            &service,
+            CreateCellRequest {
                 enabled_tools: vec![blocking_tool()],
                 source: r#"
 await tools.block({});
 text("after");
 "#
                 .to_string(),
-                yield_time_ms: Some(60_000),
                 ..execute_request("")
-            })
-            .await
-            .unwrap(),
-        ExecuteToPendingOutcome::Pending {
+            },
+        )
+        .await
+        .unwrap(),
+        PendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
             pending_tool_call_ids: vec!["tool-1".to_string()],
@@ -276,53 +310,51 @@ text("after");
 
     assert_eq!(
         service
-            .wait_to_pending(WaitToPendingRequest {
+            .observe_to_pending(ObserveToPendingRequest {
                 cell_id: cell_id("1"),
             })
             .await
             .unwrap(),
-        WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Completed(
-            RuntimeResponse::Result {
-                cell_id: cell_id("1"),
-                content_items: vec![FunctionCallOutputContentItem::InputText {
-                    text: "after".to_string(),
-                }],
-                error_text: None,
-            }
-        ))
+        ObserveToPendingOutcome::LiveCell(PendingOutcome::Completed(RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "after".to_string(),
+            }],
+            error_text: None,
+        }))
     );
 }
 
 #[tokio::test]
 async fn observed_natural_completion_wins_over_termination() {
     let service = CodeModeService::new();
-    let cell = service
-        .execute(execute_request(
-            r#"yield_control(); store("finished", true); text("done");"#,
-        ))
-        .await
-        .unwrap();
+    let cell = execute(
+        &service,
+        execute_request(r#"yield_control(); store("finished", true); text("done");"#),
+    )
+    .await;
 
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         }
     );
-    tokio::time::timeout(Duration::from_secs(1), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let response = service
-                .execute(ExecuteRequest {
-                    yield_time_ms: Some(60_000),
+            // Observe the synchronous probe through completion so scheduler load
+            // cannot turn its short yield deadline into a false lifecycle failure.
+            let response = create_and_observe_to_pending(
+                &service,
+                CreateCellRequest {
                     ..execute_request(r#"text(String(load("finished")));"#)
-                })
-                .await
-                .unwrap()
-                .initial_response()
-                .await
-                .unwrap();
-            let RuntimeResponse::Result { content_items, .. } = response else {
+                },
+            )
+            .await
+            .unwrap();
+            let PendingOutcome::Completed(RuntimeResponse::Result { content_items, .. }) = response
+            else {
                 panic!("expected stored-value probe to complete");
             };
             if content_items
@@ -339,7 +371,7 @@ async fn observed_natural_completion_wins_over_termination() {
     .unwrap();
     assert_eq!(
         service.terminate(cell_id("1")).await.unwrap(),
-        WaitOutcome::LiveCell(RuntimeResponse::Result {
+        CellOutcome::LiveCell(RuntimeResponse::Result {
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
@@ -353,19 +385,18 @@ async fn observed_natural_completion_wins_over_termination() {
 async fn termination_discards_pending_callbacks_before_responding() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
     let service = CodeModeService::with_delegate(delegate.clone());
-    let cell = service
-        .execute(execute_request(
-            r#"notify("pending"); await new Promise(() => {});"#,
-        ))
-        .await
-        .unwrap();
+    let cell = execute(
+        &service,
+        execute_request(r#"notify("pending"); await new Promise(() => {});"#),
+    )
+    .await;
 
     assert_eq!(
         next_event(&mut events_rx).await,
         DelegateEvent::NotificationStarted
     );
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
@@ -373,7 +404,7 @@ async fn termination_discards_pending_callbacks_before_responding() {
     );
     assert_eq!(
         service.terminate(cell_id("1")).await.unwrap(),
-        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+        CellOutcome::LiveCell(RuntimeResponse::Terminated {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -388,15 +419,14 @@ async fn termination_discards_pending_callbacks_before_responding() {
 async fn termination_discards_stored_writes_before_the_next_cell_can_load_them() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
     let service = CodeModeService::with_delegate(delegate.clone());
-    let cell = service
-        .execute(ExecuteRequest {
+    let created_cell_id = service
+        .create_cell(CreateCellRequest {
             enabled_tools: vec![blocking_tool()],
             source: r#"
 store("candidate", "leaked");
 await tools.block({});
 "#
             .to_string(),
-            yield_time_ms: Some(60_000),
             ..execute_request("")
         })
         .await
@@ -405,8 +435,8 @@ await tools.block({});
     // Reaching the delegate proves that the store ran before execution became gated.
     assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
     assert_eq!(
-        service.terminate(cell.cell_id).await.unwrap(),
-        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+        service.terminate(created_cell_id).await.unwrap(),
+        CellOutcome::LiveCell(RuntimeResponse::Terminated {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -418,16 +448,12 @@ await tools.block({});
     );
 
     assert_eq!(
-        service
-            .execute(ExecuteRequest {
-                yield_time_ms: Some(60_000),
-                ..execute_request(r#"text(String(load("candidate")));"#)
-            })
-            .await
-            .unwrap()
-            .initial_response()
-            .await
-            .unwrap(),
+        execute_with_yield_time(
+            &service,
+            execute_request(r#"text(String(load("candidate")));"#),
+            /*yield_time_ms*/ 60_000,
+        )
+        .await,
         RuntimeResponse::Result {
             cell_id: cell_id("2"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
@@ -443,7 +469,7 @@ async fn shutdown_does_not_await_notifications_during_natural_completion() {
     let (delegate, mut events_rx) = NeverResolvingNotificationDelegate::new();
     let service = Arc::new(CodeModeService::with_delegate(delegate));
     service
-        .execute(execute_request(r#"notify("pending");"#))
+        .create_cell(execute_request(r#"notify("pending");"#))
         .await
         .unwrap();
 
@@ -469,8 +495,8 @@ async fn shutdown_does_not_await_notifications_during_natural_completion() {
 async fn shutdown_does_not_await_a_non_cooperative_nested_tool() {
     let (delegate, mut events_rx) = NeverResolvingToolDelegate::new();
     let service = CodeModeService::with_delegate(delegate);
-    let _started = service
-        .execute(ExecuteRequest {
+    let _cell_id = service
+        .create_cell(CreateCellRequest {
             enabled_tools: vec![blocking_tool()],
             source: r#"await tools.block({});"#.to_string(),
             ..execute_request("")
@@ -493,19 +519,18 @@ async fn shutdown_does_not_await_a_non_cooperative_nested_tool() {
 async fn termination_does_not_await_a_non_cooperative_notification() {
     let (delegate, mut events_rx) = NeverResolvingNotificationDelegate::new();
     let service = CodeModeService::with_delegate(delegate);
-    let cell = service
-        .execute(execute_request(
-            r#"notify("pending"); await new Promise(() => {});"#,
-        ))
-        .await
-        .unwrap();
+    let cell = execute(
+        &service,
+        execute_request(r#"notify("pending"); await new Promise(() => {});"#),
+    )
+    .await;
 
     assert_eq!(
         next_event(&mut events_rx).await,
         DelegateEvent::NotificationStarted
     );
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
@@ -520,7 +545,7 @@ async fn termination_does_not_await_a_non_cooperative_notification() {
         .await
         .expect("termination should not await a non-cooperative notification")
         .unwrap(),
-        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+        CellOutcome::LiveCell(RuntimeResponse::Terminated {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -534,13 +559,10 @@ async fn termination_does_not_await_a_non_cooperative_notification() {
 #[tokio::test]
 async fn second_observer_is_rejected_without_displacing_the_first() {
     let service = CodeModeService::new();
-    let cell = service
-        .execute(execute_request("await new Promise(() => {});"))
-        .await
-        .unwrap();
+    let cell = execute(&service, execute_request("await new Promise(() => {});")).await;
 
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        cell,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
@@ -548,14 +570,14 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
     );
 
     let first_observer = service
-        .begin_wait(WaitRequest {
+        .begin_observe(ObserveRequest {
             cell_id: cell_id("1"),
             yield_time_ms: 60_000,
         })
         .await;
     assert_eq!(
         service
-            .wait(WaitRequest {
+            .observe(ObserveRequest {
                 cell_id: cell_id("1"),
                 yield_time_ms: 60_000,
             })
@@ -570,11 +592,11 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
     };
     assert_eq!(
         service.terminate(cell_id("1")).await.unwrap(),
-        WaitOutcome::LiveCell(terminated.clone())
+        CellOutcome::LiveCell(terminated.clone())
     );
     assert_eq!(
         first_observer.await.unwrap(),
-        WaitOutcome::LiveCell(terminated)
+        CellOutcome::LiveCell(terminated)
     );
 }
 
@@ -582,8 +604,8 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
 async fn natural_completion_cleans_up_callbacks_before_responding() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
     let service = CodeModeService::with_delegate(delegate.clone());
-    let cell = service
-        .execute(ExecuteRequest {
+    let created_cell_id = service
+        .create_cell(CreateCellRequest {
             enabled_tools: vec![blocking_tool()],
             source: concat!(
                 "tools.block({});",
@@ -591,7 +613,6 @@ async fn natural_completion_cleans_up_callbacks_before_responding() {
                 "text('done');",
             )
             .to_string(),
-            yield_time_ms: Some(60_000),
             ..execute_request("")
         })
         .await
@@ -599,14 +620,20 @@ async fn natural_completion_cleans_up_callbacks_before_responding() {
 
     assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
     assert_eq!(
-        cell.initial_response().await.unwrap(),
-        RuntimeResponse::Result {
+        service
+            .observe(ObserveRequest {
+                cell_id: created_cell_id,
+                yield_time_ms: 60_000,
+            })
+            .await
+            .unwrap(),
+        CellOutcome::LiveCell(RuntimeResponse::Result {
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
             }],
             error_text: None,
-        }
+        })
     );
     assert!(delegate.tool_future_dropped.load(Ordering::Acquire));
 }

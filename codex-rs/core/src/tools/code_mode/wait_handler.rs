@@ -89,14 +89,14 @@ impl CodeModeWaitHandler {
                     exec.session
                         .services
                         .code_mode_service
-                        .wait(codex_code_mode::WaitRequest {
+                        .observe(codex_code_mode::ObserveRequest {
                             cell_id,
                             yield_time_ms: args.yield_time_ms,
                         })
                         .await
                 }
                 .map_err(FunctionCallError::RespondToModel)?;
-                if let codex_code_mode::WaitOutcome::LiveCell(response) = &wait_response
+                if let codex_code_mode::CellOutcome::LiveCell(response) = &wait_response
                     && !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. })
                 {
                     // Only a live-cell wait can close a CodeCell. A missing

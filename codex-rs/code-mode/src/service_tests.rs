@@ -2,20 +2,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::CellId;
+use super::CellOutcome;
 use super::CodeModeNestedToolCall;
 use super::CodeModeService;
 use super::CodeModeSessionDelegate;
 use super::NotificationFuture;
+use super::ObserveRequest;
+use super::ObserveToPendingOutcome;
+use super::ObserveToPendingRequest;
 use super::RuntimeResponse;
 use super::ToolInvocationFuture;
-use super::WaitOutcome;
-use super::WaitRequest;
-use super::WaitToPendingOutcome;
-use super::WaitToPendingRequest;
 use crate::CodeModeToolKind;
-use crate::ExecuteRequest;
-use crate::ExecuteToPendingOutcome;
+use crate::CreateCellRequest;
 use crate::FunctionCallOutputContentItem;
+use crate::PendingOutcome;
 use crate::ToolDefinition;
 use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
@@ -61,13 +61,11 @@ impl CodeModeSessionDelegate for ReleasableToolDelegate {
     fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
-fn execute_request(source: &str) -> ExecuteRequest {
-    ExecuteRequest {
+fn execute_request(source: &str) -> CreateCellRequest {
+    CreateCellRequest {
         tool_call_id: "call_1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
-        yield_time_ms: Some(1),
-        max_output_tokens: None,
     }
 }
 
@@ -86,14 +84,38 @@ fn echo_tool() -> ToolDefinition {
     }
 }
 
-async fn execute(service: &CodeModeService, request: ExecuteRequest) -> RuntimeResponse {
+async fn execute(service: &CodeModeService, request: CreateCellRequest) -> RuntimeResponse {
+    execute_with_yield_time(service, request, /*yield_time_ms*/ 10_000).await
+}
+
+async fn execute_with_yield_time(
+    service: &CodeModeService,
+    request: CreateCellRequest,
+    yield_time_ms: u64,
+) -> RuntimeResponse {
+    let cell_id = service.create_cell(request).await.unwrap();
     service
-        .execute(request)
+        .observe(ObserveRequest {
+            cell_id,
+            yield_time_ms,
+        })
         .await
         .unwrap()
-        .initial_response()
-        .await
-        .unwrap()
+        .into()
+}
+
+async fn create_and_observe_to_pending(
+    service: &CodeModeService,
+    request: CreateCellRequest,
+) -> Result<PendingOutcome, String> {
+    let cell_id = service.create_cell(request).await?;
+    match service
+        .observe_to_pending(ObserveToPendingRequest { cell_id })
+        .await?
+    {
+        ObserveToPendingOutcome::LiveCell(outcome) => Ok(outcome),
+        ObserveToPendingOutcome::MissingCell(response) => Ok(PendingOutcome::Completed(response)),
+    }
 }
 
 #[tokio::test]
@@ -102,9 +124,8 @@ async fn synchronous_exit_returns_successfully() {
 
     let response = execute(
         &service,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"text("before"); exit(); text("after");"#.to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -129,9 +150,8 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
 
     let write_response = execute(
         &first_session,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"store("key", "visible");"#.to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -139,18 +159,16 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
 
     let same_session = execute(
         &first_session,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"text(String(load("key")));"#.to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
     .await;
     let other_session = execute(
         &second_session,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"text(String(load("key")));"#.to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -190,15 +208,17 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
 async fn shutdown_interrupts_cpu_bound_cells() {
     let service = CodeModeService::new();
 
-    let cell = service
-        .execute(ExecuteRequest {
+    let response = execute_with_yield_time(
+        &service,
+        CreateCellRequest {
             source: "while (true) {}".to_string(),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+        /*yield_time_ms*/ 1,
+    )
+    .await;
     assert_eq!(
-        cell.initial_response().await.unwrap(),
+        response,
         RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
@@ -217,7 +237,7 @@ async fn start_cell_rejects_new_cell_after_shutdown_begins() {
     service.shutdown().await.unwrap();
 
     let error = service
-        .execute(execute_request("text('late');"))
+        .create_cell(execute_request("text('late');"))
         .await
         .err()
         .unwrap();
@@ -226,21 +246,22 @@ async fn start_cell_rejects_new_cell_after_shutdown_begins() {
 }
 
 #[tokio::test]
-async fn execute_to_pending_returns_completed_for_synchronous_results() {
+async fn create_and_observe_to_pending_returns_completed_for_synchronous_results() {
     let service = CodeModeService::new();
 
-    let response = service
-        .execute_to_pending(ExecuteRequest {
+    let response = create_and_observe_to_pending(
+        &service,
+        CreateCellRequest {
             source: r#"text("done");"#.to_string(),
-            yield_time_ms: Some(60_000),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         response,
-        ExecuteToPendingOutcome::Completed(RuntimeResponse::Result {
+        PendingOutcome::Completed(RuntimeResponse::Result {
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
@@ -251,16 +272,18 @@ async fn execute_to_pending_returns_completed_for_synchronous_results() {
 }
 
 #[tokio::test]
-async fn execute_to_pending_returns_once_the_runtime_is_quiescent() {
+async fn create_and_observe_to_pending_returns_once_the_runtime_is_quiescent() {
     let service = CodeModeService::new();
 
     let response = tokio::time::timeout(
         Duration::from_secs(1),
-        service.execute_to_pending(ExecuteRequest {
-            source: r#"text("before"); await new Promise(() => {});"#.to_string(),
-            yield_time_ms: Some(60_000),
-            ..execute_request("")
-        }),
+        create_and_observe_to_pending(
+            &service,
+            CreateCellRequest {
+                source: r#"text("before"); await new Promise(() => {});"#.to_string(),
+                ..execute_request("")
+            },
+        ),
     )
     .await
     .unwrap()
@@ -268,7 +291,7 @@ async fn execute_to_pending_returns_once_the_runtime_is_quiescent() {
 
     assert_eq!(
         response,
-        ExecuteToPendingOutcome::Pending {
+        PendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "before".to_string(),
@@ -281,7 +304,7 @@ async fn execute_to_pending_returns_once_the_runtime_is_quiescent() {
 
     assert_eq!(
         termination,
-        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+        CellOutcome::LiveCell(RuntimeResponse::Terminated {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -289,11 +312,12 @@ async fn execute_to_pending_returns_once_the_runtime_is_quiescent() {
 }
 
 #[tokio::test]
-async fn execute_to_pending_identifies_tool_calls_in_paused_frontier() {
+async fn create_and_observe_to_pending_identifies_tool_calls_in_paused_frontier() {
     let service = CodeModeService::new();
 
-    let response = service
-        .execute_to_pending(ExecuteRequest {
+    let response = create_and_observe_to_pending(
+        &service,
+        CreateCellRequest {
             enabled_tools: vec![echo_tool()],
             source: r#"
 await Promise.all([
@@ -302,15 +326,15 @@ await Promise.all([
 ]);
 "#
             .to_string(),
-            yield_time_ms: Some(60_000),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         response,
-        ExecuteToPendingOutcome::Pending {
+        PendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
             pending_tool_call_ids: vec!["tool-1".to_string(), "tool-2".to_string()],
@@ -321,7 +345,7 @@ await Promise.all([
 
     assert_eq!(
         termination,
-        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+        CellOutcome::LiveCell(RuntimeResponse::Terminated {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -329,11 +353,12 @@ await Promise.all([
 }
 
 #[tokio::test]
-async fn execute_to_pending_excludes_delayed_timeout_tool_calls_until_wait() {
+async fn create_and_observe_to_pending_excludes_delayed_timeout_tool_calls_until_observe() {
     let service = CodeModeService::new();
 
-    let initial_response = service
-        .execute_to_pending(ExecuteRequest {
+    let initial_response = create_and_observe_to_pending(
+        &service,
+        CreateCellRequest {
             enabled_tools: vec![echo_tool()],
             source: r#"
 setTimeout(() => {
@@ -345,15 +370,15 @@ await Promise.all([
 ]);
 "#
             .to_string(),
-            yield_time_ms: Some(60_000),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         initial_response,
-        ExecuteToPendingOutcome::Pending {
+        PendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
             pending_tool_call_ids: vec!["tool-1".to_string(), "tool-2".to_string()],
@@ -367,13 +392,13 @@ await Promise.all([
     let resumed_response = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let response = service
-                .wait_to_pending(WaitToPendingRequest {
+                .observe_to_pending(ObserveToPendingRequest {
                     cell_id: cell_id("1"),
                 })
                 .await?;
             if !matches!(
                 &response,
-                WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Pending {
+                ObserveToPendingOutcome::LiveCell(PendingOutcome::Pending {
                     pending_tool_call_ids,
                     ..
                 }) if pending_tool_call_ids.is_empty()
@@ -388,7 +413,7 @@ await Promise.all([
 
     assert_eq!(
         resumed_response,
-        WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Pending {
+        ObserveToPendingOutcome::LiveCell(PendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
             pending_tool_call_ids: vec!["tool-3".to_string()],
@@ -399,7 +424,7 @@ await Promise.all([
 
     assert_eq!(
         termination,
-        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+        CellOutcome::LiveCell(RuntimeResponse::Terminated {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -407,12 +432,13 @@ await Promise.all([
 }
 
 #[tokio::test]
-async fn wait_to_pending_returns_after_resumed_runtime_becomes_quiescent_again() {
+async fn observe_to_pending_returns_after_resumed_runtime_becomes_quiescent_again() {
     let delegate = Arc::new(ReleasableToolDelegate::default());
     let service = CodeModeService::with_delegate(delegate.clone());
 
-    let initial_response = service
-        .execute_to_pending(ExecuteRequest {
+    let initial_response = create_and_observe_to_pending(
+        &service,
+        CreateCellRequest {
             enabled_tools: vec![echo_tool()],
             source: r#"
 await tools.echo({});
@@ -420,15 +446,15 @@ text("after");
 await new Promise(() => {});
 "#
             .to_string(),
-            yield_time_ms: Some(60_000),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         initial_response,
-        ExecuteToPendingOutcome::Pending {
+        PendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
             pending_tool_call_ids: vec!["tool-1".to_string()],
@@ -439,7 +465,7 @@ await new Promise(() => {});
 
     let resumed_response = tokio::time::timeout(
         Duration::from_secs(1),
-        service.wait_to_pending(WaitToPendingRequest {
+        service.observe_to_pending(ObserveToPendingRequest {
             cell_id: cell_id("1"),
         }),
     )
@@ -449,7 +475,7 @@ await new Promise(() => {});
 
     assert_eq!(
         resumed_response,
-        WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Pending {
+        ObserveToPendingOutcome::LiveCell(PendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "after".to_string(),
@@ -462,7 +488,7 @@ await new Promise(() => {});
 
     assert_eq!(
         termination,
-        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+        CellOutcome::LiveCell(RuntimeResponse::Terminated {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -470,27 +496,28 @@ await new Promise(() => {});
 }
 
 #[tokio::test]
-async fn wait_to_pending_returns_completed_after_resumed_runtime_finishes() {
+async fn observe_to_pending_returns_completed_after_resumed_runtime_finishes() {
     let delegate = Arc::new(ReleasableToolDelegate::default());
     let service = CodeModeService::with_delegate(delegate.clone());
 
-    let initial_response = service
-        .execute_to_pending(ExecuteRequest {
+    let initial_response = create_and_observe_to_pending(
+        &service,
+        CreateCellRequest {
             enabled_tools: vec![echo_tool()],
             source: r#"
 await tools.echo({});
 text("done");
 "#
             .to_string(),
-            yield_time_ms: Some(60_000),
             ..execute_request("")
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         initial_response,
-        ExecuteToPendingOutcome::Pending {
+        PendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
             pending_tool_call_ids: vec!["tool-1".to_string()],
@@ -501,7 +528,7 @@ text("done");
 
     let resumed_response = tokio::time::timeout(
         Duration::from_secs(1),
-        service.wait_to_pending(WaitToPendingRequest {
+        service.observe_to_pending(ObserveToPendingRequest {
             cell_id: cell_id("1"),
         }),
     )
@@ -511,15 +538,13 @@ text("done");
 
     assert_eq!(
         resumed_response,
-        WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Completed(
-            RuntimeResponse::Result {
-                cell_id: cell_id("1"),
-                content_items: vec![FunctionCallOutputContentItem::InputText {
-                    text: "done".to_string(),
-                }],
-                error_text: None,
-            }
-        ))
+        ObserveToPendingOutcome::LiveCell(PendingOutcome::Completed(RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "done".to_string(),
+            }],
+            error_text: None,
+        }))
     );
 }
 
@@ -529,9 +554,8 @@ async fn v8_console_is_not_exposed_on_global_this() {
 
     let response = execute(
         &service,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"text(String(Object.hasOwn(globalThis, "console")));"#.to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -555,7 +579,7 @@ async fn date_locale_string_formats_with_icu_data() {
 
     let response = execute(
         &service,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"
 const value = new Date("2025-01-02T03:04:05Z")
   .toLocaleString("fr-FR", {
@@ -571,7 +595,6 @@ const value = new Date("2025-01-02T03:04:05Z")
 text(value);
 "#
             .to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -595,7 +618,7 @@ async fn intl_date_time_format_formats_with_icu_data() {
 
     let response = execute(
         &service,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"
 const formatter = new Intl.DateTimeFormat("fr-FR", {
   weekday: "long",
@@ -610,7 +633,6 @@ const formatter = new Intl.DateTimeFormat("fr-FR", {
 text(formatter.format(new Date("2025-01-02T03:04:05Z")));
 "#
             .to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -634,7 +656,7 @@ async fn output_helpers_return_undefined() {
 
     let response = execute(
         &service,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"
 const returnsUndefined = [
   text("first"),
@@ -644,7 +666,6 @@ const returnsUndefined = [
 text(JSON.stringify(returnsUndefined));
 "#
             .to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -677,7 +698,7 @@ async fn image_helper_accepts_raw_mcp_image_block_with_original_detail() {
 
     let response = execute(
             &service,
-            ExecuteRequest {
+            CreateCellRequest {
                 source: r#"
 image({
   type: "image",
@@ -687,7 +708,6 @@ image({
 });
 "#
                 .to_string(),
-                yield_time_ms: None,
                 ..execute_request("")
             },
         )
@@ -712,7 +732,7 @@ async fn generated_image_helper_appends_image_and_output_hint() {
 
     let response = execute(
         &service,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"
 generatedImage({
   image_url: "data:image/png;base64,AAA",
@@ -720,7 +740,6 @@ generatedImage({
 });
 "#
             .to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -750,7 +769,7 @@ async fn image_helper_second_arg_overrides_explicit_object_detail() {
 
     let response = execute(
         &service,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"
 image(
   {
@@ -761,7 +780,6 @@ image(
 );
 "#
             .to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -786,7 +804,7 @@ async fn image_helper_second_arg_overrides_raw_mcp_image_detail() {
 
     let response = execute(
             &service,
-            ExecuteRequest {
+            CreateCellRequest {
                 source: r#"
 image(
   {
@@ -799,7 +817,6 @@ image(
 );
 "#
                 .to_string(),
-                yield_time_ms: None,
                 ..execute_request("")
             },
         )
@@ -824,7 +841,7 @@ async fn image_helper_accepts_low_detail() {
 
     let response = execute(
         &service,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"
 image({
   image_url: "data:image/png;base64,AAA",
@@ -832,7 +849,6 @@ image({
 });
 "#
             .to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -865,9 +881,8 @@ async fn image_helpers_reject_remote_urls() {
 
             let response = execute(
                 &service,
-                ExecuteRequest {
+                CreateCellRequest {
                     source,
-                    yield_time_ms: None,
                     ..execute_request("")
                 },
             )
@@ -893,7 +908,7 @@ async fn image_helper_rejects_unsupported_detail() {
 
     let response = execute(
         &service,
-        ExecuteRequest {
+        CreateCellRequest {
             source: r#"
 image({
   image_url: "data:image/png;base64,AAA",
@@ -901,7 +916,6 @@ image({
 });
 "#
             .to_string(),
-            yield_time_ms: None,
             ..execute_request("")
         },
     )
@@ -923,7 +937,7 @@ async fn image_helper_rejects_raw_mcp_result_container() {
 
     let response = execute(
             &service,
-            ExecuteRequest {
+            CreateCellRequest {
                 source: r#"
 image({
   content: [
@@ -938,7 +952,6 @@ image({
 });
 "#
                 .to_string(),
-                yield_time_ms: None,
                 ..execute_request("")
             },
         )
@@ -957,11 +970,11 @@ image({
 }
 
 #[tokio::test]
-async fn wait_reports_missing_cell_separately_from_runtime_results() {
+async fn observe_reports_missing_cell_separately_from_runtime_results() {
     let service = CodeModeService::new();
 
     let response = service
-        .wait(WaitRequest {
+        .observe(ObserveRequest {
             cell_id: cell_id("missing"),
             yield_time_ms: 1,
         })
@@ -970,7 +983,7 @@ async fn wait_reports_missing_cell_separately_from_runtime_results() {
 
     assert_eq!(
         response,
-        WaitOutcome::MissingCell(RuntimeResponse::Result {
+        CellOutcome::MissingCell(RuntimeResponse::Result {
             cell_id: cell_id("missing"),
             content_items: Vec::new(),
             error_text: Some("exec cell missing not found".to_string()),
