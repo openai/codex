@@ -36,6 +36,7 @@ $testPathEntries = @(
   (Join-Path $gitRoot 'bin'),
   (Join-Path $gitRoot 'usr\bin'),
   (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'),
+  (Join-Path $windowsDir 'System32\WindowsPowerShell\v1.0'),
   (Join-Path $windowsDir 'System32'),
   $windowsDir
 )
