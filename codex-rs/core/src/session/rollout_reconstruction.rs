@@ -10,12 +10,16 @@ pub(super) struct RolloutReconstruction {
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
     pub(super) window_number: u64,
+    pub(super) first_window_id: Option<Uuid>,
+    pub(super) previous_window_id: Option<Uuid>,
     pub(super) window_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ReconstructedWindow {
     number: u64,
+    first_id: Option<Uuid>,
+    previous_id: Option<Uuid>,
     id: Option<Uuid>,
 }
 
@@ -133,6 +137,11 @@ impl Session {
                     {
                         active_segment.window = Some(ReconstructedWindow {
                             number: window_number,
+                            first_id: compacted.first_window_id.as_deref().and_then(parse_uuid_v7),
+                            previous_id: compacted
+                                .previous_window_id
+                                .as_deref()
+                                .and_then(parse_uuid_v7),
                             id: compacted.window_id.as_deref().and_then(parse_uuid_v7),
                         });
                     }
@@ -341,6 +350,8 @@ impl Session {
 
         let window = window.unwrap_or(ReconstructedWindow {
             number: fallback_window_number,
+            first_id: None,
+            previous_id: None,
             id: None,
         });
         RolloutReconstruction {
@@ -348,6 +359,8 @@ impl Session {
             previous_turn_settings,
             reference_context_item,
             window_number: window.number,
+            first_window_id: window.first_id,
+            previous_window_id: window.previous_id,
             window_id: window.id,
         }
     }

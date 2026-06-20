@@ -829,6 +829,8 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
             message: String::new(),
             replacement_history: Some(Vec::new()),
             window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -887,6 +889,8 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
             message: String::new(),
             replacement_history: Some(Vec::new()),
             window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
     ];
@@ -914,6 +918,8 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
             message: "legacy summary".to_string(),
             replacement_history: None,
             window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
     ];
@@ -947,6 +953,8 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
             message: "legacy summary".to_string(),
             replacement_history: None,
             window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -1043,6 +1051,8 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             message: String::new(),
             replacement_history: Some(Vec::new()),
             window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
         RolloutItem::TurnContext(previous_context_item),
@@ -1196,6 +1206,8 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
             message: String::new(),
             replacement_history: Some(Vec::new()),
             window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
     ];
@@ -1433,6 +1445,8 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
             message: String::new(),
             replacement_history: Some(Vec::new()),
             window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
     ];
@@ -1599,6 +1613,8 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
             message: String::new(),
             replacement_history: Some(Vec::new()),
             window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
         // A newer TurnStarted replaces the incomplete compacted turn without a matching

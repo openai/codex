@@ -311,6 +311,7 @@ use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 #[cfg(test)]
 use crate::skills::SkillLoadOutcome;
+use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
@@ -1364,6 +1365,8 @@ impl Session {
             previous_turn_settings,
             reference_context_item,
             window_number,
+            first_window_id,
+            previous_window_id,
             window_id,
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
@@ -1382,8 +1385,16 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
-            let window_id = window_id.unwrap_or_else(|| state.auto_compact_window_id());
-            state.restore_auto_compact_window(window_number, window_id);
+            let fallback_ids = state.auto_compact_window_ids();
+            let window_id = window_id.unwrap_or(fallback_ids.window_id);
+            state.restore_auto_compact_window(
+                window_number,
+                AutoCompactWindowIds {
+                    first_window_id: first_window_id.unwrap_or(window_id),
+                    previous_window_id,
+                    window_id,
+                },
+            );
             state.set_previous_turn_settings(previous_turn_settings.clone());
         }
         let prefix_tokens = if matches!(
@@ -3011,7 +3022,7 @@ impl Session {
             collaboration_mode,
             base_instructions,
             session_source,
-            auto_compact_window_id,
+            auto_compact_window_ids,
         ) = {
             let state = self.state.lock().await;
             (
@@ -3020,7 +3031,7 @@ impl Session {
                 state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
-                state.auto_compact_window_id(),
+                state.auto_compact_window_ids(),
             )
         };
         if let Some(model_switch_message) =
@@ -3210,7 +3221,9 @@ impl Session {
             developer_sections.push(
                 crate::context::TokenBudgetContext::new(
                     self.thread_id(),
-                    auto_compact_window_id,
+                    auto_compact_window_ids.first_window_id,
+                    auto_compact_window_ids.previous_window_id,
+                    auto_compact_window_ids.window_id,
                     model_context_window,
                 )
                 .render(),
@@ -3309,10 +3322,9 @@ impl Session {
         format!("{thread_id}:{window_number}")
     }
 
-    pub(crate) async fn advance_auto_compact_window(&self) -> (u64, String) {
+    pub(crate) async fn advance_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
         let mut state = self.state.lock().await;
-        let (window_number, window_id) = state.advance_auto_compact_window();
-        (window_number, window_id.to_string())
+        state.advance_auto_compact_window()
     }
 
     pub(crate) async fn request_new_context_window(&self) {
@@ -3328,7 +3340,7 @@ impl Session {
             let mut state = self.state.lock().await;
             state.start_new_context_window_if_requested()
         };
-        let (window_number, window_id) = window?;
+        let (window_number, window_ids) = window?;
         let context_items = self.build_initial_context(turn_context).await;
         let turn_context_item = turn_context.to_turn_context_item();
         let replacement_history = context_items;
@@ -3341,7 +3353,9 @@ impl Session {
                 message: String::new(),
                 replacement_history: Some(replacement_history),
                 window_number: Some(window_number),
-                window_id: Some(window_id.to_string()),
+                first_window_id: Some(window_ids.first_window_id.to_string()),
+                previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
+                window_id: Some(window_ids.window_id.to_string()),
             }),
             RolloutItem::TurnContext(turn_context_item),
         ])
