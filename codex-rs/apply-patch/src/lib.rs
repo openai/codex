@@ -351,9 +351,9 @@ pub async fn apply_hunks(
 /// Tracks file paths affected by applying a patch, preserving the path spelling
 /// from the patch for user-facing summaries.
 pub struct AffectedPaths {
-    pub added: Vec<PathBuf>,
-    pub modified: Vec<PathBuf>,
-    pub deleted: Vec<PathBuf>,
+    pub added: Vec<String>,
+    pub modified: Vec<String>,
+    pub deleted: Vec<String>,
 }
 
 /// Apply the hunks to the filesystem, returning which files were added, modified, or deleted.
@@ -369,9 +369,9 @@ async fn apply_hunks_to_files(
         anyhow::bail!("No files were modified.");
     }
 
-    let mut added: Vec<PathBuf> = Vec::new();
-    let mut modified: Vec<PathBuf> = Vec::new();
-    let mut deleted: Vec<PathBuf> = Vec::new();
+    let mut added = Vec::new();
+    let mut modified = Vec::new();
+    let mut deleted = Vec::new();
     // A failed write can still have modified the target before surfacing an
     // error (for example by truncating before ENOSPC), so the accumulated
     // delta is no longer exact when a write fails.
@@ -389,8 +389,9 @@ async fn apply_hunks_to_files(
 
     // TODO(anp): Carry PathUri through committed patch deltas and the turn diff tracker.
     for hunk in hunks {
-        let affected_path = hunk.path().to_path_buf();
+        let affected_path = hunk.path().to_string();
         let path_uri = hunk.resolve_path(cwd)?;
+        let move_path_uri = hunk.resolve_move_path(cwd)?;
         match hunk {
             Hunk::AddFile { contents, .. } => {
                 let overwritten_content =
@@ -462,16 +463,13 @@ async fn apply_hunks_to_files(
                 }
                 deleted.push(affected_path);
             }
-            Hunk::UpdateFile {
-                move_path, chunks, ..
-            } => {
+            Hunk::UpdateFile { chunks, .. } => {
                 note_existing_path_delta_support(&path_uri, fs, sandbox, &mut delta.exact).await;
                 let AppliedPatch {
                     original_contents,
                     new_contents,
                 } = derive_new_contents_from_chunks(&path_uri, chunks, fs, sandbox).await?;
-                if let Some(dest) = move_path {
-                    let dest_uri = cwd.join(&dest.to_string_lossy())?;
+                if let Some(dest_uri) = move_path_uri {
                     let overwritten_move_content =
                         read_optional_file_text_for_delta(&dest_uri, fs, sandbox, &mut delta.exact)
                             .await;
@@ -874,13 +872,13 @@ pub fn print_summary(
 ) -> std::io::Result<()> {
     writeln!(out, "Success. Updated the following files:")?;
     for path in &affected.added {
-        writeln!(out, "A {}", path.display())?;
+        writeln!(out, "A {path}")?;
     }
     for path in &affected.modified {
-        writeln!(out, "M {}", path.display())?;
+        writeln!(out, "M {path}")?;
     }
     for path in &affected.deleted {
-        writeln!(out, "D {}", path.display())?;
+        writeln!(out, "D {path}")?;
     }
     Ok(())
 }
@@ -897,6 +895,23 @@ mod tests {
     /// Helper to construct a patch with the given body.
     fn wrap_patch(body: &str) -> String {
         format!("*** Begin Patch\n{body}\n*** End Patch")
+    }
+
+    #[test]
+    fn test_print_summary_preserves_local_output() {
+        let affected = AffectedPaths {
+            added: vec!["src/new.rs".to_string()],
+            modified: vec!["src/old.rs".to_string()],
+            deleted: vec!["tests/old.rs".to_string()],
+        };
+        let mut output = Vec::new();
+
+        print_summary(&affected, &mut output).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Success. Updated the following files:\nA src/new.rs\nM src/old.rs\nD tests/old.rs\n"
+        );
     }
 
     #[tokio::test]

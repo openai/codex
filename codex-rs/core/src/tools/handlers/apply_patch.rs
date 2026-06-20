@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -143,7 +142,7 @@ fn convert_apply_patch_hunks_to_protocol(hunks: &[Hunk]) -> HashMap<PathBuf, Fil
     hunks
         .iter()
         .map(|hunk| {
-            let path = hunk_source_path(hunk).to_path_buf();
+            let path = PathBuf::from(hunk_source_path(hunk));
             let change = match hunk {
                 Hunk::AddFile { contents, .. } => FileChange::Add {
                     content: contents.clone(),
@@ -155,7 +154,7 @@ fn convert_apply_patch_hunks_to_protocol(hunks: &[Hunk]) -> HashMap<PathBuf, Fil
                     chunks, move_path, ..
                 } => FileChange::Update {
                     unified_diff: format_update_chunks_for_progress(chunks),
-                    move_path: move_path.clone(),
+                    move_path: move_path.as_ref().map(PathBuf::from),
                 },
             };
             (path, change)
@@ -163,7 +162,7 @@ fn convert_apply_patch_hunks_to_protocol(hunks: &[Hunk]) -> HashMap<PathBuf, Fil
         .collect()
 }
 
-fn hunk_source_path(hunk: &Hunk) -> &Path {
+fn hunk_source_path(hunk: &Hunk) -> &str {
     match hunk {
         Hunk::AddFile { path, .. } | Hunk::DeleteFile { path } | Hunk::UpdateFile { path, .. } => {
             path

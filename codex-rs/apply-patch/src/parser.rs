@@ -29,8 +29,6 @@ use crate::streaming_parser::StreamingPatchParser;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_path_uri::PathUri;
 use codex_utils_path_uri::PathUriParseError;
-use std::path::Path;
-use std::path::PathBuf;
 
 use thiserror::Error;
 
@@ -65,15 +63,15 @@ use ParseError::*;
 #[allow(clippy::enum_variant_names)]
 pub enum Hunk {
     AddFile {
-        path: PathBuf,
+        path: String,
         contents: String,
     },
     DeleteFile {
-        path: PathBuf,
+        path: String,
     },
     UpdateFile {
-        path: PathBuf,
-        move_path: Option<PathBuf>,
+        path: String,
+        move_path: Option<String>,
 
         /// Chunks should be in order, i.e. the `change_context` of one chunk
         /// should occur later in the file than the previous chunk.
@@ -87,11 +85,23 @@ impl Hunk {
             Hunk::UpdateFile { path, .. } => path,
             Hunk::AddFile { .. } | Hunk::DeleteFile { .. } => self.path(),
         };
-        cwd.join(&path.to_string_lossy())
+        cwd.join(path)
+    }
+
+    pub(crate) fn resolve_move_path(
+        &self,
+        cwd: &PathUri,
+    ) -> Result<Option<PathUri>, PathUriParseError> {
+        match self {
+            Hunk::UpdateFile { move_path, .. } => {
+                move_path.as_deref().map(|path| cwd.join(path)).transpose()
+            }
+            Hunk::AddFile { .. } | Hunk::DeleteFile { .. } => Ok(None),
+        }
     }
 
     /// Returns the path affected by this hunk, using the move destination for rename hunks.
-    pub fn path(&self) -> &Path {
+    pub fn path(&self) -> &str {
         match self {
             Hunk::AddFile { path, .. } => path,
             Hunk::DeleteFile { path } => path,
@@ -287,7 +297,7 @@ fn test_parse_patch() {
         .unwrap()
         .hunks,
         vec![AddFile {
-            path: PathBuf::from("foo"),
+            path: "foo".to_string(),
             contents: "hi\n".to_string()
         }]
     );
@@ -332,15 +342,15 @@ fn test_parse_patch() {
         .hunks,
         vec![
             AddFile {
-                path: PathBuf::from("path/add.py"),
+                path: "path/add.py".to_string(),
                 contents: "abc\ndef\n".to_string()
             },
             DeleteFile {
-                path: PathBuf::from("path/delete.py")
+                path: "path/delete.py".to_string()
             },
             UpdateFile {
-                path: PathBuf::from("path/update.py"),
-                move_path: Some(PathBuf::from("path/update2.py")),
+                path: "path/update.py".to_string(),
+                move_path: Some("path/update2.py".to_string()),
                 chunks: vec![UpdateFileChunk {
                     change_context: Some("def f():".to_string()),
                     old_lines: vec!["    pass".to_string()],
@@ -366,7 +376,7 @@ fn test_parse_patch() {
         .hunks,
         vec![
             UpdateFile {
-                path: PathBuf::from("file.py"),
+                path: "file.py".to_string(),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
@@ -376,7 +386,7 @@ fn test_parse_patch() {
                 }],
             },
             AddFile {
-                path: PathBuf::from("other.py"),
+                path: "other.py".to_string(),
                 contents: "content\n".to_string()
             }
         ]
@@ -396,7 +406,7 @@ fn test_parse_patch() {
         .unwrap()
         .hunks,
         vec![UpdateFile {
-            path: PathBuf::from("file2.py"),
+            path: "file2.py".to_string(),
             move_path: None,
             chunks: vec![UpdateFileChunk {
                 change_context: None,
@@ -416,7 +426,7 @@ fn test_parse_patch_preserves_end_of_file_marker() {
         parse_patch(patch),
         Ok(ApplyPatchArgs {
             hunks: vec![UpdateFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
@@ -457,14 +467,14 @@ fn test_parse_patch_accepts_relative_and_absolute_hunk_paths() {
             .hunks,
         vec![
             AddFile {
-                path: PathBuf::from("relative-add.py"),
+                path: "relative-add.py".to_string(),
                 contents: "content\n".to_string()
             },
             DeleteFile {
-                path: absolute_delete.to_path_buf()
+                path: absolute_delete.display().to_string()
             },
             UpdateFile {
-                path: absolute_update.to_path_buf(),
+                path: absolute_update.display().to_string(),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
@@ -472,6 +482,41 @@ fn test_parse_patch_accepts_relative_and_absolute_hunk_paths() {
                     new_lines: vec!["new".to_string()],
                     is_end_of_file: false
                 }]
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_parse_patch_preserves_windows_path_spelling() {
+    let patch = r#"*** Begin Patch
+*** Add File: src\new.rs
++new
+*** Update File: C:\repo\old.rs
+*** Move to: D:\target\new.rs
+@@
+-old
++new
+*** End Patch"#;
+
+    let parsed = parse_patch_text(patch, ParseMode::Strict).unwrap();
+
+    assert_eq!(
+        parsed.hunks,
+        vec![
+            AddFile {
+                path: r"src\new.rs".to_string(),
+                contents: "new\n".to_string(),
+            },
+            UpdateFile {
+                path: r"C:\repo\old.rs".to_string(),
+                move_path: Some(r"D:\target\new.rs".to_string()),
+                chunks: vec![UpdateFileChunk {
+                    change_context: None,
+                    old_lines: vec!["old".to_string()],
+                    new_lines: vec!["new".to_string()],
+                    is_end_of_file: false,
+                }],
             },
         ]
     );
@@ -489,20 +534,20 @@ fn test_hunk_resolve_path_accepts_relative_and_absolute_paths() {
     for (hunk, expected_path) in [
         (
             AddFile {
-                path: PathBuf::from("relative-add.py"),
+                path: "relative-add.py".to_string(),
                 contents: String::new(),
             },
             cwd.join("relative-add.py").unwrap(),
         ),
         (
             DeleteFile {
-                path: PathBuf::from("relative-delete.py"),
+                path: "relative-delete.py".to_string(),
             },
             cwd.join("relative-delete.py").unwrap(),
         ),
         (
             UpdateFile {
-                path: PathBuf::from("relative-update.py"),
+                path: "relative-update.py".to_string(),
                 move_path: None,
                 chunks: Vec::new(),
             },
@@ -510,20 +555,20 @@ fn test_hunk_resolve_path_accepts_relative_and_absolute_paths() {
         ),
         (
             AddFile {
-                path: absolute_add.to_path_buf(),
+                path: absolute_add.display().to_string(),
                 contents: String::new(),
             },
             PathUri::from_abs_path(&absolute_add),
         ),
         (
             DeleteFile {
-                path: absolute_delete.to_path_buf(),
+                path: absolute_delete.display().to_string(),
             },
             PathUri::from_abs_path(&absolute_delete),
         ),
         (
             UpdateFile {
-                path: absolute_update.to_path_buf(),
+                path: absolute_update.display().to_string(),
                 move_path: None,
                 chunks: Vec::new(),
             },
@@ -535,6 +580,69 @@ fn test_hunk_resolve_path_accepts_relative_and_absolute_paths() {
 }
 
 #[test]
+fn test_hunk_resolution_uses_cwd_convention() {
+    for (cwd, path, expected) in [
+        (
+            "file:///C:/repo/worktree",
+            r"src\main.rs",
+            "file:///C:/repo/worktree/src/main.rs",
+        ),
+        (
+            "file:///C:/repo/worktree",
+            r"..\shared\lib.rs",
+            "file:///C:/repo/shared/lib.rs",
+        ),
+        (
+            "file:///C:/repo/worktree",
+            r"D:\target\main.rs",
+            "file:///D:/target/main.rs",
+        ),
+        (
+            "file:///repo/worktree",
+            "../shared/lib.rs",
+            "file:///repo/shared/lib.rs",
+        ),
+        (
+            "file:///repo/worktree",
+            "/target/main.rs",
+            "file:///target/main.rs",
+        ),
+    ] {
+        let cwd = PathUri::parse(cwd).unwrap();
+        let expected = PathUri::parse(expected).unwrap();
+        let hunk = DeleteFile {
+            path: path.to_string(),
+        };
+
+        assert_eq!(hunk.resolve_path(&cwd), Ok(expected));
+    }
+}
+
+#[test]
+fn test_hunk_move_resolution_uses_cwd_convention() {
+    let cwd = PathUri::parse("file:///C:/repo/worktree").unwrap();
+    for (move_path, expected) in [
+        (
+            r"renamed\main.rs",
+            "file:///C:/repo/worktree/renamed/main.rs",
+        ),
+        (r"..\shared\main.rs", "file:///C:/repo/shared/main.rs"),
+        (r"D:\target\main.rs", "file:///D:/target/main.rs"),
+    ] {
+        let hunk = UpdateFile {
+            path: r"src\main.rs".to_string(),
+            move_path: Some(move_path.to_string()),
+            chunks: Vec::new(),
+        };
+
+        assert_eq!(
+            hunk.resolve_move_path(&cwd),
+            Ok(Some(PathUri::parse(expected).unwrap()))
+        );
+    }
+}
+
+#[test]
 fn test_parse_patch_lenient() {
     let patch_text = r#"*** Begin Patch
 *** Update File: file2.py
@@ -542,7 +650,7 @@ fn test_parse_patch_lenient() {
 +bar
 *** End Patch"#;
     let expected_patch = vec![UpdateFile {
-        path: PathBuf::from("file2.py"),
+        path: "file2.py".to_string(),
         move_path: None,
         chunks: vec![UpdateFileChunk {
             change_context: None,
@@ -636,7 +744,7 @@ fn test_parse_patch_environment_id_preamble() {
         ),
         Ok(ApplyPatchArgs {
             hunks: vec![AddFile {
-                path: PathBuf::from("hello.txt"),
+                path: "hello.txt".to_string(),
                 contents: "hello\n".to_string(),
             }],
             patch: "*** Begin Patch\n*** Environment ID: remote\n*** Add File: hello.txt\n+hello\n*** End Patch".to_string(),

@@ -197,6 +197,7 @@ async fn try_verify_apply_patch_args(
     let mut changes = HashMap::new();
     for hunk in hunks {
         let path = hunk.resolve_path(&effective_cwd)?;
+        let move_path = hunk.resolve_move_path(&effective_cwd)?;
         match hunk {
             Hunk::AddFile { contents, .. } => {
                 changes.insert(path, ApplyPatchFileChange::Add { content: contents });
@@ -210,9 +211,7 @@ async fn try_verify_apply_patch_args(
                 })?;
                 changes.insert(path, ApplyPatchFileChange::Delete { content });
             }
-            Hunk::UpdateFile {
-                move_path, chunks, ..
-            } => {
+            Hunk::UpdateFile { chunks, .. } => {
                 let ApplyPatchFileUpdate {
                     unified_diff,
                     content: contents,
@@ -222,9 +221,7 @@ async fn try_verify_apply_patch_args(
                     path,
                     ApplyPatchFileChange::Update {
                         unified_diff,
-                        move_path: move_path
-                            .map(|path| effective_cwd.join(&path.to_string_lossy()))
-                            .transpose()?,
+                        move_path,
                         new_content: contents,
                     },
                 );
@@ -398,7 +395,6 @@ mod tests {
     use codex_exec_server::LOCAL_FS;
     use pretty_assertions::assert_eq;
     use std::fs;
-    use std::path::PathBuf;
     use std::string::ToString;
     use tempfile::tempdir;
 
@@ -446,7 +442,7 @@ mod tests {
 
     fn expected_single_add() -> Vec<Hunk> {
         vec![Hunk::AddFile {
-            path: PathBuf::from("foo"),
+            path: "foo".to_string(),
             contents: "hi\n".to_string(),
         }]
     }
@@ -545,7 +541,7 @@ mod tests {
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
-                        path: PathBuf::from("foo"),
+                        path: "foo".to_string(),
                         contents: "hi\n".to_string()
                     }]
                 );
@@ -573,7 +569,7 @@ mod tests {
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
-                        path: PathBuf::from("foo"),
+                        path: "foo".to_string(),
                         contents: "hi\n".to_string()
                     }]
                 );
@@ -616,7 +612,7 @@ PATCH"#,
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
-                        path: PathBuf::from("foo"),
+                        path: "foo".to_string(),
                         contents: "hi\n".to_string()
                     }]
                 );

@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use codex_protocol::models::PermissionProfile;
+use codex_utils_path_uri::PathUri;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -11,7 +12,6 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
@@ -235,8 +235,6 @@ M {file_name}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_custom_tool_call_reports_failure_output() -> Result<()> {
-    // TODO(anp): Remove after apply-patch assertions use target-native paths.
-    skip_if_wine_exec!(Ok(()), "asserts POSIX apply_patch failure text");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -258,11 +256,12 @@ async fn apply_patch_custom_tool_call_reports_failure_output() -> Result<()> {
 
     let output = harness.apply_patch_output(call_id).await;
 
-    let expected_output = format!(
-        "apply_patch verification failed: Failed to read file to update {}/{missing_file}: No such file or directory (os error 2)",
-        harness.cwd().to_string_lossy()
+    let missing_path = PathUri::from_abs_path(&harness.cwd_abs()).join(missing_file)?;
+    let expected_pattern = format!(
+        r"^apply_patch verification failed: Failed to read file to update {}: [^\r\n]+ \(os error 2\)$",
+        regex_lite::escape(&missing_path.inferred_native_path_string())
     );
-    assert_eq!(output, expected_output.as_str());
+    assert_regex_match(&expected_pattern, output.as_str());
 
     Ok(())
 }

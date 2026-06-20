@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use crate::parser::ADD_FILE_MARKER;
 use crate::parser::BEGIN_PATCH_MARKER;
 use crate::parser::CHANGE_CONTEXT_MARKER;
@@ -56,7 +54,7 @@ impl StreamingPatchParser {
                 && let StreamingParserMode::UpdateFile { hunk_line_number } = self.state.mode
             {
                 return Err(InvalidHunkError {
-                    message: format!("Update file hunk for path '{}' is empty", path.display()),
+                    message: format!("Update file hunk for path '{path}' is empty"),
                     line_number: hunk_line_number,
                 });
             }
@@ -107,7 +105,7 @@ impl StreamingPatchParser {
         if let Some(path) = trimmed.strip_prefix(ADD_FILE_MARKER) {
             self.ensure_update_hunk_is_not_empty(trimmed)?;
             self.state.hunks.push(AddFile {
-                path: PathBuf::from(path),
+                path: path.to_string(),
                 contents: String::new(),
             });
             self.state.mode = StreamingParserMode::AddFile;
@@ -116,7 +114,7 @@ impl StreamingPatchParser {
         if let Some(path) = trimmed.strip_prefix(DELETE_FILE_MARKER) {
             self.ensure_update_hunk_is_not_empty(trimmed)?;
             self.state.hunks.push(DeleteFile {
-                path: PathBuf::from(path),
+                path: path.to_string(),
             });
             self.state.mode = StreamingParserMode::DeleteFile;
             return Ok(true);
@@ -124,7 +122,7 @@ impl StreamingPatchParser {
         if let Some(path) = trimmed.strip_prefix(UPDATE_FILE_MARKER) {
             self.ensure_update_hunk_is_not_empty(trimmed)?;
             self.state.hunks.push(UpdateFile {
-                path: PathBuf::from(path),
+                path: path.to_string(),
                 move_path: None,
                 chunks: Vec::new(),
             });
@@ -254,7 +252,7 @@ impl StreamingPatchParser {
                         && move_path.is_none()
                         && let Some(move_to_path) = update_line.strip_prefix(MOVE_TO_MARKER)
                     {
-                        *move_path = Some(PathBuf::from(move_to_path));
+                        *move_path = Some(move_to_path.to_string());
                         self.state.mode = StreamingParserMode::UpdateFile { hunk_line_number };
                         return Ok(());
                     }
@@ -411,7 +409,6 @@ impl StreamingPatchParser {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
 
     use super::*;
 
@@ -421,14 +418,14 @@ mod tests {
         assert_eq!(
             parser.push_delta("*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor"),
             Ok(vec![AddFile {
-                path: PathBuf::from("src/hello.txt"),
+                path: "src/hello.txt".to_string(),
                 contents: "hello\n".to_string(),
             }])
         );
         assert_eq!(
             parser.push_delta("ld\n"),
             Ok(vec![AddFile {
-                path: PathBuf::from("src/hello.txt"),
+                path: "src/hello.txt".to_string(),
                 contents: "hello\nworld\n".to_string(),
             }])
         );
@@ -439,8 +436,8 @@ mod tests {
                 "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new\n",
             ),
             Ok(vec![UpdateFile {
-                path: PathBuf::from("src/old.rs"),
-                move_path: Some(PathBuf::from("src/new.rs")),
+                path: "src/old.rs".to_string(),
+                move_path: Some("src/new.rs".to_string()),
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
                     old_lines: vec!["old".to_string()],
@@ -458,7 +455,7 @@ mod tests {
         assert_eq!(
             parser.push_delta("\n"),
             Ok(vec![DeleteFile {
-                path: PathBuf::from("gone.txt"),
+                path: "gone.txt".to_string(),
             }])
         );
 
@@ -469,11 +466,11 @@ mod tests {
             ),
             Ok(vec![
                 AddFile {
-                    path: PathBuf::from("src/one.txt"),
+                    path: "src/one.txt".to_string(),
                     contents: "one\n".to_string(),
                 },
                 DeleteFile {
-                    path: PathBuf::from("src/two.txt"),
+                    path: "src/two.txt".to_string(),
                 },
             ])
         );
@@ -493,7 +490,7 @@ mod tests {
         assert_eq!(
             parser.push_delta(patch),
             Ok(vec![AddFile {
-                path: PathBuf::from("src/hello.txt"),
+                path: "src/hello.txt".to_string(),
                 contents: "hello\n".to_string(),
             }])
         );
@@ -628,7 +625,7 @@ mod tests {
 ",
             ),
             Ok(vec![UpdateFile {
-                path: PathBuf::from("a.txt"),
+                path: "a.txt".to_string(),
                 move_path: None,
                 chunks: vec![
                     UpdateFileChunk {
@@ -664,7 +661,7 @@ mod tests {
 ",
             ),
             Ok(vec![UpdateFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
@@ -694,7 +691,7 @@ mod tests {
                 "*** Begin Patch\n*** Update File: file.txt\n@@\n+quux\n*** End of File\n\n*** End Patch\n",
             ),
             Ok(vec![UpdateFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
@@ -712,7 +709,7 @@ mod tests {
         assert_eq!(
             parser.push_delta("*** Begin Patch\r\n*** Update File: file.txt\r\n@@\r\n-old\r\n+new\r\n*** End Patch\r\n"),
             Ok(vec![UpdateFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
@@ -727,7 +724,7 @@ mod tests {
         assert_eq!(
             parser.push_delta("*** Begin Patch\r\n*** Update File: file.txt\r\n@@\r\n-old\r\r\n+new\r\n*** End Patch\r\n"),
             Ok(vec![UpdateFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
@@ -745,14 +742,14 @@ mod tests {
         assert_eq!(
             parser.push_delta("*** Begin Patch\n*** Add File: file.txt\n+hello\n*** End Patch"),
             Ok(vec![AddFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 contents: "hello\n".to_string(),
             }])
         );
         assert_eq!(
             parser.finish(),
             Ok(vec![AddFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 contents: "hello\n".to_string(),
             }])
         );
@@ -763,7 +760,7 @@ mod tests {
                 "*** Begin Patch\n*** Update File: file.txt\n@@\n-old\n+new\n *** End Patch",
             ),
             Ok(vec![UpdateFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
@@ -776,7 +773,7 @@ mod tests {
         assert_eq!(
             parser.finish(),
             Ok(vec![UpdateFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
                     change_context: None,
@@ -794,7 +791,7 @@ mod tests {
         assert_eq!(
             parser.push_delta("*** Begin Patch\n*** Add File: file.txt\n+hello\n"),
             Ok(vec![AddFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 contents: "hello\n".to_string(),
             }])
         );
@@ -824,7 +821,7 @@ mod tests {
                 "*** Begin Patch\n*** Add File: file.txt\n+hello\n*** End Patch\n \t\n",
             ),
             Ok(vec![AddFile {
-                path: PathBuf::from("file.txt"),
+                path: "file.txt".to_string(),
                 contents: "hello\n".to_string(),
             }])
         );
