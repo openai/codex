@@ -45,13 +45,9 @@ const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
 /// are not resolved.
 ///
 /// Serde represents a `PathUri` as its canonical URI string. Deserialization
-/// also accepts an absolute native path for compatibility with fields that
-/// previously used [`AbsolutePathBuf`]; relative paths are rejected. Valid
-/// `file:` strings round-trip through their canonical URL form, including
-/// encoded non-UTF-8 path bytes, but conversion to a native path remains
-/// host-dependent as described by [RFC 8089].
+/// accepts only valid `file:` URI strings. These strings round-trip through
+/// their canonical URL form, including encoded non-UTF-8 path bytes.
 ///
-/// [RFC 8089]: https://www.rfc-editor.org/rfc/rfc8089.html
 /// [VS Code resources]: https://github.com/microsoft/vscode/blob/main/src/vs/base/common/resources.ts
 #[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
 #[ts(type = "string")]
@@ -478,30 +474,7 @@ impl<'de> Deserialize<'de> for PathUri {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        let unsupported_scheme = match Url::parse(&value) {
-            Ok(url) => match Self::try_from(url) {
-                Ok(uri) => return Ok(uri),
-                // `Url` parses a Windows drive prefix such as `C:\` as the
-                // scheme `c`. Give any unsupported URI one chance to satisfy
-                // the native absolute-path invariant before reporting it.
-                Err(error @ PathUriParseError::UnsupportedScheme(_)) => Some(error),
-                Err(error) => return Err(serde::de::Error::custom(error)),
-            },
-            Err(url::ParseError::RelativeUrlWithoutBase) => None,
-            Err(error) => {
-                return Err(serde::de::Error::custom(PathUriParseError::InvalidUri(
-                    error,
-                )));
-            }
-        };
-
-        let path = AbsolutePathBuf::from_absolute_path_checked(value).map_err(|path_error| {
-            serde::de::Error::custom(
-                unsupported_scheme
-                    .map_or_else(|| path_error.to_string(), |error| error.to_string()),
-            )
-        })?;
-        Ok(Self::from_abs_path(&path))
+        Self::parse(&value).map_err(serde::de::Error::custom)
     }
 }
 
