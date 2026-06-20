@@ -85,7 +85,7 @@ async fn approvals_selection_popup_snapshot() {
 }
 
 #[tokio::test]
-async fn profile_permissions_selection_popup_snapshot() {
+async fn profile_permissions_selection_popup_snapshot_while_task_running() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.explicit_permission_profile_mode = true;
     chat.config
@@ -96,7 +96,8 @@ async fn profile_permissions_selection_popup_snapshot() {
         ))
         .expect("set active profile");
 
-    chat.open_permissions_popup();
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.dispatch_command(SlashCommand::Permissions);
 
     assert_chatwidget_snapshot!(
         "profile_permissions_selection_popup",
