@@ -3016,6 +3016,7 @@ impl Session {
             collaboration_mode,
             base_instructions,
             session_source,
+            auto_compact_window_id,
         ) = {
             let state = self.state.lock().await;
             (
@@ -3024,6 +3025,7 @@ impl Session {
                 state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
+                state.auto_compact_window_id(),
             )
         };
         if let Some(model_switch_message) =
@@ -3205,6 +3207,19 @@ impl Session {
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             contextual_user_sections.push(user_instructions.to_string());
+        }
+        // This is full-context metadata. Steady-state context diffs should not re-emit it.
+        if turn_context.config.features.enabled(Feature::TokenBudget)
+            && let Some(model_context_window) = turn_context.model_context_window()
+        {
+            developer_sections.push(
+                crate::context::TokenBudgetContext::new(
+                    self.thread_id(),
+                    auto_compact_window_id,
+                    model_context_window,
+                )
+                .render(),
+            );
         }
         if turn_context.config.include_environment_context {
             let shell = self.user_shell();
