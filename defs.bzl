@@ -55,7 +55,7 @@ def _workspace_root_test_impl(ctx):
     workspace_root_marker = ctx.file.workspace_root_marker
     launcher_template = ctx.file._windows_launcher_template if is_windows else ctx.file._bash_launcher_template
     runfile_env_exports = _windows_runfile_env_exports(ctx) if is_windows else _bash_runfile_env_exports(ctx)
-    test_python_exec_path = _windows_test_python_exec_path(ctx) if is_windows else ""
+    test_python_relative_path = _windows_test_python_relative_path(ctx, launcher) if is_windows else ""
     workspace_root_setup = _windows_workspace_root_setup(ctx) if is_windows else _bash_workspace_root_setup(ctx)
     ctx.actions.expand_template(
         template = launcher_template,
@@ -64,7 +64,7 @@ def _workspace_root_test_impl(ctx):
         substitutions = {
             "__RUNFILE_ENV_EXPORTS__": runfile_env_exports,
             "__TEST_BIN__": test_bin.short_path,
-            "__TEST_PYTHON_EXEC_PATH__": test_python_exec_path,
+            "__TEST_PYTHON_RELATIVE_PATH__": test_python_relative_path,
             "__WORKSPACE_ROOT_SETUP__": workspace_root_setup,
             "__WORKSPACE_ROOT_MARKER__": workspace_root_marker.short_path,
         },
@@ -121,10 +121,26 @@ def _windows_runfile_env_exports(ctx):
         lines.append("if errorlevel 1 exit /b 1")
     return "\n".join(lines)
 
-def _windows_test_python_exec_path(ctx):
+def _windows_test_python_relative_path(ctx, launcher):
     if ctx.attr.hermetic_test_python == None:
         fail("Windows tests must provide the fixed hermetic Python tool")
-    return ctx.attr.hermetic_test_python[HermeticTestPythonInfo].executable.path
+
+    executable = ctx.attr.hermetic_test_python[HermeticTestPythonInfo].executable
+    launcher_dir_parts = launcher.dirname.split("/")
+    executable_path_parts = executable.path.split("/")
+    common_prefix_len = 0
+    prefix_matches = True
+    for index in range(min(len(launcher_dir_parts), len(executable_path_parts))):
+        if prefix_matches and launcher_dir_parts[index] == executable_path_parts[index]:
+            common_prefix_len += 1
+        else:
+            prefix_matches = False
+
+    relative_path_parts = (
+        [".."] * (len(launcher_dir_parts) - common_prefix_len) +
+        executable_path_parts[common_prefix_len:]
+    )
+    return "\\".join(relative_path_parts)
 
 def _runfile_env_file(target):
     executable = target[DefaultInfo].files_to_run.executable

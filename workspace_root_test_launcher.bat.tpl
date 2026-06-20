@@ -12,7 +12,7 @@ if errorlevel 1 exit /b 1
 
 __RUNFILE_ENV_EXPORTS__
 
-set "CODEX_BAZEL_TEST_PYTHON=__TEST_PYTHON_EXEC_PATH__"
+set "CODEX_BAZEL_TEST_PYTHON=%~dp0__TEST_PYTHON_RELATIVE_PATH__"
 for %%P in ("%CODEX_BAZEL_TEST_PYTHON%") do set "CODEX_BAZEL_TEST_PYTHON=%%~fP"
 if not exist "%CODEX_BAZEL_TEST_PYTHON%" (
   >&2 echo hermetic Bazel test interpreter does not exist: %CODEX_BAZEL_TEST_PYTHON%
