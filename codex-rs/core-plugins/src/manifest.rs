@@ -1,11 +1,18 @@
-use codex_config::HooksFile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
-use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::path::Component;
 use std::path::Path;
+
+use crate::manifest_document::RawPluginManifest;
+use crate::manifest_document::RawPluginManifestDefaultPrompt;
+use crate::manifest_document::RawPluginManifestDefaultPromptEntry;
+use crate::manifest_document::RawPluginManifestHooks;
+use crate::manifest_document::RawPluginManifestInterface;
+use crate::manifest_document::RawPluginManifestMcpServers;
+use crate::manifest_document::RawPluginManifestPaths;
+
 const MAX_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_DEFAULT_PROMPT_LEN: usize = 128;
 
@@ -15,108 +22,6 @@ pub type PluginManifestInterface = codex_plugin::manifest::PluginManifestInterfa
 pub type PluginManifestMcpServers =
     codex_plugin::manifest::PluginManifestMcpServers<AbsolutePathBuf>;
 pub type PluginManifestPaths = codex_plugin::manifest::PluginManifestPaths<AbsolutePathBuf>;
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawPluginManifest {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    keywords: Vec<String>,
-    // Keep manifest paths as raw strings so we can validate the required `./...` syntax before
-    // resolving them under the plugin root.
-    #[serde(default)]
-    skills: Option<RawPluginManifestPaths>,
-    #[serde(default)]
-    mcp_servers: Option<RawPluginManifestMcpServers>,
-    #[serde(default)]
-    apps: Option<String>,
-    #[serde(default)]
-    hooks: Option<RawPluginManifestHooks>,
-    #[serde(default)]
-    interface: Option<RawPluginManifestInterface>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawPluginManifestInterface {
-    #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    short_description: Option<String>,
-    #[serde(default)]
-    long_description: Option<String>,
-    #[serde(default)]
-    developer_name: Option<String>,
-    #[serde(default)]
-    category: Option<String>,
-    #[serde(default)]
-    capabilities: Vec<String>,
-    #[serde(default)]
-    #[serde(alias = "websiteURL")]
-    website_url: Option<String>,
-    #[serde(default)]
-    #[serde(alias = "privacyPolicyURL")]
-    privacy_policy_url: Option<String>,
-    #[serde(default)]
-    #[serde(alias = "termsOfServiceURL")]
-    terms_of_service_url: Option<String>,
-    #[serde(default)]
-    default_prompt: Option<RawPluginManifestDefaultPrompt>,
-    #[serde(default)]
-    brand_color: Option<String>,
-    #[serde(default)]
-    composer_icon: Option<String>,
-    #[serde(default)]
-    logo: Option<String>,
-    #[serde(default)]
-    screenshots: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawPluginManifestDefaultPrompt {
-    String(String),
-    List(Vec<RawPluginManifestDefaultPromptEntry>),
-    Invalid(JsonValue),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawPluginManifestDefaultPromptEntry {
-    String(String),
-    Invalid(JsonValue),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawPluginManifestPaths {
-    Path(String),
-    Paths(Vec<String>),
-    Invalid(JsonValue),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawPluginManifestMcpServers {
-    Path(String),
-    Object(std::collections::BTreeMap<String, JsonValue>),
-    Invalid(JsonValue),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawPluginManifestHooks {
-    Path(String),
-    Paths(Vec<String>),
-    Inline(HooksFile),
-    InlineList(Vec<HooksFile>),
-    Invalid(JsonValue),
-}
 
 /// Loads a plugin manifest from the local host filesystem.
 pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
@@ -139,6 +44,19 @@ pub(crate) fn parse_plugin_manifest(
     manifest_path: &Path,
     contents: &str,
 ) -> Result<PluginManifest, serde_json::Error> {
+    let fallback_name = plugin_root.file_name().and_then(|entry| entry.to_str());
+    let manifest_display = manifest_path.display().to_string();
+    parse_plugin_manifest_with(fallback_name, &manifest_display, contents, |field, path| {
+        resolve_manifest_path(plugin_root, field, Some(path))
+    })
+}
+
+pub(crate) fn parse_plugin_manifest_with<Resource>(
+    fallback_name: Option<&str>,
+    manifest_display: &str,
+    contents: &str,
+    mut resolve_resource: impl FnMut(&'static str, &str) -> Option<Resource>,
+) -> Result<codex_plugin::manifest::PluginManifest<Resource>, serde_json::Error> {
     let RawPluginManifest {
         name: raw_name,
         version,
@@ -149,10 +67,8 @@ pub(crate) fn parse_plugin_manifest(
         apps,
         hooks,
         interface,
-    } = serde_json::from_str::<RawPluginManifest>(contents)?;
-    let name = plugin_root
-        .file_name()
-        .and_then(|entry| entry.to_str())
+    } = crate::manifest_document::parse(contents)?;
+    let name = fallback_name
         .filter(|_| raw_name.trim().is_empty())
         .unwrap_or(&raw_name)
         .to_string();
@@ -178,7 +94,7 @@ pub(crate) fn parse_plugin_manifest(
             screenshots,
         } = interface;
 
-        let interface = PluginManifestInterface {
+        let interface = codex_plugin::manifest::PluginManifestInterface {
             display_name,
             short_description,
             long_description,
@@ -188,23 +104,17 @@ pub(crate) fn parse_plugin_manifest(
             website_url,
             privacy_policy_url,
             terms_of_service_url,
-            default_prompt: resolve_default_prompts(manifest_path, default_prompt.as_ref()),
+            default_prompt: resolve_default_prompts(manifest_display, default_prompt.as_ref()),
             brand_color,
-            composer_icon: resolve_interface_asset_path(
-                plugin_root,
-                "interface.composerIcon",
-                composer_icon.as_deref(),
-            ),
-            logo: resolve_interface_asset_path(plugin_root, "interface.logo", logo.as_deref()),
+            composer_icon: composer_icon
+                .as_deref()
+                .and_then(|path| resolve_resource("interface.composerIcon", path)),
+            logo: logo
+                .as_deref()
+                .and_then(|path| resolve_resource("interface.logo", path)),
             screenshots: screenshots
                 .iter()
-                .filter_map(|screenshot| {
-                    resolve_interface_asset_path(
-                        plugin_root,
-                        "interface.screenshots",
-                        Some(screenshot),
-                    )
-                })
+                .filter_map(|screenshot| resolve_resource("interface.screenshots", screenshot))
                 .collect(),
         };
 
@@ -225,38 +135,41 @@ pub(crate) fn parse_plugin_manifest(
 
         has_fields.then_some(interface)
     });
-    Ok(PluginManifest {
+    Ok(codex_plugin::manifest::PluginManifest {
         name,
         version,
         description,
         keywords,
-        paths: PluginManifestPaths {
-            skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
-            mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
-            apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
-            hooks: resolve_manifest_hooks(plugin_root, hooks),
+        paths: codex_plugin::manifest::PluginManifestPaths {
+            skills: resolve_manifest_paths("skills", skills.as_ref(), &mut resolve_resource),
+            mcp_servers: resolve_manifest_mcp_servers(mcp_servers, &mut resolve_resource),
+            apps: apps
+                .as_deref()
+                .and_then(|path| resolve_resource("apps", path)),
+            hooks: resolve_manifest_hooks(hooks, &mut resolve_resource),
         },
         interface,
     })
 }
 
-fn resolve_manifest_hooks(
-    plugin_root: &Path,
+fn resolve_manifest_hooks<Resource>(
     hooks: Option<RawPluginManifestHooks>,
-) -> Option<PluginManifestHooks> {
+    resolve_resource: &mut impl FnMut(&'static str, &str) -> Option<Resource>,
+) -> Option<codex_plugin::manifest::PluginManifestHooks<Resource>> {
+    use codex_plugin::manifest::PluginManifestHooks;
+
     match hooks? {
         RawPluginManifestHooks::Path(path) => {
-            resolve_manifest_path(plugin_root, "hooks", Some(&path))
-                .map(|path| PluginManifestHooks::Paths(vec![path]))
+            resolve_resource("hooks", &path).map(|path| PluginManifestHooks::Paths(vec![path]))
         }
         RawPluginManifestHooks::Paths(paths) => {
             let hooks = paths
                 .iter()
-                .filter_map(|path| resolve_manifest_path(plugin_root, "hooks", Some(path)))
+                .filter_map(|path| resolve_resource("hooks", path))
                 .collect::<Vec<_>>();
             (!hooks.is_empty()).then_some(PluginManifestHooks::Paths(hooks))
         }
-        RawPluginManifestHooks::Inline(hooks) => Some(PluginManifestHooks::Inline(vec![hooks])),
+        RawPluginManifestHooks::Inline(hooks) => Some(PluginManifestHooks::Inline(vec![*hooks])),
         RawPluginManifestHooks::InlineList(hooks) => {
             (!hooks.is_empty()).then_some(PluginManifestHooks::Inline(hooks))
         }
@@ -270,14 +183,15 @@ fn resolve_manifest_hooks(
     }
 }
 
-fn resolve_manifest_mcp_servers(
-    plugin_root: &Path,
+fn resolve_manifest_mcp_servers<Resource>(
     mcp_servers: Option<RawPluginManifestMcpServers>,
-) -> Option<PluginManifestMcpServers> {
+    resolve_resource: &mut impl FnMut(&'static str, &str) -> Option<Resource>,
+) -> Option<codex_plugin::manifest::PluginManifestMcpServers<Resource>> {
+    use codex_plugin::manifest::PluginManifestMcpServers;
+
     match mcp_servers? {
         RawPluginManifestMcpServers::Path(path) => {
-            resolve_manifest_path(plugin_root, "mcpServers", Some(&path))
-                .map(PluginManifestMcpServers::Path)
+            resolve_resource("mcpServers", &path).map(PluginManifestMcpServers::Path)
         }
         RawPluginManifestMcpServers::Object(servers) => match serde_json::to_string(&servers) {
             Ok(servers) => Some(PluginManifestMcpServers::Object(servers)),
@@ -296,21 +210,13 @@ fn resolve_manifest_mcp_servers(
     }
 }
 
-fn resolve_interface_asset_path(
-    plugin_root: &Path,
-    field: &'static str,
-    path: Option<&str>,
-) -> Option<AbsolutePathBuf> {
-    resolve_manifest_path(plugin_root, field, path)
-}
-
 fn resolve_default_prompts(
-    manifest_path: &Path,
+    manifest_display: &str,
     value: Option<&RawPluginManifestDefaultPrompt>,
 ) -> Option<Vec<String>> {
     match value? {
         RawPluginManifestDefaultPrompt::String(prompt) => {
-            resolve_default_prompt_str(manifest_path, "interface.defaultPrompt", prompt)
+            resolve_default_prompt_str(manifest_display, "interface.defaultPrompt", prompt)
                 .map(|prompt| vec![prompt])
         }
         RawPluginManifestDefaultPrompt::List(values) => {
@@ -318,7 +224,7 @@ fn resolve_default_prompts(
             for (index, item) in values.iter().enumerate() {
                 if prompts.len() >= MAX_DEFAULT_PROMPT_COUNT {
                     warn_invalid_default_prompt(
-                        manifest_path,
+                        manifest_display,
                         "interface.defaultPrompt",
                         &format!("maximum of {MAX_DEFAULT_PROMPT_COUNT} prompts is supported"),
                     );
@@ -329,7 +235,7 @@ fn resolve_default_prompts(
                     RawPluginManifestDefaultPromptEntry::String(prompt) => {
                         let field = format!("interface.defaultPrompt[{index}]");
                         if let Some(prompt) =
-                            resolve_default_prompt_str(manifest_path, &field, prompt)
+                            resolve_default_prompt_str(manifest_display, &field, prompt)
                         {
                             prompts.push(prompt);
                         }
@@ -337,7 +243,7 @@ fn resolve_default_prompts(
                     RawPluginManifestDefaultPromptEntry::Invalid(value) => {
                         let field = format!("interface.defaultPrompt[{index}]");
                         warn_invalid_default_prompt(
-                            manifest_path,
+                            manifest_display,
                             &field,
                             &format!("expected a string, found {}", json_value_type(value)),
                         );
@@ -349,7 +255,7 @@ fn resolve_default_prompts(
         }
         RawPluginManifestDefaultPrompt::Invalid(value) => {
             warn_invalid_default_prompt(
-                manifest_path,
+                manifest_display,
                 "interface.defaultPrompt",
                 &format!(
                     "expected a string or array of strings, found {}",
@@ -361,15 +267,15 @@ fn resolve_default_prompts(
     }
 }
 
-fn resolve_default_prompt_str(manifest_path: &Path, field: &str, prompt: &str) -> Option<String> {
+fn resolve_default_prompt_str(manifest_display: &str, field: &str, prompt: &str) -> Option<String> {
     let prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
     if prompt.is_empty() {
-        warn_invalid_default_prompt(manifest_path, field, "prompt must not be empty");
+        warn_invalid_default_prompt(manifest_display, field, "prompt must not be empty");
         return None;
     }
     if prompt.chars().count() > MAX_DEFAULT_PROMPT_LEN {
         warn_invalid_default_prompt(
-            manifest_path,
+            manifest_display,
             field,
             &format!("prompt must be at most {MAX_DEFAULT_PROMPT_LEN} characters"),
         );
@@ -378,11 +284,8 @@ fn resolve_default_prompt_str(manifest_path: &Path, field: &str, prompt: &str) -
     Some(prompt)
 }
 
-fn warn_invalid_default_prompt(manifest_path: &Path, field: &str, message: &str) {
-    tracing::warn!(
-        path = %manifest_path.display(),
-        "ignoring {field}: {message}"
-    );
+fn warn_invalid_default_prompt(manifest_display: &str, field: &str, message: &str) {
+    tracing::warn!(path = manifest_display, "ignoring {field}: {message}");
 }
 
 fn json_value_type(value: &JsonValue) -> &'static str {
@@ -396,20 +299,18 @@ fn json_value_type(value: &JsonValue) -> &'static str {
     }
 }
 
-fn resolve_manifest_paths(
-    plugin_root: &Path,
+fn resolve_manifest_paths<Resource>(
     field: &'static str,
     paths: Option<&RawPluginManifestPaths>,
-) -> Vec<AbsolutePathBuf> {
+    resolve_resource: &mut impl FnMut(&'static str, &str) -> Option<Resource>,
+) -> Vec<Resource> {
     match paths {
-        Some(RawPluginManifestPaths::Path(path)) => {
-            resolve_manifest_path(plugin_root, field, Some(path))
-                .map(|path| vec![path])
-                .unwrap_or_default()
-        }
+        Some(RawPluginManifestPaths::Path(path)) => resolve_resource(field, path)
+            .map(|path| vec![path])
+            .unwrap_or_default(),
         Some(RawPluginManifestPaths::Paths(paths)) => paths
             .iter()
-            .filter_map(|path| resolve_manifest_path(plugin_root, field, Some(path)))
+            .filter_map(|path| resolve_resource(field, path))
             .collect(),
         Some(RawPluginManifestPaths::Invalid(value)) => {
             tracing::warn!(
@@ -470,6 +371,7 @@ mod tests {
     use super::MAX_DEFAULT_PROMPT_LEN;
     use super::PluginManifest;
     use super::load_plugin_manifest;
+    use super::parse_plugin_manifest_with;
     use codex_exec_server::EnvironmentManager;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_plugin::PluginProvider;
@@ -514,6 +416,95 @@ mod tests {
 
     fn load_manifest(plugin_root: &Path) -> PluginManifest {
         load_plugin_manifest(plugin_root).expect("load plugin manifest")
+    }
+
+    #[test]
+    fn generic_parser_passes_raw_resource_strings_to_resolver() {
+        let mut observed = Vec::new();
+        let manifest = parse_plugin_manifest_with(
+            Some("fallback-plugin"),
+            "manifest.json",
+            r#"{
+  "name": "",
+  "skills": ["./skills/search", "../shared-skill"],
+  "mcpServers": "./.mcp.json",
+  "apps": "./apps/connectors.json",
+  "hooks": ["./hooks/one.json", "../hooks/two.json"],
+  "interface": {
+    "displayName": "Fallback Plugin",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "../assets/logo.svg",
+    "screenshots": ["./assets/one.png", "../assets/two.png"]
+  }
+}"#,
+            |field, path| {
+                observed.push((field.to_string(), path.to_string()));
+                Some(format!("{field}:{path}"))
+            },
+        )
+        .expect("parse plugin manifest");
+
+        assert_eq!(
+            manifest,
+            codex_plugin::manifest::PluginManifest {
+                name: "fallback-plugin".to_string(),
+                version: None,
+                description: None,
+                keywords: Vec::new(),
+                paths: codex_plugin::manifest::PluginManifestPaths {
+                    skills: vec![
+                        "skills:./skills/search".to_string(),
+                        "skills:../shared-skill".to_string(),
+                    ],
+                    mcp_servers: Some(codex_plugin::manifest::PluginManifestMcpServers::Path(
+                        "mcpServers:./.mcp.json".to_string(),
+                    ),),
+                    apps: Some("apps:./apps/connectors.json".to_string()),
+                    hooks: Some(codex_plugin::manifest::PluginManifestHooks::Paths(vec![
+                        "hooks:./hooks/one.json".to_string(),
+                        "hooks:../hooks/two.json".to_string(),
+                    ])),
+                },
+                interface: Some(codex_plugin::manifest::PluginManifestInterface {
+                    display_name: Some("Fallback Plugin".to_string()),
+                    composer_icon: Some("interface.composerIcon:./assets/icon.svg".to_string(),),
+                    logo: Some("interface.logo:../assets/logo.svg".to_string()),
+                    screenshots: vec![
+                        "interface.screenshots:./assets/one.png".to_string(),
+                        "interface.screenshots:../assets/two.png".to_string(),
+                    ],
+                    ..Default::default()
+                }),
+            }
+        );
+
+        observed.sort();
+        let mut expected_observed = vec![
+            ("apps".to_string(), "./apps/connectors.json".to_string()),
+            ("hooks".to_string(), "../hooks/two.json".to_string()),
+            ("hooks".to_string(), "./hooks/one.json".to_string()),
+            (
+                "interface.composerIcon".to_string(),
+                "./assets/icon.svg".to_string(),
+            ),
+            (
+                "interface.logo".to_string(),
+                "../assets/logo.svg".to_string(),
+            ),
+            (
+                "interface.screenshots".to_string(),
+                "../assets/two.png".to_string(),
+            ),
+            (
+                "interface.screenshots".to_string(),
+                "./assets/one.png".to_string(),
+            ),
+            ("mcpServers".to_string(), "./.mcp.json".to_string()),
+            ("skills".to_string(), "../shared-skill".to_string()),
+            ("skills".to_string(), "./skills/search".to_string()),
+        ];
+        expected_observed.sort();
+        assert_eq!(observed, expected_observed);
     }
 
     #[test]

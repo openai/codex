@@ -4,6 +4,7 @@ pub mod installed_marketplaces;
 pub mod loader;
 mod manager;
 pub mod manifest;
+mod manifest_document;
 pub mod marketplace;
 pub mod marketplace_add;
 pub mod marketplace_remove;
