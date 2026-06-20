@@ -117,7 +117,7 @@ enum ManagedFileSystemContext {
 }
 
 impl FileSystemContext {
-    fn from_permission_profile(
+    pub(super) fn from_permission_profile(
         permission_profile: &PermissionProfile,
         workspace_roots: &[AbsolutePathBuf],
     ) -> Self {
@@ -143,7 +143,7 @@ impl FileSystemContext {
         }
     }
 
-    fn render(&self) -> String {
+    pub(super) fn render(&self) -> String {
         let mut rendered = "<filesystem>".to_string();
         if !self.workspace_roots.is_empty() {
             rendered.push_str("<workspace_roots>");
@@ -283,7 +283,7 @@ fn push_text_element(rendered: &mut String, name: &str, value: &str) {
     rendered.push_str(&format!("</{name}>"));
 }
 
-fn push_xml_escaped_text(rendered: &mut String, value: &str) {
+pub(super) fn push_xml_escaped_text(rendered: &mut String, value: &str) {
     for ch in value.chars() {
         match ch {
             '&' => rendered.push_str("&amp;"),
@@ -310,7 +310,7 @@ impl NetworkContext {
         }
     }
 
-    fn render(&self) -> String {
+    pub(super) fn render(&self) -> String {
         let mut rendered = "<network enabled=\"true\">".to_string();
         Self::push_rendered_domain_element(&mut rendered, "allowed", &self.allowed_domains);
         Self::push_rendered_domain_element(&mut rendered, "denied", &self.denied_domains);
