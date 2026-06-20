@@ -10,6 +10,12 @@ pub(super) enum RefreshControl {
     Stop,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InitialRefresh {
+    Immediate,
+    AfterInterval,
+}
+
 #[derive(Debug)]
 pub(crate) struct PeriodicRefreshWorker {
     shutdown: CancellationToken,
@@ -28,7 +34,11 @@ impl Drop for PeriodicRefreshWorker {
     }
 }
 
-pub(super) fn spawn<F, Fut>(refresh_interval: Duration, mut refresh: F) -> PeriodicRefreshWorker
+pub(super) fn spawn<F, Fut>(
+    refresh_interval: Duration,
+    initial_refresh: InitialRefresh,
+    mut refresh: F,
+) -> PeriodicRefreshWorker
 where
     F: FnMut() -> Fut + Send + 'static,
     Fut: Future<Output = RefreshControl> + Send + 'static,
@@ -36,7 +46,14 @@ where
     let shutdown = CancellationToken::new();
     let worker_shutdown = shutdown.clone();
     let task = tokio::spawn(async move {
+        let mut delay_before_refresh = initial_refresh == InitialRefresh::AfterInterval;
         loop {
+            if delay_before_refresh {
+                tokio::select! {
+                    _ = worker_shutdown.cancelled() => break,
+                    _ = tokio::time::sleep(refresh_interval) => {}
+                }
+            }
             let refresh_control = tokio::select! {
                 _ = worker_shutdown.cancelled() => break,
                 refresh_control = refresh() => refresh_control,
@@ -44,11 +61,7 @@ where
             if refresh_control == RefreshControl::Stop {
                 break;
             }
-
-            tokio::select! {
-                _ = worker_shutdown.cancelled() => break,
-                _ = tokio::time::sleep(refresh_interval) => {}
-            }
+            delay_before_refresh = true;
         }
     });
     PeriodicRefreshWorker {

@@ -13,7 +13,7 @@ async fn refreshes_immediately_periodically_and_stops_when_dropped() {
     let refresh_count = Arc::new(AtomicUsize::new(0));
     let refreshed = Arc::new(Notify::new());
     let hold_second_refresh = Arc::new(Notify::new());
-    let worker = spawn(Duration::from_millis(10), {
+    let worker = spawn(Duration::from_millis(10), InitialRefresh::Immediate, {
         let refresh_count = Arc::clone(&refresh_count);
         let refreshed = Arc::clone(&refreshed);
         let hold_second_refresh = Arc::clone(&hold_second_refresh);
@@ -50,7 +50,7 @@ async fn refreshes_immediately_periodically_and_stops_when_dropped() {
 async fn stops_when_refresh_requests_it() {
     let refresh_count = Arc::new(AtomicUsize::new(0));
     let refreshed = Arc::new(Notify::new());
-    let worker = spawn(Duration::from_millis(10), {
+    let worker = spawn(Duration::from_millis(10), InitialRefresh::Immediate, {
         let refresh_count = Arc::clone(&refresh_count);
         let refreshed = Arc::clone(&refreshed);
         move || {
@@ -67,6 +67,29 @@ async fn stops_when_refresh_requests_it() {
     tokio::time::timeout(Duration::from_secs(1), refreshed.notified())
         .await
         .expect("expected refresh");
+    drop(worker);
+
+    assert_eq!(refresh_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn can_delay_the_first_refresh() {
+    let refresh_count = Arc::new(AtomicUsize::new(0));
+    let worker = spawn(Duration::from_secs(60), InitialRefresh::AfterInterval, {
+        let refresh_count = Arc::clone(&refresh_count);
+        move || {
+            let refresh_count = Arc::clone(&refresh_count);
+            async move {
+                refresh_count.fetch_add(1, Ordering::SeqCst);
+                RefreshControl::Continue
+            }
+        }
+    });
+
+    tokio::task::yield_now().await;
+    assert_eq!(refresh_count.load(Ordering::SeqCst), 0);
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::task::yield_now().await;
     drop(worker);
 
     assert_eq!(refresh_count.load(Ordering::SeqCst), 1);
