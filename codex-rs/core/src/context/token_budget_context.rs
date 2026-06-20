@@ -8,7 +8,6 @@ pub(crate) struct TokenBudgetContext {
     first_window_id: Uuid,
     previous_window_id: Option<Uuid>,
     window_id: Uuid,
-    tokens_left: i64,
     mcp_result: Option<String>,
 }
 
@@ -18,7 +17,6 @@ impl TokenBudgetContext {
         first_window_id: Uuid,
         previous_window_id: Option<Uuid>,
         window_id: Uuid,
-        tokens_left: i64,
         mcp_result: Option<String>,
     ) -> Self {
         Self {
@@ -26,7 +24,6 @@ impl TokenBudgetContext {
             first_window_id,
             previous_window_id,
             window_id,
-            tokens_left,
             mcp_result,
         }
     }
@@ -52,14 +49,13 @@ impl ContextualUserFragment for TokenBudgetContext {
             .previous_window_id
             .map_or_else(|| "none".to_string(), |window_id| window_id.to_string());
         let window_id = self.window_id;
-        let tokens_left = self.tokens_left;
         let mcp_result = self
             .mcp_result
             .as_deref()
-            .map(|result| format!("\nHistory MCP result: {result}"))
+            .map(|result| format!("\n{result}"))
             .unwrap_or_default();
         format!(
-            "Thread id {thread_id}.\nFirst context window id {first_window_id}.\nPrevious context window id {previous_window_id}.\nCurrent context window id {window_id}.\nYou have {tokens_left} tokens left in this context window.{mcp_result}"
+            "Thread id {thread_id}.\nFirst context window id {first_window_id}.\nPrevious context window id {previous_window_id}.\nCurrent context window id {window_id}.{mcp_result}"
         )
     }
 }

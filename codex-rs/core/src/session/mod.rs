@@ -3216,7 +3216,7 @@ impl Session {
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
         if turn_context.config.features.enabled(Feature::TokenBudget)
-            && let Some(model_context_window) = turn_context.model_context_window()
+            && turn_context.model_context_window().is_some()
         {
             let mcp_result = self
                 .call_tool(
@@ -3229,14 +3229,24 @@ impl Session {
                 )
                 .await
                 .ok()
-                .and_then(|result| serde_json::to_string(&result.content).ok());
+                .and_then(|result| {
+                    let text = result
+                        .content
+                        .iter()
+                        .filter_map(|content| {
+                            content.get("text").and_then(serde_json::Value::as_str)
+                        })
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    (!text.is_empty()).then_some(text)
+                });
             developer_sections.push(
                 crate::context::TokenBudgetContext::new(
                     self.thread_id(),
                     auto_compact_window_ids.first_window_id,
                     auto_compact_window_ids.previous_window_id,
                     auto_compact_window_ids.window_id,
-                    model_context_window,
                     mcp_result,
                 )
                 .render(),
