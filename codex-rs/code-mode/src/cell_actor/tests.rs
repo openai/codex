@@ -612,6 +612,34 @@ fn failed_completion_delivery_rebuffers_the_event() {
 }
 
 #[tokio::test]
+async fn only_the_first_termination_claims_a_buffered_completion() {
+    let session_shutdown_token = CancellationToken::new();
+    let cell_state = CellState::new(session_shutdown_token.child_token());
+    let completion = CellEvent::Completed {
+        content_items: Vec::new(),
+        error_text: None,
+    };
+    assert!(cell_state.commit_completion(completion.clone(), || {}));
+    assert!(matches!(
+        cell_state.deliver_completion(/*response_tx*/ None),
+        CompletionDelivery::Buffered
+    ));
+
+    let first_termination = cell_state.request_termination();
+    assert_eq!(
+        cell_state.request_termination().await,
+        Err(CellError::AlreadyTerminating)
+    );
+    assert_eq!(first_termination.await, Ok(completion.clone()));
+    assert_eq!(
+        cell_state.finish_termination(CellEvent::Terminated {
+            content_items: Vec::new(),
+        }),
+        Some(completion)
+    );
+}
+
+#[tokio::test]
 async fn session_shutdown_rejects_observation_before_the_actor_closes() {
     let session_shutdown_token = CancellationToken::new();
     let cell_state = Arc::new(CellState::new(session_shutdown_token.child_token()));

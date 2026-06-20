@@ -115,6 +115,7 @@ enum CellPhase {
         response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
     },
     Completed(CellEvent),
+    CompletionClaimed(CellEvent),
     Tombstone,
 }
 
@@ -167,9 +168,13 @@ impl CellState {
                 Box::pin(async { Err(CellError::AlreadyTerminating) })
             }
             CellPhase::Completed(event) => {
-                *phase = CellPhase::Completed(event.clone());
+                *phase = CellPhase::CompletionClaimed(event.clone());
                 self.cancellation_token.cancel();
                 ready_event(event)
+            }
+            CellPhase::CompletionClaimed(event) => {
+                *phase = CellPhase::CompletionClaimed(event);
+                Box::pin(async { Err(CellError::AlreadyTerminating) })
             }
             CellPhase::Tombstone => closed_event(),
         }
@@ -257,6 +262,11 @@ impl CellState {
                 let _ = response_tx.send(Err(CellError::Closed));
                 ObservationDelivery::Closed
             }
+            CellPhase::CompletionClaimed(event) => {
+                *phase = CellPhase::CompletionClaimed(event);
+                let _ = response_tx.send(Err(CellError::Closed));
+                ObservationDelivery::Closed
+            }
             CellPhase::Tombstone => {
                 let _ = response_tx.send(Err(CellError::Closed));
                 ObservationDelivery::Closed
@@ -276,6 +286,7 @@ impl CellState {
                 Some(event)
             }
             CellPhase::Completed(completed_event) => Some(completed_event),
+            CellPhase::CompletionClaimed(completed_event) => Some(completed_event),
             CellPhase::Tombstone => None,
         };
         self.cancellation_token.cancel();
