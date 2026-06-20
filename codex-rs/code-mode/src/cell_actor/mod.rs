@@ -48,19 +48,10 @@ impl CellActor {
         request: CellRequest,
         stored_values: HashMap<String, JsonValue>,
         host: Arc<H>,
-        initial_observe_mode: ObserveMode,
         cell_state: Arc<CellState>,
-    ) -> Result<
-        (
-            CellHandle,
-            CellEventFuture,
-            impl Future<Output = ()> + Send + 'static,
-        ),
-        String,
-    > {
+    ) -> Result<(CellHandle, impl Future<Output = ()> + Send + 'static), String> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let (initial_response_tx, initial_response_rx) = oneshot::channel();
         let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
             stored_values,
             runtime_request(request),
@@ -78,14 +69,8 @@ impl CellActor {
             },
             event_rx,
             command_rx,
-            Observer {
-                mode: initial_observe_mode,
-                response_tx: initial_response_tx,
-            },
         );
-        let initial_response =
-            Box::pin(async move { initial_response_rx.await.unwrap_or(Err(CellError::Closed)) });
-        Ok((handle, initial_response, task))
+        Ok((handle, task))
     }
 }
 
@@ -106,7 +91,6 @@ async fn run_cell<H: CellHost>(
     context: CellContext,
     mut event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
     command_rx: mpsc::UnboundedReceiver<CellCommand>,
-    initial_observer: Observer,
 ) {
     let CellContext {
         runtime_tx,
@@ -118,8 +102,10 @@ async fn run_cell<H: CellHost>(
     let callback_cancellation_token = cancellation_token.child_token();
     let mut content_items = Vec::new();
     let mut pending_tool_call_ids = Vec::new();
+    let mut pending_initial_yield_items: Option<Vec<OutputItem>> = None;
     let mut pending_frontier_ready = false;
-    let mut observer = Some(initial_observer);
+    let mut observer: Option<Observer> = None;
+    let mut has_been_observed = false;
     let mut termination = false;
     let mut runtime_closed = false;
     let mut runtime_paused = false;
@@ -136,6 +122,10 @@ async fn run_cell<H: CellHost>(
             _ = cancellation_token.cancelled(), if !termination => {
                 termination = true;
                 yield_timer = None;
+                if let Some(mut yielded_items) = pending_initial_yield_items.take() {
+                    yielded_items.append(&mut content_items);
+                    content_items = yielded_items;
+                }
                 drop(command_rx.take());
                 begin_termination(
                     &runtime_tx,
@@ -189,28 +179,45 @@ async fn run_cell<H: CellHost>(
                     let _ = response_tx.send(Err(CellError::Busy));
                     continue;
                 }
-                if matches!(mode, ObserveMode::PendingFrontier) && pending_frontier_ready {
-                    pending_frontier_ready = false;
-                    match send_cell_event(
+                has_been_observed = true;
+                if matches!(mode, ObserveMode::YieldAfter(_))
+                    && let Some(yielded_items) = pending_initial_yield_items.take()
+                {
+                    let delivered = match send_cell_event(
                         response_tx,
-                        CellEvent::Pending {
-                            content_items: std::mem::take(&mut content_items),
-                            pending_tool_call_ids: std::mem::take(&mut pending_tool_call_ids),
+                        CellEvent::Yielded {
+                            content_items: yielded_items,
                         },
                     ) {
-                        Ok(()) => {}
-                        Err(CellEvent::Pending {
-                            content_items: undelivered_items,
-                            pending_tool_call_ids: undelivered_tool_call_ids,
-                        }) => {
-                            content_items = undelivered_items;
-                            pending_tool_call_ids = undelivered_tool_call_ids;
-                            pending_frontier_ready = true;
+                        Ok(()) => true,
+                        Err(CellEvent::Yielded { content_items }) => {
+                            pending_initial_yield_items = Some(content_items);
+                            has_been_observed = false;
+                            false
                         }
                         Err(event) => {
-                            panic!("pending delivery returned an unexpected event: {event:?}")
+                            panic!("initial yield delivery returned an unexpected event: {event:?}")
                         }
+                    };
+                    if delivered && runtime_paused {
+                        pending_frontier_ready = false;
+                        pending_tool_call_ids.clear();
+                        resume_for_observation(
+                            mode,
+                            &mut runtime_paused,
+                            &runtime_tx,
+                            &runtime_control_tx,
+                        );
                     }
+                    continue;
+                }
+                if matches!(mode, ObserveMode::PendingFrontier) && pending_frontier_ready {
+                    pending_frontier_ready = !send_pending_event(
+                        response_tx,
+                        &mut pending_initial_yield_items,
+                        &mut content_items,
+                        &mut pending_tool_call_ids,
+                    );
                     continue;
                 }
                 observer = Some(Observer { mode, response_tx });
@@ -254,6 +261,10 @@ async fn run_cell<H: CellHost>(
                 let Some(event) = maybe_event else {
                     runtime_closed = true;
                     if termination || cancellation_token.is_cancelled() {
+                        let termination_content_items = take_all_content(
+                            &mut pending_initial_yield_items,
+                            &mut content_items,
+                        );
                         finish_callbacks(
                             &callback_cancellation_token,
                             &mut notification_tasks,
@@ -264,7 +275,7 @@ async fn run_cell<H: CellHost>(
                             &cell_state,
                             observer.take().map(|observer| observer.response_tx),
                             CellEvent::Terminated {
-                                content_items: std::mem::take(&mut content_items),
+                                content_items: termination_content_items,
                             },
                         );
                         break;
@@ -284,7 +295,7 @@ async fn run_cell<H: CellHost>(
                         .commit_completion(
                             HashMap::new(),
                             event,
-                            /*pending_initial_yield_items*/ None,
+                            pending_initial_yield_items.take(),
                             Arc::clone(&cell_state),
                         )
                         .await
@@ -293,7 +304,9 @@ async fn run_cell<H: CellHost>(
                         CompletionCommit::Rejected(event) => Some(event),
                     };
                     match cell_state.deliver_completion(
-                        observer.take().map(|observer| observer.response_tx),
+                        observer
+                            .take()
+                            .map(|observer| (observer.mode, observer.response_tx)),
                     ) {
                         CompletionDelivery::Delivered => break,
                         CompletionDelivery::Buffered => {}
@@ -316,42 +329,32 @@ async fn run_cell<H: CellHost>(
                     }
                     RuntimeEvent::Pending => {
                         runtime_paused = true;
-                        if matches!(
-                            observer.as_ref().map(|observer| observer.mode),
-                            Some(ObserveMode::PendingFrontier)
-                        ) {
+                        if let Some(observer) = observer.take_if(|observer| {
+                            observer.mode == ObserveMode::PendingFrontier
+                        }) {
                             yield_timer = None;
+                            pending_frontier_ready = !send_pending_event(
+                                observer.response_tx,
+                                &mut pending_initial_yield_items,
+                                &mut content_items,
+                                &mut pending_tool_call_ids,
+                            );
+                        } else if observer.is_some() || has_been_observed {
                             pending_frontier_ready = false;
-                            match send_observer_event(
-                                observer.take(),
-                                CellEvent::Pending {
-                                    content_items: std::mem::take(&mut content_items),
-                                    pending_tool_call_ids: std::mem::take(
-                                        &mut pending_tool_call_ids,
-                                    ),
-                                },
-                            ) {
-                                Ok(()) => {}
-                                Err(CellEvent::Pending {
-                                    content_items: undelivered_items,
-                                    pending_tool_call_ids: undelivered_tool_call_ids,
-                                }) => {
-                                    content_items = undelivered_items;
-                                    pending_tool_call_ids = undelivered_tool_call_ids;
-                                    pending_frontier_ready = true;
-                                }
-                                Err(event) => {
-                                    panic!("pending delivery returned an unexpected event: {event:?}")
-                                }
-                            }
-                        } else {
                             pending_tool_call_ids.clear();
                             let _ = runtime_control_tx.send(RuntimeControlCommand::Continue);
                             runtime_paused = false;
+                        } else {
+                            pending_frontier_ready = true;
                         }
                     }
                     RuntimeEvent::ContentItem(item) => content_items.push(output_item(item)),
                     RuntimeEvent::YieldRequested => {
+                        // An unattached yield is normally a no-op. Preserve only the first
+                        // pre-observation yield so create followed by its initial observe/wait
+                        // retains the former execute initial-response behavior. After an
+                        // observation attaches, later unattached yields do not affect a future
+                        // observation.
                         let yield_observer = matches!(
                             observer.as_ref().map(|observer| observer.mode),
                             Some(ObserveMode::YieldAfter(_))
@@ -367,6 +370,11 @@ async fn run_cell<H: CellHost>(
                                 ),
                                 &mut content_items,
                             );
+                        } else if observer.is_none()
+                            && !has_been_observed
+                            && pending_initial_yield_items.is_none()
+                        {
+                            pending_initial_yield_items = Some(std::mem::take(&mut content_items));
                         }
                     }
                     RuntimeEvent::Notify { call_id, text } => {
@@ -400,6 +408,10 @@ async fn run_cell<H: CellHost>(
                         runtime_closed = true;
                         yield_timer = None;
                         if termination || cancellation_token.is_cancelled() {
+                            let termination_content_items = take_all_content(
+                                &mut pending_initial_yield_items,
+                                &mut content_items,
+                            );
                             finish_callbacks(
                                 &callback_cancellation_token,
                                 &mut notification_tasks,
@@ -410,7 +422,7 @@ async fn run_cell<H: CellHost>(
                                 &cell_state,
                                 observer.take().map(|observer| observer.response_tx),
                                 CellEvent::Terminated {
-                                    content_items: std::mem::take(&mut content_items),
+                                    content_items: termination_content_items,
                                 },
                             );
                             break;
@@ -430,7 +442,7 @@ async fn run_cell<H: CellHost>(
                             .commit_completion(
                                 stored_value_writes,
                                 event,
-                                /*pending_initial_yield_items*/ None,
+                                pending_initial_yield_items.take(),
                                 Arc::clone(&cell_state),
                             )
                             .await
@@ -439,7 +451,9 @@ async fn run_cell<H: CellHost>(
                             CompletionCommit::Rejected(event) => Some(event),
                         };
                         match cell_state.deliver_completion(
-                            observer.take().map(|observer| observer.response_tx),
+                            observer
+                                .take()
+                                .map(|observer| (observer.mode, observer.response_tx)),
                         ) {
                             CompletionDelivery::Delivered => break,
                             CompletionDelivery::Buffered => {}
@@ -502,6 +516,40 @@ fn send_cell_event(
     }
 }
 
+fn send_pending_event(
+    response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
+    pending_initial_yield_items: &mut Option<Vec<OutputItem>>,
+    content_items: &mut Vec<OutputItem>,
+    pending_tool_call_ids: &mut Vec<String>,
+) -> bool {
+    let had_initial_yield = pending_initial_yield_items.is_some();
+    let mut delivered_items = pending_initial_yield_items.take().unwrap_or_default();
+    let initial_yield_len = delivered_items.len();
+    delivered_items.append(content_items);
+    match send_cell_event(
+        response_tx,
+        CellEvent::Pending {
+            content_items: delivered_items,
+            pending_tool_call_ids: std::mem::take(pending_tool_call_ids),
+        },
+    ) {
+        Ok(()) => true,
+        Err(CellEvent::Pending {
+            content_items: mut undelivered_items,
+            pending_tool_call_ids: undelivered_tool_call_ids,
+        }) => {
+            let following_items = undelivered_items.split_off(initial_yield_len);
+            if had_initial_yield {
+                *pending_initial_yield_items = Some(undelivered_items);
+            }
+            *content_items = following_items;
+            *pending_tool_call_ids = undelivered_tool_call_ids;
+            false
+        }
+        Err(event) => panic!("pending delivery returned an unexpected event: {event:?}"),
+    }
+}
+
 fn restore_undelivered_yield(delivery: Result<(), CellEvent>, content_items: &mut Vec<OutputItem>) {
     match delivery {
         Ok(()) => {}
@@ -521,6 +569,17 @@ fn rejected_completion_content(event: Option<CellEvent>) -> Vec<OutputItem> {
         None => Vec::new(),
         Some(event) => panic!("completion commit rejected an unexpected event: {event:?}"),
     }
+}
+
+fn take_all_content(
+    pending_initial_yield_items: &mut Option<Vec<OutputItem>>,
+    content_items: &mut Vec<OutputItem>,
+) -> Vec<OutputItem> {
+    let Some(mut yielded_items) = pending_initial_yield_items.take() else {
+        return std::mem::take(content_items);
+    };
+    yielded_items.append(content_items);
+    yielded_items
 }
 
 fn finish_termination(

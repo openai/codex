@@ -89,20 +89,25 @@ impl CodeModeService {
 
     pub async fn execute(&self, request: ExecuteRequest) -> Result<StartedCell, String> {
         let yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
-        let started = self
+        let runtime_cell_id = self
             .runtime
-            .execute(
-                runtime_request(request),
+            .create_cell(runtime_request(request))
+            .await
+            .map_err(|error| error.to_string())?;
+        let pending_event = self
+            .runtime
+            .begin_observe(
+                &runtime_cell_id,
                 runtime::ObserveMode::YieldAfter(Duration::from_millis(yield_time_ms)),
             )
             .await
             .map_err(|error| error.to_string())?;
-        let cell_id = protocol_cell_id(&started.cell_id);
+        let cell_id = protocol_cell_id(&runtime_cell_id);
         let response_cell_id = cell_id.clone();
         let (response_tx, response_rx) = oneshot::channel();
         tokio::spawn(async move {
-            let response = started
-                .initial_event()
+            let response = pending_event
+                .event()
                 .await
                 .map_err(|error| error.to_string())
                 .and_then(|event| runtime_response(&response_cell_id, event));
@@ -115,17 +120,15 @@ impl CodeModeService {
         &self,
         request: ExecuteRequest,
     ) -> Result<ExecuteToPendingOutcome, String> {
-        let started = self
+        let runtime_cell_id = self
             .runtime
-            .execute(
-                runtime_request(request),
-                runtime::ObserveMode::PendingFrontier,
-            )
+            .create_cell(runtime_request(request))
             .await
             .map_err(|error| error.to_string())?;
-        let cell_id = protocol_cell_id(&started.cell_id);
-        let event = started
-            .initial_event()
+        let cell_id = protocol_cell_id(&runtime_cell_id);
+        let event = self
+            .runtime
+            .observe(&runtime_cell_id, runtime::ObserveMode::PendingFrontier)
             .await
             .map_err(|error| error.to_string())?;
         pending_outcome(&cell_id, event)

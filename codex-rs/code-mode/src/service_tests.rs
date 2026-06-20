@@ -362,12 +362,26 @@ await Promise.all([
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let resumed_response = tokio::time::timeout(
-        Duration::from_secs(1),
-        service.wait_to_pending(WaitToPendingRequest {
-            cell_id: cell_id("1"),
-        }),
-    )
+    // Resuming can expose an empty quiescent frontier before the expired timer
+    // callback is dequeued, so keep observing until its tool call is visible.
+    let resumed_response = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = service
+                .wait_to_pending(WaitToPendingRequest {
+                    cell_id: cell_id("1"),
+                })
+                .await?;
+            if !matches!(
+                &response,
+                WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Pending {
+                    pending_tool_call_ids,
+                    ..
+                }) if pending_tool_call_ids.is_empty()
+            ) {
+                break Ok::<_, String>(response);
+            }
+        }
+    })
     .await
     .unwrap()
     .unwrap();
