@@ -1160,6 +1160,8 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 message: String::new(),
                 replacement_history: Some(replacement_history),
                 window_number: None,
+                first_window_id: None,
+                previous_window_id: None,
                 window_id: None,
             }),
             RolloutItem::TurnContext(turn_context.to_turn_context_item()),
