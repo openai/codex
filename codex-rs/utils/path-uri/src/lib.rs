@@ -19,6 +19,7 @@ use ts_rs::TS;
 use url::Url;
 
 mod api_path_string;
+mod lexical;
 
 pub use api_path_string::LegacyAppPathString;
 pub use api_path_string::LegacyAppPathStringError;
@@ -693,6 +694,10 @@ pub enum PathUriParseError {
     FragmentNotAllowed,
     #[error("path `{0}` must be relative when joining a path URI")]
     JoinPathMustBeRelative(String),
+    #[error("relative path `{0}` escapes the base path URI")]
+    JoinPathEscapesBase(String),
+    #[error("path `{0}` is not an absolute POSIX, drive, or UNC path")]
+    ExpectedAbsoluteNativePath(String),
 }
 
 /// Path syntax used to render a [`PathUri`] as an operating-system path.

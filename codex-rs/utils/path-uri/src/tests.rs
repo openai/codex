@@ -698,6 +698,204 @@ fn join_uses_the_base_uri_path_convention() {
 }
 
 #[test]
+fn inferred_absolute_paths_parse_without_host_path_semantics() {
+    for (path, expected) in [
+        ("/workspace/a file.rs", "file:///workspace/a%20file.rs"),
+        ("/tmp/100%", "file:///tmp/100%25"),
+        (
+            r"C:\Users\Alice Smith\main.rs",
+            "file:///C:/Users/Alice%20Smith/main.rs",
+        ),
+        ("d:/src/main.rs", "file:///d:/src/main.rs"),
+        (
+            r"\\server\share\project\main.rs",
+            "file://server/share/project/main.rs",
+        ),
+    ] {
+        assert_eq!(
+            PathUri::from_inferred_absolute_path(path),
+            Ok(PathUri::parse(expected).expect("valid expected URI")),
+            "parsing {path}"
+        );
+    }
+}
+
+#[test]
+fn inferred_absolute_paths_reject_other_input_forms() {
+    for path in [
+        "",
+        ".",
+        "src/main.rs",
+        r"C:src\main.rs",
+        r"\Windows\System32",
+        r"\\server",
+        r"\\?\C:\workspace",
+        r"\\.\COM1",
+        "file:///workspace",
+        "/tmp/null\0byte",
+    ] {
+        assert_eq!(
+            PathUri::from_inferred_absolute_path(path),
+            Err(PathUriParseError::ExpectedAbsoluteNativePath(
+                path.to_string()
+            )),
+            "parsing {path:?}"
+        );
+    }
+}
+
+#[test]
+fn join_relative_normalizes_target_relative_text() {
+    for (base, relative, expected) in [
+        (
+            "file:///workspace/src",
+            "generated/../lib.rs",
+            "file:///workspace/src/lib.rs",
+        ),
+        (
+            "file:///C:/workspace/src",
+            r"generated\..\lib.rs",
+            "file:///C:/workspace/src/lib.rs",
+        ),
+        ("file:///workspace", "", "file:///workspace"),
+        ("file:///workspace", ".", "file:///workspace"),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(
+            base.join_relative(relative),
+            Ok(expected),
+            "joining {relative}"
+        );
+    }
+}
+
+#[test]
+fn join_relative_rejects_rooted_text_under_either_path_grammar() {
+    for base in ["file:///workspace", "file:///C:/workspace"] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        for path in [
+            "/tmp/file.rs",
+            r"\Windows\file.rs",
+            r"C:\tmp\file.rs",
+            "C:/tmp/file.rs",
+            r"C:tmp\file.rs",
+            r"\\server\share\file.rs",
+            "//server/share/file.rs",
+        ] {
+            assert_eq!(
+                base.join_relative(path),
+                Err(PathUriParseError::JoinPathMustBeRelative(path.to_string())),
+                "joining {path} to {base}"
+            );
+        }
+    }
+}
+
+#[test]
+fn join_relative_rejects_parent_traversal_above_the_base_uri() {
+    for (base, path) in [
+        ("file:///workspace/src", "../tests"),
+        ("file:///", ".."),
+        ("file:///C:/workspace", r"..\Windows"),
+        ("file:///C:", ".."),
+        ("file://server/share/workspace", r"..\sibling"),
+        ("file://server/share", ".."),
+        ("file://server/", ".."),
+        ("file:///workspace", "child/../.."),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        assert_eq!(
+            base.join_relative(path),
+            Err(PathUriParseError::JoinPathEscapesBase(path.to_string())),
+            "joining {path} to {base}"
+        );
+    }
+}
+
+#[test]
+fn join_relative_allows_normalization_that_stays_within_the_relative_input() {
+    for (base, path, expected) in [
+        ("file:///workspace", "a/../b", "file:///workspace/b"),
+        ("file:///C:/workspace", r"a\..\b", "file:///C:/workspace/b"),
+        (
+            "file://server/share/workspace",
+            r"a\..\b",
+            "file://server/share/workspace/b",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join_relative(path), Ok(expected));
+    }
+}
+
+#[test]
+fn relative_path_from_returns_descendant_paths_with_normalized_separators() {
+    for (candidate, root, expected) in [
+        ("file:///workspace", "file:///workspace", ""),
+        (
+            "file:///workspace/src/a%20file.rs",
+            "file:///workspace",
+            "src/a file.rs",
+        ),
+        (
+            "file:///workspace/src/a%252Fb",
+            "file:///workspace",
+            "src/a%2Fb",
+        ),
+        (
+            "file:///C:/workspace/src/main.rs",
+            "file:///C:/workspace",
+            "src/main.rs",
+        ),
+        (
+            "file://server/share/project/src/main.rs",
+            "file://server/share/project",
+            "src/main.rs",
+        ),
+        ("file:///workspace/src", "file:///", "workspace/src"),
+    ] {
+        let candidate = PathUri::parse(candidate).expect("valid candidate URI");
+        let root = PathUri::parse(root).expect("valid root URI");
+        assert_eq!(
+            candidate.relative_path_from(&root),
+            Some(expected.to_string()),
+            "relativizing {candidate} from {root}"
+        );
+    }
+}
+
+#[test]
+fn relative_path_from_requires_authority_convention_and_descendant_containment() {
+    for (candidate, root) in [
+        ("file:///workspace-other/file", "file:///workspace"),
+        ("file:///workspace", "file:///workspace/src"),
+        ("file:///sibling/file", "file:///workspace"),
+        ("file:///C:/workspace/file", "file:///D:/workspace"),
+        ("file:///C:/workspace/file", "file:///workspace"),
+        (
+            "file://other/share/workspace/file",
+            "file://server/share/workspace",
+        ),
+        (
+            "file://server/other/workspace/file",
+            "file://server/share/workspace",
+        ),
+        ("file://server/share/file", "file://server/"),
+        ("file:///%00/bad/path/YQ", "file:///%00/bad/path/YQ"),
+    ] {
+        let candidate = PathUri::parse(candidate).expect("valid candidate URI");
+        let root = PathUri::parse(root).expect("valid root URI");
+        assert_eq!(
+            candidate.relative_path_from(&root),
+            None,
+            "relativizing {candidate} from {root}"
+        );
+    }
+}
+
+#[test]
 fn to_url_returns_the_validated_url() {
     let uri = PathUri::parse("file://localhost/workspace/a%20file.rs").expect("valid file URI");
 
