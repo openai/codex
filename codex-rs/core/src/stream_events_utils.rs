@@ -36,11 +36,9 @@ use tracing::debug;
 use tracing::instrument;
 use tracing::warn;
 
-const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
-
-/// Returns the host-owned default artifact path for a generated image.
+/// Returns the path for a generated image within the configured artifact directory.
 pub fn image_generation_artifact_path(
-    codex_home: &AbsolutePathBuf,
+    artifacts_dir: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
 ) -> AbsolutePathBuf {
@@ -61,8 +59,7 @@ pub fn image_generation_artifact_path(
         sanitized
     };
 
-    codex_home
-        .join(GENERATED_IMAGE_ARTIFACTS_DIR)
+    artifacts_dir
         .join(sanitize(session_id))
         .join(format!("{}.png", sanitize(call_id)))
 }
@@ -109,7 +106,7 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
 }
 
 async fn save_image_generation_result(
-    codex_home: &AbsolutePathBuf,
+    artifacts_dir: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
     result: &str,
@@ -119,7 +116,7 @@ async fn save_image_generation_result(
         .map_err(|err| {
             CodexErr::InvalidRequest(format!("invalid image generation payload: {err}"))
         })?;
-    let path = image_generation_artifact_path(codex_home, session_id, call_id);
+    let path = image_generation_artifact_path(artifacts_dir, session_id, call_id);
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -135,7 +132,7 @@ pub(crate) async fn persist_image_generation_item(
     image_item.saved_path = None;
     let session_id = sess.thread_id.to_string();
     match save_image_generation_result(
-        &turn_context.config.codex_home,
+        &turn_context.config.image_generation_artifacts_dir,
         &session_id,
         &image_item.id,
         &image_item.result,
@@ -148,13 +145,13 @@ pub(crate) async fn persist_image_generation_item(
         }
         Err(err) => {
             let output_path = image_generation_artifact_path(
-                &turn_context.config.codex_home,
+                &turn_context.config.image_generation_artifacts_dir,
                 &session_id,
                 &image_item.id,
             );
             let output_dir = output_path
                 .parent()
-                .unwrap_or_else(|| turn_context.config.codex_home.clone());
+                .unwrap_or_else(|| turn_context.config.image_generation_artifacts_dir.clone());
             tracing::warn!(
                 call_id = %image_item.id,
                 output_dir = %output_dir.display(),
@@ -174,11 +171,14 @@ async fn record_image_generation_instructions(
         return;
     }
     let session_id = sess.thread_id.to_string();
-    let image_output_path =
-        image_generation_artifact_path(&turn_context.config.codex_home, &session_id, "<image_id>");
+    let image_output_path = image_generation_artifact_path(
+        &turn_context.config.image_generation_artifacts_dir,
+        &session_id,
+        "<image_id>",
+    );
     let image_output_dir = image_output_path
         .parent()
-        .unwrap_or_else(|| turn_context.config.codex_home.clone());
+        .unwrap_or_else(|| turn_context.config.image_generation_artifacts_dir.clone());
     let message: ResponseItem = ContextualUserFragment::into(ImageGenerationInstructions::new(
         image_output_dir.display(),
         image_output_path.display(),

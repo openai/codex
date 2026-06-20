@@ -71,7 +71,11 @@ fn disabled_plan_turn(
     })
 }
 
-fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
+fn image_generation_artifact_path(
+    artifacts_dir: &Path,
+    session_id: &str,
+    call_id: &str,
+) -> PathBuf {
     fn sanitize(value: &str) -> String {
         let mut sanitized: String = value
             .chars()
@@ -89,8 +93,7 @@ fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: 
         sanitized
     }
 
-    codex_home
-        .join("generated_images")
+    artifacts_dir
         .join(sanitize(session_id))
         .join(format!("{}.png", sanitize(call_id)))
 }
@@ -348,20 +351,28 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn builtin_image_generation_call_persisted() -> anyhow::Result<()> {
+async fn builtin_image_generation_call_persisted_to_configured_directory() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
+    let artifacts_parent = tempfile::tempdir()?;
+    let artifacts_dir = artifacts_parent.path().join("team-images").abs();
 
     let TestCodex {
         codex,
         config,
         session_configured,
         ..
-    } = test_codex().build(&server).await?;
-    let call_id = "ig_image_saved_to_temp_dir_default";
+    } = test_codex()
+        .with_config({
+            let artifacts_dir = artifacts_dir.clone();
+            move |config| config.image_generation_artifacts_dir = artifacts_dir
+        })
+        .build(&server)
+        .await?;
+    let call_id = "ig_image_saved_to_configured_dir";
     let expected_saved_path = image_generation_artifact_path(
-        config.codex_home.as_path(),
+        config.image_generation_artifacts_dir.as_path(),
         &session_configured.thread_id.to_string(),
         call_id,
     );
@@ -448,7 +459,7 @@ async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyho
         ..
     } = test_codex().build(&server).await?;
     let expected_saved_path = image_generation_artifact_path(
-        config.codex_home.as_path(),
+        config.image_generation_artifacts_dir.as_path(),
         &session_configured.thread_id.to_string(),
         "ig_invalid",
     );

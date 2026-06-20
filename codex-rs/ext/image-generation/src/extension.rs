@@ -27,7 +27,7 @@ struct ImageGenerationExtension {
 struct ImageGenerationExtensionConfig {
     available: bool,
     provider: ModelProviderInfo,
-    codex_home: AbsolutePathBuf,
+    artifacts_dir: AbsolutePathBuf,
 }
 
 impl From<&Config> for ImageGenerationExtensionConfig {
@@ -37,7 +37,7 @@ impl From<&Config> for ImageGenerationExtensionConfig {
             // Core selects this executor per turn using the feature flag or model metadata.
             available: config.model_provider.is_openai(),
             provider: config.model_provider.clone(),
-            codex_home: config.codex_home.clone(),
+            artifacts_dir: config.image_generation_artifacts_dir.clone(),
         }
     }
 }
@@ -88,7 +88,7 @@ impl ToolContributor for ImageGenerationExtension {
                 config.provider.clone(),
                 Some(self.auth_manager.clone()),
             )),
-            config.codex_home.clone(),
+            config.artifacts_dir.clone(),
             thread_store.level_id().to_string(),
         ))]
     }
