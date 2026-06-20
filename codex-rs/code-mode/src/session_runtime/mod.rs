@@ -4,13 +4,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 pub(crate) use self::types::CellEvent;
 pub(crate) use self::types::CellId;
@@ -43,8 +43,9 @@ pub(crate) struct SessionRuntime<D: SessionRuntimeDelegate> {
 struct Inner<D: SessionRuntimeDelegate> {
     stored_values: Mutex<HashMap<String, JsonValue>>,
     cells: Mutex<HashMap<CellId, CellHandle>>,
+    cell_tasks: TaskTracker,
+    shutdown_token: CancellationToken,
     delegate: Arc<D>,
-    shutting_down: AtomicBool,
     next_cell_id: AtomicU64,
 }
 
@@ -54,15 +55,16 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
                 cells: Mutex::new(HashMap::new()),
+                cell_tasks: TaskTracker::new(),
+                shutdown_token: CancellationToken::new(),
                 delegate,
-                shutting_down: AtomicBool::new(false),
                 next_cell_id: AtomicU64::new(1),
             }),
         }
     }
 
     pub(crate) fn is_alive(&self) -> bool {
-        !self.inner.shutting_down.load(Ordering::Acquire)
+        !self.inner.shutdown_token.is_cancelled()
     }
 
     pub(crate) async fn execute(
@@ -70,6 +72,9 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         request: CreateCellRequest,
         initial_observe_mode: ObserveMode,
     ) -> Result<StartedCell, Error> {
+        if self.inner.shutdown_token.is_cancelled() {
+            return Err(Error::ShuttingDown);
+        }
         let cell_id = self.allocate_cell_id();
         let initial_event = self
             .start_cell(cell_id.clone(), request, initial_observe_mode)
@@ -122,21 +127,13 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {
-        self.inner.shutting_down.store(true, Ordering::Release);
-        let handles = self
-            .inner
-            .cells
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for handle in handles {
-            handle.shutdown();
-        }
-        while !self.inner.cells.lock().await.is_empty() {
-            tokio::task::yield_now().await;
-        }
+        self.begin_shutdown();
+        // Taking the registry lock ensures every cell that passed the shutdown
+        // check has registered its actor with the tracker before we wait.
+        let cells = self.inner.cells.lock().await;
+        self.inner.cell_tasks.close();
+        drop(cells);
+        self.inner.cell_tasks.wait().await;
         Ok(())
     }
 
@@ -161,13 +158,13 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             inner: Arc::clone(&self.inner),
         });
         let mut cells = self.inner.cells.lock().await;
-        if self.inner.shutting_down.load(Ordering::Acquire) {
+        if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
         if cells.contains_key(&cell_id) {
             return Err(Error::DuplicateCell(cell_id));
         }
-        let cell_state = Arc::new(CellState::new(CancellationToken::new()));
+        let cell_state = Arc::new(CellState::new(self.inner.shutdown_token.child_token()));
         let (handle, initial_event, task) = CellActor::prepare(
             request,
             stored_values,
@@ -177,18 +174,14 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         )
         .map_err(Error::Runtime)?;
         cells.insert(cell_id.clone(), handle);
+        self.inner.cell_tasks.spawn(task);
         drop(cells);
-        tokio::spawn(task);
         Ok(map_actor_event(cell_id, initial_event))
     }
 
     fn begin_shutdown(&self) {
-        self.inner.shutting_down.store(true, Ordering::Release);
-        if let Ok(cells) = self.inner.cells.try_lock() {
-            for handle in cells.values() {
-                handle.shutdown();
-            }
-        }
+        self.inner.shutdown_token.cancel();
+        self.inner.cell_tasks.close();
     }
 }
 
