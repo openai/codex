@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/exec_flow.rs
 expression: blob
 ---
-■ '/review' is disabled while a task is in progress.
+■ '/resume' is disabled while a task is in progress.

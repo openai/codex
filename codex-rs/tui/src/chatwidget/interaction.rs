@@ -25,7 +25,11 @@ impl ChatWidget {
                 self.pause_active_goal_for_interrupt();
             }
             if self.bottom_pane.no_modal_or_popup_active() {
-                self.maybe_send_next_queued_input();
+                if self.input_queue.suppress_queue_autosend {
+                    self.app_event_tx.send(AppEvent::SettingsSelectionClosed);
+                } else {
+                    self.maybe_send_next_queued_input();
+                }
             }
             return;
         }

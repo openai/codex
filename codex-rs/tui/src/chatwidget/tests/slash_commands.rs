@@ -338,7 +338,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
 }
 
 async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_popup_text: &str) {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
@@ -356,6 +356,13 @@ async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::SettingsSelectionClosed))
+    );
+    chat.set_queue_autosend_suppressed(/*suppressed*/ false);
+    chat.maybe_send_next_queued_input();
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
@@ -378,33 +385,43 @@ async fn queued_slash_menu_cancel_drains_next_input() {
 }
 
 #[tokio::test]
-async fn queued_slash_menu_selection_drains_next_input() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+async fn queued_settings_selection_applies_before_next_input() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
+    chat.set_personality(Personality::Friendly);
     handle_turn_started(&mut chat, "turn-1");
 
-    queue_composer_text_with_tab(&mut chat, "/permissions");
+    queue_composer_text_with_tab(&mut chat, "/personality");
     queue_composer_text_with_tab(&mut chat, "hello after selection");
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Update Model Permissions"),
-        "expected permissions menu to open; popup:\n{popup}"
+        popup.contains("Select Personality"),
+        "expected personality menu to open; popup:\n{popup}"
     );
 
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::UpdatePersonality(personality) => chat.set_personality(personality),
+            AppEvent::SettingsSelectionClosed => {
+                chat.set_queue_autosend_suppressed(/*suppressed*/ false);
+                chat.maybe_send_next_queued_input();
+            }
+            _ => {}
+        }
+    }
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "hello after selection".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued message after permissions selection, got {other:?}"),
+        Op::UserTurn {
+            personality: Some(Personality::Pragmatic),
+            ..
+        } => {}
+        other => panic!("expected queued message with updated personality, got {other:?}"),
     }
     assert!(chat.input_queue.queued_user_messages.is_empty());
 }
@@ -2293,7 +2310,7 @@ async fn slash_memory_update_reports_stubbed_feature() {
 }
 
 #[tokio::test]
-async fn slash_resume_opens_picker_while_task_running() {
+async fn slash_resume_opens_picker_while_mcp_startup_is_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
 
@@ -2351,7 +2368,7 @@ async fn slash_delete_confirmation_requests_current_thread_delete() {
 }
 
 #[tokio::test]
-async fn slash_resume_with_arg_requests_named_session_while_task_running() {
+async fn slash_resume_with_arg_requests_named_session_while_mcp_startup_is_running() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
 
