@@ -428,11 +428,9 @@ async fn queued_settings_selection_applies_before_next_input() {
             AppEvent::SettingsSelectionClosed => {
                 chat.app_event_tx.send(AppEvent::SettingsSelectionSettled);
             }
-            AppEvent::SettingsSelectionSettled => {
-                if chat.no_modal_or_popup_active() {
-                    chat.set_queue_autosend_suppressed(/*suppressed*/ false);
-                    chat.maybe_send_next_queued_input();
-                }
+            AppEvent::SettingsSelectionSettled if chat.no_modal_or_popup_active() => {
+                chat.set_queue_autosend_suppressed(/*suppressed*/ false);
+                chat.maybe_send_next_queued_input();
             }
             _ => {}
         }
