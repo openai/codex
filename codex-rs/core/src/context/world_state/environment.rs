@@ -1,8 +1,8 @@
 use super::WorldStateSection;
-use super::environment_support::FileSystemContext;
-use super::environment_support::NetworkContext;
-use super::environment_support::push_xml_escaped_text;
 use crate::context::ContextualUserFragment;
+use crate::context::environment_context::FileSystemContext;
+use crate::context::environment_context::NetworkContext;
+use crate::context::environment_context::push_xml_escaped_text;
 use crate::session::turn_context::TurnContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::models::ResponseItem;

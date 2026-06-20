@@ -7,6 +7,7 @@ mod available_skills_instructions;
 mod collaboration_mode_instructions;
 mod contextual_user_message;
 mod current_time_reminder;
+mod environment_context;
 mod guardian_followup_review_reminder;
 mod hook_additional_context;
 mod image_generation_instructions;
