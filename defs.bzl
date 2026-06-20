@@ -77,7 +77,7 @@ def _workspace_root_test_impl(ctx):
         runfiles = runfiles.merge(ctx.runfiles(files = [runfile]))
         runfiles = runfiles.merge(runfile_dep[DefaultInfo].default_runfiles)
     if ctx.attr.hermetic_test_python != None:
-        test_python = ctx.attr.hermetic_test_python[HermeticTestPythonInfo].interpreter
+        test_python = ctx.attr.hermetic_test_python[HermeticTestPythonInfo].executable
         runfiles = runfiles.merge(ctx.runfiles(files = [test_python]))
         runfiles = runfiles.merge(ctx.attr.hermetic_test_python[DefaultInfo].default_runfiles)
 
@@ -118,7 +118,7 @@ def _windows_runfile_env_exports(ctx):
         lines.append('call :resolve_runfile {} "{}"'.format(env_var, _runfile_logical_path(runfile)))
         lines.append("if errorlevel 1 exit /b 1")
     if ctx.attr.hermetic_test_python != None:
-        test_python = ctx.attr.hermetic_test_python[HermeticTestPythonInfo].interpreter
+        test_python = ctx.attr.hermetic_test_python[HermeticTestPythonInfo].executable
         lines.append('call :resolve_runfile CODEX_BAZEL_TEST_PYTHON "{}"'.format(_runfile_logical_path(test_python)))
         lines.append("if errorlevel 1 exit /b 1")
     return "\n".join(lines)
