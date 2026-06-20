@@ -30,7 +30,6 @@ fn renders_full_environment_state() -> Result<()> {
             &[],
         )),
         subagents: Some("task_1: running\ntask_2: completed".to_string()),
-        turn_context_values_comparable: true,
     };
 
     let mut world_state = WorldState::default();
@@ -132,7 +131,6 @@ fn persisted_turn_context_values_render_a_diff() -> Result<()> {
             &PermissionProfile::Disabled,
             &[],
         )),
-        turn_context_values_comparable: true,
         ..environments.clone()
     });
     let mut current = WorldState::default();
@@ -149,7 +147,6 @@ fn persisted_turn_context_values_render_a_diff() -> Result<()> {
             },
             &[],
         )),
-        turn_context_values_comparable: true,
         ..environments
     });
 
@@ -206,17 +203,30 @@ fn loaded_environment_state_produces_no_diff_with_live_state() -> Result<()> {
             &[],
         )),
         subagents: Some("task_1: running".to_string()),
-        turn_context_values_comparable: true,
     };
 
     let stored = serde_json::to_value(&live_state)?;
     assert_eq!(
         json!({
-            "devbox": {
-                "cwd": "file:///workspace",
+            "environments": {
+                "devbox": {
+                    "cwd": "file:///workspace",
+                },
+                "laptop": {
+                    "cwd": "file:///repo",
+                },
             },
-            "laptop": {
-                "cwd": "file:///repo",
+            "current_date": "2026-06-20",
+            "timezone": "America/Los_Angeles",
+            "network": {
+                "domains": {
+                    "api.example.com": "allow",
+                    "blocked.example.com": "deny",
+                },
+            },
+            "filesystem": {
+                "workspace_roots": {},
+                "permission_profile": "disabled",
             },
         }),
         stored,
