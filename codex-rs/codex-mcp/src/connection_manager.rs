@@ -372,12 +372,6 @@ impl McpConnectionManager {
             .map(super::server::McpServerOrigin::as_str)
     }
 
-    pub fn server_environment_id(&self, server_name: &str) -> Option<&str> {
-        self.server_metadata
-            .get(server_name)
-            .map(|metadata| metadata.environment_id.as_str())
-    }
-
     pub fn server_pollutes_memory(&self, server_name: &str) -> bool {
         self.server_metadata
             .get(server_name)
