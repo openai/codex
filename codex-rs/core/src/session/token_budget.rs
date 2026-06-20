@@ -5,72 +5,72 @@ use codex_features::Feature;
 
 const TOKEN_BUDGET_USAGE_THRESHOLDS: [i64; 3] = [25, 50, 75];
 
-pub(super) async fn maybe_record_token_budget_remaining_context(
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TokenBudgetSnapshot {
+    pub(super) active_context_tokens: i64,
+    pub(super) tokens_until_compaction: i64,
+    pub(super) reminder_delivered: bool,
+}
+
+pub(super) async fn maybe_record(
     sess: &Session,
     turn_context: &TurnContext,
-    active_context_tokens_before_sampling: i64,
-    active_context_tokens_after_sampling: i64,
+    before: TokenBudgetSnapshot,
+    after: TokenBudgetSnapshot,
 ) {
     if !turn_context.config.features.enabled(Feature::TokenBudget) {
         return;
     }
 
+    let mut response_items = Vec::with_capacity(2);
     let model_context_window = turn_context
         .model_context_window()
         .filter(|window| *window > 0);
     let crossed_remaining_threshold = model_context_window.is_some_and(|model_context_window| {
-        active_context_tokens_after_sampling > active_context_tokens_before_sampling
+        after.active_context_tokens > before.active_context_tokens
             && TOKEN_BUDGET_USAGE_THRESHOLDS.iter().any(|threshold| {
                 crossed_usage_threshold(
-                    active_context_tokens_before_sampling.max(0),
-                    active_context_tokens_after_sampling.max(0),
+                    before.active_context_tokens.max(0),
+                    after.active_context_tokens.max(0),
                     model_context_window,
                     *threshold,
                 )
             })
     });
-    if !crossed_remaining_threshold {
-        return;
+    if crossed_remaining_threshold && let Some(model_context_window) = model_context_window {
+        let tokens_left = model_context_window
+            .saturating_sub(after.active_context_tokens)
+            .max(0);
+        response_items.push(ContextualUserFragment::into(
+            crate::context::TokenBudgetRemainingContext::new(tokens_left),
+        ));
     }
 
-    if let Some(model_context_window) = model_context_window {
-        let tokens_left = model_context_window
-            .saturating_sub(active_context_tokens_after_sampling)
-            .max(0);
-        let response_item = ContextualUserFragment::into(
-            crate::context::TokenBudgetRemainingContext::new(tokens_left),
-        );
-        sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+    let reminder_config = if after.reminder_delivered {
+        None
+    } else {
+        turn_context.config.token_budget.as_ref().filter(|config| {
+            config
+                .reminder_threshold_tokens
+                .is_some_and(|threshold| after.tokens_until_compaction <= threshold)
+        })
+    };
+    if let Some(config) = reminder_config {
+        response_items.push(ContextualUserFragment::into(
+            crate::context::TokenBudgetReminder::new(
+                &config.reminder_message_template,
+                after.tokens_until_compaction,
+            ),
+        ));
+    }
+
+    if !response_items.is_empty() {
+        sess.record_conversation_items(turn_context, &response_items)
             .await;
     }
-}
-
-pub(super) async fn maybe_record_token_budget_reminder(
-    sess: &Session,
-    turn_context: &TurnContext,
-    tokens_until_compaction: i64,
-    reminder_delivered: bool,
-) {
-    if !turn_context.config.features.enabled(Feature::TokenBudget) || reminder_delivered {
-        return;
+    if reminder_config.is_some() {
+        sess.mark_token_budget_reminder_delivered().await;
     }
-    let Some(config) = turn_context.config.token_budget.as_ref() else {
-        return;
-    };
-    let Some(threshold) = config.reminder_threshold_tokens else {
-        return;
-    };
-    if tokens_until_compaction > threshold {
-        return;
-    }
-
-    let response_item = ContextualUserFragment::into(crate::context::TokenBudgetReminder::new(
-        &config.reminder_message_template,
-        tokens_until_compaction,
-    ));
-    sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
-        .await;
-    sess.mark_token_budget_reminder_delivered().await;
 }
 
 fn crossed_usage_threshold(

@@ -247,11 +247,13 @@ pub(crate) async fn run_turn(
             );
             let token_status_before_sampling =
                 auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
-            super::token_budget::maybe_record_token_budget_reminder(
+            let token_budget_status_before_sampling =
+                token_status_before_sampling.token_budget_snapshot();
+            super::token_budget::maybe_record(
                 sess.as_ref(),
                 turn_context.as_ref(),
-                token_status_before_sampling.tokens_until_compaction(),
-                token_status_before_sampling.token_budget_reminder_delivered,
+                token_budget_status_before_sampling,
+                token_budget_status_before_sampling,
             )
             .await;
 
@@ -322,18 +324,11 @@ pub(crate) async fn run_turn(
                     "post sampling token usage"
                 );
 
-                super::token_budget::maybe_record_token_budget_remaining_context(
+                super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    token_status_before_sampling.active_context_tokens,
-                    token_status.active_context_tokens,
-                )
-                .await;
-                super::token_budget::maybe_record_token_budget_reminder(
-                    sess.as_ref(),
-                    turn_context.as_ref(),
-                    token_status.tokens_until_compaction(),
-                    token_status.token_budget_reminder_delivered,
+                    token_status_before_sampling.token_budget_snapshot(),
+                    token_status.token_budget_snapshot(),
                 )
                 .await;
 
@@ -815,6 +810,14 @@ impl AutoCompactTokenStatus {
                 auto_compact_scope_remaining.min(full_context_remaining)
             })
             .max(0)
+    }
+
+    fn token_budget_snapshot(&self) -> super::token_budget::TokenBudgetSnapshot {
+        super::token_budget::TokenBudgetSnapshot {
+            active_context_tokens: self.active_context_tokens,
+            tokens_until_compaction: self.tokens_until_compaction(),
+            reminder_delivered: self.token_budget_reminder_delivered,
+        }
     }
 }
 
