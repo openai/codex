@@ -1,7 +1,7 @@
 mod environment;
+mod environment_support;
 
 use codex_protocol::models::ResponseItem;
-use environment::EnvironmentsState;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -9,6 +9,8 @@ use serde_json::Value;
 use std::any::Any;
 use std::any::TypeId;
 use std::collections::BTreeMap;
+
+pub(crate) use environment::EnvironmentsState;
 
 trait ErasedWorldStateSection: Send + Sync {
     fn as_any(&self) -> &dyn Any;

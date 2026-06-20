@@ -7350,7 +7350,7 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
 }
 
 #[tokio::test]
-async fn build_settings_update_items_emits_environment_item_for_network_changes() {
+async fn build_settings_update_items_emits_environment_item_for_cwd_changes() {
     let (session, previous_context) = make_session_and_context().await;
     let previous_context = Arc::new(previous_context);
     let mut current_context = previous_context
@@ -7359,43 +7359,14 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
             &session.services.models_manager,
         )
         .await;
-
-    let mut config = (*current_context.config).clone();
-    let mut requirements = config.config_layer_stack.requirements().clone();
-    requirements.network = Some(Sourced::new(
-        NetworkConstraints {
-            domains: Some(NetworkDomainPermissionsToml {
-                entries: std::collections::BTreeMap::from([
-                    (
-                        "api.example.com".to_string(),
-                        NetworkDomainPermissionToml::Allow,
-                    ),
-                    (
-                        "blocked.example.com".to_string(),
-                        NetworkDomainPermissionToml::Deny,
-                    ),
-                ]),
-            }),
-            ..Default::default()
-        },
-        RequirementSource::LegacyManagedConfigTomlFromMdm,
-    ));
-    let layers = config
-        .config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
-        .cloned()
-        .collect();
-    config.config_layer_stack = ConfigLayerStack::new(
-        layers,
-        requirements,
-        config.config_layer_stack.requirements_toml().clone(),
-    )
-    .expect("rebuild config layer stack with network requirements");
-    current_context.config = Arc::new(config);
+    let cwd = test_path_buf("/new-repo").abs();
+    let environment = current_context.environments.turn_environments[0].clone();
+    current_context.environments.turn_environments[0] = TurnEnvironment::new(
+        environment.environment_id,
+        environment.environment,
+        PathUri::from_abs_path(&cwd),
+        environment.shell,
+    );
 
     let reference_context_item = previous_context.to_turn_context_item();
     let update_items = session
@@ -7406,78 +7377,11 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
         .into_iter()
         .find(|text| text.contains("<environment_context>"))
         .expect("environment update item should be emitted");
-    assert!(environment_update.contains(
-        "<network enabled=\"true\"><allowed>api.example.com</allowed><denied>blocked.example.com</denied></network>"
-    ));
-}
-
-#[tokio::test]
-async fn environment_context_uses_session_shell_when_environment_shell_is_absent() {
-    let (mut session, mut turn_context) = make_session_and_context().await;
-    session.services.user_shell = Arc::new(crate::shell::Shell {
-        shell_type: crate::shell::ShellType::PowerShell,
-        shell_path: PathBuf::from("powershell"),
-    });
-    for environment in &mut turn_context.environments.turn_environments {
-        environment.shell = None;
-    }
-
-    let session_shell = session.user_shell();
-    let environment_context = crate::context::EnvironmentContext::from_turn_context(
-        &turn_context,
-        session_shell.as_ref(),
-    )
-    .render();
     assert!(
-        environment_context.contains("<shell>powershell</shell>"),
-        "{environment_context}"
+        environment_update.contains(&format!("<cwd>{}</cwd>", cwd.display())),
+        "{environment_update}"
     );
-
-    let primary_environment = turn_context
-        .environments
-        .turn_environments
-        .first_mut()
-        .expect("primary environment");
-    primary_environment.shell = Some(crate::shell::Shell {
-        shell_type: crate::shell::ShellType::Cmd,
-        shell_path: PathBuf::from("cmd"),
-    });
-
-    let environment_context = crate::context::EnvironmentContext::from_turn_context(
-        &turn_context,
-        session_shell.as_ref(),
-    )
-    .render();
-    assert!(
-        environment_context.contains("<shell>cmd</shell>"),
-        "{environment_context}"
-    );
-}
-
-#[tokio::test]
-async fn build_settings_update_items_emits_environment_item_for_time_changes() {
-    let (session, previous_context) = make_session_and_context().await;
-    let previous_context = Arc::new(previous_context);
-    let mut current_context = previous_context
-        .with_model(
-            previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
-        )
-        .await;
-    current_context.current_date = Some("2026-02-27".to_string());
-    current_context.timezone = Some("Europe/Berlin".to_string());
-
-    let reference_context_item = previous_context.to_turn_context_item();
-    let update_items = session
-        .build_settings_update_items(Some(&reference_context_item), &current_context)
-        .await;
-
-    let environment_update = user_input_texts(&update_items)
-        .into_iter()
-        .find(|text| text.contains("<environment_context>"))
-        .expect("environment update item should be emitted");
-    assert!(environment_update.contains("<current_date>2026-02-27</current_date>"));
-    assert!(environment_update.contains("<timezone>Europe/Berlin</timezone>"));
+    assert!(!environment_update.contains("<environments>"));
 }
 
 #[tokio::test]
@@ -7493,7 +7397,13 @@ async fn build_settings_update_items_omits_environment_item_when_disabled() {
     let mut config = (*current_context.config).clone();
     config.include_environment_context = false;
     current_context.config = Arc::new(config);
-    current_context.current_date = Some("2026-02-27".to_string());
+    let environment = current_context.environments.turn_environments[0].clone();
+    current_context.environments.turn_environments[0] = TurnEnvironment::new(
+        environment.environment_id,
+        environment.environment,
+        PathUri::from_abs_path(&test_path_buf("/new-repo").abs()),
+        environment.shell,
+    );
 
     let reference_context_item = previous_context.to_turn_context_item();
     let update_items = session

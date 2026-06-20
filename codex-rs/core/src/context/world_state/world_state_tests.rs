@@ -5,33 +5,47 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 
-macro_rules! mock_section {
-    ($type:ident, $name:literal) => {
-        #[derive(Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-        pub(super) struct $type {
-            value: String,
-        }
-
-        impl $type {
-            fn new(value: &str) -> Self {
-                Self {
-                    value: value.to_string(),
-                }
-            }
-        }
-
-        impl WorldStateSection for $type {
-            const NAME: &'static str = $name;
-
-            fn render_diff(&self, _previous: &Self) -> Option<ResponseItem> {
-                None
-            }
-        }
-    };
+#[derive(Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct AlphaSection {
+    value: String,
 }
 
-mock_section!(AlphaSection, "alpha");
-mock_section!(BetaSection, "beta");
+impl AlphaSection {
+    fn new(value: &str) -> Self {
+        Self {
+            value: value.to_string(),
+        }
+    }
+}
+
+impl WorldStateSection for AlphaSection {
+    const NAME: &'static str = "alpha";
+
+    fn render_diff(&self, _previous: &Self) -> Option<ResponseItem> {
+        None
+    }
+}
+
+#[derive(Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct BetaSection {
+    value: String,
+}
+
+impl BetaSection {
+    fn new(value: &str) -> Self {
+        Self {
+            value: value.to_string(),
+        }
+    }
+}
+
+impl WorldStateSection for BetaSection {
+    const NAME: &'static str = "beta";
+
+    fn render_diff(&self, _previous: &Self) -> Option<ResponseItem> {
+        None
+    }
+}
 
 #[test]
 fn full_json_reloads_registered_sections() -> Result<()> {

@@ -3,7 +3,7 @@ use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 
 use super::AdditionalContextUserFragment;
-use super::EnvironmentContext;
+use super::EnvironmentsState;
 use super::FragmentRegistration;
 use super::FragmentRegistrationProxy;
 use super::InternalModelContextFragment;
@@ -19,7 +19,7 @@ use super::UserShellCommand;
 
 static USER_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<UserInstructions> =
     FragmentRegistrationProxy::new();
-static ENVIRONMENT_CONTEXT_REGISTRATION: FragmentRegistrationProxy<EnvironmentContext> =
+static ENVIRONMENT_CONTEXT_REGISTRATION: FragmentRegistrationProxy<EnvironmentsState> =
     FragmentRegistrationProxy::new();
 static ADDITIONAL_CONTEXT_REGISTRATION: FragmentRegistrationProxy<AdditionalContextUserFragment> =
     FragmentRegistrationProxy::new();
