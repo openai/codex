@@ -55,6 +55,7 @@ def _workspace_root_test_impl(ctx):
     workspace_root_marker = ctx.file.workspace_root_marker
     launcher_template = ctx.file._windows_launcher_template if is_windows else ctx.file._bash_launcher_template
     runfile_env_exports = _windows_runfile_env_exports(ctx) if is_windows else _bash_runfile_env_exports(ctx)
+    test_python_exec_path = _windows_test_python_exec_path(ctx) if is_windows else ""
     workspace_root_setup = _windows_workspace_root_setup(ctx) if is_windows else _bash_workspace_root_setup(ctx)
     ctx.actions.expand_template(
         template = launcher_template,
@@ -63,6 +64,7 @@ def _workspace_root_test_impl(ctx):
         substitutions = {
             "__RUNFILE_ENV_EXPORTS__": runfile_env_exports,
             "__TEST_BIN__": test_bin.short_path,
+            "__TEST_PYTHON_EXEC_PATH__": test_python_exec_path,
             "__WORKSPACE_ROOT_SETUP__": workspace_root_setup,
             "__WORKSPACE_ROOT_MARKER__": workspace_root_marker.short_path,
         },
@@ -117,11 +119,12 @@ def _windows_runfile_env_exports(ctx):
         runfile = _runfile_env_file(runfile_dep)
         lines.append('call :resolve_runfile {} "{}"'.format(env_var, _runfile_logical_path(runfile)))
         lines.append("if errorlevel 1 exit /b 1")
-    if ctx.attr.hermetic_test_python != None:
-        test_python = ctx.attr.hermetic_test_python[HermeticTestPythonInfo].executable
-        lines.append('call :resolve_runfile CODEX_BAZEL_TEST_PYTHON "{}"'.format(_runfile_logical_path(test_python)))
-        lines.append("if errorlevel 1 exit /b 1")
     return "\n".join(lines)
+
+def _windows_test_python_exec_path(ctx):
+    if ctx.attr.hermetic_test_python == None:
+        fail("Windows tests must provide the fixed hermetic Python tool")
+    return ctx.attr.hermetic_test_python[HermeticTestPythonInfo].executable.path
 
 def _runfile_env_file(target):
     executable = target[DefaultInfo].files_to_run.executable
