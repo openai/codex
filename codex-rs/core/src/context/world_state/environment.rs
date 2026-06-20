@@ -4,6 +4,7 @@ use super::environment_support::NetworkContext;
 use super::environment_support::push_xml_escaped_text;
 use crate::context::ContextualUserFragment;
 use crate::session::turn_context::TurnContext;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
@@ -87,7 +88,7 @@ impl EnvironmentsState {
     pub(crate) fn from_turn_context_item(turn_context_item: &TurnContextItem) -> Self {
         Self {
             environments: [(
-                String::new(),
+                LOCAL_ENVIRONMENT_ID.to_string(),
                 EnvironmentState {
                     cwd: PathUri::from_abs_path(&turn_context_item.cwd),
                     status: Some(EnvironmentStatus::Available),
@@ -141,33 +142,27 @@ impl WorldStateSection for EnvironmentsState {
     const NAME: &'static str = "environments";
 
     fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
-        let legacy_single =
-            is_legacy_single(&self.environments) && previous.environments.len() <= 1;
         let turn_context_values_changed = self.current_date != previous.current_date
             || self.timezone != previous.timezone
             || self.network != previous.network
             || self.filesystem != previous.filesystem;
-        if legacy_single
-            && self.environments.values().next() == previous.environments.values().next()
-            && !turn_context_values_changed
-        {
-            return None;
-        }
         let mut updates = self
             .environments
             .iter()
             .filter(|(id, environment)| previous.environments.get(*id) != Some(*environment))
             .map(|(id, environment)| (id.clone(), EnvironmentUpdate::Current(environment.clone())))
             .collect::<BTreeMap<_, _>>();
-        if !legacy_single {
-            updates.extend(
-                previous
-                    .environments
-                    .keys()
-                    .filter(|id| !id.is_empty() && !self.environments.contains_key(*id))
-                    .map(|id| (id.clone(), EnvironmentUpdate::Unavailable)),
-            );
-        }
+        updates.extend(
+            previous
+                .environments
+                .keys()
+                .filter(|id| !self.environments.contains_key(*id))
+                .map(|id| (id.clone(), EnvironmentUpdate::Unavailable)),
+        );
+        let legacy_single = is_legacy_single(&self.environments)
+            && updates
+                .values()
+                .all(|update| matches!(update, EnvironmentUpdate::Current(_)));
         (!updates.is_empty() || turn_context_values_changed).then(|| {
             ContextualUserFragment::into(RenderedEnvironments {
                 updates,
