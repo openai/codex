@@ -582,7 +582,6 @@ impl ChatWidget {
             || self.status_line_workspace_messages_disabled
             || !self.has_chatgpt_account
             || !self.has_codex_backend_auth
-            || !crate::workspace_messages::plan_type_allows_workspace_headline(self.plan_type)
         {
             return false;
         }

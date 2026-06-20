@@ -1,6 +1,5 @@
 use codex_app_server_protocol::GetWorkspaceMessagesResponse;
 use codex_app_server_protocol::WorkspaceMessageType;
-use codex_protocol::account::PlanType;
 use std::time::Duration;
 
 pub(crate) const WORKSPACE_HEADLINE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
@@ -23,13 +22,6 @@ pub(crate) fn workspace_headline_from_response(
             .then(|| message.message_body.trim().to_string())
             .filter(|headline| !headline.is_empty())
     }))
-}
-
-pub(crate) fn plan_type_allows_workspace_headline(plan_type: Option<PlanType>) -> bool {
-    matches!(
-        plan_type,
-        Some(PlanType::Enterprise | PlanType::EnterpriseCbpUsageBased)
-    )
 }
 
 #[cfg(test)]
@@ -84,22 +76,5 @@ mod tests {
             workspace_headline_from_response(response),
             WorkspaceHeadlineFetchResult::FeatureDisabled
         );
-    }
-
-    #[test]
-    fn workspace_headline_plan_gate_allows_enterprise_plans_only() {
-        let cases = [
-            (Some(PlanType::Enterprise), true),
-            (Some(PlanType::EnterpriseCbpUsageBased), true),
-            (Some(PlanType::Business), false),
-            (Some(PlanType::Team), false),
-            (Some(PlanType::Edu), false),
-            (Some(PlanType::Pro), false),
-            (None, false),
-        ];
-
-        for (plan_type, expected) in cases {
-            assert_eq!(plan_type_allows_workspace_headline(plan_type), expected);
-        }
     }
 }
