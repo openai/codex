@@ -240,6 +240,21 @@ pub(crate) async fn run_turn(
             )
             .await?;
 
+            let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+                sess.installation_id.clone(),
+                window_id,
+                CodexResponsesRequestKind::Turn,
+            );
+            let token_status_before_sampling =
+                auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
+            super::token_budget::maybe_record_token_budget_reminder(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                token_status_before_sampling.tokens_until_compaction(),
+                token_status_before_sampling.token_budget_reminder_delivered,
+            )
+            .await;
+
             // Construct the input that we will send to the model.
             let sampling_request_input: Vec<ResponseItem> = async {
                 sess.clone_history()
@@ -248,13 +263,6 @@ pub(crate) async fn run_turn(
             }
             .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
             .await;
-
-            let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
-                sess.installation_id.clone(),
-                window_id,
-                CodexResponsesRequestKind::Turn,
-            );
-            let tokens_before_sampling = sess.get_total_token_usage().await;
             let (sampling_request_output, sampling_request_input) = run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&turn_context),
@@ -268,14 +276,14 @@ pub(crate) async fn run_turn(
             .await?;
 
             Ok((
-                tokens_before_sampling,
+                token_status_before_sampling,
                 sampling_request_output,
                 sampling_request_input,
             ))
         }
         .await;
         match sampling_request_result {
-            Ok((tokens_before_sampling, sampling_request_output, sampling_request_input)) => {
+            Ok((token_status_before_sampling, sampling_request_output, sampling_request_input)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -305,6 +313,8 @@ pub(crate) async fn run_turn(
                     auto_compact_window_prefill_tokens = ?token_status.auto_compact_window_prefill_tokens,
                     full_context_window_limit = ?token_status.full_context_window_limit,
                     full_context_window_limit_reached = token_status.full_context_window_limit_reached,
+                    tokens_until_compaction = token_status.tokens_until_compaction(),
+                    token_budget_reminder_delivered = token_status.token_budget_reminder_delivered,
                     token_limit_reached,
                     model_needs_follow_up,
                     has_pending_input,
@@ -312,12 +322,18 @@ pub(crate) async fn run_turn(
                     "post sampling token usage"
                 );
 
-                let tokens_after_sampling = token_status.active_context_tokens;
                 super::token_budget::maybe_record_token_budget_remaining_context(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    tokens_before_sampling,
-                    tokens_after_sampling,
+                    token_status_before_sampling.active_context_tokens,
+                    token_status.active_context_tokens,
+                )
+                .await;
+                super::token_budget::maybe_record_token_budget_reminder(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    token_status.tokens_until_compaction(),
+                    token_status.token_budget_reminder_delivered,
                 )
                 .await;
 
@@ -783,8 +799,23 @@ struct AutoCompactTokenStatus {
     auto_compact_scope_limit: i64,
     full_context_window_limit: Option<i64>,
     auto_compact_window_prefill_tokens: Option<i64>,
+    token_budget_reminder_delivered: bool,
     full_context_window_limit_reached: bool,
     token_limit_reached: bool,
+}
+
+impl AutoCompactTokenStatus {
+    fn tokens_until_compaction(&self) -> i64 {
+        let auto_compact_scope_remaining = self
+            .auto_compact_scope_limit
+            .saturating_sub(self.auto_compact_scope_tokens);
+        self.full_context_window_limit
+            .map(|limit| limit.saturating_sub(self.active_context_tokens))
+            .map_or(auto_compact_scope_remaining, |full_context_remaining| {
+                auto_compact_scope_remaining.min(full_context_remaining)
+            })
+            .max(0)
+    }
 }
 
 async fn auto_compact_token_status(
@@ -792,6 +823,7 @@ async fn auto_compact_token_status(
     turn_context: &TurnContext,
 ) -> AutoCompactTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
+    let window = sess.auto_compact_window_snapshot().await;
     let mut auto_compact_window_prefill_tokens = None;
     let (auto_compact_scope_tokens, auto_compact_scope_limit, full_context_window_limit) =
         match turn_context.config.model_auto_compact_token_limit_scope {
@@ -804,7 +836,6 @@ async fn auto_compact_token_status(
                 None,
             ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
-                let window = sess.auto_compact_window_snapshot().await;
                 auto_compact_window_prefill_tokens = window.prefill_input_tokens;
                 let baseline = window.prefill_input_tokens.unwrap_or(active_context_tokens);
                 (
@@ -831,6 +862,7 @@ async fn auto_compact_token_status(
         auto_compact_scope_limit,
         full_context_window_limit,
         auto_compact_window_prefill_tokens,
+        token_budget_reminder_delivered: window.token_budget_reminder_delivered,
         full_context_window_limit_reached,
         token_limit_reached,
     }

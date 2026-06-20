@@ -1,10 +1,6 @@
 use anyhow::Result;
+use codex_core::config::TokenBudgetConfig;
 use codex_features::Feature;
-use codex_model_provider_info::built_in_model_providers;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
-use core_test_support::PathBufExt;
-use core_test_support::assert_regex_match;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ResponsesRequest;
@@ -17,15 +13,12 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
-const EFFECTIVE_CONTEXT_WINDOW: i64 = CONFIGURED_CONTEXT_WINDOW * 95 / 100;
 
 fn token_budget_texts(request: &ResponsesRequest) -> Vec<String> {
     request
@@ -47,59 +40,7 @@ fn tool_names(request: &ResponsesRequest) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_context_is_only_emitted_with_full_context() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
-    )
-    .await;
-    let test = test_codex()
-        .with_config(|config| {
-            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
-            config
-                .features
-                .enable(Feature::TokenBudget)
-                .expect("test config should allow token budget");
-        })
-        .build(&server)
-        .await?;
-
-    test.submit_turn("first turn").await?;
-
-    let second_cwd = test.workspace_path("second-cwd");
-    std::fs::create_dir_all(&second_cwd)?;
-    test.submit_turn_with_environments("second turn", Some(vec![local(second_cwd.abs())]))
-        .await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-
-    let thread_id = test.session_configured.thread_id;
-    let initial_token_budget = token_budget_texts(&requests[0]);
-    assert_eq!(initial_token_budget.len(), 1);
-    assert_regex_match(
-        &format!(
-            r"^<token_budget>\nThread id {thread_id}\.\nCurrent context window id [0-9a-f-]{{36}}\.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window\.\n</token_budget>$"
-        ),
-        &initial_token_budget[0],
-    );
-    assert_eq!(
-        token_budget_texts(&requests[1]),
-        initial_token_budget,
-        "steady-state context update should not advance the context window"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> Result<()> {
+async fn token_budget_messages_emit_on_usage_and_compaction_thresholds() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -129,6 +70,10 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
     let test = test_codex()
         .with_config(|config| {
             config.model_context_window = Some(10_000);
+            config.token_budget = Some(TokenBudgetConfig {
+                reminder_threshold_tokens: Some(2_000),
+                ..TokenBudgetConfig::default()
+            });
             config
                 .features
                 .enable(Feature::TokenBudget)
@@ -144,16 +89,6 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
     let requests = responses.requests();
     assert_eq!(requests.len(), 5);
 
-    let thread_id = test.session_configured.thread_id;
-    let full_context = token_budget_texts(&requests[0]);
-    assert_eq!(full_context.len(), 1);
-    assert_regex_match(
-        &format!(
-            r"^<token_budget>\nThread id {thread_id}\.\nCurrent context window id [0-9a-f-]{{36}}\.\nYou have 9500 tokens left in this context window\.\n</token_budget>$"
-        ),
-        &full_context[0],
-    );
-    let full_context = full_context[0].clone();
     let threshold_25 =
         "<token_budget>\nYou have 7000 tokens left in this context window.\n</token_budget>"
             .to_string();
@@ -163,28 +98,62 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
     let threshold_75 =
         "<token_budget>\nYou have 1500 tokens left in this context window.\n</token_budget>"
             .to_string();
+    let wrap_up_reminder = "<token_budget>\nYour context window is nearly exhausted (only 1000 tokens remaining) and will be automatically reset for you soon. Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows.\n</token_budget>"
+        .to_string();
 
-    assert_eq!(token_budget_texts(&requests[0]), vec![full_context.clone()]);
-    assert_eq!(
-        token_budget_texts(&requests[1]),
-        vec![full_context.clone(), threshold_25.clone()]
-    );
-    assert_eq!(
-        token_budget_texts(&requests[2]),
-        vec![full_context.clone(), threshold_25.clone()]
-    );
+    assert_eq!(token_budget_texts(&requests[1]), vec![threshold_25.clone()]);
+    assert_eq!(token_budget_texts(&requests[2]), vec![threshold_25.clone()]);
     assert_eq!(
         token_budget_texts(&requests[3]),
-        vec![
-            full_context.clone(),
-            threshold_25.clone(),
-            threshold_50.clone()
-        ]
+        vec![threshold_25.clone(), threshold_50.clone()]
     );
     assert_eq!(
         token_budget_texts(&requests[4]),
-        vec![full_context, threshold_25, threshold_50, threshold_75]
+        vec![threshold_25, threshold_50, threshold_75, wrap_up_reminder]
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_reminder_is_level_triggered_once_per_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 1_000),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_context_window = Some(10_000);
+            config.token_budget = Some(TokenBudgetConfig {
+                reminder_threshold_tokens: Some(10_000),
+                reminder_message_template: "Custom reminder.".to_string(),
+            });
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("first turn").await?;
+    test.submit_turn("second turn").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let reminder = "<token_budget>\nCustom reminder.\n</token_budget>".to_string();
+    assert_eq!(token_budget_texts(&requests[0]), vec![reminder.clone()]);
+    assert_eq!(token_budget_texts(&requests[1]), vec![reminder]);
 
     Ok(())
 }
@@ -239,19 +208,11 @@ async fn get_context_remaining_returns_token_budget_remaining_fragment() -> Resu
         "get_context_remaining should be exposed when token budget is enabled"
     );
 
-    let thread_id = test.session_configured.thread_id;
     let remaining_context =
         "<token_budget>\nYou have 7000 tokens left in this context window.\n</token_budget>"
             .to_string();
     let token_budgets = token_budget_texts(&requests[1]);
-    assert_eq!(token_budgets.len(), 2);
-    assert_regex_match(
-        &format!(
-            r"^<token_budget>\nThread id {thread_id}\.\nCurrent context window id [0-9a-f-]{{36}}\.\nYou have 9500 tokens left in this context window\.\n</token_budget>$"
-        ),
-        &token_budgets[0],
-    );
-    assert_eq!(token_budgets[1], remaining_context);
+    assert_eq!(token_budgets, vec![remaining_context.clone()]);
     assert_eq!(
         requests[2].function_call_output_content_and_success(call_id),
         Some((Some(remaining_context), None))
@@ -308,7 +269,6 @@ async fn get_context_remaining_returns_unknown_when_window_is_unavailable() -> R
         "get_context_remaining should be exposed when token budget is enabled"
     );
 
-    assert_eq!(token_budget_texts(&requests[0]), Vec::<String>::new());
     assert_eq!(
         requests[1].function_call_output_content_and_success(call_id),
         Some((
@@ -319,83 +279,6 @@ async fn get_context_remaining_returns_unknown_when_window_is_unavailable() -> R
             None,
         ))
     );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-            sse(vec![
-                ev_response_created("resp-compact"),
-                ev_assistant_message("msg-compact", "compact summary"),
-                ev_completed("resp-compact"),
-            ]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
-    )
-    .await;
-
-    let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
-    model_provider.name = "OpenAI-compatible test provider".to_string();
-    model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    model_provider.supports_websockets = false;
-
-    let test = test_codex()
-        .with_config(move |config| {
-            config.model_provider = model_provider;
-            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
-            config
-                .features
-                .enable(Feature::TokenBudget)
-                .expect("test config should allow token budget");
-        })
-        .build(&server)
-        .await?;
-
-    test.submit_turn("before compact").await?;
-    test.codex.submit(Op::Compact).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-    test.submit_turn("after compact").await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 3);
-
-    let thread_id = test.session_configured.thread_id;
-    let initial_token_budget = token_budget_texts(&requests[0]);
-    assert_eq!(initial_token_budget.len(), 1);
-    let initial_window_id = assert_regex_match(
-        &format!(
-            r"^<token_budget>\nThread id {thread_id}\.\nCurrent context window id ([0-9a-f-]{{36}})\.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window\.\n</token_budget>$"
-        ),
-        &initial_token_budget[0],
-    )
-    .get(1)
-    .expect("window id capture")
-    .as_str()
-    .to_string();
-    let post_compaction_token_budget = token_budget_texts(&requests[2]);
-    assert_eq!(post_compaction_token_budget.len(), 1);
-    let post_compaction_window_id = assert_regex_match(
-        &format!(
-            r"^<token_budget>\nThread id {thread_id}\.\nCurrent context window id ([0-9a-f-]{{36}})\.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window\.\n</token_budget>$"
-        ),
-        &post_compaction_token_budget[0],
-    )
-    .get(1)
-    .expect("window id capture")
-    .as_str()
-    .to_string();
-    assert_ne!(post_compaction_window_id, initial_window_id);
 
     Ok(())
 }
@@ -455,32 +338,6 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
             .any(|name| name == "new_context"),
         "new_context should be exposed when token budget is enabled"
     );
-    let thread_id = test.session_configured.thread_id;
-    let initial_token_budget = token_budget_texts(&requests[0]);
-    assert_eq!(initial_token_budget.len(), 1);
-    let initial_window_id = assert_regex_match(
-        &format!(
-            r"^<token_budget>\nThread id {thread_id}\.\nCurrent context window id ([0-9a-f-]{{36}})\.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window\.\n</token_budget>$"
-        ),
-        &initial_token_budget[0],
-    )
-    .get(1)
-    .expect("window id capture")
-    .as_str()
-    .to_string();
-    let new_window_token_budget = token_budget_texts(&requests[2]);
-    assert_eq!(new_window_token_budget.len(), 1);
-    let window_id = assert_regex_match(
-        &format!(
-            r"^<token_budget>\nThread id {thread_id}\.\nCurrent context window id ([0-9a-f-]{{36}})\.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window\.\n</token_budget>$"
-        ),
-        &new_window_token_budget[0],
-    )
-    .get(1)
-    .expect("window id capture")
-    .as_str()
-    .to_string();
-    assert_ne!(window_id, initial_window_id);
     assert!(
         !requests[2].body_contains_text("request new context window"),
         "new_context should drop the prior window history before continuing the turn"
@@ -494,9 +351,6 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
         &[("Final Follow-Up Request", &requests[2])],
         &ContextSnapshotOptions::default(),
     );
-    let snapshot = snapshot
-        .replace(&thread_id.to_string(), "<THREAD_ID>")
-        .replace(&window_id, "<UUID>");
     insta::assert_snapshot!(
         "token_budget_new_context_window_tool_full_context",
         snapshot

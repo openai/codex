@@ -4,6 +4,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AutoCompactWindowSnapshot {
     pub(crate) prefill_input_tokens: Option<i64>,
+    pub(crate) token_budget_reminder_delivered: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub(super) struct AutoCompactWindow {
     /// not the growth itself; server-observed usage replaces estimated
     /// resume/recompute baselines when available.
     prefill_input_tokens: Option<AutoCompactWindowPrefill>,
+    token_budget_reminder_delivered: bool,
 }
 
 impl AutoCompactWindow {
@@ -32,6 +34,7 @@ impl AutoCompactWindow {
             window_id: Uuid::now_v7(),
             new_context_window_requested: false,
             prefill_input_tokens: None,
+            token_budget_reminder_delivered: false,
         }
     }
 
@@ -50,13 +53,23 @@ impl AutoCompactWindow {
     pub(super) fn restore(&mut self, window_number: u64, window_id: Uuid) {
         self.window_number = window_number;
         self.window_id = window_id;
+        self.token_budget_reminder_delivered = false;
     }
 
     pub(super) fn advance(&mut self) -> (u64, Uuid) {
         self.window_number = self.window_number.saturating_add(1);
         self.window_id = Uuid::now_v7();
         self.new_context_window_requested = false;
+        self.token_budget_reminder_delivered = false;
         (self.window_number, self.window_id)
+    }
+
+    pub(super) fn mark_token_budget_reminder_delivered(&mut self) {
+        self.token_budget_reminder_delivered = true;
+    }
+
+    pub(super) fn rearm_token_budget_reminder(&mut self) {
+        self.token_budget_reminder_delivered = false;
     }
 
     pub(super) fn request_new_context_window(&mut self) {
@@ -104,6 +117,7 @@ impl AutoCompactWindow {
         };
         AutoCompactWindowSnapshot {
             prefill_input_tokens,
+            token_budget_reminder_delivered: self.token_budget_reminder_delivered,
         }
     }
 }
@@ -119,10 +133,15 @@ mod tests {
 
         assert_eq!(window.window_number(), 0);
         assert_eq!(window.window_id().get_version_num(), 7);
+        window.mark_token_budget_reminder_delivered();
+        assert!(window.snapshot().token_budget_reminder_delivered);
         let restored_window_id = Uuid::now_v7();
         window.restore(/*window_number*/ 3, restored_window_id);
         assert_eq!(window.window_number(), 3);
         assert_eq!(window.window_id(), restored_window_id);
+        assert!(!window.snapshot().token_budget_reminder_delivered);
+        window.mark_token_budget_reminder_delivered();
+        assert!(window.snapshot().token_budget_reminder_delivered);
         window.request_new_context_window();
         assert!(window.take_new_context_window_request());
         assert!(!window.take_new_context_window_request());
@@ -134,11 +153,13 @@ mod tests {
         assert_eq!(window_id.get_version_num(), 7);
         assert_ne!(window_id, restored_window_id);
         assert!(!window.take_new_context_window_request());
+        assert!(!window.snapshot().token_budget_reminder_delivered);
 
         assert_eq!(
             window.snapshot(),
             AutoCompactWindowSnapshot {
                 prefill_input_tokens: None,
+                token_budget_reminder_delivered: false,
             }
         );
 
@@ -147,6 +168,7 @@ mod tests {
             window.snapshot(),
             AutoCompactWindowSnapshot {
                 prefill_input_tokens: Some(150),
+                token_budget_reminder_delivered: false,
             }
         );
 
@@ -159,6 +181,7 @@ mod tests {
             window.snapshot(),
             AutoCompactWindowSnapshot {
                 prefill_input_tokens: Some(120),
+                token_budget_reminder_delivered: false,
             }
         );
 
@@ -172,6 +195,7 @@ mod tests {
             window.snapshot(),
             AutoCompactWindowSnapshot {
                 prefill_input_tokens: Some(120),
+                token_budget_reminder_delivered: false,
             }
         );
     }
