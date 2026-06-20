@@ -605,14 +605,16 @@ mod tests {
 
         let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::default(),
-            PathUri::from_path(&native_cwd).expect("cwd URI"),
+            PathUri::from_host_native_path(&native_cwd).expect("cwd URI"),
         );
         let mut native_path_sandbox =
             serde_json::to_value(sandbox).expect("sandbox should serialize");
         native_path_sandbox["cwd"] = serde_json::json!(native_cwd.to_string_lossy());
 
         serde_json::from_value::<FsReadFileParams>(serde_json::json!({
-            "path": PathUri::from_path(native_path).expect("path URI").to_string(),
+            "path": PathUri::from_host_native_path(native_path)
+                .expect("path URI")
+                .to_string(),
             "sandbox": native_path_sandbox,
         }))
         .expect_err("native absolute sandbox cwd should not deserialize as a URI");
