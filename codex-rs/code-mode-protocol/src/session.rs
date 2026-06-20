@@ -61,9 +61,6 @@ pub trait CodeModeSessionDelegate: Send + Sync {
         text: String,
         cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a>;
-
-    /// Releases delegate state associated with a cell after it reaches a terminal state.
-    fn cell_closed(&self, cell_id: &CellId);
 }
 
 /// A stateful code-mode session owned by one Codex thread.

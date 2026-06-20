@@ -49,8 +49,6 @@ impl CodeModeSessionDelegate for NoopCodeModeSessionDelegate {
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
     }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 #[derive(Default)]
@@ -79,9 +77,11 @@ impl CodeModeService {
     }
 
     pub fn with_delegate(delegate: Arc<dyn CodeModeSessionDelegate>) -> Self {
-        Self {
-            runtime: SessionRuntime::new(Arc::new(ProtocolDelegate { delegate })),
-        }
+        #[cfg(not(test))]
+        let runtime = SessionRuntime::new(Arc::new(ProtocolDelegate { delegate }));
+        #[cfg(test)]
+        let runtime = SessionRuntime::new_for_test(Arc::new(ProtocolDelegate { delegate }));
+        Self { runtime }
     }
 
     pub async fn create_cell(&self, request: CreateCellRequest) -> Result<CellId, String> {
@@ -250,10 +250,6 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
                 cancellation_token,
             )
             .await
-    }
-
-    fn cell_closed(&self, cell_id: &runtime::CellId) {
-        self.delegate.cell_closed(&protocol_cell_id(cell_id));
     }
 }
 

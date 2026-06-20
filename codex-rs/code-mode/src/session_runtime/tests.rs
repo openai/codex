@@ -33,8 +33,6 @@ impl SessionRuntimeDelegate for RecordingDelegate {
     ) -> Result<(), String> {
         Ok(())
     }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 #[tokio::test]
@@ -161,7 +159,6 @@ async fn drop_terminates_cells_when_the_registry_is_locked() {
         .create_cell(execute_request("while (true) {}"))
         .await
         .unwrap();
-    assert_eq!(cell_id, CellId::new("1"));
     assert_eq!(
         runtime
             .observe(
@@ -183,4 +180,32 @@ async fn drop_terminates_cells_when_the_registry_is_locked() {
         .await
         .unwrap();
     assert!(inner.cell_tasks.is_empty());
+}
+
+#[tokio::test]
+async fn cell_ids_are_unique_across_runtime_instances() {
+    let first_runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
+    let second_runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
+    let first_cell_id = first_runtime
+        .create_cell(execute_request("await new Promise(() => {});"))
+        .await
+        .unwrap();
+    let second_cell_id = second_runtime
+        .create_cell(execute_request("await new Promise(() => {});"))
+        .await
+        .unwrap();
+
+    assert_ne!(first_cell_id, second_cell_id);
+    for cell_id in [&first_cell_id, &second_cell_id] {
+        assert_eq!(cell_id.as_str().len(), CELL_ID_LENGTH);
+        assert!(
+            cell_id
+                .as_str()
+                .bytes()
+                .all(|byte| CELL_ID_ALPHABET.contains(&byte))
+        );
+    }
+
+    first_runtime.shutdown().await.unwrap();
+    second_runtime.shutdown().await.unwrap();
 }

@@ -20,9 +20,11 @@ codex-code-mode-protocol = { workspace = true }
 codex-protocol = { workspace = true }
 deno_core_icudata = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 v8 = { workspace = true }
 
 [dev-dependencies]

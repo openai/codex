@@ -7,14 +7,14 @@ use tokio_util::sync::CancellationToken;
 
 /// Identifies one execution cell within a session runtime.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct CellId(String);
+pub struct CellId(String);
 
 impl CellId {
-    pub(crate) fn new(value: impl Into<String>) -> Self {
+    pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
-    pub(crate) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -27,14 +27,14 @@ impl fmt::Display for CellId {
 
 /// Selects the next observable frontier for a running cell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ObserveMode {
+pub enum ObserveMode {
     YieldAfter(Duration),
     PendingFrontier,
 }
 
 /// An observable cell lifecycle event.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CellEvent {
+pub enum CellEvent {
     Yielded {
         content_items: Vec<OutputItem>,
     },
@@ -53,7 +53,7 @@ pub(crate) enum CellEvent {
 
 /// Output emitted by a cell since its preceding observation.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum OutputItem {
+pub enum OutputItem {
     Text {
         text: String,
     },
@@ -65,7 +65,7 @@ pub(crate) enum OutputItem {
 
 /// Requested image fidelity for an output image.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ImageDetail {
+pub enum ImageDetail {
     Auto,
     Low,
     High,
@@ -75,48 +75,51 @@ pub(crate) enum ImageDetail {
 /// Transport-neutral input for creating a cell.
 ///
 /// The owning session assigns the cell ID when it admits the request.
-pub(crate) struct CreateCellRequest {
-    pub(crate) tool_call_id: String,
-    pub(crate) enabled_tools: Vec<ToolDefinition>,
-    pub(crate) source: String,
+#[derive(Debug, PartialEq)]
+pub struct CreateCellRequest {
+    pub tool_call_id: String,
+    pub enabled_tools: Vec<ToolDefinition>,
+    pub source: String,
 }
 
 /// Tool metadata exposed to code running inside a cell.
-pub(crate) struct ToolDefinition {
-    pub(crate) name: String,
-    pub(crate) tool_name: ToolName,
-    pub(crate) description: String,
-    pub(crate) kind: ToolKind,
+#[derive(Debug, PartialEq)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub tool_name: ToolName,
+    pub description: String,
+    pub kind: ToolKind,
 }
 
 /// A tool name with an optional namespace.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ToolName {
-    pub(crate) name: String,
-    pub(crate) namespace: Option<String>,
+pub struct ToolName {
+    pub name: String,
+    pub namespace: Option<String>,
 }
 
 /// The JavaScript calling convention for a tool.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ToolKind {
+pub enum ToolKind {
     Function,
     Freeform,
 }
 
 /// A nested tool request emitted by a running cell.
-pub(crate) struct NestedToolCall {
-    pub(crate) cell_id: CellId,
-    pub(crate) runtime_tool_call_id: String,
-    pub(crate) tool_name: ToolName,
-    pub(crate) tool_kind: ToolKind,
-    pub(crate) input: Option<JsonValue>,
+#[derive(Debug, PartialEq)]
+pub struct NestedToolCall {
+    pub cell_id: CellId,
+    pub runtime_tool_call_id: String,
+    pub tool_name: ToolName,
+    pub tool_kind: ToolKind,
+    pub input: Option<JsonValue>,
 }
 
 /// Host callbacks used by cells owned by a [`super::SessionRuntime`].
 ///
-/// Implementations must honor cancellation tokens. `cell_closed` is called
-/// after the runtime has stopped routing requests to the cell.
-pub(crate) trait SessionRuntimeDelegate: Send + Sync + 'static {
+/// Implementations should forward callback cancellation tokens to downstream
+/// work. The runtime stops awaiting callbacks once cancellation begins.
+pub trait SessionRuntimeDelegate: Send + Sync + 'static {
     fn invoke_tool(
         &self,
         invocation: NestedToolCall,
@@ -130,13 +133,11 @@ pub(crate) trait SessionRuntimeDelegate: Send + Sync + 'static {
         text: String,
         cancellation_token: CancellationToken,
     ) -> impl Future<Output = Result<(), String>> + Send;
-
-    fn cell_closed(&self, cell_id: &CellId);
 }
 
 /// A failure reported by a session runtime operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum Error {
+pub enum Error {
     ShuttingDown,
     DuplicateCell(CellId),
     MissingCell(CellId),
