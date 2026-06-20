@@ -145,13 +145,33 @@ if defined manifest if exist "%manifest%" (
   rem Read the manifest directly instead of shelling out to findstr. In the
   rem GitHub Windows runner, the nested `findstr` path produced
   rem `FINDSTR: Cannot open D:MANIFEST`, which then broke runfile resolution for
-  rem Bazel tests even though the manifest file was present.
+  rem Bazel tests even though the manifest file was present. A one-field
+  rem manifest entry self-maps its logical link; accept that form only when the
+  rem link exists, and never report success with an empty resolved path.
   for /f "usebackq tokens=1,* delims= " %%A in ("%manifest%") do (
     if "%%A"=="%logical_path%" (
-      endlocal & set "%~1=%%B" & exit /b 0
+      if not "%%B"=="" (
+        endlocal & set "%~1=%%B" & exit /b 0
+      )
+      if exist "!native_logical_path!" (
+        for %%P in ("!native_logical_path!") do (
+          endlocal
+          set "%~1=%%~fP"
+          exit /b 0
+        )
+      )
     )
     if "%%A"=="%workspace_logical_path%" (
-      endlocal & set "%~1=%%B" & exit /b 0
+      if not "%%B"=="" (
+        endlocal & set "%~1=%%B" & exit /b 0
+      )
+      if exist "!native_workspace_logical_path!" (
+        for %%P in ("!native_workspace_logical_path!") do (
+          endlocal
+          set "%~1=%%~fP"
+          exit /b 0
+        )
+      )
     )
   )
 )
