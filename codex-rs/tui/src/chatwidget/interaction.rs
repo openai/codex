@@ -25,7 +25,7 @@ impl ChatWidget {
                 self.pause_active_goal_for_interrupt();
             }
             if self.bottom_pane.no_modal_or_popup_active() {
-                self.maybe_send_next_queued_input();
+                self.on_modal_or_popup_closed();
             }
             return;
         }
@@ -391,6 +391,9 @@ impl ChatWidget {
             }
             if should_pause_active_goal {
                 self.pause_active_goal_for_interrupt();
+            }
+            if modal_or_popup_active && self.bottom_pane.no_modal_or_popup_active() {
+                self.on_modal_or_popup_closed();
             }
             return;
         }
