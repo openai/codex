@@ -92,16 +92,13 @@ impl CellHandle {
     pub(crate) fn terminate(&self) -> CellEventFuture {
         self.state.request_termination()
     }
-
-    pub(crate) fn shutdown(&self) {
-        self.state.cancellation_token().cancel();
-    }
 }
 
 /// The single linearization point for a cell's terminal outcome.
 ///
-/// Callback cancellation tokens are children of the cell token, so a terminal
-/// decision cancels runtime work and its callbacks together.
+/// The cancellation token is a child of the owning session token. Callback
+/// tokens are children of this token, so cancellation flows strictly from the
+/// session to the cell and then to its callbacks.
 ///
 /// The mutex is held only for synchronous phase transitions and terminal
 /// delivery. Runtime execution, observation waits, and callbacks never run
