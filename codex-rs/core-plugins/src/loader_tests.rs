@@ -70,13 +70,9 @@ fn configured_plugins_from_stack_merges_user_layers() {
 }
 
 #[tokio::test]
-async fn load_plugins_discovers_default_and_manifest_agent_roots() {
+async fn load_plugins_discovers_agent_roots_from_string_and_list_manifest_paths() {
     let temp_dir = TempDir::new().expect("tempdir");
     let plugin_root = temp_dir.path().join("plugins/cache/test/agented/local");
-    write_file(
-        &plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"agented","agents":"./extra-agents"}"#,
-    );
     write_file(
         &plugin_root.join("agents/researcher.toml"),
         r#"name = "researcher"
@@ -106,41 +102,50 @@ enabled = true
     .expect("valid config layer stack");
     let store = PluginStore::new(temp_dir.path().to_path_buf());
 
-    let plugins = load_plugins_from_layer_stack(
-        &stack,
-        HashMap::new(),
-        &store,
-        Some(Product::Codex),
-        /*prefer_remote_curated_conflicts*/ false,
-    )
-    .await;
+    for agents_json in [
+        r#""./extra-agents""#,
+        r#"["./extra-agents", "./agents", "./extra-agents"]"#,
+    ] {
+        write_file(
+            &plugin_root.join(".codex-plugin/plugin.json"),
+            &format!(r#"{{"name":"agented","agents":{agents_json}}}"#),
+        );
+        let plugins = load_plugins_from_layer_stack(
+            &stack,
+            HashMap::new(),
+            &store,
+            Some(Product::Codex),
+            /*prefer_remote_curated_conflicts*/ false,
+        )
+        .await;
 
-    let plugin = plugins
-        .iter()
-        .find(|plugin| plugin.config_name == "agented@test")
-        .expect("agented plugin should load");
-    assert_eq!(
-        plugin.agent_roots,
-        vec![
-            plugin_root.join("agents").abs(),
-            plugin_root.join("extra-agents").abs(),
-        ]
-    );
-    assert_eq!(
-        PluginLoadOutcome::from_plugins(plugins).effective_plugin_agent_roots(),
-        vec![
-            PluginAgentRoot {
-                path: plugin_root.join("agents").abs(),
-                plugin_id: "agented@test".to_string(),
-                plugin_root: plugin_root.abs(),
-            },
-            PluginAgentRoot {
-                path: plugin_root.join("extra-agents").abs(),
-                plugin_id: "agented@test".to_string(),
-                plugin_root: plugin_root.abs(),
-            },
-        ]
-    );
+        let plugin = plugins
+            .iter()
+            .find(|plugin| plugin.config_name == "agented@test")
+            .expect("agented plugin should load");
+        assert_eq!(
+            plugin.agent_roots,
+            vec![
+                plugin_root.join("agents").abs(),
+                plugin_root.join("extra-agents").abs(),
+            ]
+        );
+        assert_eq!(
+            PluginLoadOutcome::from_plugins(plugins).effective_plugin_agent_roots(),
+            vec![
+                PluginAgentRoot {
+                    path: plugin_root.join("agents").abs(),
+                    plugin_id: "agented@test".to_string(),
+                    plugin_root: plugin_root.abs(),
+                },
+                PluginAgentRoot {
+                    path: plugin_root.join("extra-agents").abs(),
+                    plugin_id: "agented@test".to_string(),
+                    plugin_root: plugin_root.abs(),
+                },
+            ]
+        );
+    }
 }
 
 #[tokio::test]

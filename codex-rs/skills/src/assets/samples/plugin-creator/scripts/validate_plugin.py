@@ -126,7 +126,7 @@ def validate_manifest_shape(
         validate_optional_https_url(author, "url", errors, prefix="author")
 
     validate_optional_contract_path(manifest, "skills", "skills", errors)
-    validate_optional_contract_path(manifest, "agents", "agents", errors)
+    validate_optional_contract_paths(manifest, "agents", "agents", errors)
     validate_optional_contract_path(manifest, "apps", ".app.json", errors)
     validate_manifest_mcp_servers(plugin_root, manifest, errors)
 
@@ -281,6 +281,25 @@ def validate_optional_contract_path(
         return
     normalized = normalize_contract_path(value) if isinstance(value, str) else None
     if normalized != expected:
+        errors.append(f"plugin.json field `{key}` must resolve to `{expected}`")
+
+
+def validate_optional_contract_paths(
+    payload: dict[str, Any],
+    key: str,
+    expected: str,
+    errors: list[str],
+) -> None:
+    value = payload.get(key)
+    if value is None:
+        return
+    values = [value] if isinstance(value, str) else value
+    if not isinstance(values, list) or not values or not all(
+        isinstance(item, str) for item in values
+    ):
+        errors.append(f"plugin.json field `{key}` must be a string path or array of string paths")
+        return
+    if any(normalize_contract_path(item) != expected for item in values):
         errors.append(f"plugin.json field `{key}` must resolve to `{expected}`")
 
 

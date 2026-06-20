@@ -62,7 +62,7 @@
 - `repository` (`string`): Source code URL.
 - `license` (`string`): License identifier (for example `MIT`, `Apache-2.0`).
 - `keywords` (`array` of `string`): Search/discovery tags.
-- `agents` (`string`): Relative path to plugin-bundled agent role TOML files.
+- `agents` (`string` or array of `string`): Relative directory path or paths containing plugin-bundled agent role TOML files.
 - `skills` (`string`): Relative path to skill directories/files.
 - `hooks` (`string`): Hook config path.
 - `mcpServers` (`string` or `object`): MCP config path, or an object whose keys are MCP server names and whose values are MCP server config objects.
@@ -115,7 +115,7 @@ Or as an object directly in `plugin.json`:
 
 ### Path conventions and defaults
 
-- Path values should be relative and begin with `./`.
+- Path values, including each entry in an `agents` array, should be relative and begin with `./`.
 - `agents`, `skills`, `hooks`, and string-valued `mcpServers` are supplemented on top of default component discovery; they do not replace defaults.
 - Custom path values must follow the plugin root convention and naming/namespacing rules.
 - This repo’s scaffold writes `.codex-plugin/plugin.json`; treat that as the manifest location this skill generates.

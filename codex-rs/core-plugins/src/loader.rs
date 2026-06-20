@@ -922,9 +922,7 @@ fn plugin_agent_roots(
     manifest_paths: &PluginManifestPaths,
 ) -> Vec<AbsolutePathBuf> {
     let mut paths = default_agent_roots(plugin_root);
-    if let Some(path) = &manifest_paths.agents {
-        paths.push(path.clone());
-    }
+    paths.extend(manifest_paths.agents.iter().cloned());
     paths.sort_unstable();
     paths.dedup();
     paths
