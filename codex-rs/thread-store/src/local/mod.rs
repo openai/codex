@@ -16,6 +16,7 @@ use codex_protocol::ThreadId;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -137,6 +138,10 @@ impl LocalThreadStore {
             .get(&thread_id)
             .cloned()
             .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
+    }
+
+    pub(super) async fn live_thread_ids(&self) -> HashSet<ThreadId> {
+        self.live_recorders.lock().await.keys().copied().collect()
     }
 
     pub(super) async fn ensure_live_recorder_absent(

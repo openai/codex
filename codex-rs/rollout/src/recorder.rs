@@ -379,6 +379,7 @@ impl RolloutRecorder {
                 /*parent_thread_id*/ None,
                 archived,
                 search_term,
+                /*missing_rollout_thread_ids_to_preserve*/ None,
             )
             .await
             .map(Into::into)
@@ -452,8 +453,8 @@ impl RolloutRecorder {
         // Warm the DB by repairing every filesystem hit before querying SQLite. Source/provider/cwd
         // filters are already validated from rollout head metadata, so lightweight read-repair is
         // enough there. Search can depend on full title metadata, so keep full reconciliation.
-        for item in &fs_page.items {
-            if search_term.is_some() {
+        if search_term.is_some() {
+            for item in &fs_page.items {
                 state_db::reconcile_rollout(
                     state_db_ctx.as_deref(),
                     item.path.as_path(),
@@ -464,15 +465,19 @@ impl RolloutRecorder {
                     /*new_thread_memory_mode*/ None,
                 )
                 .await;
-            } else {
-                state_db::read_repair_rollout_path(
-                    state_db_ctx.as_deref(),
-                    item.thread_id,
-                    Some(archived),
-                    item.path.as_path(),
-                )
-                .await;
             }
+        } else {
+            let repair_paths = fs_page
+                .items
+                .iter()
+                .map(|item| (item.thread_id, item.path.clone()))
+                .collect::<Vec<_>>();
+            state_db::read_repair_rollout_paths(
+                state_db_ctx.as_deref(),
+                repair_paths.as_slice(),
+                Some(archived),
+            )
+            .await;
         }
 
         let db_page = state_db::list_threads_db(
@@ -488,6 +493,7 @@ impl RolloutRecorder {
             /*parent_thread_id*/ None,
             archived,
             search_term,
+            /*missing_rollout_thread_ids_to_preserve*/ None,
         )
         .await;
         if let Some(db_page) = db_page {
@@ -517,6 +523,7 @@ impl RolloutRecorder {
                     /*parent_thread_id*/ None,
                     archived,
                     search_term,
+                    /*missing_rollout_thread_ids_to_preserve*/ None,
                 )
                 .await
                 {
@@ -557,6 +564,7 @@ impl RolloutRecorder {
                         /*parent_thread_id*/ None,
                         archived,
                         search_term,
+                        /*missing_rollout_thread_ids_to_preserve*/ None,
                     )
                     .await
                     {
@@ -635,6 +643,7 @@ impl RolloutRecorder {
                     /*parent_thread_id*/ None,
                     /*archived*/ false,
                     /*search_term*/ None,
+                    /*missing_rollout_thread_ids_to_preserve*/ None,
                 )
                 .await
                 else {
@@ -1037,19 +1046,43 @@ async fn fill_missing_thread_item_metadata_from_state_db(
         return page;
     };
 
+    let thread_ids = page
+        .items
+        .iter()
+        .filter_map(|item| item.thread_id)
+        .collect::<Vec<_>>();
+    let mut metadata_by_id = match state_db_ctx.get_threads(thread_ids.as_slice()).await {
+        Ok(metadata_by_id) => metadata_by_id,
+        Err(err) => {
+            warn!(
+                "state db get_threads failed while overlaying filesystem scan thread metadata: {err}"
+            );
+            for item in &mut page.items {
+                let Some(thread_id) = item.thread_id else {
+                    continue;
+                };
+                let metadata = match state_db_ctx.get_thread(thread_id).await {
+                    Ok(Some(metadata)) => metadata,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        warn!(
+                            "state db get_thread failed while overlaying filesystem scan thread metadata: {err}"
+                        );
+                        continue;
+                    }
+                };
+                fill_missing_thread_item_metadata(item, thread_item_from_state_metadata(metadata));
+            }
+            return page;
+        }
+    };
+
     for item in &mut page.items {
         let Some(thread_id) = item.thread_id else {
             continue;
         };
-        let metadata = match state_db_ctx.get_thread(thread_id).await {
-            Ok(Some(metadata)) => metadata,
-            Ok(None) => continue,
-            Err(err) => {
-                warn!(
-                    "state db get_thread failed while overlaying filesystem scan thread metadata: {err}"
-                );
-                continue;
-            }
+        let Some(metadata) = metadata_by_id.remove(&thread_id) else {
+            continue;
         };
         fill_missing_thread_item_metadata(item, thread_item_from_state_metadata(metadata));
     }
@@ -1063,6 +1096,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         thread_id: _state_thread_id,
         first_user_message,
         preview,
+        name,
         cwd,
         git_branch,
         git_sha,
@@ -1083,6 +1117,9 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     if item.preview.is_none() {
         item.preview = preview;
+    }
+    if item.name.is_none() {
+        item.name = name;
     }
     if item.cwd.is_none() {
         item.cwd = cwd;
@@ -1757,12 +1794,66 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
     }
 }
 
+impl From<codex_state::ThreadListPage> for ThreadsPage {
+    fn from(db_page: codex_state::ThreadListPage) -> Self {
+        let items = db_page
+            .items
+            .into_iter()
+            .map(thread_item_from_state_list_item)
+            .collect();
+        Self {
+            items,
+            next_cursor: db_page.next_anchor.map(Into::into),
+            num_scanned_files: db_page.num_scanned_rows,
+            reached_scan_cap: false,
+        }
+    }
+}
+
+fn thread_item_from_state_list_item(item: codex_state::ThreadListItem) -> ThreadItem {
+    let source = serde_json::from_str(item.source.as_str())
+        .or_else(|_| serde_json::from_value(Value::String(item.source)))
+        .unwrap_or(SessionSource::Unknown);
+    let name = match item.name {
+        Some(name) => {
+            let name = name.trim();
+            (!name.is_empty()).then(|| name.to_string())
+        }
+        None => {
+            let title = item.title.trim();
+            (!title.is_empty() && item.first_user_message.as_deref().map(str::trim) != Some(title))
+                .then(|| item.title.clone())
+        }
+    };
+    ThreadItem {
+        path: item.rollout_path,
+        thread_id: Some(item.id),
+        first_user_message: item.first_user_message,
+        preview: item.preview,
+        name,
+        cwd: Some(item.cwd),
+        git_branch: item.git_branch,
+        git_sha: item.git_sha,
+        git_origin_url: item.git_origin_url,
+        source: Some(source),
+        parent_thread_id: item.parent_thread_id,
+        agent_nickname: item.agent_nickname,
+        agent_role: item.agent_role,
+        model_provider: Some(item.model_provider),
+        cli_version: Some(item.cli_version),
+        created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+        updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+        recency_at: Some(item.recency_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+    }
+}
+
 fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadItem {
     ThreadItem {
         path: item.rollout_path,
         thread_id: Some(item.id),
         first_user_message: item.first_user_message,
         preview: item.preview,
+        name: item.name,
         cwd: Some(item.cwd),
         git_branch: item.git_branch,
         git_sha: item.git_sha,
@@ -1837,7 +1928,7 @@ async fn resume_candidate_matches_cwd(
 }
 
 async fn select_resume_path_from_db_page(
-    page: &codex_state::ThreadsPage,
+    page: &codex_state::ThreadListPage,
     filter_cwd: Option<&Path>,
     default_provider: &str,
 ) -> Option<PathBuf> {

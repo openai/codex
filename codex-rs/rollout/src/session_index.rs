@@ -15,7 +15,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionMetaLine;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::io::AsyncBufReadExt;
 
 const SESSION_INDEX_FILE: &str = "session_index.jsonl";
 const READ_CHUNK_SIZE: usize = 8192;
@@ -130,26 +129,10 @@ pub async fn find_thread_names_by_ids(
         return Ok(HashMap::new());
     }
 
-    let file = tokio::fs::File::open(&path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
-    let mut names = HashMap::with_capacity(thread_ids.len());
-
-    while let Some(line) = lines.next_line().await? {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
-            continue;
-        };
-        let name = entry.thread_name.trim();
-        if !name.is_empty() && thread_ids.contains(&entry.id) {
-            names.insert(entry.id, name.to_string());
-        }
-    }
-
-    Ok(names)
+    let thread_ids = thread_ids.clone();
+    tokio::task::spawn_blocking(move || scan_index_from_end_by_ids(&path, &thread_ids))
+        .await
+        .map_err(std::io::Error::other)?
 }
 
 /// Locate a recorded thread rollout and read its session metadata by thread name.
@@ -203,6 +186,24 @@ fn scan_index_from_end_by_id(
     thread_id: &ThreadId,
 ) -> std::io::Result<Option<SessionIndexEntry>> {
     scan_index_from_end(path, |entry| entry.id == *thread_id)
+}
+
+fn scan_index_from_end_by_ids(
+    path: &Path,
+    thread_ids: &HashSet<ThreadId>,
+) -> std::io::Result<HashMap<ThreadId, String>> {
+    let mut names = HashMap::with_capacity(thread_ids.len());
+    scan_index_from_end_for_each(path, |entry| {
+        let name = entry.thread_name.trim();
+        if !name.is_empty() && thread_ids.contains(&entry.id) && !names.contains_key(&entry.id) {
+            names.insert(entry.id, name.to_string());
+            if names.len() == thread_ids.len() {
+                return Ok(Some(entry.clone()));
+            }
+        }
+        Ok(None)
+    })?;
+    Ok(names)
 }
 
 fn stream_thread_ids_from_end_by_name(

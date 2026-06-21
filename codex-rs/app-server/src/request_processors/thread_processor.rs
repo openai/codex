@@ -1942,28 +1942,25 @@ impl ThreadRequestProcessor {
         let backwards_cursor = stored_threads.first().and_then(|thread| {
             thread_backwards_cursor_for_sort_key(thread, store_sort_key, sort_direction)
         });
-        let mut threads = Vec::with_capacity(stored_threads.len());
-        let mut status_ids = Vec::with_capacity(stored_threads.len());
+        let status_ids = stored_threads
+            .iter()
+            .map(|thread| thread.thread_id.to_string())
+            .collect::<Vec<_>>();
         let fallback_provider = self.config.model_provider_id.clone();
-
-        for stored_thread in stored_threads {
-            let (thread, _) = thread_from_stored_thread(
-                stored_thread,
-                fallback_provider.as_str(),
-                &self.config.cwd,
-            );
-            status_ids.push(thread.id.clone());
-            threads.push(thread);
-        }
 
         let statuses = self
             .thread_watch_manager
-            .loaded_statuses_for_threads(status_ids)
+            .loaded_status_overrides_for_threads(status_ids)
             .await;
 
-        let data: Vec<_> = threads
+        let data: Vec<_> = stored_threads
             .into_iter()
-            .map(|mut thread| {
+            .map(|stored_thread| {
+                let (mut thread, _) = thread_from_stored_thread(
+                    stored_thread,
+                    fallback_provider.as_str(),
+                    &self.config.cwd,
+                );
                 if let Some(status) = statuses.get(&thread.id) {
                     thread.status = status.clone();
                 }
@@ -2084,7 +2081,7 @@ impl ThreadRequestProcessor {
         }
         let statuses = self
             .thread_watch_manager
-            .loaded_statuses_for_threads(status_ids)
+            .loaded_status_overrides_for_threads(status_ids)
             .await;
         let data = results
             .into_iter()
@@ -3635,6 +3632,11 @@ impl ThreadRequestProcessor {
             SortDirection::Asc => StoreSortDirection::Asc,
             SortDirection::Desc => StoreSortDirection::Desc,
         };
+        let store_applies_cwd_filters = self
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+            .is_some();
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -3666,11 +3668,12 @@ impl ThreadRequestProcessor {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&source, filter))
-                    && cwd_filters.as_ref().is_none_or(|expected_cwds| {
-                        expected_cwds.iter().any(|expected_cwd| {
-                            path_utils::paths_match_after_normalization(&it.cwd, expected_cwd)
-                        })
-                    })
+                    && (store_applies_cwd_filters
+                        || cwd_filters.as_ref().is_none_or(|expected_cwds| {
+                            expected_cwds.iter().any(|expected_cwd| {
+                                path_utils::paths_match_after_normalization(&it.cwd, expected_cwd)
+                            })
+                        }))
                 {
                     filtered.push(it);
                     if filtered.len() >= remaining {

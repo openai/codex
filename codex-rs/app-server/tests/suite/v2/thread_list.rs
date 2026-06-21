@@ -1014,12 +1014,10 @@ async fn thread_list_parent_filter_reads_direct_children_from_state_db() -> Resu
         ),
     ] {
         let created_at = DateTime::parse_from_rfc3339(created_at)?.with_timezone(&Utc);
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
-            thread_id,
-            codex_home.path().join(format!("{thread_id}.jsonl")),
-            created_at,
-            source,
-        );
+        let rollout_path = codex_home.path().join(format!("{thread_id}.jsonl"));
+        std::fs::write(&rollout_path, "")?;
+        let mut builder =
+            codex_state::ThreadMetadataBuilder::new(thread_id, rollout_path, created_at, source);
         builder.model_provider = Some(model_provider.to_string());
         builder.cwd = codex_home.path().to_path_buf();
         builder.cli_version = Some("0.0.0".to_string());

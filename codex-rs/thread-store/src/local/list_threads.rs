@@ -1,19 +1,17 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
 
-use codex_protocol::ThreadId;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::find_thread_names_by_ids;
 use codex_rollout::parse_cursor;
 
 use super::LocalThreadStore;
-use super::helpers::ThreadMetadataName;
-use super::helpers::apply_thread_metadata_name;
+use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
-use super::helpers::thread_metadata_name;
+use super::helpers::stored_thread_from_state_list_item;
 use crate::ListThreadsParams;
 use crate::SortDirection;
+use crate::StoredThread;
 use crate::ThreadPage;
 use crate::ThreadSortKey;
 use crate::ThreadStoreError;
@@ -42,6 +40,18 @@ pub(super) async fn list_threads(
         SortDirection::Desc => codex_rollout::SortDirection::Desc,
     };
     let state_db = store.state_db().await;
+    if params.parent_thread_id.is_some() || params.use_state_db_only {
+        return list_threads_from_state_db(
+            store,
+            state_db.as_deref(),
+            &params,
+            cursor.as_ref(),
+            sort_key,
+            sort_direction,
+        )
+        .await;
+    }
+
     let rollout_config = RolloutConfig {
         codex_home: store.config.codex_home.clone(),
         sqlite_home: store.config.sqlite_home.clone(),
@@ -77,38 +87,91 @@ pub(super) async fn list_threads(
         })
         .collect::<Vec<_>>();
 
-    let thread_ids = items
+    fill_thread_names(store, &mut items).await;
+
+    Ok(ThreadPage { items, next_cursor })
+}
+
+async fn list_threads_from_state_db(
+    store: &LocalThreadStore,
+    state_db: Option<&codex_state::StateRuntime>,
+    params: &ListThreadsParams,
+    cursor: Option<&codex_rollout::Cursor>,
+    sort_key: codex_rollout::ThreadSortKey,
+    sort_direction: codex_rollout::SortDirection,
+) -> ThreadStoreResult<ThreadPage> {
+    let live_thread_ids = store.live_thread_ids().await;
+    let page = codex_rollout::state_db::list_threads_db(
+        state_db,
+        store.config.codex_home.as_path(),
+        params.page_size,
+        cursor,
+        sort_key,
+        sort_direction,
+        params.allowed_sources.as_slice(),
+        params.model_providers.as_deref(),
+        params.cwd_filters.as_deref(),
+        params.parent_thread_id,
+        params.archived,
+        params.search_term.as_deref(),
+        Some(&live_thread_ids),
+    )
+    .await;
+
+    let Some(page) = page else {
+        if params.parent_thread_id.is_some() {
+            return Err(ThreadStoreError::Internal {
+                message: "state DB unavailable for parent-filtered thread listing".to_string(),
+            });
+        }
+        return Ok(ThreadPage {
+            items: Vec::new(),
+            next_cursor: None,
+        });
+    };
+
+    let codex_state::ThreadListPage {
+        items, next_anchor, ..
+    } = page;
+    let next_cursor = next_anchor
+        .map(codex_rollout::Cursor::from)
+        .as_ref()
+        .and_then(|cursor| serde_json::to_value(cursor).ok())
+        .and_then(|value| value.as_str().map(str::to_owned));
+    let items = items
+        .into_iter()
+        .map(|item| {
+            stored_thread_from_state_list_item(
+                item,
+                params.archived,
+                store.config.default_model_provider_id.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(ThreadPage { items, next_cursor })
+}
+
+async fn fill_thread_names(store: &LocalThreadStore, items: &mut [StoredThread]) {
+    let thread_ids_missing_names = items
         .iter()
+        .filter(|thread| thread.name.is_none())
         .map(|thread| thread.thread_id)
         .collect::<HashSet<_>>();
-    let mut names = HashMap::<ThreadId, ThreadMetadataName>::with_capacity(thread_ids.len());
-    if let Some(state_db_ctx) = store.state_db().await {
-        for &thread_id in &thread_ids {
-            let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
-                continue;
-            };
-            if let Some(name) = thread_metadata_name(&metadata) {
-                names.insert(thread_id, name);
+    if thread_ids_missing_names.is_empty() {
+        return;
+    }
+
+    if let Ok(legacy_names) =
+        find_thread_names_by_ids(store.config.codex_home.as_path(), &thread_ids_missing_names).await
+    {
+        for thread in items {
+            if thread.name.is_none()
+                && let Some(title) = legacy_names.get(&thread.thread_id).cloned()
+            {
+                set_thread_name_from_title(thread, title);
             }
         }
     }
-    if names.len() < thread_ids.len()
-        && let Ok(legacy_names) =
-            find_thread_names_by_ids(store.config.codex_home.as_path(), &thread_ids).await
-    {
-        for (thread_id, title) in legacy_names {
-            names
-                .entry(thread_id)
-                .or_insert(ThreadMetadataName::Legacy(title));
-        }
-    }
-    for thread in &mut items {
-        if let Some(name) = names.get(&thread.thread_id).cloned() {
-            apply_thread_metadata_name(thread, name);
-        }
-    }
-
-    Ok(ThreadPage { items, next_cursor })
 }
 
 pub(super) async fn list_rollout_threads(
@@ -134,16 +197,13 @@ pub(super) async fn list_rollout_threads(
             Some(parent_thread_id),
             params.archived,
             params.search_term.as_deref(),
+            /*missing_rollout_thread_ids_to_preserve*/ None,
         )
         .await
         .ok_or_else(|| ThreadStoreError::Internal {
             message: "state DB unavailable for parent-filtered thread listing".to_string(),
         })?;
-        let mut page: codex_rollout::ThreadsPage = page.into();
-        for item in &mut page.items {
-            item.parent_thread_id = Some(parent_thread_id);
-        }
-        return Ok(page);
+        return Ok(page.into());
     }
 
     let page = if params.use_state_db_only && params.archived {

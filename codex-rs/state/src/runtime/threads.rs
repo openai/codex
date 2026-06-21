@@ -46,6 +46,36 @@ WHERE threads.id = ?
             .transpose()
     }
 
+    pub async fn get_threads(
+        &self,
+        ids: &[ThreadId],
+    ) -> anyhow::Result<std::collections::HashMap<ThreadId, crate::ThreadMetadata>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        const MAX_SQL_BINDINGS: usize = 900;
+        let mut metadata_by_id = std::collections::HashMap::with_capacity(ids.len());
+        for chunk in ids.chunks(MAX_SQL_BINDINGS) {
+            let mut builder = QueryBuilder::<Sqlite>::new("");
+            push_thread_select_columns(&mut builder);
+            builder.push(" FROM threads WHERE threads.id IN (");
+            let mut separated = builder.separated(", ");
+            for id in chunk {
+                separated.push_bind(id.to_string());
+            }
+            separated.push_unseparated(")");
+
+            let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
+            for row in rows {
+                let metadata = ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from)?;
+                metadata_by_id.insert(metadata.id, metadata);
+            }
+        }
+
+        Ok(metadata_by_id)
+    }
+
     pub async fn get_thread_memory_mode(&self, id: ThreadId) -> anyhow::Result<Option<String>> {
         let row = sqlx::query("SELECT memory_mode FROM threads WHERE id = ?")
             .bind(id.to_string())
