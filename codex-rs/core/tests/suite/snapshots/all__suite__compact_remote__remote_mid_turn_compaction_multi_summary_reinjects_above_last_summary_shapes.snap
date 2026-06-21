@@ -7,10 +7,19 @@ Scenario: After a prior manual /compact produced an older remote compaction item
 ## Remote Compaction Request
 00:message/user:USER_ONE
 01:compaction:encrypted=true
+02:message/developer[2]:
+    [01] <MODEL_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:USER_TWO
+05:function_call/shell_command
+06:function_call_output:Exit code: 0\nWall time: <DURATION>\nOutput:\nmulti-summary\n
 
 ## Second Turn Request (After Compaction)
 00:message/user:USER_ONE
 01:compaction:encrypted=true
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <MODEL_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
 03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 04:message/user:USER_TWO

@@ -194,7 +194,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let instructions_text = request.instructions_text();
+    let instructions_text = request.message_input_texts("developer").join("\n\n");
 
     assert!(
         instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
@@ -241,7 +241,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let instructions_text = request.instructions_text();
+    let instructions_text = request.message_input_texts("developer").join("\n\n");
     assert!(
         !instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
         "expected no friendly personality template, got: {instructions_text:?}"
@@ -294,7 +294,7 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let instructions_text = request.instructions_text();
+    let instructions_text = request.message_input_texts("developer").join("\n\n");
     assert!(
         instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
         "expected default friendly template, got: {instructions_text:?}"
@@ -636,7 +636,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let instructions_text = request.instructions_text();
+    let instructions_text = request.message_input_texts("developer").join("\n\n");
 
     assert!(
         instructions_text.contains(friendly_personality_message),

@@ -27,6 +27,7 @@ use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
+use crate::context::ModelInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
@@ -1403,7 +1404,10 @@ impl Session {
         ) {
             let history = self.clone_history().await;
             let base_instructions = self.get_base_instructions().await;
-            history.estimate_token_count_with_base_instructions(&base_instructions)
+            history.estimate_token_count_with_resolved_base_instructions(
+                turn_context,
+                &base_instructions,
+            )
         } else {
             None
         };
@@ -3034,6 +3038,9 @@ impl Session {
                 state.auto_compact_window_ids(),
             )
         };
+        if turn_context.inline_instructions {
+            developer_sections.push(ModelInstructions::new(base_instructions.clone()).render());
+        }
         if let Some(model_switch_message) =
             crate::context_manager::updates::build_model_instructions_update_item(
                 previous_turn_settings.as_ref(),
@@ -3503,8 +3510,8 @@ impl Session {
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
         let history = self.clone_history().await;
         let base_instructions = self.get_base_instructions().await;
-        let Some(estimated_total_tokens) =
-            history.estimate_token_count_with_base_instructions(&base_instructions)
+        let Some(estimated_total_tokens) = history
+            .estimate_token_count_with_resolved_base_instructions(turn_context, &base_instructions)
         else {
             return;
         };

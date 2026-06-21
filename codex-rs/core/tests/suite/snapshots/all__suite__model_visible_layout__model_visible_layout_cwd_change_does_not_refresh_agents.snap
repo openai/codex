@@ -5,16 +5,18 @@ expression: "format_labeled_requests_snapshot(\"Second turn changes cwd to a dir
 Scenario: Second turn changes cwd to a directory with different AGENTS.md; current behavior does not emit refreshed AGENTS instructions.
 
 ## First Request (agents_one)
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <SKILLS_INSTRUCTIONS>
+00:message/developer[3]:
+    [01] <MODEL_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <SKILLS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first turn in agents_one
 
 ## Second Request (agents_two cwd)
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <SKILLS_INSTRUCTIONS>
+00:message/developer[3]:
+    [01] <MODEL_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <SKILLS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first turn in agents_one
 03:message/assistant:turn one complete

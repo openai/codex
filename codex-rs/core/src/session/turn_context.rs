@@ -104,6 +104,7 @@ pub struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) trace_id: Option<String>,
     pub(crate) realtime_active: bool,
+    pub(crate) inline_instructions: bool,
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
@@ -257,6 +258,7 @@ impl TurnContext {
             sub_id: self.sub_id.clone(),
             trace_id: self.trace_id.clone(),
             realtime_active: self.realtime_active,
+            inline_instructions: self.inline_instructions,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
@@ -370,6 +372,7 @@ impl TurnContext {
         let cwd = self.cwd.clone();
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
+            inline_instructions: self.inline_instructions,
             cwd,
             workspace_roots: (!workspace_roots.is_empty()).then_some(workspace_roots),
             current_date: self.current_date.clone(),
@@ -551,6 +554,7 @@ impl Session {
             sub_id,
             trace_id: current_span_trace_id(),
             realtime_active: false,
+            inline_instructions: true,
             config: per_turn_config,
             auth_manager: auth_manager_for_context,
             model_info,
@@ -782,6 +786,10 @@ impl Session {
             sub_id,
             skills_snapshot,
         );
+        turn_context.inline_instructions = self
+            .reference_context_item()
+            .await
+            .is_none_or(|item| item.inline_instructions);
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {

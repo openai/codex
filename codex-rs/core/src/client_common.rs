@@ -26,7 +26,8 @@ pub struct Prompt {
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
 
-    pub base_instructions: BaseInstructions,
+    /// Base instructions to send through the top-level Responses API field.
+    pub base_instructions: Option<BaseInstructions>,
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
@@ -41,7 +42,7 @@ impl Default for Prompt {
             input: Vec::new(),
             tools: Vec::new(),
             parallel_tool_calls: false,
-            base_instructions: BaseInstructions::default(),
+            base_instructions: None,
             output_schema: None,
             output_schema_strict: true,
         }

@@ -58,8 +58,34 @@ pub fn format_request_input_snapshot(
     request: &ResponsesRequest,
     options: &ContextSnapshotOptions,
 ) -> String {
-    let items = request.input();
-    format_response_items_snapshot(items.as_slice(), options)
+    let mut items = request.input();
+    let has_top_level_instructions = request
+        .body_json()
+        .get("instructions")
+        .and_then(Value::as_str)
+        .is_some();
+    // Inline model instructions can be large and vary by model. Keep their position visible while
+    // normalizing the text to a stable, compact placeholder.
+    if !has_top_level_instructions
+        && let Some(text) = items
+            .iter_mut()
+            .find(|item| {
+                item.get("type").and_then(Value::as_str) == Some("message")
+                    && item.get("role").and_then(Value::as_str) == Some("developer")
+            })
+            .and_then(|item| item.get_mut("content"))
+            .and_then(Value::as_array_mut)
+            .and_then(|content| content.first_mut())
+            .and_then(|entry| entry.get_mut("text"))
+    {
+        *text = Value::String("<MODEL_INSTRUCTIONS>".to_string());
+    }
+    let input = format_response_items_snapshot(items.as_slice(), options);
+    if has_top_level_instructions {
+        format!("instructions:<MODEL_INSTRUCTIONS>\n{input}")
+    } else {
+        input
+    }
 }
 
 pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshotOptions) -> String {
@@ -422,7 +448,7 @@ fn canonicalize_snapshot_text(text: &str) -> String {
     {
         return format!("<COMPACTION_SUMMARY>\n{summary}");
     }
-    normalize_dynamic_snapshot_paths(text)
+    normalize_dynamic_snapshot_text(text)
 }
 
 fn is_capability_instruction_text(text: &str) -> bool {
@@ -431,14 +457,21 @@ fn is_capability_instruction_text(text: &str) -> bool {
         || text.starts_with(PLUGINS_INSTRUCTIONS_OPEN_TAG)
 }
 
-fn normalize_dynamic_snapshot_paths(text: &str) -> String {
+fn normalize_dynamic_snapshot_text(text: &str) -> String {
     static SYSTEM_SKILL_PATH_RE: OnceLock<Regex> = OnceLock::new();
+    static WALL_TIME_RE: OnceLock<Regex> = OnceLock::new();
     let system_skill_path_re = SYSTEM_SKILL_PATH_RE.get_or_init(|| {
         Regex::new(r"/[^)\n]*/skills/\.system/([^/\n]+)/SKILL\.md")
             .expect("system skill path regex should compile")
     });
-    system_skill_path_re
+    let text = system_skill_path_re
         .replace_all(text, "<SYSTEM_SKILLS_ROOT>/$1/SKILL.md")
+        .into_owned();
+    let wall_time_re = WALL_TIME_RE.get_or_init(|| {
+        Regex::new(r"Wall time: [0-9.]+ seconds").expect("wall time regex should compile")
+    });
+    wall_time_re
+        .replace_all(&text, "Wall time: <DURATION>")
         .into_owned()
 }
 

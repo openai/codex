@@ -535,7 +535,7 @@ impl ModelClient {
         let payload = ApiCompactionInput {
             model: &model,
             input: &input,
-            instructions: &instructions,
+            instructions: instructions.as_deref(),
             tools,
             parallel_tool_calls,
             reasoning,
@@ -778,7 +778,10 @@ impl ModelClient {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
-        let instructions = &prompt.base_instructions.text;
+        let instructions = prompt
+            .base_instructions
+            .as_ref()
+            .map(|instructions| instructions.text.clone());
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
         if !self.state.provider.info().is_openai() {
             input.iter_mut().for_each(ResponseItem::clear_metadata);
@@ -810,7 +813,7 @@ impl ModelClient {
         let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
-            instructions: instructions.clone(),
+            instructions,
             input,
             tools,
             tool_choice: "auto".to_string(),

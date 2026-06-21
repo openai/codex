@@ -135,7 +135,19 @@ impl ContextManager {
         let base_instructions = BaseInstructions {
             text: model_info.get_model_instructions(personality),
         };
-        self.estimate_token_count_with_base_instructions(&base_instructions)
+        self.estimate_token_count_with_resolved_base_instructions(turn_context, &base_instructions)
+    }
+
+    pub(crate) fn estimate_token_count_with_resolved_base_instructions(
+        &self,
+        turn_context: &TurnContext,
+        base_instructions: &BaseInstructions,
+    ) -> Option<i64> {
+        if turn_context.inline_instructions {
+            self.estimate_token_count_without_base_instructions()
+        } else {
+            self.estimate_token_count_with_base_instructions(base_instructions)
+        }
     }
 
     pub(crate) fn estimate_token_count_with_base_instructions(
@@ -145,13 +157,18 @@ impl ContextManager {
         let base_tokens =
             i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX);
 
+        self.estimate_token_count_without_base_instructions()
+            .map(|items_tokens| base_tokens.saturating_add(items_tokens))
+    }
+
+    fn estimate_token_count_without_base_instructions(&self) -> Option<i64> {
         let items_tokens = self
             .items
             .iter()
             .map(estimate_item_token_count)
             .fold(0i64, i64::saturating_add);
 
-        Some(base_tokens.saturating_add(items_tokens))
+        Some(items_tokens)
     }
 
     pub(crate) fn remove_first_item(&mut self) {

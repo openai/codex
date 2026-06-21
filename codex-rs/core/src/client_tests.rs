@@ -1,6 +1,7 @@
 use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
+use super::ReasoningSummaryConfig;
 use super::UnauthorizedRecoveryExecution;
 use super::X_CODEX_INSTALLATION_ID_HEADER;
 use super::X_CODEX_PARENT_THREAD_ID_HEADER;
@@ -10,6 +11,7 @@ use super::X_OPENAI_SUBAGENT_HEADER;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
+use crate::client_common::Prompt;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
@@ -25,6 +27,7 @@ use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -144,6 +147,59 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+#[tokio::test]
+async fn response_request_uses_top_level_instructions_only_for_legacy_prompts() {
+    let client = test_model_client(SessionSource::Exec);
+    let client_setup = client
+        .current_client_setup()
+        .await
+        .expect("resolve client setup");
+    let model_info = test_model_info();
+    let responses_metadata = test_responses_metadata_for_client(
+        &client,
+        Some("turn-1"),
+        format!("{}:0", client.state.thread_id),
+        /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+    let mut prompt = Prompt {
+        base_instructions: Some(BaseInstructions {
+            text: "legacy instructions".to_string(),
+        }),
+        ..Default::default()
+    };
+
+    let legacy_request = client
+        .build_responses_request(
+            &client_setup.api_provider,
+            &prompt,
+            &model_info,
+            /*effort*/ None,
+            ReasoningSummaryConfig::Auto,
+            /*service_tier*/ None,
+            &responses_metadata,
+        )
+        .expect("build legacy request");
+    assert_eq!(
+        legacy_request.instructions,
+        Some("legacy instructions".to_string())
+    );
+
+    prompt.base_instructions = None;
+    let inline_request = client
+        .build_responses_request(
+            &client_setup.api_provider,
+            &prompt,
+            &model_info,
+            /*effort*/ None,
+            ReasoningSummaryConfig::Auto,
+            /*service_tier*/ None,
+            &responses_metadata,
+        )
+        .expect("build inline request");
+    assert_eq!(inline_request.instructions, None);
 }
 
 #[derive(Default)]

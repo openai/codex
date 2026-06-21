@@ -317,8 +317,9 @@ async fn apps_default_prompt_with_auto_review_routes_actual_mcp_approval_to_guar
         .into_iter()
         .find(|request| {
             request
-                .instructions_text()
-                .starts_with("You are judging one planned coding-agent action.")
+                .message_input_texts("developer")
+                .iter()
+                .any(|text| text.starts_with("You are judging one planned coding-agent action."))
         })
         .expect("expected a Guardian request for the app MCP approval");
     assert!(guardian_request.body_contains_text("calendar_create_event"));

@@ -190,6 +190,7 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
     let repo_private = repo.join("private");
     let item = TurnContextItem {
         turn_id: None,
+        inline_instructions: false,
         cwd: test_abs_path("/not-the-workspace"),
         workspace_roots: Some(vec![repo.clone(), other_repo.clone()]),
         current_date: None,

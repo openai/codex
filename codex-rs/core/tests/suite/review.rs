@@ -627,9 +627,15 @@ async fn review_input_isolated_from_parent_history() {
         "user message should only contain the raw review prompt"
     );
 
-    // Ensure the REVIEW_PROMPT rubric is sent via instructions.
-    let instructions = body["instructions"].as_str().expect("instructions string");
-    assert_eq!(instructions, REVIEW_PROMPT);
+    // Ensure the REVIEW_PROMPT rubric is sent via developer input.
+    assert!(body.get("instructions").is_none());
+    let developer_texts = request.message_input_texts("developer");
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains(REVIEW_PROMPT)),
+        "expected review instructions in developer input, got {developer_texts:?}"
+    );
 
     // Also verify that a user interruption note was recorded in the rollout.
     let path = codex.rollout_path().expect("rollout path");
