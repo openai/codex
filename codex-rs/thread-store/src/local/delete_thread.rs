@@ -11,7 +11,9 @@ use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::SESSIONS_SUBDIR;
 use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::find_thread_path_by_id_str;
+use codex_rollout::read_fork_parent_rollout_ref;
 use codex_rollout::remove_thread_name_entries;
+use tracing::warn;
 
 use super::LocalThreadStore;
 use super::helpers::matching_rollout_file_name;
@@ -66,8 +68,26 @@ pub(super) async fn delete_thread(
     }
 
     let found_rollout_path = !rollout_paths.is_empty();
+    let mut fork_parent_snapshots = Vec::new();
     for rollout_path in rollout_paths {
+        if let Ok(Some(reference)) = read_fork_parent_rollout_ref(rollout_path.as_path()).await
+            && let Some(snapshot_path) =
+                owned_fork_parent_snapshot_path(store, reference.path.as_path())
+            && !fork_parent_snapshots.contains(&snapshot_path)
+        {
+            fork_parent_snapshots.push(snapshot_path);
+        }
         delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
+    }
+    for snapshot_path in fork_parent_snapshots {
+        if let Err(err) = std::fs::remove_file(snapshot_path.as_path())
+            && err.kind() != ErrorKind::NotFound
+        {
+            warn!(
+                "failed to remove fork parent rollout snapshot `{}`: {err}",
+                snapshot_path.display()
+            );
+        }
     }
     remove_thread_name_entries(store.config.codex_home.as_path(), thread_id)
         .await
@@ -82,6 +102,29 @@ pub(super) async fn delete_thread(
     store.live_recorders.lock().await.remove(&thread_id);
 
     Ok(())
+}
+
+fn owned_fork_parent_snapshot_path(
+    store: &LocalThreadStore,
+    reference_path: &Path,
+) -> Option<std::path::PathBuf> {
+    let path = if reference_path.is_absolute() {
+        reference_path.to_path_buf()
+    } else {
+        store.config.codex_home.join(reference_path)
+    };
+    let file_name = path.file_name()?.to_str()?;
+    if !file_name.starts_with(codex_rollout::FORK_PARENT_ROLLOUT_SNAPSHOT_PREFIX) {
+        return None;
+    }
+    let canonical_path = std::fs::canonicalize(path).ok()?;
+    [SESSIONS_SUBDIR, ARCHIVED_SESSIONS_SUBDIR]
+        .into_iter()
+        .filter_map(|subdirectory| {
+            std::fs::canonicalize(store.config.codex_home.join(subdirectory)).ok()
+        })
+        .any(|root| canonical_path.starts_with(root))
+        .then_some(canonical_path)
 }
 
 fn delete_rollout_file(

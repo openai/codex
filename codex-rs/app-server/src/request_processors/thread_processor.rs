@@ -3399,14 +3399,30 @@ impl ThreadRequestProcessor {
         let Some(rollout_path) = stored_thread.rollout_path.clone() else {
             return Ok(None);
         };
-        let Some(compacted_history) = try_read_compacted_resume_rollout_items_from_rollout_path(
+        let Some(snapshot) = try_create_fork_parent_rollout_snapshot(
+            self.config.codex_home.as_path(),
             rollout_path.as_path(),
-            stored_thread.thread_id,
         )
-        .await?
+        .await
         else {
             return Ok(None);
         };
+        let compacted_history = try_read_compacted_resume_rollout_items_from_rollout_path(
+            snapshot.absolute_path.as_path(),
+            stored_thread.thread_id,
+        )
+        .await;
+        let Some(mut compacted_history) = (match compacted_history {
+            Ok(compacted_history) => compacted_history,
+            Err(error) => {
+                remove_fork_parent_rollout_snapshot(snapshot.absolute_path.as_path()).await;
+                return Err(error);
+            }
+        }) else {
+            remove_fork_parent_rollout_snapshot(snapshot.absolute_path.as_path()).await;
+            return Ok(None);
+        };
+        compacted_history.parent_ref.path = snapshot.reference_path;
         stored_thread.history = Some(codex_thread_store::StoredThreadHistory {
             thread_id: stored_thread.thread_id,
             items: compacted_history.items,
@@ -3728,6 +3744,16 @@ impl ThreadRequestProcessor {
             history: history_items,
             rollout_path: source_thread.rollout_path.clone(),
         });
+        let initial_rollout_snapshot_path = initial_rollout_copy.as_ref().map(|reference| {
+            if reference.path.is_absolute() {
+                reference.path.clone()
+            } else {
+                self.config
+                    .codex_home
+                    .join(reference.path.as_path())
+                    .to_path_buf()
+            }
+        });
         let parent_trace = self.request_trace_context(&request_id).await;
         let thread_source = thread_source.map(Into::into);
         let fork_result = if let Some(initial_rollout_copy) = initial_rollout_copy {
@@ -3755,18 +3781,25 @@ impl ThreadRequestProcessor {
                 .await
         };
 
-        let NewThread {
-            thread_id,
-            thread: forked_thread,
-            session_configured,
-            ..
-        } = fork_result.map_err(|err| match err {
+        let fork_result = fork_result.map_err(|err| match err {
             CodexErr::Io(_) | CodexErr::Json(_) => {
                 invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
             }
             CodexErr::InvalidRequest(message) => invalid_request(message),
             err => internal_error(format!("error forking thread: {err}")),
-        })?;
+        });
+        if fork_result.is_err()
+            && let Some(snapshot_path) = initial_rollout_snapshot_path.as_deref()
+        {
+            remove_fork_parent_rollout_snapshot(snapshot_path).await;
+        }
+
+        let NewThread {
+            thread_id,
+            thread: forked_thread,
+            session_configured,
+            ..
+        } = fork_result?;
 
         Self::set_app_server_client_info(
             forked_thread.as_ref(),
@@ -4136,6 +4169,56 @@ struct CompactedResumeRollout {
     parent_ref: codex_rollout::ForkParentRolloutRef,
 }
 
+struct ForkParentRolloutSnapshot {
+    absolute_path: PathBuf,
+    reference_path: PathBuf,
+}
+
+async fn try_create_fork_parent_rollout_snapshot(
+    codex_home: &Path,
+    rollout_path: &Path,
+) -> Option<ForkParentRolloutSnapshot> {
+    let existing_path = codex_rollout::existing_rollout_path(rollout_path).await?;
+    if !is_plain_jsonl_rollout_path(existing_path.as_path()) {
+        return None;
+    }
+    let parent_directory = existing_path.parent()?;
+    let snapshot_name = format!(
+        "{}{}.jsonl",
+        codex_rollout::FORK_PARENT_ROLLOUT_SNAPSHOT_PREFIX,
+        ThreadId::default()
+    );
+    let absolute_path = parent_directory.join(snapshot_name);
+    if tokio::fs::hard_link(existing_path.as_path(), absolute_path.as_path())
+        .await
+        .is_err()
+    {
+        return None;
+    }
+    let reference_path = match absolute_path.strip_prefix(codex_home) {
+        Ok(path) => path.to_path_buf(),
+        Err(_) => {
+            remove_fork_parent_rollout_snapshot(absolute_path.as_path()).await;
+            return None;
+        }
+    };
+    Some(ForkParentRolloutSnapshot {
+        absolute_path,
+        reference_path,
+    })
+}
+
+async fn remove_fork_parent_rollout_snapshot(path: &Path) {
+    if let Err(error) = tokio::fs::remove_file(path).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(
+            "failed to remove fork parent rollout snapshot {}: {error}",
+            path.display()
+        );
+    }
+}
+
 fn thread_resume_initial_page_is_recent_not_loaded(
     params: &ThreadResumeInitialTurnsPageParams,
 ) -> bool {
@@ -4382,13 +4465,12 @@ fn read_compacted_resume_suffix_items(
             &rollout_line.item,
             RolloutItem::EventMsg(EventMsg::UserMessage(_))
         );
+        if is_turn_context {
+            found_checkpoint_turn_context = true;
+        }
         suffix_items.push(rollout_line.item);
         if is_checkpoint {
             found_checkpoint = true;
-            return Ok(true);
-        }
-        if found_checkpoint && is_turn_context {
-            found_checkpoint_turn_context = true;
             return Ok(true);
         }
         if found_checkpoint && is_user_boundary {

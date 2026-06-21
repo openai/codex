@@ -1105,10 +1105,6 @@ async fn resolve_fork_parent_rollout_path(
     parent_ref: &ForkParentRolloutRef,
     parent_thread_id: ThreadId,
 ) -> std::io::Result<PathBuf> {
-    if let Some(path) = compression::existing_rollout_path(parent_ref.path.as_path()).await {
-        return Ok(path);
-    }
-
     let codex_home = child_path
         .ancestors()
         .find(|ancestor| {
@@ -1123,6 +1119,15 @@ async fn resolve_fork_parent_rollout_path(
                 parent_ref.path.display()
             ))
         })?;
+    let referenced_path = if parent_ref.path.is_absolute() {
+        parent_ref.path.clone()
+    } else {
+        codex_home.join(parent_ref.path.as_path())
+    };
+    if let Some(path) = compression::existing_rollout_path(referenced_path.as_path()).await {
+        return Ok(path);
+    }
+
     let parent_thread_id = parent_thread_id.to_string();
     if let Some(path) = find_thread_path_by_id_str_in_subdir_from_filesystem(
         codex_home,
@@ -1181,6 +1186,19 @@ pub fn parse_fork_parent_rollout_ref_from_line(line: &str) -> Option<ForkParentR
         path: PathBuf::from(path),
         byte_len,
     })
+}
+
+pub async fn read_fork_parent_rollout_ref(
+    path: &Path,
+) -> std::io::Result<Option<ForkParentRolloutRef>> {
+    let mut reader = compression::open_rollout_line_reader(path).await?;
+    while let Some(line) = reader.next_line().await? {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            return Ok(parse_fork_parent_rollout_ref_from_line(trimmed));
+        }
+    }
+    Ok(None)
 }
 
 fn push_loaded_rollout_item(

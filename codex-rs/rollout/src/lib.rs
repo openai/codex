@@ -23,6 +23,7 @@ pub(crate) use codex_protocol::protocol;
 
 pub const SESSIONS_SUBDIR: &str = "sessions";
 pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
+pub const FORK_PARENT_ROLLOUT_SNAPSHOT_PREFIX: &str = ".fork-parent-snapshot-";
 pub static INTERACTIVE_SESSION_SOURCES: LazyLock<Vec<SessionSource>> = LazyLock::new(|| {
     vec![
         SessionSource::Cli,
@@ -67,6 +68,7 @@ pub use recorder::ForkParentRolloutRef;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use recorder::append_rollout_item_to_path;
+pub use recorder::read_fork_parent_rollout_ref;
 pub use search::first_rollout_content_match_snippet;
 pub use search::search_rollout_matches;
 pub use search::search_rollout_paths;
