@@ -486,6 +486,7 @@ impl Session {
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
+        include_initial_messages: bool,
         session_source: SessionSource,
         skills_service: Arc<SkillsService>,
         plugins_manager: Arc<PluginsManager>,
@@ -570,10 +571,14 @@ impl Session {
                         LiveThread::create(Arc::clone(&thread_store), params).await?
                     }
                     InitialHistory::Resumed(resumed_history) => {
+                        let uses_local_store = thread_store
+                            .as_any()
+                            .downcast_ref::<LocalThreadStore>()
+                            .is_some();
                         let params = ResumeThreadParams {
                             thread_id: resumed_history.conversation_id,
                             rollout_path: resumed_history.rollout_path.clone(),
-                            history: Some(resumed_history.history.clone()),
+                            history: (!uses_local_store).then(|| resumed_history.history.clone()),
                             include_archived: true,
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),
@@ -585,7 +590,16 @@ impl Session {
                                 },
                             },
                         };
-                        LiveThread::resume(Arc::clone(&thread_store), params).await?
+                        if uses_local_store {
+                            LiveThread::resume_with_known_history(
+                                Arc::clone(&thread_store),
+                                params,
+                                resumed_history.history.as_slice(),
+                            )
+                            .await?
+                        } else {
+                            LiveThread::resume(Arc::clone(&thread_store), params).await?
+                        }
                     }
                 };
                 Ok(Some(live_thread))
@@ -860,13 +874,17 @@ impl Session {
                     err.message
                 );
             }
-            let thread_name =
-                thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
-                    .instrument(info_span!(
-                        "session_init.thread_name_lookup",
-                        otel.name = "session_init.thread_name_lookup",
-                    ))
-                    .await;
+            let thread_name = thread_title_from_thread_store(
+                live_thread_init.as_ref(),
+                &thread_store,
+                state_db_ctx.as_deref(),
+                thread_id,
+            )
+            .instrument(info_span!(
+                "session_init.thread_name_lookup",
+                otel.name = "session_init.thread_name_lookup",
+            ))
+            .await;
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
@@ -1085,8 +1103,11 @@ impl Session {
                 *guard = Arc::downgrade(&sess);
             }
             // Dispatch the SessionConfiguredEvent first and then report any errors.
-            // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-            let initial_messages = initial_history.get_event_msgs();
+            let initial_messages = if include_initial_messages {
+                initial_history.get_event_msgs()
+            } else {
+                None
+            };
             let events = std::iter::once(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {

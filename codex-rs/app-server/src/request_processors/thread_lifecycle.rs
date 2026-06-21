@@ -558,13 +558,15 @@ pub(super) async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
-    if pending.include_turns {
+    let token_usage_turn_id = if pending.include_turns {
         populate_thread_turns_from_history(
             &mut thread,
             &pending.history_items,
             active_turn.as_ref(),
-        );
-    }
+        )
+    } else {
+        None
+    };
 
     let thread_status = thread_watch_manager
         .loaded_status_for_thread(&thread.id)
@@ -669,10 +671,6 @@ pub(super) async fn handle_pending_thread_resume_request(
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.
     if let Some(token_usage_thread) = token_usage_thread {
-        let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-            &pending.history_items,
-            token_usage_thread.turns.as_slice(),
-        );
         // Rejoining a loaded thread has the same UI contract as a cold resume, but
         // uses the live conversation state instead of reconstructing a new session.
         send_thread_token_usage_update_to_connection(
@@ -744,12 +742,16 @@ pub(crate) fn populate_thread_turns_from_history(
     thread: &mut Thread,
     items: &[RolloutItem],
     active_turn: Option<&Turn>,
-) {
-    let mut turns = build_api_turns_from_rollout_items(items);
+) -> Option<String> {
+    let (mut turns, token_usage_turn_owner) =
+        build_api_turns_from_rollout_items_with_token_usage_owner(items);
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
     }
+    let token_usage_turn_id =
+        latest_token_usage_turn_id_from_owner(token_usage_turn_owner, turns.as_slice());
     thread.turns = turns;
+    token_usage_turn_id
 }
 
 pub(super) async fn resolve_pending_server_request(

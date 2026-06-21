@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::Thread;
-use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
@@ -61,32 +60,31 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
 ///
 /// The id is preferred when it still appears in the rebuilt thread. The position is a
 /// fallback for histories whose implicit turn ids are regenerated during reconstruction.
-struct TokenUsageTurnOwner {
+pub(super) struct TokenUsageTurnOwner {
     id: String,
     position: Option<usize>,
 }
 
-pub(super) fn latest_token_usage_turn_id_from_rollout_items(
-    rollout_items: &[RolloutItem],
+pub(super) fn token_usage_turn_owner_for_rollout_item(
+    builder: &codex_app_server_protocol::ThreadHistoryBuilder,
+    item: &RolloutItem,
+) -> Option<TokenUsageTurnOwner> {
+    if !matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))) {
+        return None;
+    }
+    builder
+        .active_turn_snapshot()
+        .map(|turn| TokenUsageTurnOwner {
+            id: turn.id,
+            position: builder.active_turn_position(),
+        })
+}
+
+pub(super) fn latest_token_usage_turn_id_from_owner(
+    owner: Option<TokenUsageTurnOwner>,
     turns: &[Turn],
 ) -> Option<String> {
-    let mut builder = ThreadHistoryBuilder::new();
-    let mut token_usage_turn_owner = None;
-
-    for item in rollout_items {
-        if matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))) {
-            token_usage_turn_owner =
-                builder
-                    .active_turn_snapshot()
-                    .map(|turn| TokenUsageTurnOwner {
-                        id: turn.id,
-                        position: builder.active_turn_position(),
-                    });
-        }
-        builder.handle_rollout_item(item);
-    }
-
-    let owner = token_usage_turn_owner?;
+    let owner = owner?;
     if turns.iter().any(|turn| turn.id == owner.id) {
         Some(owner.id)
     } else {
@@ -95,6 +93,23 @@ pub(super) fn latest_token_usage_turn_id_from_rollout_items(
             .and_then(|position| turns.get(position))
             .map(|turn| turn.id.clone())
     }
+}
+
+pub(super) fn latest_token_usage_turn_id_from_rollout_items(
+    rollout_items: &[RolloutItem],
+    turns: &[Turn],
+) -> Option<String> {
+    let mut builder = codex_app_server_protocol::ThreadHistoryBuilder::new();
+    let mut token_usage_turn_owner = None;
+
+    for item in rollout_items {
+        if let Some(owner) = token_usage_turn_owner_for_rollout_item(&builder, item) {
+            token_usage_turn_owner = Some(owner);
+        }
+        builder.handle_rollout_item(item);
+    }
+
+    latest_token_usage_turn_id_from_owner(token_usage_turn_owner, turns)
 }
 
 /// Chooses a fallback turn id that should own a replayed token usage update.
