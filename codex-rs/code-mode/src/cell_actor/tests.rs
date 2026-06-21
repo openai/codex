@@ -33,7 +33,14 @@ impl CellHost for TestHost {
         Ok(())
     }
 
-    async fn commit_stored_values(&self, _stored_value_writes: HashMap<String, JsonValue>) {}
+    async fn commit_completion(
+        &self,
+        _stored_value_writes: HashMap<String, JsonValue>,
+        event: CellEvent,
+        cell_state: Arc<CellState>,
+    ) -> CompletionCommit {
+        cell_state.commit_completion(event, || {})
+    }
 
     async fn closed(&self) {}
 }
@@ -64,14 +71,15 @@ fn spawn_cell_actor_harness(initial_observe_mode: ObserveMode) -> CellActorHarne
         PendingRuntimeMode::PauseUntilResumed,
     )
     .unwrap();
-    let handle = CellHandle::new(command_tx, CancellationToken::new());
+    let cell_state = Arc::new(CellState::new(CancellationToken::new()));
+    let handle = CellHandle::new(command_tx, Arc::clone(&cell_state));
     let task = tokio::spawn(run_cell(
         Arc::new(TestHost),
         CellContext {
             runtime_tx,
             runtime_control_tx,
             runtime_terminate_handle,
-            cancellation_token: CancellationToken::new(),
+            cell_state,
         },
         event_rx,
         command_rx,
@@ -141,4 +149,87 @@ async fn queued_termination_preempts_unobserved_runtime_completion() {
     assert_eq!(termination.await, terminated.clone());
     assert_eq!(harness.initial_event_rx.await.unwrap(), terminated);
     harness.task.await.unwrap();
+}
+
+#[tokio::test]
+async fn only_the_first_termination_claims_a_buffered_completion() {
+    let cell_state = CellState::new(CancellationToken::new());
+    let completion = CellEvent::Completed {
+        content_items: Vec::new(),
+        error_text: None,
+    };
+    assert_eq!(
+        cell_state.commit_completion(completion.clone(), || {}),
+        CompletionCommit::Committed
+    );
+    assert!(matches!(
+        cell_state.deliver_completion(/*response_tx*/ None),
+        CompletionDelivery::Buffered
+    ));
+
+    let first_termination = cell_state.request_termination();
+    assert_eq!(
+        cell_state.request_termination().await,
+        Err(CellError::AlreadyTerminating)
+    );
+    assert_eq!(first_termination.await, Ok(completion.clone()));
+    assert_eq!(
+        cell_state.finish_termination(CellEvent::Terminated {
+            content_items: Vec::new(),
+        }),
+        Some(completion)
+    );
+}
+
+#[tokio::test]
+async fn termination_claim_prevents_stored_value_commit() {
+    let cell_state = CellState::new(CancellationToken::new());
+    let termination = cell_state.request_termination();
+    let mut commit_ran = false;
+    let completion = CellEvent::Completed {
+        content_items: Vec::new(),
+        error_text: None,
+    };
+
+    assert_eq!(
+        cell_state.commit_completion(completion.clone(), || commit_ran = true),
+        CompletionCommit::Rejected(completion)
+    );
+    assert!(!commit_ran);
+
+    let terminated = CellEvent::Terminated {
+        content_items: Vec::new(),
+    };
+    assert_eq!(
+        cell_state.finish_termination(terminated.clone()),
+        Some(terminated.clone())
+    );
+    assert_eq!(termination.await, Ok(terminated));
+}
+
+#[test]
+fn failed_completion_delivery_rebuffers_the_event() {
+    let cell_state = CellState::new(CancellationToken::new());
+    let event = CellEvent::Completed {
+        content_items: Vec::new(),
+        error_text: None,
+    };
+    assert_eq!(
+        cell_state.commit_completion(event.clone(), || {}),
+        CompletionCommit::Committed
+    );
+    let (response_tx, response_rx) = oneshot::channel();
+    drop(response_rx);
+    assert!(matches!(
+        cell_state.deliver_completion(Some(response_tx)),
+        CompletionDelivery::Buffered
+    ));
+    assert!(cell_state.accepting_observations());
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    assert!(matches!(
+        cell_state.route_observation(response_tx),
+        ObservationDelivery::Delivered
+    ));
+    assert_eq!(response_rx.try_recv(), Ok(Ok(event)));
 }
