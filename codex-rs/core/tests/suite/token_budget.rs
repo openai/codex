@@ -1,4 +1,6 @@
 use anyhow::Result;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::protocol::EventMsg;
@@ -17,15 +19,18 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
+use std::time::Duration;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
-const EFFECTIVE_CONTEXT_WINDOW: i64 = CONFIGURED_CONTEXT_WINDOW * 95 / 100;
 
 fn token_budget_texts(request: &ResponsesRequest) -> Vec<String> {
     request
@@ -38,11 +43,10 @@ fn token_budget_texts(request: &ResponsesRequest) -> Vec<String> {
 fn token_budget_window_ids(
     text: &str,
     thread_id: codex_protocol::ThreadId,
-    tokens_left: i64,
 ) -> (String, Option<String>, String) {
     let captures = assert_regex_match(
         &format!(
-            r"^<token_budget>\nThread id {thread_id}\.\nFirst context window id ([0-9a-f-]{{36}})\.\nPrevious context window id (none|[0-9a-f-]{{36}})\.\nCurrent context window id ([0-9a-f-]{{36}})\.\nYou have {tokens_left} tokens left in this context window\.\n</token_budget>$"
+            r"^<token_budget>\nThread id {thread_id}\.\nFirst context window id ([0-9a-f-]{{36}})\.\nPrevious context window id (none|[0-9a-f-]{{36}})\.\nCurrent context window id ([0-9a-f-]{{36}})\.\n</token_budget>$"
         ),
         text,
     );
@@ -112,17 +116,97 @@ async fn token_budget_context_is_only_emitted_with_full_context() -> Result<()> 
     let thread_id = test.session_configured.thread_id;
     let initial_token_budget = token_budget_texts(&requests[0]);
     assert_eq!(initial_token_budget.len(), 1);
-    let (first_window_id, previous_window_id, window_id) = token_budget_window_ids(
-        &initial_token_budget[0],
-        thread_id,
-        EFFECTIVE_CONTEXT_WINDOW,
-    );
+    let (first_window_id, previous_window_id, window_id) =
+        token_budget_window_ids(&initial_token_budget[0], thread_id);
     assert_eq!(previous_window_id, None);
     assert_eq!(first_window_id, window_id);
     assert_eq!(
         token_budget_texts(&requests[1]),
         initial_token_budget,
         "steady-state context update should not advance the context window"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                "notes".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    environment_id: "local".to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        })
+        .build(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, "notes").await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-1"),
+            ev_completed("resp-1"),
+        ])],
+    )
+    .await;
+
+    test.submit_turn("inject the history hint").await?;
+
+    let request = responses.single_request();
+    let thread_id = test.session_configured.thread_id;
+    let token_budgets = token_budget_texts(&request);
+    assert_eq!(token_budgets.len(), 1);
+    let captures = assert_regex_match(
+        &format!(
+            r"^<token_budget>\nThread id {thread_id}\.\nFirst context window id ([0-9a-f-]{{36}})\.\nPrevious context window id none\.\nCurrent context window id ([0-9a-f-]{{36}})\.\nmanual history hint for thread {thread_id}\nunstructured notes/thread_hint fixture result\n</token_budget>$"
+        ),
+        &token_budgets[0],
+    );
+    assert_eq!(
+        captures.get(1).expect("first window id capture").as_str(),
+        captures.get(2).expect("current window id capture").as_str()
+    );
+    assert!(
+        !tool_names(&request)
+            .iter()
+            .any(|name| name == "mcp__notes__thread_hint"),
+        "thread_hint should be hidden from model tool exposure"
     );
 
     Ok(())
@@ -177,7 +261,7 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
     let thread_id = test.session_configured.thread_id;
     let full_context = token_budget_texts(&requests[0]);
     assert_eq!(full_context.len(), 1);
-    token_budget_window_ids(&full_context[0], thread_id, /*tokens_left*/ 9_500);
+    token_budget_window_ids(&full_context[0], thread_id);
     let full_context = full_context[0].clone();
     let threshold_25 =
         "<token_budget>\nYou have 7000 tokens left in this context window.\n</token_budget>"
@@ -270,7 +354,7 @@ async fn get_context_remaining_returns_token_budget_remaining_fragment() -> Resu
             .to_string();
     let token_budgets = token_budget_texts(&requests[1]);
     assert_eq!(token_budgets.len(), 2);
-    token_budget_window_ids(&token_budgets[0], thread_id, /*tokens_left*/ 9_500);
+    token_budget_window_ids(&token_budgets[0], thread_id);
     assert_eq!(token_budgets[1], remaining_context);
     assert_eq!(
         requests[2].function_call_output_content_and_success(call_id),
@@ -394,22 +478,14 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
     let initial_token_budget = token_budget_texts(&requests[0]);
     assert_eq!(initial_token_budget.len(), 1);
     let (initial_first_window_id, initial_previous_window_id, initial_window_id) =
-        token_budget_window_ids(
-            &initial_token_budget[0],
-            thread_id,
-            EFFECTIVE_CONTEXT_WINDOW,
-        );
+        token_budget_window_ids(&initial_token_budget[0], thread_id);
     let post_compaction_token_budget = token_budget_texts(&requests[2]);
     assert_eq!(post_compaction_token_budget.len(), 1);
     let (
         post_compaction_first_window_id,
         post_compaction_previous_window_id,
         post_compaction_window_id,
-    ) = token_budget_window_ids(
-        &post_compaction_token_budget[0],
-        thread_id,
-        EFFECTIVE_CONTEXT_WINDOW,
-    );
+    ) = token_budget_window_ids(&post_compaction_token_budget[0], thread_id);
     assert_eq!(initial_previous_window_id, None);
     assert_eq!(initial_first_window_id, initial_window_id);
     assert_eq!(post_compaction_first_window_id, initial_first_window_id);
@@ -480,18 +556,12 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
     let thread_id = test.session_configured.thread_id;
     let initial_token_budget = token_budget_texts(&requests[0]);
     assert_eq!(initial_token_budget.len(), 1);
-    let (initial_first_window_id, _, initial_window_id) = token_budget_window_ids(
-        &initial_token_budget[0],
-        thread_id,
-        EFFECTIVE_CONTEXT_WINDOW,
-    );
+    let (initial_first_window_id, _, initial_window_id) =
+        token_budget_window_ids(&initial_token_budget[0], thread_id);
     let new_window_token_budget = token_budget_texts(&requests[2]);
     assert_eq!(new_window_token_budget.len(), 1);
-    let (new_first_window_id, new_previous_window_id, new_window_id) = token_budget_window_ids(
-        &new_window_token_budget[0],
-        thread_id,
-        EFFECTIVE_CONTEXT_WINDOW,
-    );
+    let (new_first_window_id, new_previous_window_id, new_window_id) =
+        token_budget_window_ids(&new_window_token_budget[0], thread_id);
     assert_eq!(new_first_window_id, initial_first_window_id);
     assert_eq!(
         new_previous_window_id.as_deref(),
