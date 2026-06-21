@@ -1,12 +1,19 @@
 //! Resolve plugin namespace from skill file paths by walking ancestors for `plugin.json`.
 
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::FileSystemOperation;
-use codex_exec_server::FileSystemOperationOutput;
+use codex_exec_server::ExecutorRpcBatchCall;
+use codex_exec_server::ExecutorRpcBatchResult;
+use codex_exec_server::FS_GET_METADATA_METHOD;
+use codex_exec_server::FS_READ_FILE_METHOD;
+use codex_exec_server::FsGetMetadataParams;
+use codex_exec_server::FsGetMetadataResponse;
+use codex_exec_server::FsReadFileParams;
+use codex_exec_server::FsReadFileResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -54,7 +61,7 @@ impl PluginNamespaceResolver {
             .flat_map(AbsolutePathBuf::ancestors)
             .filter(|ancestor| seen.insert(ancestor.clone()))
             .collect::<Vec<_>>();
-        let operations = roots
+        let calls = roots
             .iter()
             .flat_map(|root| {
                 DISCOVERABLE_PLUGIN_MANIFEST_PATHS
@@ -62,14 +69,26 @@ impl PluginNamespaceResolver {
                     .flat_map(|relative_path| {
                         let path = PathUri::from_abs_path(&root.join(relative_path));
                         [
-                            FileSystemOperation::GetMetadata { path: path.clone() },
-                            FileSystemOperation::ReadFile { path },
+                            rpc_batch_call(
+                                FS_GET_METADATA_METHOD,
+                                FsGetMetadataParams {
+                                    path: path.clone(),
+                                    sandbox: None,
+                                },
+                            ),
+                            rpc_batch_call(
+                                FS_READ_FILE_METHOD,
+                                FsReadFileParams {
+                                    path,
+                                    sandbox: None,
+                                },
+                            ),
                         ]
                     })
             })
-            .collect();
+            .collect::<io::Result<Vec<_>>>();
         let mut results = fs
-            .execute_batch(operations, /*sandbox*/ None)
+            .execute_rpc_batch(calls.unwrap_or_default())
             .await
             .unwrap_or_default()
             .into_iter();
@@ -81,15 +100,17 @@ impl PluginNamespaceResolver {
                 for _ in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
                     let metadata_result = results.next();
                     let contents_result = results.next();
-                    let is_file = matches!(
+                    let is_file = decode_rpc_batch_result::<FsGetMetadataResponse>(
                         metadata_result,
-                        Some(Ok(FileSystemOperationOutput::GetMetadata(metadata)))
-                            if metadata.is_file
-                    );
+                        "stat plugin manifest",
+                    )
+                    .is_ok_and(|metadata| metadata.is_file);
                     if !selected && is_file {
                         selected = true;
-                        if let Some(Ok(FileSystemOperationOutput::ReadFile(contents))) =
-                            contents_result
+                        if let Ok(response) = decode_rpc_batch_result::<FsReadFileResponse>(
+                            contents_result,
+                            "read plugin manifest",
+                        ) && let Ok(contents) = response.into_bytes()
                         {
                             name = plugin_manifest_name(&root, &contents);
                         }
@@ -106,6 +127,31 @@ impl PluginNamespaceResolver {
     pub fn resolve(&self, path: &AbsolutePathBuf) -> Option<&str> {
         path.ancestors()
             .find_map(|ancestor| self.manifests_by_root.get(&ancestor).map(String::as_str))
+    }
+}
+
+fn rpc_batch_call<P: serde::Serialize>(
+    method: &str,
+    params: P,
+) -> io::Result<ExecutorRpcBatchCall> {
+    Ok(ExecutorRpcBatchCall {
+        method: method.to_string(),
+        params: serde_json::to_value(params).map_err(io::Error::other)?,
+    })
+}
+
+fn decode_rpc_batch_result<T: serde::de::DeserializeOwned>(
+    result: Option<ExecutorRpcBatchResult>,
+    operation: &str,
+) -> io::Result<T> {
+    match result {
+        Some(Ok(value)) => serde_json::from_value(value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+        Some(Err(error)) => Err(error),
+        None => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("filesystem returned no result for {operation}"),
+        )),
     }
 }
 

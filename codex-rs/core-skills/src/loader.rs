@@ -13,8 +13,21 @@ use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::FileSystemOperation;
-use codex_exec_server::FileSystemOperationOutput;
+use codex_exec_server::ExecutorRpcBatchCall;
+use codex_exec_server::ExecutorRpcBatchResult;
+use codex_exec_server::FS_CANONICALIZE_METHOD;
+use codex_exec_server::FS_GET_METADATA_METHOD;
+use codex_exec_server::FS_READ_DIRECTORY_METHOD;
+use codex_exec_server::FS_READ_FILE_METHOD;
+use codex_exec_server::FileMetadata;
+use codex_exec_server::FsCanonicalizeParams;
+use codex_exec_server::FsCanonicalizeResponse;
+use codex_exec_server::FsGetMetadataParams;
+use codex_exec_server::FsGetMetadataResponse;
+use codex_exec_server::FsReadDirectoryParams;
+use codex_exec_server::FsReadDirectoryResponse;
+use codex_exec_server::FsReadFileParams;
+use codex_exec_server::FsReadFileResponse;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -25,6 +38,8 @@ use codex_utils_plugins::PluginNamespaceResolver;
 use codex_utils_plugins::PluginSkillRoot;
 use dirs::home_dir;
 use serde::Deserialize;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -534,17 +549,26 @@ async fn discover_skills_under_root(
 
     while !queue.is_empty() {
         let dirs = std::mem::take(&mut queue);
-        let directory_results = match fs
-            .execute_batch(
-                dirs.iter()
-                    .map(|(dir, _)| FileSystemOperation::ReadDirectory {
+        let directory_calls = match dirs
+            .iter()
+            .map(|(dir, _)| {
+                rpc_batch_call(
+                    FS_READ_DIRECTORY_METHOD,
+                    FsReadDirectoryParams {
                         path: PathUri::from_abs_path(dir),
-                    })
-                    .collect(),
-                /*sandbox*/ None,
-            )
-            .await
+                        sandbox: None,
+                    },
+                )
+            })
+            .collect::<io::Result<Vec<_>>>()
         {
+            Ok(calls) => calls,
+            Err(err) => {
+                error!("failed to build batched skills directory reads: {err:#}");
+                break;
+            }
+        };
+        let directory_results = match fs.execute_rpc_batch(directory_calls).await {
             Ok(results) => results,
             Err(err) => {
                 error!("failed to batch-read skills directories: {err:#}");
@@ -554,18 +578,15 @@ async fn discover_skills_under_root(
 
         let mut candidates = Vec::new();
         for ((dir, depth), result) in dirs.into_iter().zip(directory_results) {
-            let entries = match result {
-                Ok(FileSystemOperationOutput::ReadDirectory(entries)) => entries,
-                Ok(_) => {
-                    error!("filesystem returned the wrong result for {}", dir.display());
-                    continue;
-                }
-                Err(err) => {
-                    error!("failed to read skills dir {}: {err:#}", dir.display());
-                    continue;
-                }
-            };
-            candidates.extend(entries.into_iter().filter_map(|entry| {
+            let response: FsReadDirectoryResponse =
+                match decode_rpc_batch_result(Some(result), "read skills dir") {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!("failed to read skills dir {}: {err:#}", dir.display());
+                        continue;
+                    }
+                };
+            candidates.extend(response.entries.into_iter().filter_map(|entry| {
                 let file_name = entry.file_name;
                 if file_name.starts_with('.') {
                     return None;
@@ -574,18 +595,26 @@ async fn discover_skills_under_root(
             }));
         }
 
-        let metadata_results = match fs
-            .execute_batch(
-                candidates
-                    .iter()
-                    .map(|(path, _, _)| FileSystemOperation::GetMetadata {
+        let metadata_calls = match candidates
+            .iter()
+            .map(|(path, _, _)| {
+                rpc_batch_call(
+                    FS_GET_METADATA_METHOD,
+                    FsGetMetadataParams {
                         path: PathUri::from_abs_path(path),
-                    })
-                    .collect(),
-                /*sandbox*/ None,
-            )
-            .await
+                        sandbox: None,
+                    },
+                )
+            })
+            .collect::<io::Result<Vec<_>>>()
         {
+            Ok(calls) => calls,
+            Err(err) => {
+                error!("failed to build batched skills path stats: {err:#}");
+                break;
+            }
+        };
+        let metadata_results = match fs.execute_rpc_batch(metadata_calls).await {
             Ok(results) => results,
             Err(err) => {
                 error!("failed to batch-stat skills paths: {err:#}");
@@ -595,19 +624,21 @@ async fn discover_skills_under_root(
 
         let mut directories = Vec::new();
         for ((path, depth, file_name), result) in candidates.into_iter().zip(metadata_results) {
-            let metadata = match result {
-                Ok(FileSystemOperationOutput::GetMetadata(metadata)) => metadata,
-                Ok(_) => {
-                    error!(
-                        "filesystem returned the wrong result for {}",
-                        path.display()
-                    );
-                    continue;
-                }
-                Err(err) => {
-                    error!("failed to stat skills path {}: {err:#}", path.display());
-                    continue;
-                }
+            let response: FsGetMetadataResponse =
+                match decode_rpc_batch_result(Some(result), "stat skills path") {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!("failed to stat skills path {}: {err:#}", path.display());
+                        continue;
+                    }
+                };
+            let metadata = FileMetadata {
+                is_directory: response.is_directory,
+                is_file: response.is_file,
+                is_symlink: response.is_symlink,
+                size: response.size,
+                created_at_ms: response.created_at_ms,
+                modified_at_ms: response.modified_at_ms,
             };
             if metadata.is_symlink {
                 if follow_symlinks && metadata.is_directory {
@@ -620,18 +651,26 @@ async fn discover_skills_under_root(
             }
         }
 
-        let canonical_results = match fs
-            .execute_batch(
-                directories
-                    .iter()
-                    .map(|(path, _)| FileSystemOperation::Canonicalize {
+        let canonical_calls = match directories
+            .iter()
+            .map(|(path, _)| {
+                rpc_batch_call(
+                    FS_CANONICALIZE_METHOD,
+                    FsCanonicalizeParams {
                         path: PathUri::from_abs_path(path),
-                    })
-                    .collect(),
-                /*sandbox*/ None,
-            )
-            .await
+                        sandbox: None,
+                    },
+                )
+            })
+            .collect::<io::Result<Vec<_>>>()
         {
+            Ok(calls) => calls,
+            Err(err) => {
+                error!("failed to build batched skills directory canonicalization: {err:#}");
+                break;
+            }
+        };
+        let canonical_results = match fs.execute_rpc_batch(canonical_calls).await {
             Ok(results) => results,
             Err(err) => {
                 error!("failed to batch-canonicalize skills directories: {err:#}");
@@ -639,18 +678,18 @@ async fn discover_skills_under_root(
             }
         };
         for ((path, depth), result) in directories.into_iter().zip(canonical_results) {
-            let resolved_dir = match result {
-                Ok(FileSystemOperationOutput::Canonicalize(resolved_path)) => {
-                    resolved_path.to_abs_path().unwrap_or_else(|_| path.clone())
-                }
-                Ok(_) => {
+            let resolved_dir = match decode_rpc_batch_result::<FsCanonicalizeResponse>(
+                Some(result),
+                "canonicalize skills dir",
+            ) {
+                Ok(response) => response.path.to_abs_path().unwrap_or_else(|_| path.clone()),
+                Err(err) => {
                     error!(
-                        "filesystem returned the wrong result for {}",
+                        "failed to canonicalize skills dir {}: {err:#}",
                         path.display()
                     );
                     path
                 }
-                Err(_) => path,
             };
             enqueue_dir(
                 &mut queue,
@@ -710,7 +749,7 @@ async fn preload_skill_files(
     fs: &dyn ExecutorFileSystem,
     skill_paths: &[AbsolutePathBuf],
 ) -> io::Result<Vec<PreloadedSkillFile>> {
-    let operations = skill_paths
+    let calls = skill_paths
         .iter()
         .flat_map(|path| {
             let metadata_path = path
@@ -722,34 +761,43 @@ async fn preload_skill_files(
                 })
                 .unwrap_or_else(|| path.clone());
             [
-                FileSystemOperation::ReadFile {
-                    path: PathUri::from_abs_path(path),
-                },
-                FileSystemOperation::ReadFile {
-                    path: PathUri::from_abs_path(&metadata_path),
-                },
-                FileSystemOperation::Canonicalize {
-                    path: PathUri::from_abs_path(path),
-                },
+                rpc_batch_call(
+                    FS_READ_FILE_METHOD,
+                    FsReadFileParams {
+                        path: PathUri::from_abs_path(path),
+                        sandbox: None,
+                    },
+                ),
+                rpc_batch_call(
+                    FS_READ_FILE_METHOD,
+                    FsReadFileParams {
+                        path: PathUri::from_abs_path(&metadata_path),
+                        sandbox: None,
+                    },
+                ),
+                rpc_batch_call(
+                    FS_CANONICALIZE_METHOD,
+                    FsCanonicalizeParams {
+                        path: PathUri::from_abs_path(path),
+                        sandbox: None,
+                    },
+                ),
             ]
         })
-        .collect();
-    let mut results = fs
-        .execute_batch(operations, /*sandbox*/ None)
-        .await?
-        .into_iter();
+        .collect::<io::Result<Vec<_>>>()?;
+    let mut results = fs.execute_rpc_batch(calls).await?.into_iter();
 
     Ok(skill_paths
         .iter()
         .map(|path| {
-            let contents = decode_text_operation_result(results.next(), "read skill file");
-            let metadata_contents =
-                decode_text_operation_result(results.next(), "read skill metadata");
-            let resolved_path = match results.next() {
-                Some(Ok(FileSystemOperationOutput::Canonicalize(resolved_path))) => {
-                    resolved_path.to_abs_path().unwrap_or_else(|_| path.clone())
-                }
-                Some(Ok(_)) | Some(Err(_)) | None => path.clone(),
+            let contents = decode_text_rpc_result(results.next(), "read skill file");
+            let metadata_contents = decode_text_rpc_result(results.next(), "read skill metadata");
+            let resolved_path = match decode_rpc_batch_result::<FsCanonicalizeResponse>(
+                results.next(),
+                "canonicalize skill path",
+            ) {
+                Ok(response) => response.path.to_abs_path().unwrap_or_else(|_| path.clone()),
+                Err(_) => path.clone(),
             };
             PreloadedSkillFile {
                 contents,
@@ -760,23 +808,37 @@ async fn preload_skill_files(
         .collect())
 }
 
-fn decode_text_operation_result(
-    result: Option<io::Result<FileSystemOperationOutput>>,
+fn rpc_batch_call<P: Serialize>(method: &str, params: P) -> io::Result<ExecutorRpcBatchCall> {
+    Ok(ExecutorRpcBatchCall {
+        method: method.to_string(),
+        params: serde_json::to_value(params).map_err(io::Error::other)?,
+    })
+}
+
+fn decode_rpc_batch_result<T: DeserializeOwned>(
+    result: Option<ExecutorRpcBatchResult>,
     operation: &str,
-) -> io::Result<String> {
+) -> io::Result<T> {
     match result {
-        Some(Ok(FileSystemOperationOutput::ReadFile(contents))) => String::from_utf8(contents)
+        Some(Ok(value)) => serde_json::from_value(value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
-        Some(Ok(_)) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("filesystem returned the wrong result for {operation}"),
-        )),
         Some(Err(error)) => Err(error),
         None => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("filesystem returned no result for {operation}"),
         )),
     }
+}
+
+fn decode_text_rpc_result(
+    result: Option<ExecutorRpcBatchResult>,
+    operation: &str,
+) -> io::Result<String> {
+    let response: FsReadFileResponse = decode_rpc_batch_result(result, operation)?;
+    let contents = response
+        .into_bytes()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    String::from_utf8(contents).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 fn parse_skill_file(
