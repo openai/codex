@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
+use crate::session_runtime::OutputItem as CellOutputItem;
 
 struct TestHost;
 

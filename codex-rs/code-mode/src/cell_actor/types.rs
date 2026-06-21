@@ -4,39 +4,19 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use crate::session_runtime::CellEvent;
+use crate::session_runtime::ObserveMode;
+use crate::session_runtime::ToolKind;
+use crate::session_runtime::ToolName;
+
 pub(crate) type CellEventFuture =
     Pin<Box<dyn Future<Output = Result<CellEvent, CellError>> + Send + 'static>>;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ObserveMode {
-    YieldAfter(Duration),
-    PendingFrontier,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CellEvent {
-    Yielded {
-        content_items: Vec<CellOutputItem>,
-    },
-    Pending {
-        content_items: Vec<CellOutputItem>,
-        pending_tool_call_ids: Vec<String>,
-    },
-    Completed {
-        content_items: Vec<CellOutputItem>,
-        error_text: Option<String>,
-    },
-    Terminated {
-        content_items: Vec<CellOutputItem>,
-    },
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CellError {
@@ -45,54 +25,10 @@ pub(crate) enum CellError {
     Closed,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CellOutputItem {
-    Text {
-        text: String,
-    },
-    Image {
-        image_url: String,
-        detail: Option<CellImageDetail>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CellImageDetail {
-    Auto,
-    Low,
-    High,
-    Original,
-}
-
-pub(crate) struct CellRequest {
-    pub(crate) tool_call_id: String,
-    pub(crate) enabled_tools: Vec<CellToolDefinition>,
-    pub(crate) source: String,
-}
-
-pub(crate) struct CellToolDefinition {
-    pub(crate) name: String,
-    pub(crate) tool_name: CellToolName,
-    pub(crate) description: String,
-    pub(crate) kind: CellToolKind,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CellToolName {
-    pub(crate) name: String,
-    pub(crate) namespace: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CellToolKind {
-    Function,
-    Freeform,
-}
-
 pub(crate) struct CellToolCall {
     pub(crate) id: String,
-    pub(crate) name: CellToolName,
-    pub(crate) kind: CellToolKind,
+    pub(crate) name: ToolName,
+    pub(crate) kind: ToolKind,
     pub(crate) input: Option<JsonValue>,
 }
 

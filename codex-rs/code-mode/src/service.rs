@@ -33,18 +33,18 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cell_actor::CellActor;
 use crate::cell_actor::CellError;
-use crate::cell_actor::CellEvent;
 use crate::cell_actor::CellEventFuture;
 use crate::cell_actor::CellHandle;
 use crate::cell_actor::CellHost;
-use crate::cell_actor::CellImageDetail;
-use crate::cell_actor::CellOutputItem;
-use crate::cell_actor::CellRequest;
 use crate::cell_actor::CellToolCall;
-use crate::cell_actor::CellToolDefinition;
-use crate::cell_actor::CellToolKind;
-use crate::cell_actor::CellToolName;
-use crate::cell_actor::ObserveMode;
+use crate::session_runtime::CellEvent;
+use crate::session_runtime::CreateCellRequest as CellRequest;
+use crate::session_runtime::ImageDetail as CellImageDetail;
+use crate::session_runtime::ObserveMode;
+use crate::session_runtime::OutputItem as CellOutputItem;
+use crate::session_runtime::ToolDefinition as CellToolDefinition;
+use crate::session_runtime::ToolKind as CellToolKind;
+use crate::session_runtime::ToolName as CellToolName;
 
 pub struct NoopCodeModeSessionDelegate;
 
