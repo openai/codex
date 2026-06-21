@@ -289,7 +289,10 @@ async fn observed_natural_completion_wins_over_termination() {
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let response = service
-                .execute(execute_request(r#"text(String(load("finished")));"#))
+                .execute(ExecuteRequest {
+                    yield_time_ms: Some(60_000),
+                    ..execute_request(r#"text(String(load("finished")));"#)
+                })
                 .await
                 .unwrap()
                 .initial_response()

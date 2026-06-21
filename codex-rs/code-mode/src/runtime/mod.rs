@@ -420,7 +420,7 @@ await new Promise(() => {});
             .send(RuntimeCommand::TimeoutFired { id: 1 })
             .unwrap();
         assert!(
-            tokio::time::timeout(Duration::from_millis(100), event_rx.recv())
+            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
                 .await
                 .is_err()
         );
