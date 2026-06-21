@@ -3,6 +3,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::environment_context::FileSystemContext;
 use crate::context::environment_context::NetworkContext;
 use crate::context::environment_context::push_xml_escaped_text;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::turn_context::TurnContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::models::ResponseItem;
@@ -37,9 +38,15 @@ impl Eq for EnvironmentsState {}
 
 impl EnvironmentsState {
     pub(crate) fn from_turn_context(turn_context: &TurnContext) -> Self {
+        Self::from_turn_context_with_environments(turn_context, &turn_context.environments)
+    }
+
+    pub(crate) fn from_turn_context_with_environments(
+        turn_context: &TurnContext,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> Self {
         let mut state = Self {
-            environments: turn_context
-                .environments
+            environments: environments
                 .turn_environments
                 .iter()
                 .map(|environment| {
@@ -65,7 +72,7 @@ impl EnvironmentsState {
             )),
             subagents: None,
         };
-        for environment in &turn_context.environments.starting {
+        for environment in &environments.starting {
             state
                 .environments
                 .entry(environment.selection.environment_id.clone())

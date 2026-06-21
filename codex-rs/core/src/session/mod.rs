@@ -2874,6 +2874,9 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
+            if reference_context_item.is_some() {
+                state.set_world_state(Arc::new(build_world_state_from_turn_context(turn_context)));
+            }
         }
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
@@ -3335,6 +3338,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
+            state.set_world_state(Arc::new(build_world_state_from_turn_context(turn_context)));
         };
         self.persist_rollout_items(&[
             RolloutItem::Compacted(CompactedItem {
@@ -3413,6 +3417,7 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
+        state.set_world_state(Arc::new(build_world_state_from_turn_context(turn_context)));
     }
 
     pub(crate) async fn update_token_usage_info(

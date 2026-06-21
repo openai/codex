@@ -1,3 +1,4 @@
+use crate::context::world_state::WorldState;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
@@ -27,6 +28,7 @@ use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 use codex_utils_output_truncation::truncate_text;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 /// Transcript of thread history
@@ -48,6 +50,8 @@ pub(crate) struct ContextManager {
     /// also clear this when it trims a mixed initial-context developer bundle
     /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
+    /// Latest in-memory world snapshot represented by this history.
+    world_state: Option<Arc<WorldState>>,
 }
 
 impl ContextManager {
@@ -59,6 +63,7 @@ impl ContextManager {
                 &None, &None, /*model_context_window*/ None,
             ),
             reference_context_item: None,
+            world_state: None,
         }
     }
 
@@ -71,11 +76,22 @@ impl ContextManager {
     }
 
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        if item.is_none() {
+            self.world_state = None;
+        }
         self.reference_context_item = item;
     }
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
         self.reference_context_item.clone()
+    }
+
+    pub(crate) fn set_world_state(&mut self, world_state: Arc<WorldState>) {
+        self.world_state = Some(world_state);
+    }
+
+    pub(crate) fn world_state(&self) -> Option<Arc<WorldState>> {
+        self.world_state.clone()
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -412,6 +428,7 @@ impl ContextManager {
                         // steady-state diffs once trimmed, so the next real turn must fully
                         // reinject context instead of diffing against a stale baseline.
                         self.reference_context_item = None;
+                        self.world_state = None;
                     }
                     cut_idx -= 1;
                 }

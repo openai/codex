@@ -4,6 +4,7 @@ use codex_protocol::models::ResponseItem;
 use indexmap::IndexMap;
 use std::any::Any;
 use std::any::TypeId;
+use std::fmt;
 
 pub(crate) use environment::EnvironmentsState;
 
@@ -43,6 +44,15 @@ pub(crate) trait WorldStateSection: Any + Default + Send + Sync {
 #[derive(Default)]
 pub(crate) struct WorldState {
     sections: IndexMap<TypeId, Box<dyn ErasedWorldStateSection>>,
+}
+
+impl fmt::Debug for WorldState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorldState")
+            .field("section_count", &self.sections.len())
+            .finish()
+    }
 }
 
 impl WorldState {
