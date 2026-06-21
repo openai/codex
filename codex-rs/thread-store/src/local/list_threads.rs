@@ -8,9 +8,9 @@ use codex_rollout::find_thread_names_by_ids;
 use codex_rollout::parse_cursor;
 
 use super::LocalThreadStore;
-use super::helpers::distinct_thread_metadata_title;
 use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
+use super::helpers::thread_metadata_name;
 use crate::ListThreadsParams;
 use crate::SortDirection;
 use crate::ThreadPage;
@@ -86,7 +86,7 @@ pub(super) async fn list_threads(
             let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
                 continue;
             };
-            if let Some(title) = distinct_thread_metadata_title(&metadata) {
+            if let Some(title) = thread_metadata_name(&metadata) {
                 names.insert(thread_id, title);
             }
         }

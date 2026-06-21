@@ -92,7 +92,7 @@ pub(super) async fn update_thread_metadata(
     .await;
 
     if let Some(name) = name {
-        apply_thread_name(store, thread_id, name.unwrap_or_default()).await?;
+        apply_thread_name(store, thread_id, name).await?;
     }
 
     let resolved_git_info = match git_info {
@@ -239,9 +239,6 @@ async fn apply_metadata_update(
             }
             if let Some(preview) = patch.preview {
                 metadata.preview = Some(preview);
-            }
-            if let Some(name) = patch.name {
-                metadata.title = name.unwrap_or_default();
             }
             if let Some(title) = patch.title {
                 metadata.title = title;
@@ -515,11 +512,11 @@ async fn apply_thread_git_info_to_rollout(
 async fn apply_thread_name(
     store: &LocalThreadStore,
     thread_id: ThreadId,
-    name: String,
+    name: Option<String>,
 ) -> ThreadStoreResult<()> {
     if let Some(state_db) = store.state_db().await {
         let updated = state_db
-            .update_thread_title(thread_id, &name)
+            .update_thread_name(thread_id, name.as_deref())
             .await
             .map_err(|err| ThreadStoreError::Internal {
                 message: format!("failed to set thread name: {err}"),
@@ -531,11 +528,15 @@ async fn apply_thread_name(
         }
     }
 
-    append_thread_name(store.config.codex_home.as_path(), thread_id, &name)
-        .await
-        .map_err(|err| ThreadStoreError::Internal {
-            message: format!("failed to index thread name: {err}"),
-        })
+    append_thread_name(
+        store.config.codex_home.as_path(),
+        thread_id,
+        name.as_deref().unwrap_or_default(),
+    )
+    .await
+    .map_err(|err| ThreadStoreError::Internal {
+        message: format!("failed to index thread name: {err}"),
+    })
 }
 
 async fn apply_thread_memory_mode(
@@ -1266,7 +1267,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn metadata_patch_applies_title_over_existing_name() {
+    async fn metadata_patch_preserves_explicit_name_over_derived_title() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
@@ -1305,7 +1306,7 @@ mod tests {
             .await
             .expect("apply observed metadata");
 
-        assert_eq!(thread.name.as_deref(), Some("Derived first message"));
+        assert_eq!(thread.name.as_deref(), Some("User chosen name"));
     }
 
     #[tokio::test]

@@ -108,7 +108,7 @@ async fn try_init_times_out_waiting_for_stuck_startup_backfill() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn reconcile_rollout_preserves_existing_explicit_title() -> anyhow::Result<()> {
+async fn reconcile_rollout_preserves_existing_explicit_name() -> anyhow::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let thread_id = ThreadId::new();
     let rollout_path = write_rollout_with_user_message(home.path(), thread_id, "Hey")?;
@@ -122,7 +122,7 @@ async fn reconcile_rollout_preserves_existing_explicit_title() -> anyhow::Result
             .metadata;
     assert_eq!(metadata.title, "Hey");
     assert_eq!(metadata.first_user_message.as_deref(), Some("Hey"));
-    metadata.title = "math".to_string();
+    metadata.name = Some("math".to_string());
     runtime.upsert_thread(&metadata).await?;
 
     reconcile_rollout(
@@ -140,7 +140,8 @@ async fn reconcile_rollout_preserves_existing_explicit_title() -> anyhow::Result
         .get_thread(thread_id)
         .await?
         .expect("thread should exist");
-    assert_eq!(persisted.title, "math");
+    assert_eq!(persisted.title, "Hey");
+    assert_eq!(persisted.name.as_deref(), Some("math"));
     assert_eq!(persisted.first_user_message.as_deref(), Some("Hey"));
     Ok(())
 }

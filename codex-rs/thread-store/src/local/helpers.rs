@@ -176,13 +176,13 @@ pub(super) fn permission_profile_to_metadata_value(
     }
 }
 
-pub(super) fn distinct_thread_metadata_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = metadata.title.trim();
-    if title.is_empty() || metadata.first_user_message.as_deref().map(str::trim) == Some(title) {
-        None
-    } else {
-        Some(title.to_string())
-    }
+pub(super) fn thread_metadata_name(metadata: &ThreadMetadata) -> Option<String> {
+    metadata
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 pub(super) fn set_thread_name_from_title(thread: &mut StoredThread, title: String) {
