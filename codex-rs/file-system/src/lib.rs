@@ -56,14 +56,6 @@ pub struct ReadDirectoryEntry {
     pub is_file: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct ExecutorRpcBatchCall {
-    pub method: String,
-    pub params: serde_json::Value,
-}
-
-pub type ExecutorRpcBatchResult = FileSystemResult<serde_json::Value>;
-
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSystemSandboxContext {
@@ -271,21 +263,4 @@ pub trait ExecutorFileSystem: Send + Sync {
         copy_options: CopyOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
-
-    /// Sends independent executor RPC requests as one batch.
-    ///
-    /// The executor may execute entries concurrently and does not guarantee execution order.
-    /// Callers must only batch requests that are safe to run in any order, and must send dependent
-    /// requests separately. Results are matched back to the input order by request id.
-    fn execute_rpc_batch<'a>(
-        &'a self,
-        _calls: Vec<ExecutorRpcBatchCall>,
-    ) -> ExecutorFileSystemFuture<'a, Vec<ExecutorRpcBatchResult>> {
-        Box::pin(async move {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "filesystem does not support RPC batching",
-            ))
-        })
-    }
 }

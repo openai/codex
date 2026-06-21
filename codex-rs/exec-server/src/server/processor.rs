@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use futures::StreamExt;
 use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
@@ -19,8 +18,6 @@ use crate::rpc::method_not_found;
 use crate::server::ExecServerHandler;
 use crate::server::registry::build_router;
 use crate::server::session_registry::SessionRegistry;
-
-const MAX_RPC_BATCH_CONCURRENCY: usize = 32;
 
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
@@ -182,59 +179,54 @@ async fn run_connection(
                     continue;
                 }
 
-                let batch = futures::stream::iter(messages)
-                    .map(|message| {
-                        let router = Arc::clone(&router);
-                        let handler = Arc::clone(&handler);
-                        async move {
-                            match message {
-                                codex_app_server_protocol::JSONRPCMessage::Request(request) => {
-                                    dispatch_request(router, handler, request).await
-                                }
-                                codex_app_server_protocol::JSONRPCMessage::Notification(_) => {
-                                    Some(RpcServerOutboundMessage::Error {
-                                        request_id: codex_app_server_protocol::RequestId::Integer(
-                                            -1,
-                                        ),
-                                        error: invalid_request(
-                                            "notifications cannot be sent in a JSON-RPC batch"
-                                                .to_string(),
-                                        ),
-                                    })
-                                }
-                                codex_app_server_protocol::JSONRPCMessage::Response(response) => {
-                                    Some(RpcServerOutboundMessage::Error {
-                                        request_id: response.id,
-                                        error: invalid_request(
-                                            "client responses cannot be sent in a JSON-RPC batch"
-                                                .to_string(),
-                                        ),
-                                    })
-                                }
-                                codex_app_server_protocol::JSONRPCMessage::Error(error) => {
-                                    Some(RpcServerOutboundMessage::Error {
-                                        request_id: error.id,
-                                        error: invalid_request(
-                                            "client errors cannot be sent in a JSON-RPC batch"
-                                                .to_string(),
-                                        ),
-                                    })
+                let mut responses = Vec::new();
+                for message in messages {
+                    let response = match message {
+                        codex_app_server_protocol::JSONRPCMessage::Request(request) => {
+                            tokio::select! {
+                                response = dispatch_request(
+                                    Arc::clone(&router),
+                                    Arc::clone(&handler),
+                                    request,
+                                ) => response,
+                                _ = disconnected_rx.changed() => {
+                                    debug!("exec-server transport disconnected while handling batch");
+                                    break;
                                 }
                             }
                         }
-                    })
-                    .buffered(MAX_RPC_BATCH_CONCURRENCY)
-                    .filter_map(std::future::ready)
-                    .collect::<Vec<_>>();
-                let messages = tokio::select! {
-                    messages = batch => messages,
-                    _ = disconnected_rx.changed() => {
-                        debug!("exec-server transport disconnected while handling batch");
-                        break;
+                        codex_app_server_protocol::JSONRPCMessage::Notification(_) => {
+                            Some(RpcServerOutboundMessage::Error {
+                                request_id: codex_app_server_protocol::RequestId::Integer(-1),
+                                error: invalid_request(
+                                    "notifications cannot be sent in a JSON-RPC batch".to_string(),
+                                ),
+                            })
+                        }
+                        codex_app_server_protocol::JSONRPCMessage::Response(response) => {
+                            Some(RpcServerOutboundMessage::Error {
+                                request_id: response.id,
+                                error: invalid_request(
+                                    "client responses cannot be sent in a JSON-RPC batch"
+                                        .to_string(),
+                                ),
+                            })
+                        }
+                        codex_app_server_protocol::JSONRPCMessage::Error(error) => {
+                            Some(RpcServerOutboundMessage::Error {
+                                request_id: error.id,
+                                error: invalid_request(
+                                    "client errors cannot be sent in a JSON-RPC batch".to_string(),
+                                ),
+                            })
+                        }
+                    };
+                    if let Some(response) = response {
+                        responses.push(response);
                     }
-                };
+                }
                 if outgoing_tx
-                    .send(RpcServerOutboundMessage::Batch(messages))
+                    .send(RpcServerOutboundMessage::Batch(responses))
                     .await
                     .is_err()
                 {
