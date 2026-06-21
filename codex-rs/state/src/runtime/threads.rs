@@ -1384,7 +1384,9 @@ pub(super) fn push_thread_filters<'a>(
         None => {}
     }
     if let Some(search_term) = search_term {
-        builder.push(" AND (instr(COALESCE(NULLIF(threads.name, ''), threads.title), ");
+        builder.push(" AND (instr(threads.name, ");
+        builder.push_bind(search_term);
+        builder.push(") > 0 OR instr(threads.title, ");
         builder.push_bind(search_term);
         builder.push(") > 0 OR instr(threads.preview, ");
         builder.push_bind(search_term);
