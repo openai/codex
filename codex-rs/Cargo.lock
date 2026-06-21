@@ -3801,7 +3801,6 @@ dependencies = [
  "libc",
  "pretty_assertions",
  "regex-lite",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",

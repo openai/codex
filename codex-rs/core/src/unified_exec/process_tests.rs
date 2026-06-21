@@ -13,7 +13,6 @@ use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
-use codex_sandboxing::SandboxType;
 use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -43,6 +42,7 @@ impl MockExecProcess {
                 exit_code: None,
                 closed: false,
                 failure: None,
+                sandbox_denied: false,
             }))
     }
 
@@ -104,7 +104,6 @@ async fn remote_process(
             terminate_error,
             wake_tx,
         }),
-        sandbox: SandboxType::None,
     };
 
     UnifiedExecProcess::from_exec_server_started(started)
@@ -194,11 +193,11 @@ async fn remote_process_waits_for_early_exit_event() {
                 exit_code: Some(17),
                 closed: true,
                 failure: None,
+                sandbox_denied: false,
             }])),
             terminate_error: None,
             wake_tx: wake_tx.clone(),
         }),
-        sandbox: SandboxType::None,
     };
 
     tokio::spawn(async move {
@@ -215,7 +214,7 @@ async fn remote_process_waits_for_early_exit_event() {
 }
 
 #[tokio::test]
-async fn remote_process_uses_executor_sandbox_for_denial_detection() {
+async fn remote_process_uses_executor_denial_classification() {
     let (wake_tx, _wake_rx) = watch::channel(0);
     let started = StartedExecProcess {
         process: Arc::new(MockExecProcess {
@@ -234,11 +233,11 @@ async fn remote_process_uses_executor_sandbox_for_denial_detection() {
                 exit_code: Some(1),
                 closed: true,
                 failure: None,
+                sandbox_denied: true,
             }])),
             terminate_error: None,
             wake_tx,
         }),
-        sandbox: SandboxType::LinuxSeccomp,
     };
 
     let result = UnifiedExecProcess::from_exec_server_started(started).await;

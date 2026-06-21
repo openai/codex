@@ -10,8 +10,11 @@ use std::time::Duration;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::shell_environment;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::is_likely_sandbox_denied;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
 use codex_utils_pty::TerminalSize;
@@ -88,6 +91,8 @@ struct RunningProcess {
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
+    sandbox: SandboxType,
+    sandbox_denied: bool,
 }
 
 /// Bounded cache of stdin write ids that have already been accepted for one process.
@@ -309,6 +314,8 @@ impl LocalProcess {
                     output_notify: Arc::clone(&output_notify),
                     open_streams: 2,
                     closed: false,
+                    sandbox: prepared.sandbox,
+                    sandbox_denied: false,
                 })),
             );
         }
@@ -342,14 +349,7 @@ impl LocalProcess {
             output_notify,
         ));
 
-        Ok((
-            ExecResponse {
-                process_id,
-                sandbox: Some(prepared.sandbox),
-            },
-            wake_tx,
-            events,
-        ))
+        Ok((ExecResponse { process_id }, wake_tx, events))
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
@@ -410,6 +410,7 @@ impl LocalProcess {
                         exit_code: process.exit_code,
                         closed: process.closed,
                         failure: None,
+                        sandbox_denied: process.sandbox_denied,
                     },
                     Arc::clone(&process.output_notify),
                 )
@@ -593,7 +594,6 @@ impl LocalProcess {
                 wake_tx,
                 events,
             }),
-            sandbox: response.sandbox.unwrap_or(SandboxType::None),
         })
     }
 }
@@ -858,6 +858,30 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
             return;
         }
 
+        if process.sandbox != SandboxType::None {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut aggregated = Vec::new();
+            for chunk in &process.output {
+                match chunk.stream {
+                    ExecOutputStream::Stdout | ExecOutputStream::Pty => {
+                        stdout.extend_from_slice(&chunk.chunk);
+                    }
+                    ExecOutputStream::Stderr => stderr.extend_from_slice(&chunk.chunk),
+                }
+                aggregated.extend_from_slice(&chunk.chunk);
+            }
+            let exec_output = ExecToolCallOutput {
+                exit_code: process.exit_code.unwrap_or(-1),
+                stdout: StreamOutput::new(String::from_utf8_lossy(&stdout).into_owned()),
+                stderr: StreamOutput::new(String::from_utf8_lossy(&stderr).into_owned()),
+                aggregated_output: StreamOutput::new(
+                    String::from_utf8_lossy(&aggregated).into_owned(),
+                ),
+                ..Default::default()
+            };
+            process.sandbox_denied = is_likely_sandbox_denied(process.sandbox, &exec_output);
+        }
         process.closed = true;
         let seq = process.next_seq;
         process.next_seq += 1;
@@ -990,7 +1014,7 @@ mod tests {
     #[tokio::test]
     async fn exited_process_retains_late_output_past_retention() {
         let backend = LocalProcess::default();
-        let mut process = spawn_test_process(&backend, "proc-late-output").await;
+        let mut process = spawn_test_process(&backend, "proc-late-output", SandboxType::None).await;
 
         process.exit(/*exit_code*/ 0);
         let exit_response =
@@ -1004,6 +1028,7 @@ mod tests {
                 exit_code: Some(0),
                 closed: false,
                 failure: None,
+                sandbox_denied: false,
             }
         );
 
@@ -1051,7 +1076,8 @@ mod tests {
     #[tokio::test]
     async fn closed_process_is_evicted_after_retention() {
         let backend = LocalProcess::default();
-        let mut process = spawn_test_process(&backend, "proc-closed-eviction").await;
+        let mut process =
+            spawn_test_process(&backend, "proc-closed-eviction", SandboxType::None).await;
         let process_id = process.process_id.clone();
 
         process.exit(/*exit_code*/ 0);
@@ -1082,6 +1108,27 @@ mod tests {
         backend.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn closed_sandboxed_process_reports_denial() {
+        let backend = LocalProcess::default();
+        let mut process =
+            spawn_test_process(&backend, "proc-sandbox-denied", SandboxType::LinuxSeccomp).await;
+
+        process
+            .stderr_tx
+            .send(b"Permission denied\n".to_vec())
+            .await
+            .expect("send stderr");
+        process.exit(/*exit_code*/ 1);
+        drop(process.stdout_tx);
+        drop(process.stderr_tx);
+
+        let response = read_process_until_closed(&backend, &process.process_id).await;
+
+        assert!(response.sandbox_denied);
+        backend.shutdown().await;
+    }
+
     struct TestProcess {
         process_id: ProcessId,
         stdout_tx: mpsc::Sender<Vec<u8>>,
@@ -1099,7 +1146,11 @@ mod tests {
         }
     }
 
-    async fn spawn_test_process(backend: &LocalProcess, process_id: &str) -> TestProcess {
+    async fn spawn_test_process(
+        backend: &LocalProcess,
+        process_id: &str,
+        sandbox: SandboxType,
+    ) -> TestProcess {
         let process_id = ProcessId::from(process_id);
         let (stdout_tx, stdout_rx) = mpsc::channel(16);
         let (stderr_tx, stderr_rx) = mpsc::channel(16);
@@ -1128,6 +1179,8 @@ mod tests {
                 output_notify: Arc::clone(&output_notify),
                 open_streams: 2,
                 closed: false,
+                sandbox,
+                sandbox_denied: false,
             })),
         );
         assert!(previous.is_none());

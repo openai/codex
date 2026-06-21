@@ -228,6 +228,7 @@ impl BlockingTerminateExecProcess {
             exit_code: None,
             closed: false,
             failure: None,
+            sandbox_denied: false,
         })
     }
 
@@ -293,7 +294,6 @@ async fn blocking_terminate_unified_process(
                 allow_terminate,
                 wake_tx,
             }),
-            sandbox: SandboxType::None,
         })
         .await?,
     ))

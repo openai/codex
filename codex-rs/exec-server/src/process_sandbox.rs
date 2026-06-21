@@ -66,6 +66,19 @@ pub(crate) fn prepare_exec_request(
         sandbox_context.windows_sandbox_level,
         params.enforce_managed_network,
     );
+    match sandbox {
+        SandboxType::None => {
+            return Err(invalid_params(
+                "sandbox intent cannot be enforced on this executor".to_string(),
+            ));
+        }
+        SandboxType::WindowsRestrictedToken => {
+            return Err(invalid_params(
+                "sandboxed remote process launch is not supported on Windows".to_string(),
+            ));
+        }
+        SandboxType::MacosSeatbelt | SandboxType::LinuxSeccomp => {}
+    }
     let (program, args) = params
         .argv
         .split_first()
