@@ -360,7 +360,7 @@ await Promise.all([
         }
     );
 
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     let resumed_response = tokio::time::timeout(
         Duration::from_secs(1),
