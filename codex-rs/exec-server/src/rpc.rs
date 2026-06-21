@@ -26,6 +26,7 @@ use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 use crate::connection::JsonRpcWireMessage;
+use crate::connection::MAX_RPC_BATCH_REQUESTS;
 
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
 
@@ -404,6 +405,69 @@ impl RpcClient {
         serde_json::from_value(response).map_err(RpcCallError::Json)
     }
 
+    pub(crate) async fn call_batch(
+        &self,
+        calls: Vec<(String, Value)>,
+    ) -> Result<Vec<Result<Value, RpcCallError>>, RpcCallError> {
+        if calls.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut results = Vec::with_capacity(calls.len());
+        let mut calls = calls.into_iter();
+        loop {
+            let call_chunk = calls
+                .by_ref()
+                .take(MAX_RPC_BATCH_REQUESTS)
+                .collect::<Vec<_>>();
+            if call_chunk.is_empty() {
+                break;
+            }
+
+            let mut request_ids = Vec::with_capacity(call_chunk.len());
+            let mut requests = Vec::with_capacity(call_chunk.len());
+            let mut response_receivers = Vec::with_capacity(call_chunk.len());
+            {
+                let mut pending = self.pending.lock().await;
+                if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
+                    return Err(RpcCallError::Closed);
+                }
+                for (method, params) in call_chunk {
+                    let request_id =
+                        RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
+                    let (response_tx, response_rx) = oneshot::channel();
+                    pending.insert(request_id.clone(), response_tx);
+                    request_ids.push(request_id.clone());
+                    requests.push(JSONRPCMessage::Request(JSONRPCRequest {
+                        id: request_id,
+                        method,
+                        params: Some(params),
+                        trace: None,
+                    }));
+                    response_receivers.push(response_rx);
+                }
+            }
+
+            if self
+                .write_tx
+                .send(JsonRpcWireMessage::Batch(requests))
+                .await
+                .is_err()
+            {
+                let mut pending = self.pending.lock().await;
+                for request_id in request_ids {
+                    pending.remove(&request_id);
+                }
+                return Err(RpcCallError::Closed);
+            }
+
+            for response_rx in response_receivers {
+                results.push(response_rx.await.map_err(|_| RpcCallError::Closed)?);
+            }
+        }
+        Ok(results)
+    }
+
     #[cfg(test)]
     pub(crate) async fn pending_request_count(&self) -> usize {
         self.pending.lock().await.len()
@@ -592,8 +656,21 @@ mod tests {
 
     use super::RpcClient;
     use crate::connection::JsonRpcConnection;
+    use crate::connection::JsonRpcWireMessage;
 
     async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        match read_jsonrpc_wire_line(lines).await {
+            JsonRpcWireMessage::Single(message) => message,
+            JsonRpcWireMessage::Batch(_) => panic!("expected single JSON-RPC message"),
+        }
+    }
+
+    async fn read_jsonrpc_wire_line<R>(
+        lines: &mut tokio::io::Lines<BufReader<R>>,
+    ) -> JsonRpcWireMessage
     where
         R: tokio::io::AsyncRead + Unpin,
     {
@@ -610,13 +687,20 @@ mod tests {
             Some(line) => line,
             None => panic!("server connection closed before JSON-RPC line arrived"),
         };
-        match serde_json::from_str::<JSONRPCMessage>(&line) {
+        match serde_json::from_str::<JsonRpcWireMessage>(&line) {
             Ok(message) => message,
             Err(err) => panic!("failed to parse JSON-RPC line: {err}"),
         }
     }
 
     async fn write_jsonrpc_line<W>(writer: &mut W, message: JSONRPCMessage)
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        write_jsonrpc_wire_line(writer, JsonRpcWireMessage::Single(message)).await;
+    }
+
+    async fn write_jsonrpc_wire_line<W>(writer: &mut W, message: JsonRpcWireMessage)
     where
         W: tokio::io::AsyncWrite + Unpin,
     {
@@ -687,6 +771,75 @@ mod tests {
         let fast = fast.unwrap_or_else(|err| panic!("fast request failed: {err:?}"));
         assert_eq!(slow, serde_json::json!({ "value": "slow" }));
         assert_eq!(fast, serde_json::json!({ "value": "fast" }));
+
+        assert_eq!(client.pending_request_count().await, 0);
+
+        if let Err(err) = server.await {
+            panic!("server task failed: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rpc_client_batch_sends_one_json_rpc_array() {
+        let (client_stdin, server_reader) = tokio::io::duplex(4096);
+        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
+        let connection =
+            JsonRpcConnection::from_stdio(client_stdout, client_stdin, "test-rpc".to_string());
+        let (client, _events_rx) = RpcClient::new(connection);
+
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let batch = read_jsonrpc_wire_line(&mut lines).await;
+            let requests = match batch {
+                JsonRpcWireMessage::Batch(messages) => messages
+                    .into_iter()
+                    .map(|message| match message {
+                        JSONRPCMessage::Request(request) => request,
+                        other => panic!("expected JSON-RPC request in batch, got {other:?}"),
+                    })
+                    .collect::<Vec<_>>(),
+                JsonRpcWireMessage::Single(message) => {
+                    panic!("expected JSON-RPC batch, got {message:?}")
+                }
+            };
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0].method, "first");
+            assert_eq!(requests[1].method, "second");
+
+            write_jsonrpc_wire_line(
+                &mut server_writer,
+                JsonRpcWireMessage::Batch(vec![
+                    JSONRPCMessage::Response(JSONRPCResponse {
+                        id: requests[1].id.clone(),
+                        result: serde_json::json!({ "value": "second" }),
+                    }),
+                    JSONRPCMessage::Response(JSONRPCResponse {
+                        id: requests[0].id.clone(),
+                        result: serde_json::json!({ "value": "first" }),
+                    }),
+                ]),
+            )
+            .await;
+        });
+
+        let results = client
+            .call_batch(vec![
+                ("first".to_string(), serde_json::json!({ "n": 1 })),
+                ("second".to_string(), serde_json::json!({ "n": 2 })),
+            ])
+            .await
+            .expect("batch request should send");
+        let results = results
+            .into_iter()
+            .map(|result| result.expect("request should succeed"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results,
+            vec![
+                serde_json::json!({ "value": "first" }),
+                serde_json::json!({ "value": "second" }),
+            ]
+        );
 
         assert_eq!(client.pending_request_count().await, 0);
 

@@ -9,6 +9,7 @@ use crate::CreateDirectoryOptions;
 use crate::ExecServerError;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
+use crate::ExecutorRpcBatchResult;
 use crate::FileMetadata;
 use crate::FileSystemReadStream;
 use crate::FileSystemResult;
@@ -223,6 +224,20 @@ impl RemoteFileSystem {
             .map_err(map_remote_error)?;
         Ok(())
     }
+
+    async fn execute_rpc_batch(
+        &self,
+        calls: Vec<(String, serde_json::Value)>,
+    ) -> FileSystemResult<Vec<ExecutorRpcBatchResult>> {
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        Ok(client
+            .call_batch(calls)
+            .await
+            .map_err(map_remote_error)?
+            .into_iter()
+            .map(|result| result.map_err(map_remote_error))
+            .collect())
+    }
 }
 
 impl ExecutorFileSystem for RemoteFileSystem {
@@ -309,6 +324,13 @@ impl ExecutorFileSystem for RemoteFileSystem {
             options,
             sandbox,
         ))
+    }
+
+    fn execute_rpc_batch<'a>(
+        &'a self,
+        calls: Vec<(String, serde_json::Value)>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ExecutorRpcBatchResult>> {
+        Box::pin(RemoteFileSystem::execute_rpc_batch(self, calls))
     }
 }
 
