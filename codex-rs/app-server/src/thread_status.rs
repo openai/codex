@@ -113,6 +113,7 @@ impl ThreadWatchManager {
         self.state.lock().await.loaded_status_for_thread(thread_id)
     }
 
+    #[cfg(test)]
     pub(crate) async fn loaded_statuses_for_threads(
         &self,
         thread_ids: Vec<String>,
@@ -123,6 +124,21 @@ impl ThreadWatchManager {
             .map(|thread_id| {
                 let status = state.loaded_status_for_thread(&thread_id);
                 (thread_id, status)
+            })
+            .collect()
+    }
+
+    pub(crate) async fn loaded_status_overrides_for_threads(
+        &self,
+        thread_ids: Vec<String>,
+    ) -> HashMap<String, ThreadStatus> {
+        let state = self.state.lock().await;
+        thread_ids
+            .into_iter()
+            .filter_map(|thread_id| {
+                state.status_for(&thread_id).and_then(|status| {
+                    (!matches!(status, ThreadStatus::NotLoaded)).then_some((thread_id, status))
+                })
             })
             .collect()
     }

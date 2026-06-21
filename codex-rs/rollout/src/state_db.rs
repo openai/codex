@@ -12,6 +12,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 pub use codex_state::LogEntry;
+use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path::normalize_for_path_comparison;
 use serde_json::Value;
@@ -355,7 +356,7 @@ pub async fn list_thread_ids_db(
     }
 }
 
-/// List thread metadata from SQLite without rollout directory traversal.
+/// List thread summaries from SQLite without rollout directory traversal.
 #[allow(clippy::too_many_arguments)]
 pub async fn list_threads_db(
     context: Option<&codex_state::StateRuntime>,
@@ -370,7 +371,7 @@ pub async fn list_threads_db(
     parent_thread_id: Option<ThreadId>,
     archived: bool,
     search_term: Option<&str>,
-) -> Option<codex_state::ThreadsPage> {
+) -> Option<codex_state::ThreadListPage> {
     let ctx = context?;
     if ctx.codex_home() != codex_home {
         warn!(
@@ -415,17 +416,13 @@ pub async fn list_threads_db(
     };
     let page = match parent_thread_id {
         Some(parent_thread_id) => {
-            ctx.list_threads_by_parent(page_size, parent_thread_id, filters)
+            ctx.list_thread_summaries_by_parent(page_size, parent_thread_id, filters)
                 .await
         }
-        None => ctx.list_threads(page_size, filters).await,
+        None => ctx.list_thread_summaries(page_size, filters).await,
     };
     match page {
         Ok(mut page) => {
-            // Parent-filtered listings intentionally treat persisted state as authoritative.
-            if parent_thread_id.is_some() {
-                return Some(page);
-            }
             let mut valid_items = Vec::with_capacity(page.items.len());
             for item in page.items {
                 if let Some(existing_path) =
@@ -558,6 +555,52 @@ pub async fn reconcile_rollout(
     }
 }
 
+/// Repair a batch of rollout locations after filesystem fallback succeeds.
+pub async fn read_repair_rollout_paths(
+    context: Option<&codex_state::StateRuntime>,
+    rollout_paths: &[(Option<ThreadId>, PathBuf)],
+    archived_only: Option<bool>,
+) {
+    let Some(ctx) = context else {
+        return;
+    };
+    if rollout_paths.is_empty() {
+        return;
+    }
+
+    let thread_ids = rollout_paths
+        .iter()
+        .filter_map(|(thread_id, _)| *thread_id)
+        .collect::<Vec<_>>();
+    let metadata_by_id = match ctx.get_threads(thread_ids.as_slice()).await {
+        Ok(metadata_by_id) => metadata_by_id,
+        Err(err) => {
+            warn!("state db batch read-repair lookup failed: {err}");
+            for (thread_id, rollout_path) in rollout_paths {
+                read_repair_rollout_path(Some(ctx), *thread_id, archived_only, rollout_path).await;
+            }
+            return;
+        }
+    };
+
+    for (thread_id, rollout_path) in rollout_paths {
+        if let Some(thread_id) = thread_id
+            && let Some(metadata) = metadata_by_id.get(thread_id)
+            && repair_existing_rollout_location(
+                ctx,
+                metadata,
+                archived_only,
+                rollout_path.as_path(),
+            )
+            .await
+        {
+            continue;
+        }
+        warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (slow path)");
+        reconcile_rollout_path_from_contents(ctx, rollout_path.as_path(), archived_only).await;
+    }
+}
+
 /// Repair a thread's rollout path after filesystem fallback succeeds.
 pub async fn read_repair_rollout_path(
     context: Option<&codex_state::StateRuntime>,
@@ -576,24 +619,8 @@ pub async fn read_repair_rollout_path(
         && let Ok(Some(metadata)) = ctx.get_thread(thread_id).await
     {
         saw_existing_metadata = true;
-        let cwd = normalize_cwd_for_state_db(&metadata.cwd);
-        let archive_state = match archived_only {
-            Some(true) => codex_state::ThreadArchiveState::Archived,
-            Some(false) => codex_state::ThreadArchiveState::Active,
-            None => codex_state::ThreadArchiveState::Preserve,
-        };
-        match ctx
-            .repair_thread_rollout_location(thread_id, rollout_path, cwd.as_path(), archive_state)
-            .await
-        {
-            Ok(true) => return,
-            Ok(false) => saw_existing_metadata = false,
-            Err(err) => {
-                warn!(
-                    "state db read-repair update failed for {}: {err}",
-                    rollout_path.display()
-                );
-            }
+        if repair_existing_rollout_location(ctx, &metadata, archived_only, rollout_path).await {
+            return;
         }
     }
 
@@ -602,6 +629,42 @@ pub async fn read_repair_rollout_path(
     if !saw_existing_metadata {
         warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (slow path)");
     }
+    reconcile_rollout_path_from_contents(ctx, rollout_path, archived_only).await;
+}
+
+async fn repair_existing_rollout_location(
+    ctx: &codex_state::StateRuntime,
+    metadata: &ThreadMetadata,
+    archived_only: Option<bool>,
+    rollout_path: &Path,
+) -> bool {
+    let cwd = normalize_cwd_for_state_db(&metadata.cwd);
+    let archive_state = match archived_only {
+        Some(true) => codex_state::ThreadArchiveState::Archived,
+        Some(false) => codex_state::ThreadArchiveState::Active,
+        None => codex_state::ThreadArchiveState::Preserve,
+    };
+    match ctx
+        .repair_thread_rollout_location(metadata.id, rollout_path, cwd.as_path(), archive_state)
+        .await
+    {
+        Ok(true) => true,
+        Ok(false) => false,
+        Err(err) => {
+            warn!(
+                "state db read-repair update failed for {}: {err}",
+                rollout_path.display()
+            );
+            false
+        }
+    }
+}
+
+async fn reconcile_rollout_path_from_contents(
+    ctx: &codex_state::StateRuntime,
+    rollout_path: &Path,
+    archived_only: Option<bool>,
+) {
     let default_provider = crate::list::read_session_meta_line(rollout_path)
         .await
         .ok()

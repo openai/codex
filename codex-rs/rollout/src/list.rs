@@ -52,6 +52,8 @@ pub struct ThreadItem {
     pub first_user_message: Option<String>,
     /// Best available user-facing preview for discovery and list display.
     pub preview: Option<String>,
+    /// Explicit user-assigned name from persisted metadata, when available.
+    pub name: Option<String>,
     /// Working directory from session metadata.
     pub cwd: Option<PathBuf>,
     /// Git branch from session metadata.
@@ -94,6 +96,7 @@ struct HeadTailSummary {
     thread_id: Option<ThreadId>,
     first_user_message: Option<String>,
     preview: Option<String>,
+    name: Option<String>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
     git_sha: Option<String>,
@@ -262,30 +265,6 @@ impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
         {
             self.items.push(item);
         }
-        ControlFlow::Continue(())
-    }
-}
-
-/// Collects lightweight file candidates (path + id + mtime).
-/// Sorting after mtime happens after all files are collected.
-struct FilesByUpdatedAtVisitor<'a> {
-    candidates: &'a mut Vec<ThreadCandidate>,
-}
-
-impl<'a> RolloutFileVisitor for FilesByUpdatedAtVisitor<'a> {
-    async fn visit(
-        &mut self,
-        _ts: OffsetDateTime,
-        id: Uuid,
-        path: PathBuf,
-        _scanned: usize,
-    ) -> ControlFlow<()> {
-        let updated_at = file_modified_time(&path).await.unwrap_or(None);
-        self.candidates.push(ThreadCandidate {
-            path,
-            id,
-            updated_at,
-        });
         ControlFlow::Continue(())
     }
 }
@@ -801,6 +780,7 @@ async fn build_thread_item(
             thread_id,
             first_user_message,
             preview,
+            name,
             cwd,
             git_branch,
             git_sha,
@@ -823,6 +803,7 @@ async fn build_thread_item(
             thread_id,
             first_user_message,
             preview,
+            name,
             cwd,
             git_branch,
             git_sha,
@@ -981,12 +962,16 @@ async fn collect_files_by_updated_at(
     root: &Path,
     scanned_files: &mut usize,
 ) -> io::Result<Vec<ThreadCandidate>> {
-    let mut candidates = Vec::new();
-    let mut visitor = FilesByUpdatedAtVisitor {
-        candidates: &mut candidates,
-    };
-    walk_rollout_files(root, scanned_files, &mut visitor).await?;
-
+    let root = root.to_path_buf();
+    let initial_scanned_files = *scanned_files;
+    let (candidates, scanned) = tokio::task::spawn_blocking(move || {
+        let mut scanned_files = initial_scanned_files;
+        let candidates = collect_files_by_updated_at_blocking(root.as_path(), &mut scanned_files)?;
+        Ok::<_, io::Error>((candidates, scanned_files))
+    })
+    .await
+    .map_err(io::Error::other)??;
+    *scanned_files = scanned;
     Ok(candidates)
 }
 
@@ -994,24 +979,72 @@ async fn collect_flat_files_by_updated_at(
     root: &Path,
     scanned_files: &mut usize,
 ) -> io::Result<Vec<ThreadCandidate>> {
+    let root = root.to_path_buf();
+    let initial_scanned_files = *scanned_files;
+    let (candidates, scanned) = tokio::task::spawn_blocking(move || {
+        let mut scanned_files = initial_scanned_files;
+        let candidates =
+            collect_flat_files_by_updated_at_blocking(root.as_path(), &mut scanned_files)?;
+        Ok::<_, io::Error>((candidates, scanned_files))
+    })
+    .await
+    .map_err(io::Error::other)??;
+    *scanned_files = scanned;
+    Ok(candidates)
+}
+
+fn collect_files_by_updated_at_blocking(
+    root: &Path,
+    scanned_files: &mut usize,
+) -> io::Result<Vec<ThreadCandidate>> {
     let mut candidates = Vec::new();
-    let mut dir = tokio::fs::read_dir(root).await?;
-    while let Some(entry) = dir.next_entry().await? {
+    let year_dirs = collect_dirs_desc_blocking(root, |value| value.parse::<u16>().ok())?;
+
+    'outer: for (_year, year_path) in year_dirs.iter() {
         if *scanned_files >= MAX_SCAN_FILES {
             break;
         }
-        if !entry
-            .file_type()
-            .await
-            .map(|ft| ft.is_file())
-            .unwrap_or(false)
-        {
-            continue;
+        let month_dirs = collect_dirs_desc_blocking(year_path, |value| value.parse::<u8>().ok())?;
+        for (_month, month_path) in month_dirs.iter() {
+            if *scanned_files >= MAX_SCAN_FILES {
+                break 'outer;
+            }
+            let day_dirs =
+                collect_dirs_desc_blocking(month_path, |value| value.parse::<u8>().ok())?;
+            for (_day, day_path) in day_dirs.iter() {
+                if *scanned_files >= MAX_SCAN_FILES {
+                    break 'outer;
+                }
+                let day_files = collect_rollout_day_file_candidates_blocking(day_path)?;
+                for (_timestamp, id, path, updated_at) in day_files {
+                    *scanned_files += 1;
+                    if *scanned_files > MAX_SCAN_FILES {
+                        break 'outer;
+                    }
+                    candidates.push(ThreadCandidate {
+                        path,
+                        id,
+                        updated_at,
+                    });
+                }
+            }
         }
-        let Some(rollout_file) = compression::RolloutFile::from_path(entry.path()) else {
-            continue;
-        };
-        let Some((_ts, id)) = parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())
+    }
+
+    Ok(candidates)
+}
+
+fn collect_flat_files_by_updated_at_blocking(
+    root: &Path,
+    scanned_files: &mut usize,
+) -> io::Result<Vec<ThreadCandidate>> {
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(root)? {
+        if *scanned_files >= MAX_SCAN_FILES {
+            break;
+        }
+        let entry = entry?;
+        let Some((_timestamp, id, path, updated_at)) = rollout_candidate_from_dir_entry(&entry)
         else {
             continue;
         };
@@ -1019,17 +1052,71 @@ async fn collect_flat_files_by_updated_at(
         if *scanned_files > MAX_SCAN_FILES {
             break;
         }
-        let updated_at = file_modified_time(rollout_file.path())
-            .await
-            .unwrap_or(None);
         candidates.push(ThreadCandidate {
-            path: rollout_file.into_path(),
+            path,
             id,
             updated_at,
         });
     }
 
     Ok(candidates)
+}
+
+fn collect_dirs_desc_blocking<T, F>(parent: &Path, parse: F) -> io::Result<Vec<(T, PathBuf)>>
+where
+    T: Ord + Copy,
+    F: Fn(&str) -> Option<T>,
+{
+    let mut directories = Vec::new();
+    for entry in std::fs::read_dir(parent)? {
+        let entry = entry?;
+        if entry
+            .file_type()
+            .map(|file_type| file_type.is_dir())
+            .unwrap_or(false)
+            && let Some(name) = entry.file_name().to_str()
+            && let Some(value) = parse(name)
+        {
+            directories.push((value, entry.path()));
+        }
+    }
+    directories.sort_by_key(|(value, _)| Reverse(*value));
+    Ok(directories)
+}
+
+fn collect_rollout_day_file_candidates_blocking(
+    day_path: &Path,
+) -> io::Result<Vec<(OffsetDateTime, Uuid, PathBuf, Option<OffsetDateTime>)>> {
+    let mut day_files = Vec::new();
+    for entry in std::fs::read_dir(day_path)? {
+        let entry = entry?;
+        if let Some(candidate) = rollout_candidate_from_dir_entry(&entry) {
+            day_files.push(candidate);
+        }
+    }
+    day_files.sort_by_key(|(timestamp, id, _, _)| (Reverse(*timestamp), Reverse(*id)));
+    Ok(day_files)
+}
+
+fn rollout_candidate_from_dir_entry(
+    entry: &std::fs::DirEntry,
+) -> Option<(OffsetDateTime, Uuid, PathBuf, Option<OffsetDateTime>)> {
+    if !entry
+        .file_type()
+        .map(|file_type| file_type.is_file())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let rollout_file = compression::RolloutFile::from_path(entry.path())?;
+    let (timestamp, id) = parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())?;
+    let updated_at = entry
+        .metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .map(OffsetDateTime::from)
+        .and_then(truncate_to_millis);
+    Some((timestamp, id, rollout_file.into_path(), updated_at))
 }
 
 async fn walk_rollout_files(

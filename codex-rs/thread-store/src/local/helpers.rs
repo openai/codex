@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use chrono::DateTime;
+use chrono::Timelike;
 use chrono::Utc;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
@@ -17,6 +18,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
+use codex_state::ThreadListItem;
 use codex_state::ThreadMetadata;
 
 use crate::StoredThread;
@@ -119,6 +121,7 @@ pub(super) fn stored_thread_from_rollout_item(
         .clone()
         .or_else(|| item.first_user_message.clone())
         .unwrap_or_default();
+    let name = item.name.clone();
     let rollout_path = codex_rollout::plain_rollout_path(item.path.as_path());
 
     Some(StoredThread {
@@ -128,7 +131,7 @@ pub(super) fn stored_thread_from_rollout_item(
         forked_from_id: None,
         parent_thread_id: item.parent_thread_id,
         preview,
-        name: None,
+        name,
         model_provider: item
             .model_provider
             .filter(|provider| !provider.is_empty())
@@ -153,6 +156,75 @@ pub(super) fn stored_thread_from_rollout_item(
         first_user_message: item.first_user_message,
         history: None,
     })
+}
+
+pub(super) fn stored_thread_from_state_list_item(
+    item: ThreadListItem,
+    archived: bool,
+    default_provider: &str,
+) -> StoredThread {
+    let ThreadListItem {
+        id,
+        rollout_path,
+        created_at,
+        updated_at,
+        recency_at,
+        source,
+        parent_thread_id,
+        agent_nickname,
+        agent_role,
+        model_provider,
+        cwd,
+        cli_version,
+        title: _,
+        name,
+        preview,
+        first_user_message,
+        git_sha,
+        git_branch,
+        git_origin_url,
+    } = item;
+
+    let preview = preview
+        .or_else(|| first_user_message.clone())
+        .unwrap_or_default();
+    let git_info = git_info_from_parts(git_sha, git_branch, git_origin_url);
+    let rollout_path = codex_rollout::plain_rollout_path(rollout_path.as_path());
+    let model_provider = if model_provider.is_empty() {
+        default_provider.to_string()
+    } else {
+        model_provider
+    };
+
+    StoredThread {
+        thread_id: id,
+        extra_config: None,
+        rollout_path: Some(rollout_path),
+        forked_from_id: None,
+        parent_thread_id,
+        preview,
+        name,
+        model_provider,
+        model: None,
+        reasoning_effort: None,
+        created_at: truncate_datetime_to_seconds(created_at),
+        updated_at: truncate_datetime_to_millis(updated_at),
+        recency_at: truncate_datetime_to_millis(recency_at),
+        archived_at: archived.then_some(updated_at),
+        cwd,
+        cli_version,
+        source: parse_session_source(&source),
+        thread_source: None,
+        agent_nickname,
+        agent_role,
+        agent_path: None,
+        git_info,
+        approval_mode: AskForApproval::OnRequest,
+        permission_profile: PermissionProfile::read_only(),
+        token_usage: None,
+        first_user_message,
+        history: None,
+    }
 }
 
 pub(super) fn permission_profile_from_metadata_value(value: &str, cwd: &Path) -> PermissionProfile {
@@ -217,6 +289,21 @@ pub(super) fn set_thread_name_from_title(thread: &mut StoredThread, title: Strin
         return;
     }
     thread.name = Some(title);
+}
+
+pub(super) fn parse_session_source(source: &str) -> SessionSource {
+    serde_json::from_str(source)
+        .or_else(|_| serde_json::from_value(serde_json::Value::String(source.to_string())))
+        .unwrap_or(SessionSource::Unknown)
+}
+
+fn truncate_datetime_to_seconds(timestamp: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp(timestamp.timestamp(), 0).unwrap_or(timestamp)
+}
+
+fn truncate_datetime_to_millis(timestamp: DateTime<Utc>) -> DateTime<Utc> {
+    let nanos = timestamp.nanosecond() / 1_000_000 * 1_000_000;
+    DateTime::<Utc>::from_timestamp(timestamp.timestamp(), nanos).unwrap_or(timestamp)
 }
 
 fn parse_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
