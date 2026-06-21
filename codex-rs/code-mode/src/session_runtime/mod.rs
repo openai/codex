@@ -1,10 +1,278 @@
 mod types;
 
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+
+use serde_json::Value as JsonValue;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+
 pub(crate) use self::types::CellEvent;
+pub(crate) use self::types::CellId;
 pub(crate) use self::types::CreateCellRequest;
+pub(crate) use self::types::Error;
 pub(crate) use self::types::ImageDetail;
+pub(crate) use self::types::NestedToolCall;
 pub(crate) use self::types::ObserveMode;
 pub(crate) use self::types::OutputItem;
+pub(crate) use self::types::SessionRuntimeDelegate;
 pub(crate) use self::types::ToolDefinition;
 pub(crate) use self::types::ToolKind;
 pub(crate) use self::types::ToolName;
+use crate::cell_actor::CellActor;
+use crate::cell_actor::CellError;
+use crate::cell_actor::CellEventFuture;
+use crate::cell_actor::CellHandle;
+use crate::cell_actor::CellHost;
+use crate::cell_actor::CellToolCall;
+
+type RuntimeEventFuture = Pin<Box<dyn Future<Output = Result<CellEvent, Error>> + Send + 'static>>;
+
+/// Owns all cells and shared state for one transport-neutral code-mode session.
+pub(crate) struct SessionRuntime<D: SessionRuntimeDelegate> {
+    inner: Arc<Inner<D>>,
+}
+
+struct Inner<D: SessionRuntimeDelegate> {
+    stored_values: Mutex<HashMap<String, JsonValue>>,
+    cells: Mutex<HashMap<CellId, CellHandle>>,
+    delegate: Arc<D>,
+    shutting_down: AtomicBool,
+    next_cell_id: AtomicU64,
+}
+
+impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
+    pub(crate) fn new(delegate: Arc<D>) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                stored_values: Mutex::new(HashMap::new()),
+                cells: Mutex::new(HashMap::new()),
+                delegate,
+                shutting_down: AtomicBool::new(false),
+                next_cell_id: AtomicU64::new(1),
+            }),
+        }
+    }
+
+    pub(crate) fn is_alive(&self) -> bool {
+        !self.inner.shutting_down.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn execute(
+        &self,
+        request: CreateCellRequest,
+        initial_observe_mode: ObserveMode,
+    ) -> Result<StartedCell, Error> {
+        let cell_id = self.allocate_cell_id();
+        let initial_event = self
+            .start_cell(cell_id.clone(), request, initial_observe_mode)
+            .await?;
+        Ok(StartedCell {
+            cell_id,
+            initial_event,
+        })
+    }
+
+    pub(crate) async fn observe(
+        &self,
+        cell_id: &CellId,
+        mode: ObserveMode,
+    ) -> Result<CellEvent, Error> {
+        self.begin_observe(cell_id, mode).await?.event().await
+    }
+
+    pub(crate) async fn begin_observe(
+        &self,
+        cell_id: &CellId,
+        mode: ObserveMode,
+    ) -> Result<PendingEvent, Error> {
+        let handle = self
+            .inner
+            .cells
+            .lock()
+            .await
+            .get(cell_id)
+            .cloned()
+            .ok_or_else(|| Error::MissingCell(cell_id.clone()))?;
+        Ok(PendingEvent {
+            event: map_actor_event(cell_id.clone(), handle.observe(mode)),
+        })
+    }
+
+    pub(crate) async fn terminate(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
+        let handle = self
+            .inner
+            .cells
+            .lock()
+            .await
+            .get(cell_id)
+            .cloned()
+            .ok_or_else(|| Error::MissingCell(cell_id.clone()))?;
+        handle
+            .terminate()
+            .await
+            .map_err(|error| actor_error(cell_id, error))
+    }
+
+    pub(crate) async fn shutdown(&self) -> Result<(), Error> {
+        self.inner.shutting_down.store(true, Ordering::Release);
+        let handles = self
+            .inner
+            .cells
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.shutdown();
+        }
+        while !self.inner.cells.lock().await.is_empty() {
+            tokio::task::yield_now().await;
+        }
+        Ok(())
+    }
+
+    fn allocate_cell_id(&self) -> CellId {
+        CellId::new(
+            self.inner
+                .next_cell_id
+                .fetch_add(1, Ordering::Relaxed)
+                .to_string(),
+        )
+    }
+
+    async fn start_cell(
+        &self,
+        cell_id: CellId,
+        request: CreateCellRequest,
+        initial_observe_mode: ObserveMode,
+    ) -> Result<RuntimeEventFuture, Error> {
+        let stored_values = self.inner.stored_values.lock().await.clone();
+        let host = Arc::new(RuntimeCellHost {
+            cell_id: cell_id.clone(),
+            inner: Arc::clone(&self.inner),
+        });
+        let mut cells = self.inner.cells.lock().await;
+        if self.inner.shutting_down.load(Ordering::Acquire) {
+            return Err(Error::ShuttingDown);
+        }
+        if cells.contains_key(&cell_id) {
+            return Err(Error::DuplicateCell(cell_id));
+        }
+        let (handle, initial_event, task) =
+            CellActor::prepare(request, stored_values, host, initial_observe_mode)
+                .map_err(Error::Runtime)?;
+        cells.insert(cell_id.clone(), handle);
+        drop(cells);
+        tokio::spawn(task);
+        Ok(map_actor_event(cell_id, initial_event))
+    }
+
+    fn begin_shutdown(&self) {
+        self.inner.shutting_down.store(true, Ordering::Release);
+        if let Ok(cells) = self.inner.cells.try_lock() {
+            for handle in cells.values() {
+                handle.shutdown();
+            }
+        }
+    }
+}
+
+impl<D: SessionRuntimeDelegate> Drop for SessionRuntime<D> {
+    fn drop(&mut self) {
+        self.begin_shutdown();
+    }
+}
+
+/// A cell admitted by [`SessionRuntime::execute`].
+pub(crate) struct StartedCell {
+    pub(crate) cell_id: CellId,
+    initial_event: RuntimeEventFuture,
+}
+
+impl StartedCell {
+    pub(crate) async fn initial_event(self) -> Result<CellEvent, Error> {
+        self.initial_event.await
+    }
+}
+
+/// An admitted observation that has not reached its requested frontier yet.
+pub(crate) struct PendingEvent {
+    event: RuntimeEventFuture,
+}
+
+impl PendingEvent {
+    pub(crate) async fn event(self) -> Result<CellEvent, Error> {
+        self.event.await
+    }
+}
+
+struct RuntimeCellHost<D: SessionRuntimeDelegate> {
+    cell_id: CellId,
+    inner: Arc<Inner<D>>,
+}
+
+impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
+    async fn invoke_tool(
+        &self,
+        invocation: CellToolCall,
+        cancellation_token: CancellationToken,
+    ) -> Result<JsonValue, String> {
+        self.inner
+            .delegate
+            .invoke_tool(
+                NestedToolCall {
+                    cell_id: self.cell_id.clone(),
+                    runtime_tool_call_id: invocation.id,
+                    tool_name: invocation.name,
+                    tool_kind: invocation.kind,
+                    input: invocation.input,
+                },
+                cancellation_token,
+            )
+            .await
+    }
+
+    async fn notify(
+        &self,
+        call_id: String,
+        text: String,
+        cancellation_token: CancellationToken,
+    ) -> Result<(), String> {
+        self.inner
+            .delegate
+            .notify(call_id, self.cell_id.clone(), text, cancellation_token)
+            .await
+    }
+
+    async fn commit_stored_values(&self, stored_value_writes: HashMap<String, JsonValue>) {
+        self.inner
+            .stored_values
+            .lock()
+            .await
+            .extend(stored_value_writes);
+    }
+
+    async fn closed(&self) {
+        self.inner.cells.lock().await.remove(&self.cell_id);
+        self.inner.delegate.cell_closed(&self.cell_id);
+    }
+}
+
+fn map_actor_event(cell_id: CellId, event: CellEventFuture) -> RuntimeEventFuture {
+    Box::pin(async move { event.await.map_err(|error| actor_error(&cell_id, error)) })
+}
+
+fn actor_error(cell_id: &CellId, error: CellError) -> Error {
+    match error {
+        CellError::Busy => Error::BusyObserver(cell_id.clone()),
+        CellError::AlreadyTerminating => Error::AlreadyTerminating(cell_id.clone()),
+        CellError::Closed => Error::ClosedCell(cell_id.clone()),
+    }
+}
