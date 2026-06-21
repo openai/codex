@@ -275,8 +275,11 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let initial_request = initial_mock.single_request();
-    assert!(initial_request.body_json().get("instructions").is_none());
+    assert_eq!(initial_request.body_json().get("instructions"), None);
     let initial_developer_texts = initial_request.message_input_texts("developer");
+    let initial_instructions = initial_developer_texts
+        .first()
+        .expect("initial developer instructions");
 
     let resumed_mock = mount_sse_sequence(
         &server,
@@ -339,22 +342,19 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     assert_eq!(requests.len(), 2, "expected two resumed requests");
 
     let first_resumed = &requests[0];
-    assert!(first_resumed.body_json().get("instructions").is_none());
+    assert_eq!(first_resumed.body_json().get("instructions"), None);
     let first_developer_texts = first_resumed.message_input_texts("developer");
-    assert!(first_developer_texts.starts_with(&initial_developer_texts));
+    assert_eq!(first_developer_texts.first(), Some(initial_instructions));
     let first_model_switch_count = first_developer_texts
         .iter()
         .filter(|text| text.contains("<model_switch>"))
         .count();
-    assert!(
-        first_model_switch_count >= 1,
-        "expected model switch message on first post-resume turn"
-    );
+    assert_eq!(first_model_switch_count, 1);
 
     let second_resumed = &requests[1];
-    assert!(second_resumed.body_json().get("instructions").is_none());
+    assert_eq!(second_resumed.body_json().get("instructions"), None);
     let second_developer_texts = second_resumed.message_input_texts("developer");
-    assert!(second_developer_texts.starts_with(&initial_developer_texts));
+    assert_eq!(second_developer_texts.first(), Some(initial_instructions));
     let second_model_switch_count = second_developer_texts
         .iter()
         .filter(|text| text.contains("<model_switch>"))

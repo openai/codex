@@ -5376,7 +5376,7 @@ mod tests {
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
-        assert!(!item.inline_instructions);
+        assert_eq!(item.inline_instructions, false);
         Ok(())
     }
 

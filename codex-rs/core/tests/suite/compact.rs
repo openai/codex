@@ -547,13 +547,15 @@ async fn summarize_context_three_requests_and_instructions() {
     let body3 = requests[2].body_json();
 
     // Manual compact should keep the baseline developer instructions.
-    assert!(body1.get("instructions").is_none());
-    assert!(body2.get("instructions").is_none());
+    assert_eq!(body1.get("instructions"), None);
+    assert_eq!(body2.get("instructions"), None);
     let developer_texts1 = requests[0].message_input_texts("developer");
     let developer_texts2 = requests[1].message_input_texts("developer");
-    assert!(
-        developer_texts2.starts_with(&developer_texts1),
-        "manual compact should keep the standard developer instructions: {developer_texts2:?}"
+    let baseline_instructions = developer_texts1.first().expect("developer instructions");
+    assert_eq!(
+        developer_texts2.first(),
+        Some(baseline_instructions),
+        "manual compact should keep the standard developer instructions"
     );
 
     // The summarization request should include the injected user input marker.
@@ -1215,13 +1217,10 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                     && value
                         .get("content")
                         .and_then(|content| content.as_array())
-                        .is_some_and(|content| {
-                            content.iter().any(|item| {
-                                item.get("text")
-                                    .and_then(|text| text.as_str())
-                                    .is_some_and(|text| text.contains("`sandbox_mode`"))
-                            })
-                        })
+                        .and_then(|content| content.get(1))
+                        .and_then(|item| item.get("text"))
+                        .and_then(|text| text.as_str())
+                        .is_some_and(|text| text.contains("`sandbox_mode`"))
                 {
                     return None;
                 }
@@ -1717,13 +1716,17 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let body_first = requests[0].body_json();
     let body_auto = requests[auto_compact_index].body_json();
     let body_follow_up = requests[follow_up_index].body_json();
-    assert!(body_first.get("instructions").is_none());
-    assert!(body_auto.get("instructions").is_none());
+    assert_eq!(body_first.get("instructions"), None);
+    assert_eq!(body_auto.get("instructions"), None);
     let baseline_developer_texts = requests[0].message_input_texts("developer");
     let auto_developer_texts = requests[auto_compact_index].message_input_texts("developer");
-    assert!(
-        auto_developer_texts.starts_with(&baseline_developer_texts),
-        "auto compact should keep the standard developer instructions: {auto_developer_texts:?}",
+    let baseline_instructions = baseline_developer_texts
+        .first()
+        .expect("developer instructions");
+    assert_eq!(
+        auto_developer_texts.first(),
+        Some(baseline_instructions),
+        "auto compact should keep the standard developer instructions",
     );
 
     let input_auto = body_auto.get("input").and_then(|v| v.as_array()).unwrap();

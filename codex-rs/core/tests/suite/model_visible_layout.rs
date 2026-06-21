@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use codex_config::types::Personality;
 use codex_features::Feature;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -29,6 +30,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
@@ -376,6 +378,10 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     let initial_request = initial_mock.single_request();
+    let initial_developer_texts = initial_request.message_input_texts("developer");
+    let initial_model_instructions = initial_developer_texts
+        .first()
+        .expect("initial model instructions");
 
     // Rewrite the seed turn into the legacy representation: no persisted compatibility flag and
     // no model instructions in history. The resumed request should therefore use the top-level
@@ -394,8 +400,10 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
                     if role == "developer" && !removed_inline_instructions =>
                 {
-                    assert!(!content.is_empty(), "developer message should have content");
-                    content.remove(0);
+                    let ContentItem::InputText { text } = content.remove(0) else {
+                        panic!("first developer content should be model instructions");
+                    };
+                    assert_eq!(text, initial_model_instructions.as_str());
                     removed_inline_instructions = true;
                 }
                 _ => {}

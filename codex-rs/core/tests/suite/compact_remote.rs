@@ -2180,18 +2180,14 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
     .await;
 
     let override_compact_request = override_compact_mock.single_request();
-    assert!(
-        override_compact_request
-            .body_json()
-            .get("instructions")
-            .is_none()
+    assert_eq!(
+        override_compact_request.body_json().get("instructions"),
+        None
     );
     let override_developer_texts = override_compact_request.message_input_texts("developer");
-    assert!(
-        override_developer_texts
-            .iter()
-            .any(|text| text.contains(&override_base_instructions)),
-        "expected override instructions in developer input, got {override_developer_texts:?}"
+    assert_eq!(
+        override_developer_texts.first().map(String::as_str),
+        Some(override_base_instructions.as_str())
     );
     assert!(
         override_compact_request.has_function_call(override_retained_call_id),

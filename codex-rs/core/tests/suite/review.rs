@@ -628,13 +628,11 @@ async fn review_input_isolated_from_parent_history() {
     );
 
     // Ensure the REVIEW_PROMPT rubric is sent via developer input.
-    assert!(body.get("instructions").is_none());
+    assert_eq!(body.get("instructions"), None);
     let developer_texts = request.message_input_texts("developer");
-    assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains(REVIEW_PROMPT)),
-        "expected review instructions in developer input, got {developer_texts:?}"
+    assert_eq!(
+        developer_texts.first().map(String::as_str),
+        Some(REVIEW_PROMPT)
     );
 
     // Also verify that a user interruption note was recorded in the rollout.

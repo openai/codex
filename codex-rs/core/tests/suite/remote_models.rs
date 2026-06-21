@@ -827,13 +827,11 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         .get_model_info("gpt-5.2", &config.to_models_manager_config())
         .await;
     let request = response_mock.single_request();
-    assert!(request.body_json().get("instructions").is_none());
+    assert_eq!(request.body_json().get("instructions"), None);
     let developer_texts = request.message_input_texts("developer");
-    assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains(&base_model_info.base_instructions)),
-        "expected model instructions in developer input, got {developer_texts:?}"
+    assert_eq!(
+        developer_texts.first().map(String::as_str),
+        Some(base_model_info.base_instructions.as_str())
     );
 
     Ok(())

@@ -206,25 +206,21 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         [base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS.to_string()].join("\n")
     };
 
-    assert!(body0.get("instructions").is_none());
+    assert_eq!(body0.get("instructions"), None);
     let developer_texts0 = request0.message_input_texts("developer");
-    assert!(
-        developer_texts0
-            .iter()
-            .any(|text| text.starts_with(&expected_instructions)),
-        "expected model instructions in developer input, got {developer_texts0:?}"
+    assert_eq!(
+        developer_texts0.first().map(String::as_str),
+        Some(expected_instructions.as_str())
     );
     assert_tool_names(&body0, &expected_tools_names);
 
     let request1 = req2.single_request();
     let body1 = request1.body_json();
-    assert!(body1.get("instructions").is_none());
+    assert_eq!(body1.get("instructions"), None);
     let developer_texts1 = request1.message_input_texts("developer");
-    assert!(
-        developer_texts1
-            .iter()
-            .any(|text| text.starts_with(&expected_instructions)),
-        "expected model instructions in developer input, got {developer_texts1:?}"
+    assert_eq!(
+        developer_texts1.first().map(String::as_str),
+        Some(expected_instructions.as_str())
     );
     assert_tool_names(&body1, &expected_tools_names);
 
@@ -290,7 +286,7 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request0 = req1.single_request();
-    assert!(request0.body_json().get("instructions").is_none());
+    assert_eq!(request0.body_json().get("instructions"), None);
     let developer_texts0 = request0.message_input_texts("developer");
     let instructions0 = developer_texts0.first().expect("developer instructions");
     assert!(
@@ -299,7 +295,7 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
     );
 
     let request1 = req2.single_request();
-    assert!(request1.body_json().get("instructions").is_none());
+    assert_eq!(request1.body_json().get("instructions"), None);
     let developer_texts1 = request1.message_input_texts("developer");
     let instructions1 = developer_texts1.first().expect("developer instructions");
     assert_eq!(
@@ -654,24 +650,18 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         "environment context should appear at least once, found {env_count}"
     );
 
-    let permissions_texts: Vec<&str> = input
-        .iter()
-        .filter(|msg| msg["role"].as_str() == Some("developer"))
-        .flat_map(|msg| {
-            msg["content"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item["text"].as_str())
-        })
-        .collect();
+    let permissions_text = input
+        .first()
+        .and_then(|message| message["content"].as_array())
+        .and_then(|content| content.get(1))
+        .and_then(|item| item["text"].as_str())
+        .expect("permissions instructions");
+    let normalized_permissions = permissions_text.to_ascii_lowercase();
     assert!(
-        permissions_texts.iter().any(|text| {
-            let lower = text.to_ascii_lowercase();
-            (lower.contains("approval policy") || lower.contains("approval_policy"))
-                && lower.contains("never")
-        }),
-        "permissions message should reflect overridden approval policy: {permissions_texts:?}"
+        (normalized_permissions.contains("approval policy")
+            || normalized_permissions.contains("approval_policy"))
+            && normalized_permissions.contains("never"),
+        "permissions message should reflect overridden approval policy: {permissions_text:?}"
     );
 
     let user_texts: Vec<&str> = input

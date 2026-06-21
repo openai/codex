@@ -1240,12 +1240,10 @@ async fn inlines_base_instructions_override_in_request() {
     let request_body = request.body_json();
     let developer_messages = request.message_input_texts("developer");
 
-    assert!(request_body.get("instructions").is_none());
-    assert!(
-        developer_messages
-            .iter()
-            .any(|text| text.contains("test instructions")),
-        "expected base instructions in developer input, got {developer_messages:?}"
+    assert_eq!(request_body.get("instructions"), None);
+    assert_eq!(
+        developer_messages.first().map(String::as_str),
+        Some("test instructions")
     );
 }
 
@@ -1466,12 +1464,10 @@ async fn includes_user_instructions_message_in_request() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    assert!(request_body.get("instructions").is_none());
+    assert_eq!(request_body.get("instructions"), None);
     assert_message_role(&request_body["input"][0], "developer");
-    let developer_texts = request.message_input_texts("developer");
-    let permissions_text = developer_texts
-        .iter()
-        .find(|text| text.contains("`sandbox_mode`"))
+    let permissions_text = request_body["input"][0]["content"][1]["text"]
+        .as_str()
         .expect("permissions message content");
     assert!(
         permissions_text.contains("`sandbox_mode`"),
@@ -2649,12 +2645,10 @@ async fn includes_developer_instructions_message_in_request() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    assert!(request_body.get("instructions").is_none());
+    assert_eq!(request_body.get("instructions"), None);
     assert_message_role(&request_body["input"][0], "developer");
-    let developer_texts = request.message_input_texts("developer");
-    let permissions_text = developer_texts
-        .iter()
-        .find(|text| text.contains("`sandbox_mode`"))
+    let permissions_text = request_body["input"][0]["content"][1]["text"]
+        .as_str()
         .expect("permissions message content");
     assert!(
         permissions_text.contains("`sandbox_mode`"),

@@ -1907,25 +1907,21 @@ async fn build_initial_context_inlines_base_instructions_for_new_turn_contexts()
 
     assert!(turn_context.inline_instructions);
     let initial_context = session.build_initial_context(&turn_context).await;
-    assert!(
-        developer_input_texts(&initial_context)
-            .iter()
-            .any(|text| text.contains(&base_instructions))
-    );
+    let developer_texts = developer_input_texts(&initial_context);
+    assert_eq!(developer_texts.first(), Some(&base_instructions.as_str()));
 
     turn_context.inline_instructions = false;
     let legacy_initial_context = session.build_initial_context(&turn_context).await;
-    assert!(
-        developer_input_texts(&legacy_initial_context)
-            .iter()
-            .all(|text| !text.contains(&base_instructions))
+    assert_eq!(
+        developer_input_texts(&legacy_initial_context),
+        developer_texts[1..]
     );
 }
 
 #[tokio::test]
 async fn new_turn_context_inherits_inline_instructions_from_reference_context() {
     let (session, turn_context) = make_session_and_context().await;
-    assert!(turn_context.inline_instructions);
+    assert_eq!(turn_context.inline_instructions, true);
 
     let mut legacy_context_item = turn_context.to_turn_context_item();
     legacy_context_item.inline_instructions = false;
@@ -1936,11 +1932,12 @@ async fn new_turn_context_inherits_inline_instructions_from_reference_context() 
         .set_reference_context_item(Some(legacy_context_item));
 
     let resumed_turn_context = session.new_default_turn().await;
-    assert!(!resumed_turn_context.inline_instructions);
-    assert!(
-        !resumed_turn_context
+    assert_eq!(resumed_turn_context.inline_instructions, false);
+    assert_eq!(
+        resumed_turn_context
             .to_turn_context_item()
-            .inline_instructions
+            .inline_instructions,
+        false
     );
 }
 
