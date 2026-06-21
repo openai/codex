@@ -1814,14 +1814,17 @@ fn thread_item_from_state_list_item(item: codex_state::ThreadListItem) -> Thread
     let source = serde_json::from_str(item.source.as_str())
         .or_else(|_| serde_json::from_value(Value::String(item.source)))
         .unwrap_or(SessionSource::Unknown);
-    let name = item
-        .name
-        .filter(|name| !name.trim().is_empty())
-        .or_else(|| {
+    let name = match item.name {
+        Some(name) => {
+            let name = name.trim();
+            (!name.is_empty()).then(|| name.to_string())
+        }
+        None => {
             let title = item.title.trim();
             (!title.is_empty() && item.first_user_message.as_deref().map(str::trim) != Some(title))
                 .then(|| item.title.clone())
-        });
+        }
+    };
     ThreadItem {
         path: item.rollout_path,
         thread_id: Some(item.id),
