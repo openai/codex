@@ -534,6 +534,11 @@ impl Session {
             }
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
         };
+        // Legacy subagent rollouts synthesize session_id from their own thread id.
+        let resumed_session_id = resumed_session_id.filter(|session_id| {
+            !session_configuration.session_source.is_non_root_agent()
+                || *session_id != SessionId::from(thread_id)
+        });
         let session_id = resumed_session_id.unwrap_or_else(|| {
             if session_configuration.session_source.is_non_root_agent() {
                 agent_control.session_id()
