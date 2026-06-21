@@ -148,6 +148,10 @@ impl SessionState {
         self.auto_compact_window.snapshot()
     }
 
+    pub(crate) fn claim_token_budget_reminder(&mut self) -> bool {
+        self.auto_compact_window.claim_token_budget_reminder()
+    }
+
     pub(crate) fn auto_compact_window_number(&self) -> u64 {
         self.auto_compact_window.window_number()
     }

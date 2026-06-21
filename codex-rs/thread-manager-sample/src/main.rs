@@ -280,6 +280,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         background_terminal_max_timeout: 300_000,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
+        token_budget: None,
         rollout_budget: None,
         current_time_reminder: None,
         features: Default::default(),

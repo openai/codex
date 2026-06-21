@@ -313,11 +313,22 @@ pub(crate) async fn run_turn(
                 );
 
                 let tokens_after_sampling = token_status.active_context_tokens;
-                super::token_budget::maybe_record_token_budget_remaining_context(
+                let full_context_remaining = token_status
+                    .full_context_window_limit
+                    .map_or(i64::MAX, |limit| {
+                        limit.saturating_sub(tokens_after_sampling)
+                    });
+                let tokens_until_compaction = token_status
+                    .auto_compact_scope_limit
+                    .saturating_sub(token_status.auto_compact_scope_tokens)
+                    .min(full_context_remaining)
+                    .max(0);
+                super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
                     tokens_before_sampling,
                     tokens_after_sampling,
+                    tokens_until_compaction,
                 )
                 .await;
 

@@ -73,6 +73,7 @@ pub(crate) use rollout_budget::RolloutBudgetContext;
 pub(crate) use subagent_notification::SubagentNotification;
 pub(crate) use token_budget_context::TokenBudgetContext;
 pub(crate) use token_budget_context::TokenBudgetRemainingContext;
+pub(crate) use token_budget_context::TokenBudgetReminder;
 pub(crate) use turn_aborted::TurnAborted;
 pub(crate) use user_instructions::UserInstructions;
 pub(crate) use user_shell_command::UserShellCommand;

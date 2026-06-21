@@ -10,6 +10,7 @@ use codex_features::FeatureToml;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::RolloutBudgetConfigToml;
+use codex_features::TokenBudgetConfigToml;
 use codex_protocol::ThreadId;
 
 use crate::config::Config;
@@ -152,6 +153,12 @@ fn save_config_resolved_fields(
         resolved_config_to_toml(&config.multi_agent_v2, "features.multi_agent_v2")?;
     multi_agent_v2.enabled = Some(config.features.enabled(Feature::MultiAgentV2));
     features.multi_agent_v2 = Some(FeatureToml::Config(multi_agent_v2));
+    if let Some(token_budget) = config.token_budget.as_ref() {
+        let mut token_budget: TokenBudgetConfigToml =
+            resolved_config_to_toml(token_budget, "features.token_budget")?;
+        token_budget.enabled = Some(config.features.enabled(Feature::TokenBudget));
+        features.token_budget = Some(FeatureToml::Config(token_budget));
+    }
     if let Some(rollout_budget) = config.rollout_budget.as_ref() {
         let mut rollout_budget: RolloutBudgetConfigToml =
             resolved_config_to_toml(rollout_budget, "features.rollout_budget")?;
@@ -238,6 +245,14 @@ mod tests {
     async fn lock_contains_prompts_and_materializes_features() {
         let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
         let mut config = (*sc.original_config_do_not_use).clone();
+        config.token_budget = Some(crate::config::TokenBudgetConfig {
+            reminder_threshold_tokens: Some(16_000),
+            reminder_message_template: "Locked reminder: {n_remaining} tokens.".to_string(),
+        });
+        config
+            .features
+            .enable(Feature::TokenBudget)
+            .expect("token_budget should be enableable in tests");
         config.rollout_budget = Some(crate::config::RolloutBudgetConfig {
             limit_tokens: 100_000,
             reminder_interval_tokens: 10_000,
@@ -317,6 +332,17 @@ mod tests {
                 ..
             })
         ));
+
+        assert_eq!(
+            features.token_budget,
+            Some(FeatureToml::Config(TokenBudgetConfigToml {
+                enabled: Some(true),
+                reminder_threshold_tokens: Some(16_000),
+                reminder_message_template: Some(
+                    "Locked reminder: {n_remaining} tokens.".to_string()
+                ),
+            }))
+        );
 
         assert_eq!(
             features.rollout_budget,

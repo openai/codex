@@ -30,6 +30,7 @@ pub(super) struct AutoCompactWindow {
     /// not the growth itself; server-observed usage replaces estimated
     /// resume/recompute baselines when available.
     prefill_input_tokens: Option<AutoCompactWindowPrefill>,
+    token_budget_reminder_delivered: bool,
 }
 
 impl AutoCompactWindow {
@@ -44,6 +45,7 @@ impl AutoCompactWindow {
             },
             new_context_window_requested: false,
             prefill_input_tokens: None,
+            token_budget_reminder_delivered: false,
         }
     }
 
@@ -69,7 +71,12 @@ impl AutoCompactWindow {
         self.ids.previous_window_id = Some(self.ids.window_id);
         self.ids.window_id = Uuid::now_v7();
         self.new_context_window_requested = false;
+        self.token_budget_reminder_delivered = false;
         (self.window_number, self.ids)
+    }
+
+    pub(super) fn claim_token_budget_reminder(&mut self) -> bool {
+        !std::mem::replace(&mut self.token_budget_reminder_delivered, true)
     }
 
     pub(super) fn request_new_context_window(&mut self) {
@@ -154,6 +161,8 @@ mod tests {
         );
         assert_eq!(window.window_number(), 3);
         assert_eq!(window.ids().window_id, restored_window_id);
+        assert!(window.claim_token_budget_reminder());
+        assert!(!window.claim_token_budget_reminder());
         window.request_new_context_window();
         assert!(window.take_new_context_window_request());
         assert!(!window.take_new_context_window_request());
@@ -167,6 +176,7 @@ mod tests {
         assert_eq!(ids.window_id.get_version_num(), 7);
         assert_ne!(ids.window_id, restored_window_id);
         assert!(!window.take_new_context_window_request());
+        assert!(window.claim_token_budget_reminder());
 
         assert_eq!(
             window.snapshot(),

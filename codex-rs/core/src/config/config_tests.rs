@@ -461,6 +461,90 @@ direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
 }
 
 #[tokio::test]
+async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
+    for (config_toml, expected) in [
+        (
+            "[features]\ntoken_budget = true\n",
+            TokenBudgetConfig::default(),
+        ),
+        (
+            r#"
+[features.token_budget]
+enabled = true
+reminder_threshold_tokens = 16000
+reminder_message_template = "Custom reminder: {n_remaining} tokens."
+"#,
+            TokenBudgetConfig {
+                reminder_threshold_tokens: Some(16_000),
+                reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
+            },
+        ),
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
+        let config = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert!(config.features.enabled(Feature::TokenBudget));
+        assert_eq!(config.token_budget, Some(expected));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_invalid_token_budget_reminder_template() -> std::io::Result<()> {
+    for reminder_message_template in [
+        String::new(),
+        "x".repeat(TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES + 1),
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(&format!(
+            "[features.token_budget]\nenabled = true\nreminder_message_template = {reminder_message_template:?}\n"
+        ))
+        .expect("TOML should deserialize");
+        let error = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("invalid reminder template should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_non_positive_token_budget_reminder_threshold() -> std::io::Result<()> {
+    for reminder_threshold_tokens in [-1, 0] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(&format!(
+            "[features.token_budget]\nenabled = true\nreminder_threshold_tokens = {reminder_threshold_tokens}\n"
+        ))
+        .expect("TOML should deserialize");
+        let error = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("non-positive reminder threshold should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "features.token_budget.reminder_threshold_tokens must be positive"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_rollout_budget() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     let config_toml: ConfigToml = toml::from_str(

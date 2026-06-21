@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::TokenBudgetConfig;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::protocol::EventMsg;
@@ -293,6 +294,57 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
     assert_eq!(
         token_budget_texts(&requests[4]),
         vec![full_context, threshold_25, threshold_50, threshold_75]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_reminder_emits_after_crossing_compaction_threshold() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 8_000),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_context_window = Some(10_000);
+            config.token_budget = Some(TokenBudgetConfig {
+                reminder_threshold_tokens: Some(2_000),
+                ..TokenBudgetConfig::default()
+            });
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("cross threshold").await?;
+    test.submit_turn("observe reminder").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let initial_context = token_budget_texts(&requests[0]);
+    assert_eq!(initial_context.len(), 1);
+    let remaining_context =
+        "<token_budget>\nYou have 1500 tokens left in this context window.\n</token_budget>"
+            .to_string();
+    let reminder = "<token_budget>\nYour context window is nearly exhausted (only 1000 tokens remaining) and will be automatically reset for you soon. Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows.\n</token_budget>"
+        .to_string();
+    assert_eq!(
+        token_budget_texts(&requests[1]),
+        vec![initial_context[0].clone(), remaining_context, reminder]
     );
 
     Ok(())
