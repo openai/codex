@@ -13,6 +13,10 @@ use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FS_GET_METADATA_METHOD;
+use codex_exec_server::FileMetadata;
+use codex_exec_server::FsGetMetadataParams;
+use codex_exec_server::FsGetMetadataResponse;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -534,15 +538,26 @@ async fn discover_skills_under_root(
             }
         };
 
-        for entry in entries {
-            let file_name = entry.file_name;
-            if file_name.starts_with('.') {
-                continue;
-            }
+        let paths = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let file_name = entry.file_name;
+                if file_name.starts_with('.') {
+                    return None;
+                }
+                let path = dir.join(&file_name);
+                let path_uri = PathUri::from_abs_path(&path);
+                Some((file_name, path, path_uri))
+            })
+            .collect::<Vec<_>>();
+        let mut metadata_results = batched_get_metadata(fs, &paths).await.map(Vec::into_iter);
 
-            let path = dir.join(&file_name);
-            let path_uri = PathUri::from_abs_path(&path);
-            let metadata = match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
+        for (file_name, path, path_uri) in paths {
+            let metadata_result = match metadata_results.as_mut().and_then(Iterator::next) {
+                Some(result) => result,
+                None => fs.get_metadata(&path_uri, /*sandbox*/ None).await,
+            };
+            let metadata = match metadata_result {
                 Ok(metadata) => metadata,
                 Err(e) => {
                     error!("failed to stat skills path {}: {e:#}", path.display());
@@ -626,6 +641,70 @@ async fn discover_skills_under_root(
             root.display()
         );
     }
+}
+
+async fn batched_get_metadata(
+    fs: &dyn ExecutorFileSystem,
+    paths: &[(String, AbsolutePathBuf, PathUri)],
+) -> Option<Vec<io::Result<FileMetadata>>> {
+    if paths.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut requests = Vec::with_capacity(paths.len());
+    for (_, _, path) in paths {
+        let params = match serde_json::to_value(FsGetMetadataParams {
+            path: path.clone(),
+            sandbox: None,
+        }) {
+            Ok(params) => params,
+            Err(err) => {
+                error!("failed to encode batched skills path stat: {err:#}");
+                return None;
+            }
+        };
+        requests.push((FS_GET_METADATA_METHOD.to_string(), params));
+    }
+
+    let results = match fs.execute_rpc_batch(requests).await {
+        Ok(results) if results.len() == paths.len() => results,
+        Ok(results) => {
+            error!(
+                "batched skills path stat returned {} results for {} requests",
+                results.len(),
+                paths.len()
+            );
+            return None;
+        }
+        Err(err) if err.kind() == io::ErrorKind::Unsupported => return None,
+        Err(err) => {
+            error!("failed to batch-stat skills paths: {err:#}");
+            return None;
+        }
+    };
+
+    Some(
+        results
+            .into_iter()
+            .map(|result| {
+                let response: FsGetMetadataResponse =
+                    serde_json::from_value(result?).map_err(|err| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("fs/getMetadata returned invalid response: {err}"),
+                        )
+                    })?;
+                Ok(FileMetadata {
+                    is_directory: response.is_directory,
+                    is_file: response.is_file,
+                    is_symlink: response.is_symlink,
+                    size: response.size,
+                    created_at_ms: response.created_at_ms,
+                    modified_at_ms: response.modified_at_ms,
+                })
+            })
+            .collect(),
+    )
 }
 
 async fn parse_skill_file(

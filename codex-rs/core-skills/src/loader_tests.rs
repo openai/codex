@@ -4,7 +4,14 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::CopyOptions;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystemFuture;
+use codex_exec_server::FileSystemReadStream;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::RemoveOptions;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -16,6 +23,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::TempDir;
 use toml::Value as TomlValue;
 
@@ -2156,4 +2164,172 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     }
     expected.push(SkillScope::Admin);
     assert_eq!(scopes, expected);
+}
+
+#[tokio::test]
+async fn batched_get_metadata_sends_one_request_per_path() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let first_path = tmp.path().join("first").abs();
+    let second_path = tmp.path().join("second").abs();
+    let first_uri = PathUri::from_abs_path(&first_path);
+    let second_uri = PathUri::from_abs_path(&second_path);
+    let fs = BatchMetadataFileSystem::default();
+
+    let results = super::batched_get_metadata(
+        &fs,
+        &[
+            ("first".to_string(), first_path, first_uri.clone()),
+            ("second".to_string(), second_path, second_uri.clone()),
+        ],
+    )
+    .await
+    .expect("batch should be supported")
+    .into_iter()
+    .map(|result| result.expect("metadata result"))
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        results,
+        vec![
+            FileMetadata {
+                is_directory: true,
+                is_file: false,
+                is_symlink: false,
+                size: 0,
+                created_at_ms: 1,
+                modified_at_ms: 2,
+            },
+            FileMetadata {
+                is_directory: true,
+                is_file: false,
+                is_symlink: false,
+                size: 0,
+                created_at_ms: 1,
+                modified_at_ms: 2,
+            },
+        ]
+    );
+
+    let calls = fs.calls.lock().expect("calls lock");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].len(), 2);
+    assert_eq!(calls[0][0].0, FS_GET_METADATA_METHOD);
+    assert_eq!(calls[0][1].0, FS_GET_METADATA_METHOD);
+    let first_params: FsGetMetadataParams =
+        serde_json::from_value(calls[0][0].1.clone()).expect("first params");
+    let second_params: FsGetMetadataParams =
+        serde_json::from_value(calls[0][1].1.clone()).expect("second params");
+    assert_eq!(first_params.path, first_uri);
+    assert_eq!(second_params.path, second_uri);
+}
+
+#[derive(Default)]
+struct BatchMetadataFileSystem {
+    calls: Mutex<Vec<Vec<(String, serde_json::Value)>>>,
+}
+
+impl ExecutorFileSystem for BatchMetadataFileSystem {
+    fn canonicalize<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        Box::pin(async { unsupported() })
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        Box::pin(async { unsupported() })
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(async { unsupported() })
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _contents: Vec<u8>,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(async { unsupported() })
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _create_directory_options: CreateDirectoryOptions,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(async { unsupported() })
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(async { unsupported() })
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        Box::pin(async { unsupported() })
+    }
+
+    fn remove<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _remove_options: RemoveOptions,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(async { unsupported() })
+    }
+
+    fn copy<'a>(
+        &'a self,
+        _source_path: &'a PathUri,
+        _destination_path: &'a PathUri,
+        _copy_options: CopyOptions,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(async { unsupported() })
+    }
+
+    fn execute_rpc_batch<'a>(
+        &'a self,
+        requests: Vec<(String, serde_json::Value)>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<io::Result<serde_json::Value>>> {
+        Box::pin(async move {
+            let len = requests.len();
+            self.calls.lock().expect("calls lock").push(requests);
+            Ok((0..len)
+                .map(|_| {
+                    serde_json::to_value(FsGetMetadataResponse {
+                        is_directory: true,
+                        is_file: false,
+                        is_symlink: false,
+                        size: 0,
+                        created_at_ms: 1,
+                        modified_at_ms: 2,
+                    })
+                    .map_err(io::Error::other)
+                })
+                .collect())
+        })
+    }
+}
+
+fn unsupported<T>() -> io::Result<T> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported"))
 }
