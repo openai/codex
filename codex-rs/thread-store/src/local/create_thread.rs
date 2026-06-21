@@ -28,7 +28,6 @@ pub(super) async fn create_thread(
     RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(
-            params.session_id,
             params.thread_id,
             params.forked_from_id,
             params.parent_thread_id,
@@ -37,6 +36,7 @@ pub(super) async fn create_thread(
             params.base_instructions,
             params.dynamic_tools,
         )
+        .with_session_id(params.session_id)
         .with_multi_agent_version(params.multi_agent_version),
     )
     .await

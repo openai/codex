@@ -160,7 +160,6 @@ fn clone_io_error(err: &IoError) -> IoError {
 
 impl RolloutRecorderParams {
     pub fn new(
-        session_id: SessionId,
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         parent_thread_id: Option<ThreadId>,
@@ -170,7 +169,7 @@ impl RolloutRecorderParams {
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> Self {
         Self::Create {
-            session_id,
+            session_id: conversation_id.into(),
             conversation_id,
             forked_from_id,
             parent_thread_id,
@@ -180,6 +179,13 @@ impl RolloutRecorderParams {
             dynamic_tools,
             multi_agent_version: None,
         }
+    }
+
+    pub fn with_session_id(mut self, session_id: SessionId) -> Self {
+        if let Self::Create { session_id: id, .. } = &mut self {
+            *id = session_id;
+        }
+        self
     }
 
     pub fn with_multi_agent_version(
