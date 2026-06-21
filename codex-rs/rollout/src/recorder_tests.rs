@@ -148,7 +148,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Result<()> {
+async fn load_rollout_items_defaults_legacy_session_id() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let rollout_path = home.path().join("rollout.jsonl");
     let mut file = File::create(&rollout_path)?;
@@ -162,7 +162,6 @@ async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Resu
             "timestamp": ts,
             "type": "session_meta",
             "payload": {
-                "session_id": thread_id,
                 "id": thread_id,
                 "timestamp": ts,
                 "cwd": ".",
@@ -214,7 +213,10 @@ async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Resu
     assert_eq!(loaded_thread_id, Some(thread_id));
     assert_eq!(parse_errors, 0);
     assert_eq!(items.len(), 2);
-    assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
+    let RolloutItem::SessionMeta(session_meta) = &items[0] else {
+        panic!("expected session metadata");
+    };
+    assert_eq!(session_meta.meta.session_id, SessionId::from(thread_id));
     assert!(matches!(
         items[1],
         RolloutItem::ResponseItem(ResponseItem::Message { .. })
