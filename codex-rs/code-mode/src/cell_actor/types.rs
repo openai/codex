@@ -60,6 +60,9 @@ pub(crate) trait CellHost: Send + Sync + 'static {
         cell_state: Arc<CellState>,
     ) -> impl Future<Output = CompletionCommit> + Send;
 
+    /// Reports that execution reached a terminal state, even when its result remains buffered.
+    fn terminal(&self);
+
     fn closed(&self) -> impl Future<Output = ()> + Send;
 }
 

@@ -52,6 +52,8 @@ impl CellHost for TestHost {
         cell_state.commit_completion(event, pending_initial_yield_items, || {})
     }
 
+    fn terminal(&self) {}
+
     async fn closed(&self) {}
 }
 
@@ -85,6 +87,8 @@ impl CellHost for RecordingHost {
             self.committed.store(true, Ordering::Release);
         })
     }
+
+    fn terminal(&self) {}
 
     async fn closed(&self) {}
 }

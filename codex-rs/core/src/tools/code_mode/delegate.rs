@@ -238,6 +238,10 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
             }
         })
     }
+
+    fn cell_closed(&self, cell_id: &CellId) {
+        self.close_cell(cell_id);
+    }
 }
 
 enum DispatchMessage {
@@ -307,3 +311,7 @@ impl CoreTurnHost {
             })
     }
 }
+
+#[cfg(test)]
+#[path = "delegate_tests.rs"]
+mod tests;

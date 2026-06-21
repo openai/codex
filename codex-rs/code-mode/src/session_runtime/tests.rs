@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::task::Context;
 use std::task::Poll;
 use std::task::Waker;
@@ -33,6 +34,8 @@ impl SessionRuntimeDelegate for RecordingDelegate {
     ) -> Result<(), String> {
         Ok(())
     }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 #[tokio::test]
@@ -42,6 +45,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
     let host = RuntimeCellHost {
         cell_id: CellId::new("terminating-writer"),
         inner: Arc::clone(&runtime.inner),
+        terminal_notified: AtomicBool::new(false),
     };
     let completion = CellEvent::Completed {
         content_items: vec![OutputItem::Text {

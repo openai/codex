@@ -49,6 +49,8 @@ impl CodeModeSessionDelegate for NoopCodeModeSessionDelegate {
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
     }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 #[derive(Default)]
@@ -250,6 +252,10 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
                 cancellation_token,
             )
             .await
+    }
+
+    fn cell_closed(&self, cell_id: &runtime::CellId) {
+        self.delegate.cell_closed(&protocol_cell_id(cell_id));
     }
 }
 

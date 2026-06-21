@@ -19,6 +19,11 @@ enum DelegateEvent {
     NotificationStarted,
     NotificationFinished,
     ToolStarted,
+    CellClosed(CellId),
+}
+
+fn record_cell_closed(events_tx: &mpsc::UnboundedSender<DelegateEvent>, cell_id: &CellId) {
+    let _ = events_tx.send(DelegateEvent::CellClosed(cell_id.clone()));
 }
 
 struct BlockingDelegate {
@@ -100,6 +105,10 @@ impl CodeModeSessionDelegate for NeverResolvingNotificationDelegate {
             std::future::pending().await
         })
     }
+
+    fn cell_closed(&self, cell_id: &CellId) {
+        record_cell_closed(&self.events_tx, cell_id);
+    }
 }
 
 impl CodeModeSessionDelegate for ReleasableNotificationDelegate {
@@ -134,6 +143,10 @@ impl CodeModeSessionDelegate for ReleasableNotificationDelegate {
             }
         })
     }
+
+    fn cell_closed(&self, cell_id: &CellId) {
+        record_cell_closed(&self.events_tx, cell_id);
+    }
 }
 
 impl CodeModeSessionDelegate for NeverResolvingToolDelegate {
@@ -156,6 +169,10 @@ impl CodeModeSessionDelegate for NeverResolvingToolDelegate {
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
+    }
+
+    fn cell_closed(&self, cell_id: &CellId) {
+        record_cell_closed(&self.events_tx, cell_id);
     }
 }
 
@@ -210,6 +227,10 @@ impl CodeModeSessionDelegate for BlockingDelegate {
             cancellation_token.cancelled().await;
             Err("cancelled".to_string())
         })
+    }
+
+    fn cell_closed(&self, cell_id: &CellId) {
+        record_cell_closed(&self.events_tx, cell_id);
     }
 }
 
@@ -369,6 +390,39 @@ await tools.block({});
             }],
             error_text: None,
         })
+    );
+}
+
+#[tokio::test]
+async fn background_completion_notifies_the_delegate_without_another_observation() {
+    let (delegate, mut events_rx) = BlockingDelegate::new();
+    let service = CodeModeService::with_delegate(delegate);
+    let created_cell_id = service
+        .create_cell(execute_request(
+            r#"await new Promise(resolve => setTimeout(resolve, 100)); text("done");"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            service.observe(ObserveRequest {
+                cell_id: created_cell_id.clone(),
+                yield_time_ms: 1,
+            }),
+        )
+        .await
+        .expect("initial observation should yield while the cell is still running")
+        .unwrap(),
+        CellOutcome::LiveCell(RuntimeResponse::Yielded {
+            cell_id: created_cell_id.clone(),
+            content_items: Vec::new(),
+        })
+    );
+
+    assert_eq!(
+        next_event(&mut events_rx).await,
+        DelegateEvent::CellClosed(created_cell_id)
     );
 }
 

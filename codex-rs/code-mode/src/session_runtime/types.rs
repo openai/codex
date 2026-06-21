@@ -118,7 +118,8 @@ pub struct NestedToolCall {
 /// Host callbacks used by cells owned by a [`super::SessionRuntime`].
 ///
 /// Implementations should forward callback cancellation tokens to downstream
-/// work. The runtime stops awaiting callbacks once cancellation begins.
+/// work. The runtime stops awaiting callbacks once cancellation begins. Terminal
+/// notifications must be non-blocking and are not acknowledged or retried.
 pub trait SessionRuntimeDelegate: Send + Sync + 'static {
     fn invoke_tool(
         &self,
@@ -133,6 +134,11 @@ pub trait SessionRuntimeDelegate: Send + Sync + 'static {
         text: String,
         cancellation_token: CancellationToken,
     ) -> impl Future<Output = Result<(), String>> + Send;
+
+    /// Reports that execution is terminal and will issue no more callbacks.
+    ///
+    /// The terminal result may remain buffered for a later observation.
+    fn cell_closed(&self, cell_id: &CellId);
 }
 
 /// A failure reported by a session runtime operation.
