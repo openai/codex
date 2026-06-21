@@ -34,9 +34,8 @@ pub(crate) struct CellToolCall {
 /// Connects a cell actor to session-owned callbacks and stored values.
 ///
 /// Implementations should forward callback cancellation to downstream work.
-/// The actor stops awaiting callbacks once cancellation begins. Implementations
-/// must not return from `closed` until the session can no longer route requests
-/// to the cell.
+/// Implementations must not return from `closed` until the session can no longer
+/// route requests to the cell.
 pub(crate) trait CellHost: Send + Sync + 'static {
     fn invoke_tool(
         &self,
