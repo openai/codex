@@ -32,7 +32,9 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::RecommendedPluginsInstructions;
-use crate::context::world_state::SettingsState;
+use crate::context::world_state::ModelState;
+use crate::context::world_state::PersonalityState;
+use crate::context::world_state::RealtimeState;
 use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -3029,8 +3031,12 @@ impl Session {
                 state.auto_compact_window_id(),
             )
         };
-        if let Some(model_switch_message) =
-            SettingsState::model_update(previous_turn_settings.as_ref(), turn_context)
+        if let Some(model_switch_message) = ModelState::from_turn_context(turn_context)
+            .rendered_diff(&ModelState::from_previous_model(
+                previous_turn_settings
+                    .as_ref()
+                    .map(|settings| settings.model.as_str()),
+            ))
         {
             developer_sections.push(model_switch_message);
         }
@@ -3072,10 +3078,15 @@ impl Session {
         {
             developer_sections.push(collab_instructions.render());
         }
-        if let Some(realtime_update) = SettingsState::realtime_update(
-            reference_context_item.as_ref(),
-            previous_turn_settings.as_ref(),
-            turn_context,
+        if let Some(realtime_update) = RealtimeState::from_turn_context(turn_context).rendered_diff(
+            &RealtimeState::from_previous(
+                reference_context_item
+                    .as_ref()
+                    .and_then(|item| item.realtime_active),
+                previous_turn_settings
+                    .as_ref()
+                    .and_then(|settings| settings.realtime_active),
+            ),
         ) {
             developer_sections.push(realtime_update);
         }
@@ -3087,7 +3098,7 @@ impl Session {
                 && base_instructions == model_info.get_model_instructions(Some(personality));
             if !has_baked_personality
                 && let Some(personality_message) =
-                    SettingsState::personality_message(&model_info, personality)
+                    PersonalityState::message(&model_info, personality)
             {
                 developer_sections
                     .push(PersonalitySpecInstructions::new(personality_message).render());

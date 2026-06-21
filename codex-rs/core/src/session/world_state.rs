@@ -2,7 +2,12 @@ use super::PreviousTurnSettings;
 use super::Session;
 use super::turn_context::TurnContext;
 use crate::context::EnvironmentsState;
-use crate::context::world_state::SettingsState;
+use crate::context::world_state::CollaborationModeState;
+use crate::context::world_state::ModelState;
+use crate::context::world_state::MultiAgentModeState;
+use crate::context::world_state::PermissionsState;
+use crate::context::world_state::PersonalityState;
+use crate::context::world_state::RealtimeState;
 use crate::context::world_state::WorldState;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_execpolicy::Policy;
@@ -17,9 +22,16 @@ fn build_world_state_from_turn_context_with_environments(
     personality_feature_enabled: bool,
 ) -> WorldState {
     let mut world_state = WorldState::default();
-    world_state.add_section(SettingsState::from_turn_context(
+    world_state.add_section(ModelState::from_turn_context(turn_context));
+    world_state.add_section(PermissionsState::from_turn_context(
         turn_context,
         exec_policy,
+    ));
+    world_state.add_section(CollaborationModeState::from_turn_context(turn_context));
+    world_state.add_section(MultiAgentModeState::from_turn_context(turn_context));
+    world_state.add_section(RealtimeState::from_turn_context(turn_context));
+    world_state.add_section(PersonalityState::from_turn_context(
+        turn_context,
         personality_feature_enabled,
     ));
     if turn_context.config.include_environment_context {
@@ -36,10 +48,21 @@ pub(crate) fn build_world_state_from_turn_context_item(
     previous_turn_settings: Option<&PreviousTurnSettings>,
 ) -> WorldState {
     let mut world_state = WorldState::default();
-    world_state.add_section(SettingsState::from_turn_context_item(
-        turn_context_item,
-        previous_turn_settings,
+    world_state.add_section(ModelState::from_previous_model(
+        previous_turn_settings.map(|settings| settings.model.as_str()),
     ));
+    world_state.add_section(PermissionsState::from_turn_context_item(turn_context_item));
+    world_state.add_section(CollaborationModeState::from_turn_context_item(
+        turn_context_item,
+    ));
+    world_state.add_section(MultiAgentModeState::from_turn_context_item(
+        turn_context_item,
+    ));
+    world_state.add_section(RealtimeState::from_previous(
+        turn_context_item.realtime_active,
+        previous_turn_settings.and_then(|settings| settings.realtime_active),
+    ));
+    world_state.add_section(PersonalityState::from_turn_context_item(turn_context_item));
     world_state.add_section(EnvironmentsState::from_turn_context_item(turn_context_item));
     world_state
 }

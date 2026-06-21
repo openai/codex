@@ -1,14 +1,35 @@
+mod collaboration_mode;
 mod environment;
-mod settings;
+mod model;
+mod multi_agent_mode;
+mod permissions;
+mod personality;
+mod realtime;
 
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use indexmap::IndexMap;
 use std::any::Any;
 use std::any::TypeId;
 use std::fmt;
 
+pub(crate) use collaboration_mode::CollaborationModeState;
 pub(crate) use environment::EnvironmentsState;
-pub(crate) use settings::SettingsState;
+pub(crate) use model::ModelState;
+pub(crate) use multi_agent_mode::MultiAgentModeState;
+pub(crate) use permissions::PermissionsState;
+pub(crate) use personality::PersonalityState;
+pub(crate) use realtime::RealtimeState;
+
+fn developer_message(text: String) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText { text }],
+        phase: None,
+        metadata: None,
+    }
+}
 
 trait ErasedWorldStateSection: Send + Sync {
     fn as_any(&self) -> &dyn Any;
@@ -67,7 +88,8 @@ impl WorldState {
     }
 
     pub(crate) fn render_diff(&self, previous: &Self) -> Vec<ResponseItem> {
-        self.sections
+        let section_items = self
+            .sections
             .iter()
             .filter_map(|(type_id, section)| {
                 let previous = previous
@@ -76,6 +98,29 @@ impl WorldState {
                     .map(|section| section.as_any());
                 section.render_diff(previous)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        let mut items = Vec::with_capacity(section_items.len());
+        for item in section_items {
+            match (items.last_mut(), item) {
+                (
+                    Some(ResponseItem::Message {
+                        id: None,
+                        role: previous_role,
+                        content: previous_content,
+                        phase: None,
+                        metadata: None,
+                    }),
+                    ResponseItem::Message {
+                        id: None,
+                        role,
+                        content,
+                        phase: None,
+                        metadata: None,
+                    },
+                ) if *previous_role == role => previous_content.extend(content),
+                (_, item) => items.push(item),
+            }
+        }
+        items
     }
 }
