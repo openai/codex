@@ -103,10 +103,8 @@ fn build_multi_agent_mode_update_item(
 ) -> Option<String> {
     let effective_multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(
         next.multi_agent_version,
-        &next.config.multi_agent_v2,
         &next.session_source,
         next.multi_agent_mode,
-        next.config.features.enabled(Feature::MultiAgentMode),
     );
     let previous = previous?;
     if previous.multi_agent_mode == effective_multi_agent_mode {

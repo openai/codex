@@ -82,16 +82,15 @@ async fn multi_agent_mode_is_sticky_and_emits_only_on_change() -> Result<()> {
                 .features
                 .enable(Feature::MultiAgentV2)
                 .expect("test config should allow feature update");
-            config
-                .features
-                .enable(Feature::MultiAgentMode)
-                .expect("test config should allow feature update");
         })
         .build(&server)
         .await?;
 
     submit_turn(&test.codex, "turn one", /*mode*/ None).await?;
-    assert_eq!(test.codex.config_snapshot().await.multi_agent_mode, None);
+    assert_eq!(
+        test.codex.config_snapshot().await.multi_agent_mode,
+        MultiAgentMode::ExplicitRequestOnly
+    );
     submit_turn(&test.codex, "turn two", Some(MultiAgentMode::Proactive)).await?;
     submit_turn(&test.codex, "turn three", /*mode*/ None).await?;
 
@@ -133,7 +132,7 @@ async fn multi_agent_mode_is_sticky_and_emits_only_on_change() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_mode_feature_uses_explicit_mode_when_disabled() -> Result<()> {
+async fn multi_agent_mode_applies_without_usage_hint_text() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -148,21 +147,21 @@ async fn multi_agent_mode_feature_uses_explicit_mode_when_disabled() -> Result<(
                 .features
                 .enable(Feature::MultiAgentV2)
                 .expect("test config should allow feature update");
+            config.multi_agent_v2.root_agent_usage_hint_text = None;
         })
         .build(&server)
         .await?;
 
-    submit_turn(&test.codex, "hello", /*mode*/ None).await?;
+    submit_turn(&test.codex, "hello", Some(MultiAgentMode::Proactive)).await?;
 
     let input = responses.single_request().input();
     let texts = developer_texts(&input);
     assert_eq!(
         (
             count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&texts, NO_SPAWN_TEXT),
             count_containing(&texts, PROACTIVE_TEXT),
         ),
-        (1, 1, 0)
+        (1, 1)
     );
 
     Ok(())
@@ -175,7 +174,7 @@ async fn resume_compares_against_previous_effective_multi_agent_mode() -> Result
     let server = start_mock_server().await;
     let responses = mount_sse_sequence(
         &server,
-        (1..=4)
+        (1..=2)
             .map(|index| {
                 sse(vec![
                     ev_response_created(&format!("resp-{index}")),
@@ -214,18 +213,14 @@ async fn resume_compares_against_previous_effective_multi_agent_mode() -> Result
             .features
             .enable(Feature::MultiAgentV2)
             .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MultiAgentMode)
-            .expect("test config should allow feature update");
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
-    submit_turn(
-        &resumed.codex,
-        "after resume",
-        Some(MultiAgentMode::Proactive),
-    )
-    .await?;
+    submit_turn(&resumed.codex, "after resume", /*mode*/ None).await?;
+
+    assert_eq!(
+        resumed.codex.config_snapshot().await.multi_agent_mode,
+        MultiAgentMode::Proactive
+    );
 
     let requests = responses.requests();
     let resumed_input = requests[1].input();
@@ -236,108 +231,14 @@ async fn resume_compares_against_previous_effective_multi_agent_mode() -> Result
             count_containing(&texts, NO_SPAWN_TEXT),
             count_containing(&texts, PROACTIVE_TEXT),
         ),
-        (2, 1, 1)
-    );
-
-    let resumed_rollout_path = resumed
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("resumed rollout path");
-    let resumed_home = resumed.home.clone();
-    drop(resumed);
-    let mut same_mode_resume_builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MultiAgentMode)
-            .expect("test config should allow feature update");
-    });
-    let resumed_same_mode = same_mode_resume_builder
-        .resume(&server, resumed_home, resumed_rollout_path)
-        .await?;
-    submit_turn(
-        &resumed_same_mode.codex,
-        "after same-mode resume",
-        /*mode*/ None,
-    )
-    .await?;
-
-    assert_eq!(
-        resumed_same_mode
-            .codex
-            .config_snapshot()
-            .await
-            .multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
-    );
-    let requests = responses.requests();
-    let resumed_same_mode_input = requests[2].input();
-    let texts = developer_texts(&resumed_same_mode_input);
-    assert_eq!(
-        (
-            count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&texts, NO_SPAWN_TEXT),
-            count_containing(&texts, PROACTIVE_TEXT),
-        ),
-        (2, 1, 1)
-    );
-
-    let resumed_same_mode_rollout_path = resumed_same_mode
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("same-mode resumed rollout path");
-    let resumed_same_mode_home = resumed_same_mode.home.clone();
-    drop(resumed_same_mode);
-    let mut disabled_mode_resume_builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-    });
-    let resumed_disabled_mode = disabled_mode_resume_builder
-        .resume(
-            &server,
-            resumed_same_mode_home,
-            resumed_same_mode_rollout_path,
-        )
-        .await?;
-    submit_turn(
-        &resumed_disabled_mode.codex,
-        "after disabled-mode resume",
-        /*mode*/ None,
-    )
-    .await?;
-
-    assert_eq!(
-        resumed_disabled_mode
-            .codex
-            .config_snapshot()
-            .await
-            .multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
-    );
-    let requests = responses.requests();
-    let resumed_disabled_mode_input = requests[3].input();
-    let texts = developer_texts(&resumed_disabled_mode_input);
-    assert_eq!(
-        (
-            count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&texts, NO_SPAWN_TEXT),
-            count_containing(&texts, PROACTIVE_TEXT),
-        ),
-        (3, 2, 1)
+        (1, 0, 1)
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_multi_agent_mode_is_retained_without_multi_agent_v2() -> Result<()> {
+async fn multi_agent_mode_is_retained_without_multi_agent_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -346,21 +247,13 @@ async fn explicit_multi_agent_mode_is_retained_without_multi_agent_v2() -> Resul
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
     )
     .await;
-    let test = test_codex()
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::MultiAgentMode)
-                .expect("test config should allow feature update");
-        })
-        .build(&server)
-        .await?;
+    let test = test_codex().build(&server).await?;
 
     submit_turn(&test.codex, "hello", Some(MultiAgentMode::Proactive)).await?;
 
     assert_eq!(
         test.codex.config_snapshot().await.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
+        MultiAgentMode::Proactive
     );
     let input = responses.single_request().input();
     let texts = developer_texts(&input);

@@ -47,8 +47,6 @@ pub struct MultiAgentV2ConfigToml {
     #[schemars(range(min = 0, max = 3600000))]
     pub default_wait_timeout_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage_hint_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_hint_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_agent_usage_hint_text: Option<String>,

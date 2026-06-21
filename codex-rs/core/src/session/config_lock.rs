@@ -327,7 +327,6 @@ mod tests {
                 min_wait_timeout_ms: Some(_),
                 max_wait_timeout_ms: Some(_),
                 default_wait_timeout_ms: Some(_),
-                usage_hint_enabled: Some(_),
                 hide_spawn_agent_metadata: Some(_),
                 ..
             })

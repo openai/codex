@@ -52,7 +52,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) provider: ModelProviderInfo,
 
     pub(super) collaboration_mode: CollaborationMode,
-    pub(super) multi_agent_mode: Option<MultiAgentMode>,
+    pub(super) multi_agent_mode: MultiAgentMode,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(super) service_tier: Option<String>,
 
@@ -231,7 +231,7 @@ impl SessionConfiguration {
             next_configuration.collaboration_mode = collaboration_mode;
         }
         if let Some(multi_agent_mode) = updates.multi_agent_mode {
-            next_configuration.multi_agent_mode = Some(multi_agent_mode);
+            next_configuration.multi_agent_mode = multi_agent_mode;
         }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
