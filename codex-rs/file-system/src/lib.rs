@@ -166,6 +166,8 @@ pub type FileSystemResult<T> = io::Result<T>;
 pub type ExecutorFileSystemFuture<'a, T> =
     Pin<Box<dyn Future<Output = FileSystemResult<T>> + Send + 'a>>;
 
+pub type ExecutorRpcBatchResult = FileSystemResult<serde_json::Value>;
+
 /// Stream of immutable chunks read from an [`ExecutorFileSystem`].
 pub struct FileSystemReadStream {
     inner: Pin<Box<dyn Stream<Item = FileSystemResult<Bytes>> + Send + 'static>>,
@@ -263,4 +265,18 @@ pub trait ExecutorFileSystem: Send + Sync {
         copy_options: CopyOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
+
+    /// Sends JSON-RPC requests as one batch frame when this filesystem is backed by an exec-server
+    /// connection.
+    fn execute_rpc_batch<'a>(
+        &'a self,
+        _requests: Vec<(String, serde_json::Value)>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ExecutorRpcBatchResult>> {
+        Box::pin(async {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "filesystem does not support JSON-RPC batching",
+            ))
+        })
+    }
 }

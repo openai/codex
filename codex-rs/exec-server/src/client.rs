@@ -631,6 +631,29 @@ impl ExecServerClient {
         self.call(FS_COPY_METHOD, &params).await
     }
 
+    pub(crate) async fn call_batch(
+        &self,
+        calls: Vec<(String, Value)>,
+    ) -> Result<Vec<Result<Value, ExecServerError>>, ExecServerError> {
+        let rpc_client = self.inner.rpc_client().await?;
+        match rpc_client.call_batch(calls).await {
+            Ok(results) => Ok(results
+                .into_iter()
+                .map(|result| result.map_err(ExecServerError::from))
+                .collect()),
+            Err(error) => {
+                let error = ExecServerError::from(error);
+                if is_transport_closed_error(&error) {
+                    Err(ExecServerError::Disconnected(disconnected_message(
+                        /*reason*/ None,
+                    )))
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
     pub(crate) async fn start_process(
         &self,
         params: ExecParams,
