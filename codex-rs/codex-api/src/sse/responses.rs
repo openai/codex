@@ -1,5 +1,6 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
+use crate::common::SafetyBuffering;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
@@ -157,6 +158,7 @@ pub struct ResponsesStreamEvent {
     delta: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
+    safety_buffering: Option<Value>,
 }
 
 impl ResponsesStreamEvent {
@@ -216,6 +218,10 @@ impl ResponsesStreamEvent {
             .and_then(|metadata| metadata.get("openai_chatgpt_moderation_metadata"))
             .cloned()
             .map(|metadata| TurnModerationMetadataEvent { metadata })
+    }
+
+    pub(crate) fn safety_buffering(&self) -> Option<SafetyBuffering> {
+        serde_json::from_value(self.safety_buffering.as_ref()?.clone()).ok()
     }
 }
 
@@ -440,6 +446,7 @@ pub async fn process_sse(
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut safety_buffering_emitted = false;
 
     loop {
         let start = Instant::now();
@@ -480,6 +487,7 @@ pub async fn process_sse(
         };
         let model_verifications = event.model_verifications();
         let turn_moderation_metadata = event.turn_moderation_metadata();
+        let safety_buffering = event.safety_buffering();
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -508,6 +516,18 @@ pub async fn process_sse(
                 .is_err()
         {
             return;
+        }
+        if let Some(buffering) = safety_buffering
+            && !safety_buffering_emitted
+        {
+            if tx_event
+                .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            safety_buffering_emitted = true;
         }
 
         match process_responses_event(event) {
@@ -1292,6 +1312,53 @@ mod tests {
                 end_turn: None,
             } if response_id == "resp-1"
         );
+    }
+
+    #[tokio::test]
+    async fn process_sse_emits_safety_buffering_once_without_dropping_response_events() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.created",
+                "response": { "id": "resp-1" },
+                "safety_buffering": false
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "delta": "hello",
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "delta": " world",
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" },
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            }),
+        ])
+        .await;
+
+        assert_eq!(events.len(), 5);
+        assert_matches!(&events[0], ResponseEvent::Created);
+        assert_matches!(
+            &events[1],
+            ResponseEvent::SafetyBuffering(buffering)
+                if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
+        );
+        assert_matches!(&events[2], ResponseEvent::OutputTextDelta(delta) if delta == "hello");
+        assert_matches!(&events[3], ResponseEvent::OutputTextDelta(delta) if delta == " world");
+        assert_matches!(&events[4], ResponseEvent::Completed { response_id, .. } if response_id == "resp-1");
     }
 
     #[test]

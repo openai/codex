@@ -5095,6 +5095,26 @@
           "properties": {
             "method": {
               "enum": [
+                "turn/safetyBuffering/updated"
+              ],
+              "title": "Turn/safetyBuffering/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/TurnSafetyBufferingUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/safetyBuffering/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "warning"
               ],
               "title": "WarningNotificationMethod",
@@ -19813,6 +19833,41 @@
           "turnId"
         ],
         "title": "TurnPlanUpdatedNotification",
+        "type": "object"
+      },
+      "TurnSafetyBufferingUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "useCases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "model",
+          "reasons",
+          "threadId",
+          "turnId",
+          "useCases"
+        ],
+        "title": "TurnSafetyBufferingUpdatedNotification",
         "type": "object"
       },
       "TurnStartParams": {

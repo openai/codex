@@ -78,6 +78,7 @@ use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnModerationMetadataNotification;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
+use codex_app_server_protocol::TurnSafetyBufferingUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WarningNotification;
@@ -349,6 +350,20 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::TurnModerationMetadata(notification))
+                .await;
+        }
+        EventMsg::SafetyBuffering(event) => {
+            let notification = TurnSafetyBufferingUpdatedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                model: event.model,
+                use_cases: event.use_cases,
+                reasons: event.reasons,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::TurnSafetyBufferingUpdated(
+                    notification,
+                ))
                 .await;
         }
         EventMsg::RealtimeConversationStarted(event) => {

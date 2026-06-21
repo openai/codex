@@ -634,6 +634,7 @@ async fn run_websocket_response_stream(
     turn_state: Option<&OnceLock<String>>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut safety_buffering_emitted = false;
     send_websocket_request(
         ws_stream,
         request_text,
@@ -690,6 +691,7 @@ async fn run_websocket_response_stream(
                 }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
+                let safety_buffering = event.safety_buffering();
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -723,6 +725,20 @@ async fn run_websocket_response_stream(
                     return Err(ApiError::Stream(
                         "response event consumer dropped".to_string(),
                     ));
+                }
+                if let Some(buffering) = safety_buffering
+                    && !safety_buffering_emitted
+                {
+                    if tx_event
+                        .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
+                        .await
+                        .is_err()
+                    {
+                        return Err(ApiError::Stream(
+                            "response event consumer dropped".to_string(),
+                        ));
+                    }
+                    safety_buffering_emitted = true;
                 }
                 match process_responses_event(event) {
                     Ok(Some(event)) => {
