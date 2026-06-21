@@ -374,8 +374,8 @@ impl UnifiedExecProcess {
 
     pub(super) async fn from_exec_server_started(
         started: StartedExecProcess,
-        sandbox_type: SandboxType,
     ) -> Result<Self, UnifiedExecError> {
+        let sandbox_type = started.sandbox;
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
         let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
         let output_handles = managed.output_handles();
