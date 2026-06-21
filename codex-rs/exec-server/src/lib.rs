@@ -42,7 +42,6 @@ pub use codex_file_system::CopyOptions;
 pub use codex_file_system::CreateDirectoryOptions;
 pub use codex_file_system::ExecutorFileSystem;
 pub use codex_file_system::ExecutorFileSystemFuture;
-pub use codex_file_system::ExecutorRpcBatchResult;
 pub use codex_file_system::FILE_READ_CHUNK_SIZE;
 pub use codex_file_system::FileMetadata;
 pub use codex_file_system::FileSystemReadStream;
