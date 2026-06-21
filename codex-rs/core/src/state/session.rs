@@ -108,9 +108,9 @@ impl SessionState {
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) {
-        let world_state = reference_context_item
-            .as_ref()
-            .map(build_world_state_from_turn_context_item);
+        let world_state = reference_context_item.as_ref().map(|item| {
+            build_world_state_from_turn_context_item(item, self.previous_turn_settings.as_ref())
+        });
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
@@ -125,7 +125,9 @@ impl SessionState {
     }
 
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
-        let world_state = item.as_ref().map(build_world_state_from_turn_context_item);
+        let world_state = item.as_ref().map(|item| {
+            build_world_state_from_turn_context_item(item, self.previous_turn_settings.as_ref())
+        });
         self.history.set_reference_context_item(item);
         if let Some(world_state) = world_state {
             self.history.set_world_state(Arc::new(world_state));

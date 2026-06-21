@@ -32,6 +32,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::RecommendedPluginsInstructions;
+use crate::context::world_state::SettingsState;
 use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -243,7 +244,6 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
-pub(crate) use self::world_state::build_world_state_from_turn_context;
 pub(crate) use self::world_state::build_world_state_from_turn_context_item;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
@@ -1384,10 +1384,10 @@ impl Session {
         }
         {
             let mut state = self.state.lock().await;
+            state.set_previous_turn_settings(previous_turn_settings.clone());
             state.replace_history(history, reference_context_item);
             let window_id = window_id.unwrap_or_else(|| state.auto_compact_window_id());
             state.restore_auto_compact_window(window_number, window_id);
-            state.set_previous_turn_settings(previous_turn_settings.clone());
         }
         let prefix_tokens = if matches!(
             turn_context.config.model_auto_compact_token_limit_scope,
@@ -1669,22 +1669,24 @@ impl Session {
         reference_context_item: Option<&TurnContextItem>,
         current_context: &TurnContext,
     ) -> Vec<ResponseItem> {
-        // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
-        // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
-        // context (exec policy, feature gates, previous-turn bridge) should be persisted
-        // state or explicit non-state replay events.
-        let previous_turn_settings = {
+        let (previous_world_state, previous_turn_settings) = {
             let state = self.state.lock().await;
-            state.previous_turn_settings()
+            (state.world_state(), state.previous_turn_settings())
         };
-        let exec_policy = self.services.exec_policy.current();
-        crate::context_manager::updates::build_settings_update_items(
-            reference_context_item,
-            previous_turn_settings.as_ref(),
-            current_context,
-            exec_policy.as_ref(),
-            self.features.enabled(Feature::Personality),
-        )
+        let previous_world_state = previous_world_state.or_else(|| {
+            reference_context_item.map(|item| {
+                Arc::new(build_world_state_from_turn_context_item(
+                    item,
+                    previous_turn_settings.as_ref(),
+                ))
+            })
+        });
+        let Some(previous_world_state) = previous_world_state else {
+            return Vec::new();
+        };
+
+        self.build_world_state(current_context)
+            .render_diff(previous_world_state.as_ref())
     }
 
     /// Record a terminal CodexErr before the app-server completion notification is reduced.
@@ -2875,7 +2877,7 @@ impl Session {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
             if reference_context_item.is_some() {
-                state.set_world_state(Arc::new(build_world_state_from_turn_context(turn_context)));
+                state.set_world_state(Arc::new(self.build_world_state(turn_context)));
             }
         }
 
@@ -3028,10 +3030,7 @@ impl Session {
             )
         };
         if let Some(model_switch_message) =
-            crate::context_manager::updates::build_model_instructions_update_item(
-                previous_turn_settings.as_ref(),
-                turn_context,
-            )
+            SettingsState::model_update(previous_turn_settings.as_ref(), turn_context)
         {
             developer_sections.push(model_switch_message);
         }
@@ -3073,7 +3072,7 @@ impl Session {
         {
             developer_sections.push(collab_instructions.render());
         }
-        if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
+        if let Some(realtime_update) = SettingsState::realtime_update(
             reference_context_item.as_ref(),
             previous_turn_settings.as_ref(),
             turn_context,
@@ -3088,10 +3087,7 @@ impl Session {
                 && base_instructions == model_info.get_model_instructions(Some(personality));
             if !has_baked_personality
                 && let Some(personality_message) =
-                    crate::context_manager::updates::personality_message_for(
-                        &model_info,
-                        personality,
-                    )
+                    SettingsState::personality_message(&model_info, personality)
             {
                 developer_sections
                     .push(PersonalitySpecInstructions::new(personality_message).render());
@@ -3338,7 +3334,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
-            state.set_world_state(Arc::new(build_world_state_from_turn_context(turn_context)));
+            state.set_world_state(Arc::new(self.build_world_state(turn_context)));
         };
         self.persist_rollout_items(&[
             RolloutItem::Compacted(CompactedItem {
@@ -3417,7 +3413,7 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
-        state.set_world_state(Arc::new(build_world_state_from_turn_context(turn_context)));
+        state.set_world_state(Arc::new(self.build_world_state(turn_context)));
     }
 
     pub(crate) async fn update_token_usage_info(

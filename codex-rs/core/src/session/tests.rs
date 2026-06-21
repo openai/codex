@@ -7326,6 +7326,26 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
 }
 
 #[tokio::test]
+async fn build_settings_update_items_emits_nothing_for_matching_world_state() {
+    let (session, turn_context) = make_session_and_context().await;
+    let reference_context_item = turn_context.to_turn_context_item();
+    session
+        .set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            comp_hash: turn_context.model_info.comp_hash.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        }))
+        .await;
+
+    assert_eq!(
+        session
+            .build_settings_update_items(Some(&reference_context_item), &turn_context)
+            .await,
+        Vec::new()
+    );
+}
+
+#[tokio::test]
 async fn build_settings_update_items_emits_environment_item_for_network_changes() {
     let (session, previous_context) = make_session_and_context().await;
     let previous_context = Arc::new(previous_context);

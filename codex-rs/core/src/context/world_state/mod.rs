@@ -1,4 +1,5 @@
 mod environment;
+mod settings;
 
 use codex_protocol::models::ResponseItem;
 use indexmap::IndexMap;
@@ -7,6 +8,7 @@ use std::any::TypeId;
 use std::fmt;
 
 pub(crate) use environment::EnvironmentsState;
+pub(crate) use settings::SettingsState;
 
 trait ErasedWorldStateSection: Send + Sync {
     fn as_any(&self) -> &dyn Any;
