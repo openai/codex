@@ -39,24 +39,25 @@ impl ContextualUserFragment for TokenBudgetContext {
     }
 
     fn type_markers() -> (&'static str, &'static str) {
-        ("<token_budget>\n", "\n</token_budget>")
+        ("", "")
     }
 
     fn body(&self) -> String {
         let thread_id = self.thread_id;
         let first_window_id = self.first_window_id;
-        let previous_window_id = self
-            .previous_window_id
-            .map_or_else(|| "none".to_string(), |window_id| window_id.to_string());
         let window_id = self.window_id;
-        let mcp_result = self
-            .mcp_result
-            .as_deref()
-            .map(|result| format!("\n{result}"))
-            .unwrap_or_default();
-        format!(
-            "Thread id {thread_id}.\nFirst context window id {first_window_id}.\nPrevious context window id {previous_window_id}.\nCurrent context window id {window_id}.{mcp_result}"
-        )
+        let mut lines = vec![
+            format!("Thread id {thread_id}."),
+            format!("First context window id: {first_window_id}"),
+            format!("Current context window id: {window_id}"),
+        ];
+        if let Some(previous_window_id) = self.previous_window_id {
+            lines.push(format!("Previous context window id: {previous_window_id}"));
+        }
+        if let Some(mcp_result) = &self.mcp_result {
+            lines.push(mcp_result.clone());
+        }
+        lines.join("\n")
     }
 }
 
@@ -87,7 +88,7 @@ impl ContextualUserFragment for TokenBudgetRemainingContext {
     }
 
     fn type_markers() -> (&'static str, &'static str) {
-        ("<token_budget>\n", "\n</token_budget>")
+        ("", "")
     }
 
     fn body(&self) -> String {
@@ -123,7 +124,7 @@ impl ContextualUserFragment for TokenBudgetReminder {
     }
 
     fn type_markers() -> (&'static str, &'static str) {
-        ("<token_budget>\n", "\n</token_budget>")
+        ("", "")
     }
 
     fn body(&self) -> String {

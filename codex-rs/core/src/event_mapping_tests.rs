@@ -29,7 +29,7 @@ fn recognizes_skills_instructions_as_contextual_developer_content() {
 }
 
 #[test]
-fn recognizes_token_budget_as_contextual_developer_content() {
+fn recognizes_legacy_token_budget_as_contextual_developer_content() {
     let content = vec![ContentItem::InputText {
         text: "<token_budget>\nYou have 710 tokens left in this context window.\n</token_budget>"
             .to_string(),
