@@ -3,9 +3,9 @@ use crate::context::ContextualUserFragment;
 use crate::context::environment_context::FileSystemContext;
 use crate::context::environment_context::NetworkContext;
 use crate::context::environment_context::push_xml_escaped_text;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::turn_context::TurnContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -37,9 +37,15 @@ impl Eq for EnvironmentsState {}
 
 impl EnvironmentsState {
     pub(crate) fn from_turn_context(turn_context: &TurnContext) -> Self {
+        Self::from_turn_context_with_environments(turn_context, &turn_context.environments)
+    }
+
+    pub(crate) fn from_turn_context_with_environments(
+        turn_context: &TurnContext,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> Self {
         let mut state = Self {
-            environments: turn_context
-                .environments
+            environments: environments
                 .turn_environments
                 .iter()
                 .map(|environment| {
@@ -65,7 +71,7 @@ impl EnvironmentsState {
             )),
             subagents: None,
         };
-        for environment in &turn_context.environments.starting {
+        for environment in &environments.starting {
             state
                 .environments
                 .entry(environment.selection.environment_id.clone())
@@ -108,7 +114,10 @@ impl EnvironmentsState {
         self
     }
 
-    pub(crate) fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
+    pub(crate) fn render_diff(
+        &self,
+        previous: Option<&Self>,
+    ) -> Option<Box<dyn ContextualUserFragment>> {
         WorldStateSection::render_diff(self, previous)
     }
 
@@ -132,7 +141,9 @@ impl EnvironmentsState {
 }
 
 impl WorldStateSection for EnvironmentsState {
-    fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
+    fn render_diff(&self, previous: Option<&Self>) -> Option<Box<dyn ContextualUserFragment>> {
+        let empty = Self::default();
+        let previous = previous.unwrap_or(&empty);
         let turn_context_values_changed = self.current_date != previous.current_date
             || self.timezone != previous.timezone
             || self.network != previous.network
@@ -155,7 +166,7 @@ impl WorldStateSection for EnvironmentsState {
                 .values()
                 .all(|update| matches!(update, EnvironmentUpdate::Current(_)));
         (!updates.is_empty() || turn_context_values_changed).then(|| {
-            ContextualUserFragment::into(RenderedEnvironments {
+            Box::new(RenderedEnvironments {
                 updates,
                 legacy_single,
                 current_date: self.current_date.clone(),
@@ -163,7 +174,7 @@ impl WorldStateSection for EnvironmentsState {
                 network: self.network.clone(),
                 filesystem: self.filesystem.clone(),
                 subagents: self.subagents.clone(),
-            })
+            }) as Box<dyn ContextualUserFragment>
         })
     }
 }

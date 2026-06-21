@@ -7326,6 +7326,26 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
 }
 
 #[tokio::test]
+async fn build_settings_update_items_emits_nothing_for_matching_world_state() {
+    let (session, turn_context) = make_session_and_context().await;
+    let reference_context_item = turn_context.to_turn_context_item();
+    session
+        .set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            comp_hash: turn_context.model_info.comp_hash.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        }))
+        .await;
+
+    assert_eq!(
+        session
+            .build_settings_update_items(Some(&reference_context_item), &turn_context)
+            .await,
+        Vec::new()
+    );
+}
+
+#[tokio::test]
 async fn build_settings_update_items_emits_environment_item_for_network_changes() {
     let (session, previous_context) = make_session_and_context().await;
     let previous_context = Arc::new(previous_context);
@@ -7574,7 +7594,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
 }
 
 #[tokio::test]
-async fn build_initial_context_uses_previous_realtime_state() {
+async fn build_initial_context_renders_full_realtime_state() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.realtime_active = true;
 
@@ -7595,10 +7615,10 @@ async fn build_initial_context_uses_previous_realtime_state() {
     let resumed_context = session.build_initial_context(&turn_context).await;
     let resumed_developer_texts = developer_input_texts(&resumed_context);
     assert!(
-        !resumed_developer_texts
+        resumed_developer_texts
             .iter()
             .any(|text| text.contains("<realtime_conversation>")),
-        "did not expect a duplicate realtime update, got {resumed_developer_texts:?}"
+        "expected full initial context to restate active realtime state, got {resumed_developer_texts:?}"
     );
 }
 

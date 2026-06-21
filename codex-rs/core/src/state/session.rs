@@ -6,13 +6,16 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
+use crate::context::world_state::WorldState;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
+use crate::session::build_world_state_from_turn_context_item;
 use crate::session::session::SessionConfiguration;
 use crate::session::time_reminder::CurrentTimeReminderState;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
@@ -105,9 +108,15 @@ impl SessionState {
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) {
+        let world_state = reference_context_item.as_ref().map(|item| {
+            build_world_state_from_turn_context_item(item, self.previous_turn_settings.as_ref())
+        });
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
+        if let Some(world_state) = world_state {
+            self.history.set_world_state(Arc::new(world_state));
+        }
         self.auto_compact_window.clear_prefill();
     }
 
@@ -116,11 +125,25 @@ impl SessionState {
     }
 
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        let world_state = item.as_ref().map(|item| {
+            build_world_state_from_turn_context_item(item, self.previous_turn_settings.as_ref())
+        });
         self.history.set_reference_context_item(item);
+        if let Some(world_state) = world_state {
+            self.history.set_world_state(Arc::new(world_state));
+        }
     }
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
         self.history.reference_context_item()
+    }
+
+    pub(crate) fn set_world_state(&mut self, world_state: Arc<WorldState>) {
+        self.history.set_world_state(world_state);
+    }
+
+    pub(crate) fn world_state(&self) -> Option<Arc<WorldState>> {
+        self.history.world_state()
     }
 
     // Token/rate limit helpers

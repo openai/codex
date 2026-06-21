@@ -480,6 +480,65 @@ fn assert_two_responses_input_snapshot(snapshot_name: &str, requests: &[Vec<u8>]
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_iteration_injects_environment_diff_after_thread_environment_changes() {
+    let (gate_first_completed_tx, gate_first_completed_rx) = oneshot::channel();
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_message_item_done("msg-1", "first answer")),
+        gated_chunk(gate_first_completed_rx, vec![ev_completed("resp-1")]),
+    ];
+    let second_chunks = vec![
+        chunk(ev_response_created("resp-2")),
+        chunk(ev_message_item_done("msg-2", "second answer")),
+        chunk(ev_completed("resp-2")),
+    ];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build streaming Codex test session");
+
+    submit_user_input(&test.codex, "first prompt").await;
+    wait_for_agent_message(&test.codex, "first answer").await;
+
+    let next_cwd = test.config.codex_home.clone();
+    test.codex
+        .submit(Op::ThreadSettings {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(next_cwd.clone())),
+                ..Default::default()
+            },
+        })
+        .await
+        .expect("update thread environment");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ThreadSettingsApplied(_))
+    })
+    .await;
+    steer_user_input(&test.codex, "second prompt").await;
+    let _ = gate_first_completed_tx.send(());
+
+    wait_for_agent_message(&test.codex, "second answer").await;
+    wait_for_turn_complete(&test.codex).await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let second_request: Value = from_slice(&requests[1]).expect("parse second request");
+    let user_texts = message_input_texts(&second_request, "user");
+    let expected_cwd = format!("<cwd>{}</cwd>", next_cwd.display());
+    let environment_update = user_texts
+        .iter()
+        .find(|text| text.starts_with("<environment_context>") && text.contains(&expected_cwd))
+        .expect("second iteration should include the changed environment cwd");
+    assert!(!environment_update.contains("<environments>"));
+    assert!(user_texts.iter().any(|text| text == "second prompt"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "TODO(aibrahim): flaky"]
 async fn injected_user_input_triggers_follow_up_request_with_deltas() {
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
