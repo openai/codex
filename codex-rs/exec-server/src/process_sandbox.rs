@@ -73,6 +73,8 @@ pub(crate) fn prepare_exec_request(
             ));
         }
         SandboxType::WindowsRestrictedToken => {
+            // TODO(jif): Launch generic remote commands through the Windows sandbox session API
+            // while preserving argv and TTY behavior and passing the child environment out of band.
             return Err(invalid_params(
                 "sandboxed remote process launch is not supported on Windows".to_string(),
             ));
