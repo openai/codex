@@ -7594,7 +7594,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
 }
 
 #[tokio::test]
-async fn build_initial_context_uses_previous_realtime_state() {
+async fn build_initial_context_renders_full_realtime_state() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.realtime_active = true;
 
@@ -7615,10 +7615,10 @@ async fn build_initial_context_uses_previous_realtime_state() {
     let resumed_context = session.build_initial_context(&turn_context).await;
     let resumed_developer_texts = developer_input_texts(&resumed_context);
     assert!(
-        !resumed_developer_texts
+        resumed_developer_texts
             .iter()
             .any(|text| text.contains("<realtime_conversation>")),
-        "did not expect a duplicate realtime update, got {resumed_developer_texts:?}"
+        "expected full initial context to restate active realtime state, got {resumed_developer_texts:?}"
     );
 }
 

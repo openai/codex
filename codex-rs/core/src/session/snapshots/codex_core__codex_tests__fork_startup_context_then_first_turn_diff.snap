@@ -7,8 +7,9 @@ Scenario: First request after fork when startup preserves the parent baseline, t
 ## First Forked Turn Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:fork seed
-03:message/developer[2]:
+02:message/developer:<NO_TEXT>
+03:message/user:fork seed
+04:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <collaboration_mode>Fork turn collaboration instructions.</collaboration_mode>
-04:message/user:after fork
+05:message/user:after fork

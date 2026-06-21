@@ -20,6 +20,7 @@ fn build_world_state_from_turn_context_with_environments(
     environments: &TurnEnvironmentSnapshot,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
+    environment_subagents: &str,
 ) -> WorldState {
     let mut world_state = WorldState::default();
     world_state.add_section(ModelState::from_turn_context(turn_context));
@@ -35,10 +36,10 @@ fn build_world_state_from_turn_context_with_environments(
         personality_feature_enabled,
     ));
     if turn_context.config.include_environment_context {
-        world_state.add_section(EnvironmentsState::from_turn_context_with_environments(
-            turn_context,
-            environments,
-        ));
+        world_state.add_section(
+            EnvironmentsState::from_turn_context_with_environments(turn_context, environments)
+                .with_subagents(environment_subagents.to_string()),
+        );
     }
     world_state
 }
@@ -77,6 +78,30 @@ impl Session {
             &turn_context.environments,
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
+            "",
+        )
+    }
+
+    pub(super) fn build_initial_world_state(
+        &self,
+        turn_context: &TurnContext,
+        environment_subagents: &str,
+        base_instructions: &str,
+    ) -> WorldState {
+        let personality_is_baked = turn_context.personality.is_some_and(|personality| {
+            turn_context.model_info.supports_personality()
+                && base_instructions
+                    == turn_context
+                        .model_info
+                        .get_model_instructions(Some(personality))
+        });
+        let exec_policy = self.services.exec_policy.current();
+        build_world_state_from_turn_context_with_environments(
+            turn_context,
+            &turn_context.environments,
+            exec_policy.as_ref(),
+            self.features.enabled(Feature::Personality) && !personality_is_baked,
+            environment_subagents,
         )
     }
 
@@ -88,6 +113,7 @@ impl Session {
             &environments,
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
+            "",
         )
     }
 

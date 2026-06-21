@@ -25,15 +25,10 @@ use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::AppsInstructions;
 use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
-use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
-use crate::context::MultiAgentModeInstructions;
 use crate::context::NetworkRuleSaved;
-use crate::context::PermissionsInstructions;
-use crate::context::PersonalitySpecInstructions;
 use crate::context::RecommendedPluginsInstructions;
 use crate::context::world_state::ModelState;
-use crate::context::world_state::PersonalityState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::WorldStateSection;
 use crate::current_time::TimeProvider;
@@ -3019,7 +3014,6 @@ impl Session {
         let (
             reference_context_item,
             previous_turn_settings,
-            collaboration_mode,
             base_instructions,
             session_source,
             auto_compact_window_id,
@@ -3028,41 +3022,24 @@ impl Session {
             (
                 state.reference_context_item(),
                 state.previous_turn_settings(),
-                state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
                 state.auto_compact_window_id(),
             )
         };
-        let previous_model_state = previous_turn_settings
-            .as_ref()
-            .map(|settings| ModelState::from_previous_model(&settings.model));
-        if let Some(model_switch_fragment) =
-            ModelState::from_turn_context(turn_context).render_diff(previous_model_state.as_ref())
-        {
-            developer_sections.push(model_switch_fragment.render());
-        }
-        if turn_context.config.include_permissions_instructions {
-            developer_sections.push(
-                PermissionsInstructions::from_permission_profile(
-                    &turn_context.permission_profile,
-                    turn_context.approval_policy.value(),
-                    turn_context.config.approvals_reviewer,
-                    self.services.exec_policy.current().as_ref(),
-                    #[allow(deprecated)]
-                    &turn_context.cwd,
-                    turn_context
-                        .config
-                        .features
-                        .enabled(Feature::ExecPermissionApprovals),
-                    turn_context
-                        .config
-                        .features
-                        .enabled(Feature::RequestPermissionsTool),
-                )
-                .render(),
-            );
-        }
+        let environment_subagents = if turn_context.config.include_environment_context {
+            self.services
+                .agent_control
+                .format_environment_context_subagents(self.thread_id)
+                .await
+        } else {
+            String::new()
+        };
+        let initial_world_state = self.build_initial_world_state(
+            turn_context,
+            &environment_subagents,
+            &base_instructions,
+        );
         let separate_guardian_developer_message =
             crate::guardian::is_guardian_reviewer_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
@@ -3072,40 +3049,6 @@ impl Session {
             && !developer_instructions.is_empty()
         {
             developer_sections.push(developer_instructions.to_string());
-        }
-        // Add developer instructions from collaboration_mode if they exist and are non-empty
-        if turn_context.config.include_collaboration_mode_instructions
-            && let Some(collab_instructions) =
-                CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
-        {
-            developer_sections.push(collab_instructions.render());
-        }
-        let previous_realtime_state = RealtimeState::from_previous(
-            reference_context_item
-                .as_ref()
-                .and_then(|item| item.realtime_active),
-            previous_turn_settings
-                .as_ref()
-                .and_then(|settings| settings.realtime_active),
-        );
-        if let Some(realtime_fragment) = RealtimeState::from_turn_context(turn_context)
-            .render_diff(Some(&previous_realtime_state))
-        {
-            developer_sections.push(realtime_fragment.render());
-        }
-        if self.features.enabled(Feature::Personality)
-            && let Some(personality) = turn_context.personality
-        {
-            let model_info = turn_context.model_info.clone();
-            let has_baked_personality = model_info.supports_personality()
-                && base_instructions == model_info.get_model_instructions(Some(personality));
-            if !has_baked_personality
-                && let Some(personality_message) =
-                    PersonalityState::message(&model_info, personality)
-            {
-                developer_sections
-                    .push(PersonalitySpecInstructions::new(personality_message).render());
-            }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
             let mcp_connection_manager = self.services.mcp_connection_manager.load_full();
@@ -3230,23 +3173,35 @@ impl Session {
                 .render(),
             );
         }
-        if turn_context.config.include_environment_context {
-            let subagents = self
-                .services
-                .agent_control
-                .format_environment_context_subagents(self.thread_id)
-                .await;
-            contextual_user_sections.push(
-                crate::context::EnvironmentsState::from_turn_context(turn_context)
-                    .with_subagents(subagents)
-                    .render(),
-            );
-        }
-
         let multi_agent_v2_usage_hint_text =
             multi_agents::usage_hint_text(turn_context, &session_source);
 
-        let mut items = Vec::with_capacity(4);
+        let mut world_fragments = Vec::new();
+        let previous_model_state = previous_turn_settings
+            .as_ref()
+            .map(|settings| ModelState::from_previous_model(&settings.model));
+        if let Some(model_switch_fragment) =
+            ModelState::from_turn_context(turn_context).render_diff(previous_model_state.as_ref())
+        {
+            world_fragments.push(model_switch_fragment);
+        }
+        let previous_realtime_state = RealtimeState::from_previous(
+            reference_context_item
+                .as_ref()
+                .and_then(|item| item.realtime_active),
+            previous_turn_settings
+                .as_ref()
+                .and_then(|settings| settings.realtime_active),
+        );
+        if !turn_context.realtime_active
+            && let Some(realtime_fragment) = RealtimeState::from_turn_context(turn_context)
+                .render_diff(Some(&previous_realtime_state))
+        {
+            world_fragments.push(realtime_fragment);
+        }
+        world_fragments.extend(initial_world_state.render_full());
+        let mut items =
+            crate::context_manager::updates::merge_contextual_fragments(world_fragments);
         if let Some(developer_message) =
             crate::context_manager::updates::build_developer_update_item(developer_sections)
         {
@@ -3266,20 +3221,6 @@ impl Session {
                 ])
         {
             items.push(usage_hint_message);
-        }
-        if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(
-            turn_context.multi_agent_version,
-            &turn_context.config.multi_agent_v2,
-            &session_source,
-            turn_context.multi_agent_mode,
-            turn_context
-                .config
-                .features
-                .enabled(Feature::MultiAgentMode),
-        ) {
-            items.push(ContextualUserFragment::into(
-                MultiAgentModeInstructions::new(multi_agent_mode),
-            ));
         }
         if let Some(contextual_user_message) =
             crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
