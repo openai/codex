@@ -11,6 +11,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::SessionServices;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use codex_file_system::FileSystemSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -24,6 +25,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -408,7 +410,11 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: SandboxType,
+    /// Whether policy requested sandboxing, independent of this host's concrete wrapper.
+    pub sandbox_requested: bool,
     pub permissions: &'a codex_protocol::models::PermissionProfile,
+    /// Canonical permissions before this host materializes workspace roots.
+    pub exec_server_permissions: &'a codex_protocol::models::PermissionProfile,
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a PathUri,
@@ -460,6 +466,10 @@ impl<'a> SandboxAttempt<'a> {
         network: Option<&NetworkProxy>,
         environment_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
+        let exec_server_permissions = effective_permission_profile(
+            self.exec_server_permissions,
+            command.additional_permissions.as_ref(),
+        );
         let request = self
             .manager
             .transform(SandboxTransformRequest {
@@ -477,11 +487,27 @@ impl<'a> SandboxAttempt<'a> {
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
             .map_err(CodexErr::from)?;
-        Ok(crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+        let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
             request,
             options,
             self.workspace_roots.to_vec(),
-        ))
+        );
+        if self.sandbox_requested {
+            exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {
+                permissions: exec_server_permissions.into(),
+                cwd: Some(exec_request.windows_sandbox_policy_cwd.clone()),
+                workspace_roots: self
+                    .workspace_roots
+                    .iter()
+                    .map(PathUri::from_abs_path)
+                    .collect(),
+                windows_sandbox_level: self.windows_sandbox_level,
+                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+                use_legacy_landlock: self.use_legacy_landlock,
+            });
+            exec_request.exec_server_enforce_managed_network = self.enforce_managed_network;
+        }
+        Ok(exec_request)
     }
 }
 

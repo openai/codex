@@ -456,6 +456,8 @@ pub(crate) async fn execute_exec_request(
         windows_sandbox_filesystem_overrides,
         network_environment_id,
         arg0,
+        exec_server_sandbox: _,
+        exec_server_enforce_managed_network: _,
     } = exec_request;
 
     // TODO(anp): Keep PathUri through the local process launch boundary.

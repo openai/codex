@@ -4,7 +4,6 @@ use crate::tools::hook_names::HookToolName;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
@@ -202,21 +201,23 @@ fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
 }
 
 #[test]
-fn exec_server_env_keeps_command_native() {
+fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current dir")
         .try_into()
         .expect("absolute cwd");
     let cwd_uri = PathUri::from_abs_path(&cwd);
-    let permissions = codex_protocol::models::PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::default(),
-        NetworkSandboxPolicy::Restricted,
-    );
+    let exec_server_permissions = codex_protocol::models::PermissionProfile::workspace_write();
+    let permissions = exec_server_permissions
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
     let manager = SandboxManager::new();
     let attempt = SandboxAttempt {
-        sandbox: SandboxType::MacosSeatbelt,
+        sandbox: SandboxType::None,
+        sandbox_requested: true,
         permissions: &permissions,
-        enforce_managed_network: false,
+        exec_server_permissions: &exec_server_permissions,
+        enforce_managed_network: true,
         manager: &manager,
         sandbox_cwd: &cwd_uri,
         workspace_roots: std::slice::from_ref(&cwd),
@@ -252,4 +253,16 @@ fn exec_server_env_keeps_command_native() {
     );
     assert_eq!(request.arg0, None);
     assert_eq!(request.sandbox, SandboxType::None);
+    assert_eq!(
+        request.exec_server_sandbox,
+        Some(codex_exec_server::FileSystemSandboxContext {
+            permissions: exec_server_permissions.into(),
+            cwd: Some(cwd_uri),
+            workspace_roots: vec![PathUri::from_abs_path(&cwd)],
+            windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            use_legacy_landlock: false,
+        })
+    );
+    assert!(request.exec_server_enforce_managed_network);
 }

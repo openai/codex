@@ -282,24 +282,36 @@ impl SandboxManager {
         windows_sandbox_level: WindowsSandboxLevel,
         has_managed_network_requirements: bool,
     ) -> SandboxType {
+        if self.should_sandbox(
+            file_system_policy,
+            network_policy,
+            pref,
+            has_managed_network_requirements,
+        ) {
+            get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
+                .unwrap_or(SandboxType::None)
+        } else {
+            SandboxType::None
+        }
+    }
+
+    /// Returns whether the request needs a sandbox, independently of whether
+    /// this host can provide a concrete sandbox implementation.
+    pub fn should_sandbox(
+        &self,
+        file_system_policy: &FileSystemSandboxPolicy,
+        network_policy: NetworkSandboxPolicy,
+        pref: SandboxablePreference,
+        has_managed_network_requirements: bool,
+    ) -> bool {
         match pref {
-            SandboxablePreference::Forbid => SandboxType::None,
-            SandboxablePreference::Require => {
-                get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
-                    .unwrap_or(SandboxType::None)
-            }
-            SandboxablePreference::Auto => {
-                if should_require_platform_sandbox(
-                    file_system_policy,
-                    network_policy,
-                    has_managed_network_requirements,
-                ) {
-                    get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
-                        .unwrap_or(SandboxType::None)
-                } else {
-                    SandboxType::None
-                }
-            }
+            SandboxablePreference::Forbid => false,
+            SandboxablePreference::Require => true,
+            SandboxablePreference::Auto => should_require_platform_sandbox(
+                file_system_policy,
+                network_policy,
+                has_managed_network_requirements,
+            ),
         }
     }
 

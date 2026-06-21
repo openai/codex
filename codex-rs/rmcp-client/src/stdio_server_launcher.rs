@@ -503,6 +503,8 @@ impl ExecutorStdioServerLauncher {
                 tty: false,
                 pipe_stdin: true,
                 arg0: None,
+                sandbox: None,
+                enforce_managed_network: false,
             })
             .await
             .map_err(io::Error::other)?;

@@ -220,7 +220,9 @@ async fn file_system_sandbox_context_uses_active_attempt() {
     let sandbox_policy_cwd = PathUri::from_abs_path(&path);
     let attempt = SandboxAttempt {
         sandbox: SandboxType::MacosSeatbelt,
+        sandbox_requested: true,
         permissions: &permissions,
+        exec_server_permissions: &permissions,
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &sandbox_policy_cwd,
@@ -286,7 +288,9 @@ async fn no_sandbox_attempt_has_no_file_system_context() {
     let sandbox_policy_cwd = PathUri::from_abs_path(&path);
     let attempt = SandboxAttempt {
         sandbox: SandboxType::None,
+        sandbox_requested: false,
         permissions: &permissions,
+        exec_server_permissions: &permissions,
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &sandbox_policy_cwd,
