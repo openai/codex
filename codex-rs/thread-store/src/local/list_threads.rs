@@ -100,6 +100,7 @@ async fn list_threads_from_state_db(
     sort_key: codex_rollout::ThreadSortKey,
     sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<ThreadPage> {
+    let live_thread_ids = store.live_thread_ids().await;
     let page = codex_rollout::state_db::list_threads_db(
         state_db,
         store.config.codex_home.as_path(),
@@ -113,6 +114,7 @@ async fn list_threads_from_state_db(
         params.parent_thread_id,
         params.archived,
         params.search_term.as_deref(),
+        Some(&live_thread_ids),
     )
     .await;
 
@@ -195,6 +197,7 @@ pub(super) async fn list_rollout_threads(
             Some(parent_thread_id),
             params.archived,
             params.search_term.as_deref(),
+            /*missing_rollout_thread_ids_to_preserve*/ None,
         )
         .await
         .ok_or_else(|| ThreadStoreError::Internal {

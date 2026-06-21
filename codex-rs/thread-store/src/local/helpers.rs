@@ -176,7 +176,7 @@ pub(super) fn stored_thread_from_state_list_item(
         model_provider,
         cwd,
         cli_version,
-        title: _,
+        title,
         name,
         preview,
         first_user_message,
@@ -188,6 +188,11 @@ pub(super) fn stored_thread_from_state_list_item(
     let preview = preview
         .or_else(|| first_user_message.clone())
         .unwrap_or_default();
+    let name = name.filter(|name| !name.trim().is_empty()).or_else(|| {
+        let title = title.trim();
+        (!title.is_empty() && first_user_message.as_deref().map(str::trim) != Some(title))
+            .then(|| title.to_string())
+    });
     let git_info = git_info_from_parts(git_sha, git_branch, git_origin_url);
     let rollout_path = codex_rollout::plain_rollout_path(rollout_path.as_path());
     let model_provider = if model_provider.is_empty() {

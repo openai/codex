@@ -16,6 +16,7 @@ use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path::normalize_for_path_comparison;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -371,6 +372,7 @@ pub async fn list_threads_db(
     parent_thread_id: Option<ThreadId>,
     archived: bool,
     search_term: Option<&str>,
+    missing_rollout_thread_ids_to_preserve: Option<&HashSet<ThreadId>>,
 ) -> Option<codex_state::ThreadListPage> {
     let ctx = context?;
     if ctx.codex_home() != codex_home {
@@ -430,6 +432,11 @@ pub async fn list_threads_db(
                 {
                     let mut item = item;
                     item.rollout_path = existing_path;
+                    valid_items.push(item);
+                // Deferred live writers can own state rows before their rollout file materializes.
+                } else if missing_rollout_thread_ids_to_preserve
+                    .is_some_and(|thread_ids| thread_ids.contains(&item.id))
+                {
                     valid_items.push(item);
                 } else {
                     warn!(

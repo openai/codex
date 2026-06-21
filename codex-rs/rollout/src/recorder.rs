@@ -379,6 +379,7 @@ impl RolloutRecorder {
                 /*parent_thread_id*/ None,
                 archived,
                 search_term,
+                /*missing_rollout_thread_ids_to_preserve*/ None,
             )
             .await
             .map(Into::into)
@@ -492,6 +493,7 @@ impl RolloutRecorder {
             /*parent_thread_id*/ None,
             archived,
             search_term,
+            /*missing_rollout_thread_ids_to_preserve*/ None,
         )
         .await;
         if let Some(db_page) = db_page {
@@ -521,6 +523,7 @@ impl RolloutRecorder {
                     /*parent_thread_id*/ None,
                     archived,
                     search_term,
+                    /*missing_rollout_thread_ids_to_preserve*/ None,
                 )
                 .await
                 {
@@ -561,6 +564,7 @@ impl RolloutRecorder {
                         /*parent_thread_id*/ None,
                         archived,
                         search_term,
+                        /*missing_rollout_thread_ids_to_preserve*/ None,
                     )
                     .await
                     {
@@ -639,6 +643,7 @@ impl RolloutRecorder {
                     /*parent_thread_id*/ None,
                     /*archived*/ false,
                     /*search_term*/ None,
+                    /*missing_rollout_thread_ids_to_preserve*/ None,
                 )
                 .await
                 else {
