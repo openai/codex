@@ -206,7 +206,8 @@ pub struct NestedToolCall {
 ///
 /// Implementations should forward callback cancellation tokens to downstream
 /// work. After cancellation begins, the runtime allows callbacks a bounded
-/// grace period to finish, then aborts their local tasks.
+/// grace period to finish, then aborts their local tasks. Terminal notifications
+/// must be non-blocking and are not acknowledged or retried.
 pub trait SessionRuntimeDelegate: Send + Sync + 'static {
     fn invoke_tool(
         &self,
@@ -221,6 +222,11 @@ pub trait SessionRuntimeDelegate: Send + Sync + 'static {
         text: String,
         cancellation_token: CancellationToken,
     ) -> impl Future<Output = Result<(), String>> + Send;
+
+    /// Reports that execution is terminal and will issue no more callbacks.
+    ///
+    /// The terminal result may remain buffered for a later observation.
+    fn cell_closed(&self, cell_id: &CellId);
 }
 
 /// A failure reported by a session runtime operation.

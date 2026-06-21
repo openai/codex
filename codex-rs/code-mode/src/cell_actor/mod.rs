@@ -341,7 +341,7 @@ async fn run_cell<H: CellHost>(
                         ),
                         error_text: Some("exec runtime ended unexpectedly".to_string()),
                     };
-                    let rejected_event = match host
+                    let (completion_committed, rejected_event) = match host
                         .commit_completion(
                             HashMap::new(),
                             event,
@@ -350,14 +350,18 @@ async fn run_cell<H: CellHost>(
                         )
                         .await
                     {
-                        CompletionCommit::Committed => None,
-                        CompletionCommit::Rejected(event) => Some(event),
+                        CompletionCommit::Committed => (true, None),
+                        CompletionCommit::Rejected(event) => (false, Some(event)),
                     };
-                    match cell_state.deliver_completion(
+                    let completion_delivery = cell_state.deliver_completion(
                         observer
                             .take()
                             .map(|observer| (observer.mode, observer.response_tx)),
-                    ) {
+                    );
+                    if completion_committed {
+                        host.terminal();
+                    }
+                    match completion_delivery {
                         CompletionDelivery::Delivered => break,
                         CompletionDelivery::Buffered => {}
                         CompletionDelivery::Rejected(response_tx) => {
@@ -510,7 +514,7 @@ async fn run_cell<H: CellHost>(
                             content_items: std::mem::take(&mut content_items),
                             error_text,
                         };
-                        let rejected_event = match host
+                        let (completion_committed, rejected_event) = match host
                             .commit_completion(
                                 stored_value_writes,
                                 event,
@@ -519,14 +523,18 @@ async fn run_cell<H: CellHost>(
                             )
                             .await
                         {
-                            CompletionCommit::Committed => None,
-                            CompletionCommit::Rejected(event) => Some(event),
+                            CompletionCommit::Committed => (true, None),
+                            CompletionCommit::Rejected(event) => (false, Some(event)),
                         };
-                        match cell_state.deliver_completion(
+                        let completion_delivery = cell_state.deliver_completion(
                             observer
                                 .take()
                                 .map(|observer| (observer.mode, observer.response_tx)),
-                        ) {
+                        );
+                        if completion_committed {
+                            host.terminal();
+                        }
+                        match completion_delivery {
                             CompletionDelivery::Delivered => break,
                             CompletionDelivery::Buffered => {}
                             CompletionDelivery::Rejected(response_tx) => {

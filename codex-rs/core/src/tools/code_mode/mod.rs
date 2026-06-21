@@ -164,7 +164,7 @@ impl CodeModeService {
     }
 
     pub(crate) fn finish_cell_dispatch(&self, cell_id: &CellId) {
-        self.dispatch_broker.close_cell(cell_id);
+        self.dispatch_broker.forget_cell(cell_id);
     }
 
     pub(crate) fn start_turn_worker(

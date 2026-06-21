@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -273,6 +274,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         let host = Arc::new(RuntimeCellHost {
             cell_id: cell_id.clone(),
             inner: Arc::clone(&self.inner),
+            terminal_notified: AtomicBool::new(false),
         });
         let mut cells = self.inner.cells.lock().await;
         if self.inner.shutdown_token.is_cancelled() {
@@ -380,6 +382,7 @@ impl PendingEvent {
 struct RuntimeCellHost<D: SessionRuntimeDelegate> {
     cell_id: CellId,
     inner: Arc<Inner<D>>,
+    terminal_notified: AtomicBool,
 }
 
 impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
@@ -435,8 +438,15 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
         })
     }
 
+    fn terminal(&self) {
+        if !self.terminal_notified.swap(true, Ordering::AcqRel) {
+            self.inner.delegate.cell_closed(&self.cell_id);
+        }
+    }
+
     async fn closed(&self) {
         self.inner.cells.lock().await.remove(&self.cell_id);
+        self.terminal();
     }
 }
 

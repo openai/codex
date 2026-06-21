@@ -63,6 +63,12 @@ pub trait CodeModeSessionDelegate: Send + Sync {
         text: String,
         cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a>;
+
+    /// Reports that a cell has reached its terminal state and will issue no more callbacks.
+    ///
+    /// Implementations must keep this non-blocking. The session does not wait for an
+    /// acknowledgement or retry delivery after a transport failure.
+    fn cell_closed(&self, cell_id: &CellId);
 }
 
 /// A stateful code-mode session owned by one Codex thread.

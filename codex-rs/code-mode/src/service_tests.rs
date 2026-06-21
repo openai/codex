@@ -69,6 +69,8 @@ impl CodeModeSessionDelegate for ReleasableToolDelegate {
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
     }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 #[derive(Debug, PartialEq)]
@@ -82,6 +84,9 @@ enum RecordedDelegateCall {
         cell_id: CellId,
         text: String,
         cancellation_requested: bool,
+    },
+    CellClosed {
+        cell_id: CellId,
     },
 }
 
@@ -150,6 +155,15 @@ impl CodeModeSessionDelegate for RecordingDelegate {
                 .pop_front()
                 .expect("test must provide one result per notification")
         })
+    }
+
+    fn cell_closed(&self, cell_id: &CellId) {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedDelegateCall::CellClosed {
+                cell_id: cell_id.clone(),
+            });
     }
 }
 
@@ -1215,6 +1229,7 @@ async fn protocol_delegate_maps_callbacks_cancellation_and_errors_field_for_fiel
         .await,
         Err("notification failed".to_string())
     );
+    runtime::SessionRuntimeDelegate::cell_closed(&adapter, &runtime::CellId::new("cell-d4"));
 
     assert_eq!(
         delegate.take_calls(),
@@ -1244,6 +1259,9 @@ async fn protocol_delegate_maps_callbacks_cancellation_and_errors_field_for_fiel
                 cell_id: cell_id("cell-c3"),
                 text: "progress".to_string(),
                 cancellation_requested: true,
+            },
+            RecordedDelegateCall::CellClosed {
+                cell_id: cell_id("cell-d4"),
             },
         ]
     );
