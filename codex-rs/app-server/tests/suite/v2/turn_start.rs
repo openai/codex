@@ -1915,6 +1915,11 @@ async fn thread_start_reports_multi_agent_mode() -> Result<()> {
             MultiAgentMode::Proactive,
         ),
         (
+            BTreeMap::from([(Feature::MultiAgentV2, true)]),
+            Some(MultiAgentMode::None),
+            MultiAgentMode::None,
+        ),
+        (
             BTreeMap::new(),
             Some(MultiAgentMode::Proactive),
             MultiAgentMode::Proactive,

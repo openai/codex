@@ -3290,14 +3290,20 @@ impl Session {
         {
             items.push(usage_hint_message);
         }
-        if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(
+        match multi_agents::effective_multi_agent_mode(
             turn_context.multi_agent_version,
             &session_source,
             turn_context.multi_agent_mode,
         ) {
-            items.push(ContextualUserFragment::into(
-                MultiAgentModeInstructions::new(multi_agent_mode),
-            ));
+            Some(
+                multi_agent_mode
+                @ (MultiAgentMode::ExplicitRequestOnly | MultiAgentMode::Proactive),
+            ) => {
+                items.push(ContextualUserFragment::into(
+                    MultiAgentModeInstructions::new(multi_agent_mode),
+                ));
+            }
+            Some(MultiAgentMode::None) | None => {}
         }
         if let Some(contextual_user_message) =
             crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)

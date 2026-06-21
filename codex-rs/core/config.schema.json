@@ -557,6 +557,9 @@
             "multi_agent": {
               "type": "boolean"
             },
+            "multi_agent_mode": {
+              "type": "boolean"
+            },
             "multi_agent_v2": {
               "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
             },
@@ -1717,6 +1720,10 @@
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
           "type": "string"
+        },
+        "usage_hint_enabled": {
+          "description": "Deprecated compatibility field. Its value is ignored.",
+          "type": "boolean"
         },
         "usage_hint_text": {
           "type": "string"
@@ -4843,6 +4850,9 @@
           "type": "boolean"
         },
         "multi_agent": {
+          "type": "boolean"
+        },
+        "multi_agent_mode": {
           "type": "boolean"
         },
         "multi_agent_v2": {

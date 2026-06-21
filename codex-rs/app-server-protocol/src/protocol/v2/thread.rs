@@ -94,7 +94,8 @@ pub struct ThreadStartParams {
     pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
-    /// Set the initial multi-agent mode for this thread.
+    /// Set the initial multi-agent mode for this thread. `none` leaves the
+    /// multi-agent tools available without injecting mode instructions.
     /// Omitted defaults to `explicitRequestOnly`.
     #[experimental("thread/start.multiAgentMode")]
     #[ts(optional = nullable)]

@@ -19,6 +19,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 
 const NO_SPAWN_TEXT: &str = "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work.";
+const NO_MODE_TEXT: &str = "Multi-agent delegation mode instructions are inactive.";
 const PROACTIVE_TEXT: &str = "Proactive multi-agent delegation is active.";
 
 fn developer_texts(input: &[Value]) -> Vec<&str> {
@@ -66,7 +67,7 @@ async fn multi_agent_mode_is_sticky_and_emits_only_on_change() -> Result<()> {
     let server = start_mock_server().await;
     let responses = mount_sse_sequence(
         &server,
-        (1..=3)
+        (1..=5)
             .map(|index| {
                 sse(vec![
                     ev_response_created(&format!("resp-{index}")),
@@ -93,6 +94,13 @@ async fn multi_agent_mode_is_sticky_and_emits_only_on_change() -> Result<()> {
     );
     submit_turn(&test.codex, "turn two", Some(MultiAgentMode::Proactive)).await?;
     submit_turn(&test.codex, "turn three", /*mode*/ None).await?;
+    submit_turn(&test.codex, "turn four", Some(MultiAgentMode::None)).await?;
+    submit_turn(&test.codex, "turn five", /*mode*/ None).await?;
+
+    assert_eq!(
+        test.codex.config_snapshot().await.multi_agent_mode,
+        MultiAgentMode::None
+    );
 
     let requests = responses.requests();
     let inputs = requests
@@ -102,6 +110,8 @@ async fn multi_agent_mode_is_sticky_and_emits_only_on_change() -> Result<()> {
     let first = developer_texts(&inputs[0]);
     let second = developer_texts(&inputs[1]);
     let third = developer_texts(&inputs[2]);
+    let fourth = developer_texts(&inputs[3]);
+    let fifth = developer_texts(&inputs[4]);
 
     assert_eq!(
         (
@@ -127,6 +137,96 @@ async fn multi_agent_mode_is_sticky_and_emits_only_on_change() -> Result<()> {
         ),
         (2, 1, 1)
     );
+    assert_eq!(
+        (
+            count_containing(&fourth, MULTI_AGENT_MODE_OPEN_TAG),
+            count_containing(&fourth, NO_SPAWN_TEXT),
+            count_containing(&fourth, PROACTIVE_TEXT),
+            count_containing(&fourth, NO_MODE_TEXT),
+        ),
+        (3, 1, 1, 1)
+    );
+    assert_eq!(
+        (
+            count_containing(&fifth, MULTI_AGENT_MODE_OPEN_TAG),
+            count_containing(&fifth, NO_SPAWN_TEXT),
+            count_containing(&fifth, PROACTIVE_TEXT),
+            count_containing(&fifth, NO_MODE_TEXT),
+        ),
+        (3, 1, 1, 1)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_mode_none_omits_instructions_and_survives_resume() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        (1..=2)
+            .map(|index| {
+                sse(vec![
+                    ev_response_created(&format!("resp-{index}")),
+                    ev_completed(&format!("resp-{index}")),
+                ])
+            })
+            .collect(),
+    )
+    .await;
+    let initial = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    submit_turn(&initial.codex, "before resume", Some(MultiAgentMode::None)).await?;
+    assert_eq!(
+        initial.codex.config_snapshot().await.multi_agent_mode,
+        MultiAgentMode::None
+    );
+    drop(initial);
+
+    let mut resume_builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+    });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    submit_turn(&resumed.codex, "after resume", /*mode*/ None).await?;
+
+    assert_eq!(
+        resumed.codex.config_snapshot().await.multi_agent_mode,
+        MultiAgentMode::None
+    );
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        let input = request.input();
+        let texts = developer_texts(&input);
+        assert_eq!(
+            (
+                count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
+                count_containing(&texts, NO_SPAWN_TEXT),
+                count_containing(&texts, PROACTIVE_TEXT),
+                count_containing(&texts, NO_MODE_TEXT),
+            ),
+            (0, 0, 0, 0)
+        );
+    }
 
     Ok(())
 }
