@@ -221,11 +221,11 @@ impl ExternalAgentSessionImporter {
             },
         };
         rollout_items.retain(is_persisted_rollout_item);
-        let title = title
+        let name = title
             .as_deref()
             .and_then(codex_core::util::normalize_thread_name);
         let metadata = ThreadMetadataPatch {
-            title,
+            name: name.map(Some),
             preview: first_user_message.clone(),
             model_provider: Some(model_provider),
             created_at: Some(now),

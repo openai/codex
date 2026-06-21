@@ -177,12 +177,25 @@ pub(super) fn permission_profile_to_metadata_value(
 }
 
 pub(super) fn thread_metadata_name(metadata: &ThreadMetadata) -> Option<String> {
-    metadata
+    let explicit_name = metadata
         .name
         .as_deref()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .map(str::to_string)
+        .map(str::to_string);
+    if explicit_name.is_some() {
+        return explicit_name;
+    }
+
+    // Preserve display names from rows written before explicit names had their own column.
+    let legacy_title = metadata.title.trim();
+    if legacy_title.is_empty()
+        || metadata.first_user_message.as_deref().map(str::trim) == Some(legacy_title)
+    {
+        None
+    } else {
+        Some(legacy_title.to_string())
+    }
 }
 
 pub(super) fn set_thread_name_from_title(thread: &mut StoredThread, title: String) {
