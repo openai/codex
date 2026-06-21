@@ -176,15 +176,21 @@ pub(super) fn permission_profile_to_metadata_value(
     }
 }
 
-pub(super) fn thread_metadata_name(metadata: &ThreadMetadata) -> Option<String> {
-    let explicit_name = metadata
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_string);
-    if explicit_name.is_some() {
-        return explicit_name;
+#[derive(Clone)]
+pub(super) enum ThreadMetadataName {
+    Explicit(String),
+    Legacy(String),
+    Cleared,
+}
+
+pub(super) fn thread_metadata_name(metadata: &ThreadMetadata) -> Option<ThreadMetadataName> {
+    if let Some(name) = metadata.name.as_deref() {
+        let name = name.trim();
+        return Some(if name.is_empty() {
+            ThreadMetadataName::Cleared
+        } else {
+            ThreadMetadataName::Explicit(name.to_string())
+        });
     }
 
     // Preserve display names from rows written before explicit names had their own column.
@@ -194,7 +200,15 @@ pub(super) fn thread_metadata_name(metadata: &ThreadMetadata) -> Option<String> 
     {
         None
     } else {
-        Some(legacy_title.to_string())
+        Some(ThreadMetadataName::Legacy(legacy_title.to_string()))
+    }
+}
+
+pub(super) fn apply_thread_metadata_name(thread: &mut StoredThread, name: ThreadMetadataName) {
+    match name {
+        ThreadMetadataName::Explicit(name) => thread.name = Some(name),
+        ThreadMetadataName::Legacy(name) => set_thread_name_from_title(thread, name),
+        ThreadMetadataName::Cleared => thread.name = None,
     }
 }
 

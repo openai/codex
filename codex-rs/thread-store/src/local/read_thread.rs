@@ -13,6 +13,8 @@ use codex_rollout::read_thread_item_from_rollout;
 use codex_state::ThreadMetadata;
 
 use super::LocalThreadStore;
+use super::helpers::ThreadMetadataName;
+use super::helpers::apply_thread_metadata_name;
 use super::helpers::git_info_from_parts;
 use super::helpers::permission_profile_from_metadata_value;
 use super::helpers::rollout_path_is_archived;
@@ -118,7 +120,7 @@ pub(super) async fn read_thread_by_rollout_path(
     if let Some(metadata) = read_sqlite_metadata(store, thread.thread_id).await {
         thread.recency_at = metadata.recency_at;
         if let Some(name) = thread_metadata_name(&metadata) {
-            set_thread_name_from_title(&mut thread, name);
+            apply_thread_metadata_name(&mut thread, name);
         }
         let existing_git_info = thread.git_info.take();
         let (fallback_sha, fallback_branch, fallback_origin_url) = match existing_git_info {
@@ -307,7 +309,8 @@ async fn stored_thread_from_sqlite_metadata(
     metadata: ThreadMetadata,
 ) -> StoredThread {
     let name = match thread_metadata_name(&metadata) {
-        Some(title) => Some(title),
+        Some(ThreadMetadataName::Explicit(name) | ThreadMetadataName::Legacy(name)) => Some(name),
+        Some(ThreadMetadataName::Cleared) => None,
         None => find_thread_name_by_id(store.config.codex_home.as_path(), &metadata.id)
             .await
             .ok()

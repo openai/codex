@@ -377,7 +377,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 search_term: None,
             },
         );
-        builder.push(" AND COALESCE(NULLIF(threads.name, ''), threads.title) = ");
+        builder.push(" AND COALESCE(threads.name, threads.title) = ");
         builder.push_bind(title);
         if let Some(cwd) = cwd {
             builder.push(" AND threads.cwd = ");
@@ -658,11 +658,19 @@ ON CONFLICT(id) DO NOTHING
         thread_id: ThreadId,
         name: Option<&str>,
     ) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE threads SET name = ? WHERE id = ?")
-            .bind(name)
+        let result = match name {
+            Some(name) => sqlx::query("UPDATE threads SET name = ? WHERE id = ?")
+                .bind(name)
+                .bind(thread_id.to_string())
+                .execute(self.pool.as_ref())
+                .await?,
+            None => sqlx::query(
+                "UPDATE threads SET title = CASE WHEN name IS NOT NULL AND title = name THEN '' ELSE title END, name = '' WHERE id = ?",
+            )
             .bind(thread_id.to_string())
             .execute(self.pool.as_ref())
-            .await?;
+            .await?,
+        };
         Ok(result.rows_affected() > 0)
     }
 
