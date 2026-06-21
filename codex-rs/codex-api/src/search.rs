@@ -214,9 +214,9 @@ pub enum SearchResponseLength {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalWebAccessMode {
-    Offline,
+    Cached,
     Indexed,
-    Online,
+    Live,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]

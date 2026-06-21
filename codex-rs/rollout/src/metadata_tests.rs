@@ -155,6 +155,8 @@ fn builder_from_items_falls_back_to_filename() {
         message: "noop".to_string(),
         replacement_history: None,
         window_number: None,
+        first_window_id: None,
+        previous_window_id: None,
         window_id: None,
     })];
 

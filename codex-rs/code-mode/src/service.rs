@@ -1,8 +1,4 @@
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_code_mode_protocol::CellId;
@@ -27,24 +23,11 @@ use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::WaitToPendingOutcome;
 use codex_code_mode_protocol::WaitToPendingRequest;
 use serde_json::Value as JsonValue;
-use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use crate::cell_actor::CellActor;
-use crate::cell_actor::CellError;
-use crate::cell_actor::CellEvent;
-use crate::cell_actor::CellEventFuture;
-use crate::cell_actor::CellHandle;
-use crate::cell_actor::CellHost;
-use crate::cell_actor::CellImageDetail;
-use crate::cell_actor::CellOutputItem;
-use crate::cell_actor::CellRequest;
-use crate::cell_actor::CellToolCall;
-use crate::cell_actor::CellToolDefinition;
-use crate::cell_actor::CellToolKind;
-use crate::cell_actor::CellToolName;
-use crate::cell_actor::ObserveMode;
+use crate::session_runtime as runtime;
+use crate::session_runtime::SessionRuntime;
 
 pub struct NoopCodeModeSessionDelegate;
 
@@ -89,16 +72,8 @@ impl CodeModeSessionProvider for InProcessCodeModeSessionProvider {
     }
 }
 
-struct Inner {
-    stored_values: Mutex<HashMap<String, JsonValue>>,
-    cells: Mutex<HashMap<CellId, CellHandle>>,
-    delegate: Arc<dyn CodeModeSessionDelegate>,
-    shutting_down: AtomicBool,
-    next_cell_id: AtomicU64,
-}
-
 pub struct CodeModeService {
-    inner: Arc<Inner>,
+    runtime: SessionRuntime<ProtocolDelegate>,
 }
 
 impl CodeModeService {
@@ -108,45 +83,31 @@ impl CodeModeService {
 
     pub fn with_delegate(delegate: Arc<dyn CodeModeSessionDelegate>) -> Self {
         Self {
-            inner: Arc::new(Inner {
-                stored_values: Mutex::new(HashMap::new()),
-                cells: Mutex::new(HashMap::new()),
-                delegate,
-                shutting_down: AtomicBool::new(false),
-                next_cell_id: AtomicU64::new(1),
-            }),
+            runtime: SessionRuntime::new(Arc::new(ProtocolDelegate { delegate })),
         }
-    }
-
-    fn allocate_cell_id(&self) -> CellId {
-        CellId::new(
-            self.inner
-                .next_cell_id
-                .fetch_add(1, Ordering::Relaxed)
-                .to_string(),
-        )
     }
 
     pub async fn execute(&self, request: ExecuteRequest) -> Result<StartedCell, String> {
         let yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
-        let cell_id = self.allocate_cell_id();
-        let initial_event = self
-            .start_cell(
-                cell_id.clone(),
-                request,
-                ObserveMode::YieldAfter(Duration::from_millis(yield_time_ms)),
+        let started = self
+            .runtime
+            .execute(
+                runtime_request(request),
+                runtime::ObserveMode::YieldAfter(Duration::from_millis(yield_time_ms)),
             )
-            .await?;
+            .await
+            .map_err(|error| error.to_string())?;
+        let cell_id = protocol_cell_id(&started.cell_id);
         let response_cell_id = cell_id.clone();
         let (response_tx, response_rx) = oneshot::channel();
         tokio::spawn(async move {
-            let response = initial_event
+            let response = started
+                .initial_event()
                 .await
-                .map_err(|error| cell_error_text(&response_cell_id, error))
+                .map_err(|error| error.to_string())
                 .and_then(|event| runtime_response(&response_cell_id, event));
             let _ = response_tx.send(response);
         });
-
         Ok(StartedCell::from_result_receiver(cell_id, response_rx))
     }
 
@@ -154,43 +115,20 @@ impl CodeModeService {
         &self,
         request: ExecuteRequest,
     ) -> Result<ExecuteToPendingOutcome, String> {
-        let cell_id = self.allocate_cell_id();
-        let event = self
-            .start_cell(cell_id.clone(), request, ObserveMode::PendingFrontier)
-            .await?
+        let started = self
+            .runtime
+            .execute(
+                runtime_request(request),
+                runtime::ObserveMode::PendingFrontier,
+            )
             .await
-            .map_err(|error| cell_error_text(&cell_id, error))?;
+            .map_err(|error| error.to_string())?;
+        let cell_id = protocol_cell_id(&started.cell_id);
+        let event = started
+            .initial_event()
+            .await
+            .map_err(|error| error.to_string())?;
         pending_outcome(&cell_id, event)
-    }
-
-    async fn start_cell(
-        &self,
-        cell_id: CellId,
-        request: ExecuteRequest,
-        initial_observe_mode: ObserveMode,
-    ) -> Result<CellEventFuture, String> {
-        let stored_values = self.inner.stored_values.lock().await.clone();
-        let host = Arc::new(ServiceCellHost {
-            cell_id: cell_id.clone(),
-            inner: Arc::clone(&self.inner),
-        });
-        let mut cells = self.inner.cells.lock().await;
-        if self.inner.shutting_down.load(Ordering::Acquire) {
-            return Err("code mode session is shutting down".to_string());
-        }
-        if cells.contains_key(&cell_id) {
-            return Err(format!("exec cell {cell_id} already exists"));
-        }
-        let (handle, initial_event, task) = CellActor::prepare(
-            cell_request(request),
-            stored_values,
-            host,
-            initial_observe_mode,
-        )?;
-        cells.insert(cell_id, handle);
-        drop(cells);
-        tokio::spawn(task);
-        Ok(initial_event)
     }
 
     pub async fn wait(&self, request: WaitRequest) -> Result<WaitOutcome, String> {
@@ -205,24 +143,39 @@ impl CodeModeService {
             cell_id,
             yield_time_ms,
         } = request;
-        let handle = self.inner.cells.lock().await.get(&cell_id).cloned();
-        let Some(handle) = handle else {
-            return missing_wait(cell_id);
-        };
-        wait_for_event(
-            cell_id,
-            handle.observe(ObserveMode::YieldAfter(Duration::from_millis(
-                yield_time_ms,
-            ))),
-        )
+        let runtime_cell_id = runtime_cell_id(&cell_id);
+        match self
+            .runtime
+            .begin_observe(
+                &runtime_cell_id,
+                runtime::ObserveMode::YieldAfter(Duration::from_millis(yield_time_ms)),
+            )
+            .await
+        {
+            Ok(pending_event) => Box::pin(async move {
+                match pending_event.event().await {
+                    Ok(event) => Ok(WaitOutcome::LiveCell(runtime_response(&cell_id, event)?)),
+                    Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
+                        Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)))
+                    }
+                    Err(error) => Err(error.to_string()),
+                }
+            }),
+            Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
+                missing_wait(cell_id)
+            }
+            Err(error) => Box::pin(async move { Err(error.to_string()) }),
+        }
     }
 
     pub async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {
-        let handle = self.inner.cells.lock().await.get(&cell_id).cloned();
-        let Some(handle) = handle else {
-            return Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)));
-        };
-        wait_for_event(cell_id, handle.terminate()).await
+        match self.runtime.terminate(&runtime_cell_id(&cell_id)).await {
+            Ok(event) => Ok(WaitOutcome::LiveCell(runtime_response(&cell_id, event)?)),
+            Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
+                Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)))
+            }
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     pub async fn wait_to_pending(
@@ -230,40 +183,29 @@ impl CodeModeService {
         request: WaitToPendingRequest,
     ) -> Result<WaitToPendingOutcome, String> {
         let cell_id = request.cell_id;
-        let handle = self.inner.cells.lock().await.get(&cell_id).cloned();
-        let Some(handle) = handle else {
-            return Ok(WaitToPendingOutcome::MissingCell(missing_cell_response(
-                cell_id,
-            )));
-        };
-        match handle.observe(ObserveMode::PendingFrontier).await {
+        match self
+            .runtime
+            .observe(
+                &runtime_cell_id(&cell_id),
+                runtime::ObserveMode::PendingFrontier,
+            )
+            .await
+        {
             Ok(event) => Ok(WaitToPendingOutcome::LiveCell(pending_outcome(
                 &cell_id, event,
             )?)),
-            Err(CellError::Closed) => Ok(WaitToPendingOutcome::MissingCell(missing_cell_response(
-                cell_id,
-            ))),
-            Err(error) => Err(cell_error_text(&cell_id, error)),
+            Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => Ok(
+                WaitToPendingOutcome::MissingCell(missing_cell_response(cell_id)),
+            ),
+            Err(error) => Err(error.to_string()),
         }
     }
 
     pub async fn shutdown(&self) -> Result<(), String> {
-        self.inner.shutting_down.store(true, Ordering::Release);
-        let handles = self
-            .inner
-            .cells
-            .lock()
+        self.runtime
+            .shutdown()
             .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for handle in handles {
-            handle.shutdown();
-        }
-        while !self.inner.cells.lock().await.is_empty() {
-            tokio::task::yield_now().await;
-        }
-        Ok(())
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -273,20 +215,9 @@ impl Default for CodeModeService {
     }
 }
 
-impl Drop for CodeModeService {
-    fn drop(&mut self) {
-        self.inner.shutting_down.store(true, Ordering::Release);
-        if let Ok(cells) = self.inner.cells.try_lock() {
-            for handle in cells.values() {
-                handle.shutdown();
-            }
-        }
-    }
-}
-
 impl CodeModeSession for CodeModeService {
     fn is_alive(&self) -> bool {
-        !self.inner.shutting_down.load(Ordering::Acquire)
+        self.runtime.is_alive()
     }
 
     fn execute<'a>(
@@ -309,30 +240,28 @@ impl CodeModeSession for CodeModeService {
     }
 }
 
-struct ServiceCellHost {
-    cell_id: CellId,
-    inner: Arc<Inner>,
+struct ProtocolDelegate {
+    delegate: Arc<dyn CodeModeSessionDelegate>,
 }
 
-impl CellHost for ServiceCellHost {
+impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
     async fn invoke_tool(
         &self,
-        invocation: CellToolCall,
+        invocation: runtime::NestedToolCall,
         cancellation_token: CancellationToken,
     ) -> Result<JsonValue, String> {
-        self.inner
-            .delegate
+        self.delegate
             .invoke_tool(
                 CodeModeNestedToolCall {
-                    cell_id: self.cell_id.clone(),
-                    runtime_tool_call_id: invocation.id,
+                    cell_id: protocol_cell_id(&invocation.cell_id),
+                    runtime_tool_call_id: invocation.runtime_tool_call_id,
                     tool_name: codex_protocol::ToolName {
-                        name: invocation.name.name,
-                        namespace: invocation.name.namespace,
+                        name: invocation.tool_name.name,
+                        namespace: invocation.tool_name.namespace,
                     },
-                    tool_kind: match invocation.kind {
-                        CellToolKind::Function => CodeModeToolKind::Function,
-                        CellToolKind::Freeform => CodeModeToolKind::Freeform,
+                    tool_kind: match invocation.tool_kind {
+                        runtime::ToolKind::Function => CodeModeToolKind::Function,
+                        runtime::ToolKind::Freeform => CodeModeToolKind::Freeform,
                     },
                     input: invocation.input,
                 },
@@ -344,45 +273,41 @@ impl CellHost for ServiceCellHost {
     async fn notify(
         &self,
         call_id: String,
+        cell_id: runtime::CellId,
         text: String,
         cancellation_token: CancellationToken,
     ) -> Result<(), String> {
-        self.inner
-            .delegate
-            .notify(call_id, self.cell_id.clone(), text, cancellation_token)
+        self.delegate
+            .notify(
+                call_id,
+                protocol_cell_id(&cell_id),
+                text,
+                cancellation_token,
+            )
             .await
     }
 
-    async fn commit_stored_values(&self, stored_value_writes: HashMap<String, JsonValue>) {
-        self.inner
-            .stored_values
-            .lock()
-            .await
-            .extend(stored_value_writes);
-    }
-
-    async fn closed(&self) {
-        self.inner.cells.lock().await.remove(&self.cell_id);
-        self.inner.delegate.cell_closed(&self.cell_id);
+    fn cell_closed(&self, cell_id: &runtime::CellId) {
+        self.delegate.cell_closed(&protocol_cell_id(cell_id));
     }
 }
 
-fn cell_request(request: ExecuteRequest) -> CellRequest {
-    CellRequest {
+fn runtime_request(request: ExecuteRequest) -> runtime::CreateCellRequest {
+    runtime::CreateCellRequest {
         tool_call_id: request.tool_call_id,
         enabled_tools: request
             .enabled_tools
             .into_iter()
-            .map(|definition| CellToolDefinition {
+            .map(|definition| runtime::ToolDefinition {
                 name: definition.name,
-                tool_name: CellToolName {
+                tool_name: runtime::ToolName {
                     name: definition.tool_name.name,
                     namespace: definition.tool_name.namespace,
                 },
                 description: definition.description,
                 kind: match definition.kind {
-                    CodeModeToolKind::Function => CellToolKind::Function,
-                    CodeModeToolKind::Freeform => CellToolKind::Freeform,
+                    CodeModeToolKind::Function => runtime::ToolKind::Function,
+                    CodeModeToolKind::Freeform => runtime::ToolKind::Freeform,
                 },
             })
             .collect(),
@@ -390,22 +315,20 @@ fn cell_request(request: ExecuteRequest) -> CellRequest {
     }
 }
 
-fn wait_for_event(
-    cell_id: CellId,
-    event: CellEventFuture,
-) -> CodeModeSessionResultFuture<'static, WaitOutcome> {
-    Box::pin(async move {
-        match event.await {
-            Ok(event) => Ok(WaitOutcome::LiveCell(runtime_response(&cell_id, event)?)),
-            Err(CellError::Closed) => Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id))),
-            Err(error) => Err(cell_error_text(&cell_id, error)),
-        }
-    })
+fn runtime_cell_id(cell_id: &CellId) -> runtime::CellId {
+    runtime::CellId::new(cell_id.as_str())
 }
 
-fn pending_outcome(cell_id: &CellId, event: CellEvent) -> Result<ExecuteToPendingOutcome, String> {
+fn protocol_cell_id(cell_id: &runtime::CellId) -> CellId {
+    CellId::new(cell_id.as_str().to_string())
+}
+
+fn pending_outcome(
+    cell_id: &CellId,
+    event: runtime::CellEvent,
+) -> Result<ExecuteToPendingOutcome, String> {
     match event {
-        CellEvent::Pending {
+        runtime::CellEvent::Pending {
             content_items,
             pending_tool_call_ids,
         } => Ok(ExecuteToPendingOutcome::Pending {
@@ -419,13 +342,16 @@ fn pending_outcome(cell_id: &CellId, event: CellEvent) -> Result<ExecuteToPendin
     }
 }
 
-fn runtime_response(cell_id: &CellId, event: CellEvent) -> Result<RuntimeResponse, String> {
+fn runtime_response(
+    cell_id: &CellId,
+    event: runtime::CellEvent,
+) -> Result<RuntimeResponse, String> {
     match event {
-        CellEvent::Yielded { content_items } => Ok(RuntimeResponse::Yielded {
+        runtime::CellEvent::Yielded { content_items } => Ok(RuntimeResponse::Yielded {
             cell_id: cell_id.clone(),
             content_items: content_items.into_iter().map(output_item).collect(),
         }),
-        CellEvent::Completed {
+        runtime::CellEvent::Completed {
             content_items,
             error_text,
         } => Ok(RuntimeResponse::Result {
@@ -433,36 +359,30 @@ fn runtime_response(cell_id: &CellId, event: CellEvent) -> Result<RuntimeRespons
             content_items: content_items.into_iter().map(output_item).collect(),
             error_text,
         }),
-        CellEvent::Terminated { content_items } => Ok(RuntimeResponse::Terminated {
+        runtime::CellEvent::Terminated { content_items } => Ok(RuntimeResponse::Terminated {
             cell_id: cell_id.clone(),
             content_items: content_items.into_iter().map(output_item).collect(),
         }),
-        CellEvent::Pending { .. } => {
+        runtime::CellEvent::Pending { .. } => {
             Err("cell returned a pending frontier unexpectedly".to_string())
         }
     }
 }
 
-fn output_item(item: CellOutputItem) -> FunctionCallOutputContentItem {
+fn output_item(item: runtime::OutputItem) -> FunctionCallOutputContentItem {
     match item {
-        CellOutputItem::Text { text } => FunctionCallOutputContentItem::InputText { text },
-        CellOutputItem::Image { image_url, detail } => FunctionCallOutputContentItem::InputImage {
-            image_url,
-            detail: detail.map(|detail| match detail {
-                CellImageDetail::Auto => ImageDetail::Auto,
-                CellImageDetail::Low => ImageDetail::Low,
-                CellImageDetail::High => ImageDetail::High,
-                CellImageDetail::Original => ImageDetail::Original,
-            }),
-        },
-    }
-}
-
-fn cell_error_text(cell_id: &CellId, error: CellError) -> String {
-    match error {
-        CellError::Busy => format!("exec cell {cell_id} already has an active observer"),
-        CellError::AlreadyTerminating => format!("exec cell {cell_id} is already terminating"),
-        CellError::Closed => format!("exec cell {cell_id} closed unexpectedly"),
+        runtime::OutputItem::Text { text } => FunctionCallOutputContentItem::InputText { text },
+        runtime::OutputItem::Image { image_url, detail } => {
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: detail.map(|detail| match detail {
+                    runtime::ImageDetail::Auto => ImageDetail::Auto,
+                    runtime::ImageDetail::Low => ImageDetail::Low,
+                    runtime::ImageDetail::High => ImageDetail::High,
+                    runtime::ImageDetail::Original => ImageDetail::Original,
+                }),
+            }
+        }
     }
 }
 

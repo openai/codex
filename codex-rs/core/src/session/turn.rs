@@ -254,8 +254,7 @@ pub(crate) async fn run_turn(
                 window_id,
                 CodexResponsesRequestKind::Turn,
             );
-            let tokens_before_sampling = sess.get_total_token_usage().await;
-            let (sampling_request_output, sampling_request_input) = run_sampling_request(
+            run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&turn_context),
                 Arc::clone(&turn_extension_data),
@@ -265,17 +264,11 @@ pub(crate) async fn run_turn(
                 sampling_request_input,
                 cancellation_token.child_token(),
             )
-            .await?;
-
-            Ok((
-                tokens_before_sampling,
-                sampling_request_output,
-                sampling_request_input,
-            ))
+            .await
         }
         .await;
         match sampling_request_result {
-            Ok((tokens_before_sampling, sampling_request_output, sampling_request_input)) => {
+            Ok((sampling_request_output, sampling_request_input)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -313,11 +306,20 @@ pub(crate) async fn run_turn(
                 );
 
                 let tokens_after_sampling = token_status.active_context_tokens;
-                super::token_budget::maybe_record_token_budget_remaining_context(
+                let full_context_remaining = token_status
+                    .full_context_window_limit
+                    .map_or(i64::MAX, |limit| {
+                        limit.saturating_sub(tokens_after_sampling)
+                    });
+                let tokens_until_compaction = token_status
+                    .auto_compact_scope_limit
+                    .saturating_sub(token_status.auto_compact_scope_tokens)
+                    .min(full_context_remaining)
+                    .max(0);
+                super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    tokens_before_sampling,
-                    tokens_after_sampling,
+                    tokens_until_compaction,
                 )
                 .await;
 
@@ -655,6 +657,11 @@ async fn build_skills_and_plugins(
     Some((injection_items, explicitly_enabled_connectors))
 }
 
+#[tracing::instrument(
+    level = "trace",
+    skip_all,
+    fields(user_input_count = user_input.len())
+)]
 async fn build_extension_turn_input_items(
     sess: &Arc<Session>,
     turn_context: &TurnContext,
@@ -710,6 +717,11 @@ async fn build_extension_turn_input_items(
     Some(items)
 }
 
+#[tracing::instrument(
+    level = "trace",
+    skip_all,
+    fields(input_count = input.len())
+)]
 async fn track_turn_resolved_config_analytics(
     sess: &Session,
     turn_context: &TurnContext,

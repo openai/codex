@@ -287,6 +287,7 @@ where
 }
 
 impl<C> SkillsExtension<C> {
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn list_skills(
         &self,
         mut query: SkillListQuery,
@@ -311,6 +312,7 @@ impl<C> SkillsExtension<C> {
         catalog
     }
 
+    #[tracing::instrument(level = "trace", skip_all, fields(skill = %entry.name))]
     async fn read_main_prompt(
         &self,
         entry: &SkillCatalogEntry,

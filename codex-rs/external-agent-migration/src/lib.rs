@@ -18,7 +18,6 @@ const EXTERNAL_AGENT_HOOKS_SUBDIR: &str = "hooks";
 const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "hooks";
 const COMMAND_SKILL_PREFIX: &str = "source-command";
 const MAX_SKILL_NAME_LEN: usize = 64;
-const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
 
 #[derive(Debug)]
 struct ParsedDocument {
@@ -1130,12 +1129,9 @@ fn command_skill_name_if_supported(
         return None;
     }
     let source_name = command_source_name(source_commands, source_file);
-    let description = command_skill_description(document, &source_name)?;
+    command_skill_description(document, &source_name)?;
     let name = command_skill_name(source_commands, source_file);
     if name.chars().count() > MAX_SKILL_NAME_LEN {
-        return None;
-    }
-    if description.chars().count() > MAX_SKILL_DESCRIPTION_LEN {
         return None;
     }
     if has_unsupported_command_template_features(&document.body) {
@@ -1387,6 +1383,8 @@ fn external_agent_term_variants() -> [String; 5] {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
 
     fn source_path(relative_path: &str) -> PathBuf {
         Path::new("/repo")
@@ -1720,6 +1718,35 @@ command = "enabled-server"
         let document = parse_document_content("---\ndescription: Review PR\n---\nReview\n");
 
         assert!(command_skill_name_if_supported(&root, &file, &document).is_none());
+    }
+
+    #[test]
+    fn commands_with_overlong_descriptions_are_preserved() {
+        let root = source_path("commands");
+        let file = source_path("commands/review.md");
+        let description = "x".repeat(MAX_SKILL_DESCRIPTION_LEN + 1);
+        let document =
+            parse_document_content(&format!("---\ndescription: {description}\n---\nReview\n"));
+
+        assert_eq!(
+            command_skill_name_if_supported(&root, &file, &document),
+            Some("source-command-review".to_string())
+        );
+
+        let rendered = render_command_skill(
+            &document.body,
+            "source-command-review",
+            &description,
+            "review",
+        );
+        let rendered_document = parse_document_content(&rendered);
+        assert_eq!(
+            rendered_document
+                .frontmatter
+                .get("description")
+                .and_then(FrontmatterValue::as_scalar),
+            Some(description.as_str())
+        );
     }
 
     #[test]
