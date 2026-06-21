@@ -57,3 +57,4 @@ chrono = { workspace = true }
 codex-config = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
