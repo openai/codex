@@ -97,7 +97,6 @@ use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
-use crate::rpc::RpcBatchCall;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
 
@@ -762,29 +761,6 @@ impl ExecServerClient {
         self.call_rpc(&rpc_client, method, params).await
     }
 
-    pub(crate) async fn call_batch(
-        &self,
-        calls: Vec<RpcBatchCall>,
-    ) -> Result<Vec<Result<Value, ExecServerError>>, ExecServerError> {
-        let rpc_client = self.inner.rpc_client().await?;
-        match rpc_client.call_batch(calls).await {
-            Ok(results) => Ok(results
-                .into_iter()
-                .map(|result| result.map_err(ExecServerError::from))
-                .collect()),
-            Err(error) => {
-                let error = ExecServerError::from(error);
-                if is_transport_closed_error(&error) {
-                    Err(ExecServerError::Disconnected(disconnected_message(
-                        /*reason*/ None,
-                    )))
-                } else {
-                    Err(error)
-                }
-            }
-        }
-    }
-
     async fn call_rpc<P, T>(
         &self,
         rpc_client: &Arc<RpcClient>,
@@ -837,7 +813,6 @@ impl From<RpcCallError> for ExecServerError {
                 code: error.code,
                 message: error.message,
             },
-            RpcCallError::InvalidBatch(message) => Self::Protocol(message),
         }
     }
 }

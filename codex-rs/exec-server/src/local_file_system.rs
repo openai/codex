@@ -1,10 +1,5 @@
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
-use futures::StreamExt;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,7 +15,6 @@ use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
-use crate::ExecutorRpcBatchCall;
 use crate::FILE_READ_CHUNK_SIZE;
 use crate::FileMetadata;
 use crate::FileSystemReadStream;
@@ -28,36 +22,10 @@ use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
-use crate::protocol::FS_CANONICALIZE_METHOD;
-use crate::protocol::FS_COPY_METHOD;
-use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
-use crate::protocol::FS_GET_METADATA_METHOD;
-use crate::protocol::FS_READ_DIRECTORY_METHOD;
-use crate::protocol::FS_READ_FILE_METHOD;
-use crate::protocol::FS_REMOVE_METHOD;
-use crate::protocol::FS_WRITE_FILE_METHOD;
-use crate::protocol::FsCanonicalizeParams;
-use crate::protocol::FsCanonicalizeResponse;
-use crate::protocol::FsCopyParams;
-use crate::protocol::FsCopyResponse;
-use crate::protocol::FsCreateDirectoryParams;
-use crate::protocol::FsCreateDirectoryResponse;
-use crate::protocol::FsGetMetadataParams;
-use crate::protocol::FsGetMetadataResponse;
-use crate::protocol::FsReadDirectoryEntry;
-use crate::protocol::FsReadDirectoryParams;
-use crate::protocol::FsReadDirectoryResponse;
-use crate::protocol::FsReadFileParams;
-use crate::protocol::FsReadFileResponse;
-use crate::protocol::FsRemoveParams;
-use crate::protocol::FsRemoveResponse;
-use crate::protocol::FsWriteFileParams;
-use crate::protocol::FsWriteFileResponse;
 use crate::regular_file;
 use crate::sandboxed_file_system::SandboxedFileSystem;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
-const LOCAL_RPC_BATCH_CONCURRENCY: usize = 32;
 
 fn file_too_large_error() -> io::Error {
     io::Error::new(
@@ -224,124 +192,6 @@ impl LocalFileSystem {
             .copy(source_path, destination_path, options, sandbox)
             .await
     }
-
-    async fn execute_rpc_batch(
-        &self,
-        calls: Vec<ExecutorRpcBatchCall>,
-    ) -> FileSystemResult<Vec<FileSystemResult<serde_json::Value>>> {
-        Ok(futures::stream::iter(calls)
-            .map(|call| self.execute_rpc_request(call))
-            .buffered(LOCAL_RPC_BATCH_CONCURRENCY)
-            .collect()
-            .await)
-    }
-
-    async fn execute_rpc_request(
-        &self,
-        call: ExecutorRpcBatchCall,
-    ) -> FileSystemResult<serde_json::Value> {
-        match call.method.as_str() {
-            FS_READ_FILE_METHOD => {
-                let params: FsReadFileParams = decode_rpc_params(call.params)?;
-                encode_rpc_response(FsReadFileResponse {
-                    data_base64: STANDARD.encode(
-                        self.read_file(&params.path, params.sandbox.as_ref())
-                            .await?,
-                    ),
-                })
-            }
-            FS_WRITE_FILE_METHOD => {
-                let params: FsWriteFileParams = decode_rpc_params(call.params)?;
-                let contents = STANDARD.decode(params.data_base64).map_err(|err| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("fs/writeFile received invalid base64 dataBase64: {err}"),
-                    )
-                })?;
-                self.write_file(&params.path, contents, params.sandbox.as_ref())
-                    .await?;
-                encode_rpc_response(FsWriteFileResponse {})
-            }
-            FS_CREATE_DIRECTORY_METHOD => {
-                let params: FsCreateDirectoryParams = decode_rpc_params(call.params)?;
-                self.create_directory(
-                    &params.path,
-                    CreateDirectoryOptions {
-                        recursive: params.recursive.unwrap_or(false),
-                    },
-                    params.sandbox.as_ref(),
-                )
-                .await?;
-                encode_rpc_response(FsCreateDirectoryResponse {})
-            }
-            FS_GET_METADATA_METHOD => {
-                let params: FsGetMetadataParams = decode_rpc_params(call.params)?;
-                let metadata = self
-                    .get_metadata(&params.path, params.sandbox.as_ref())
-                    .await?;
-                encode_rpc_response(FsGetMetadataResponse {
-                    is_directory: metadata.is_directory,
-                    is_file: metadata.is_file,
-                    is_symlink: metadata.is_symlink,
-                    size: metadata.size,
-                    created_at_ms: metadata.created_at_ms,
-                    modified_at_ms: metadata.modified_at_ms,
-                })
-            }
-            FS_CANONICALIZE_METHOD => {
-                let params: FsCanonicalizeParams = decode_rpc_params(call.params)?;
-                encode_rpc_response(FsCanonicalizeResponse {
-                    path: self
-                        .canonicalize(&params.path, params.sandbox.as_ref())
-                        .await?,
-                })
-            }
-            FS_READ_DIRECTORY_METHOD => {
-                let params: FsReadDirectoryParams = decode_rpc_params(call.params)?;
-                let entries = self
-                    .read_directory(&params.path, params.sandbox.as_ref())
-                    .await?
-                    .into_iter()
-                    .map(|entry| FsReadDirectoryEntry {
-                        file_name: entry.file_name,
-                        is_directory: entry.is_directory,
-                        is_file: entry.is_file,
-                    })
-                    .collect();
-                encode_rpc_response(FsReadDirectoryResponse { entries })
-            }
-            FS_REMOVE_METHOD => {
-                let params: FsRemoveParams = decode_rpc_params(call.params)?;
-                self.remove(
-                    &params.path,
-                    RemoveOptions {
-                        recursive: params.recursive.unwrap_or(false),
-                        force: params.force.unwrap_or(false),
-                    },
-                    params.sandbox.as_ref(),
-                )
-                .await?;
-                encode_rpc_response(FsRemoveResponse {})
-            }
-            FS_COPY_METHOD => {
-                let params: FsCopyParams = decode_rpc_params(call.params)?;
-                self.copy(
-                    &params.source_path,
-                    &params.destination_path,
-                    CopyOptions {
-                        recursive: params.recursive,
-                    },
-                    params.sandbox.as_ref(),
-                )
-                .await?;
-                encode_rpc_response(FsCopyResponse {})
-            }
-            method => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("local filesystem RPC batch does not support `{method}`"),
-            )),
-        }
-    }
 }
 
 impl ExecutorFileSystem for LocalFileSystem {
@@ -429,21 +279,6 @@ impl ExecutorFileSystem for LocalFileSystem {
             sandbox,
         ))
     }
-
-    fn execute_rpc_batch<'a>(
-        &'a self,
-        calls: Vec<ExecutorRpcBatchCall>,
-    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<serde_json::Value>>> {
-        Box::pin(LocalFileSystem::execute_rpc_batch(self, calls))
-    }
-}
-
-fn decode_rpc_params<T: DeserializeOwned>(params: serde_json::Value) -> FileSystemResult<T> {
-    serde_json::from_value(params).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
-}
-
-fn encode_rpc_response<T: Serialize>(response: T) -> FileSystemResult<serde_json::Value> {
-    serde_json::to_value(response).map_err(io::Error::other)
 }
 
 impl UnsandboxedFileSystem {
