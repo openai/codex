@@ -1,13 +1,11 @@
 use super::WorldStateSection;
-use super::developer_message;
 use crate::context::ContextualUserFragment;
 use crate::context::RealtimeEndInstructions;
 use crate::context::RealtimeStartInstructions;
 use crate::context::RealtimeStartWithInstructions;
 use crate::session::turn_context::TurnContext;
-use codex_protocol::models::ResponseItem;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct RealtimeState {
     active: Option<bool>,
     active_fallback: Option<bool>,
@@ -33,28 +31,28 @@ impl RealtimeState {
             start_instructions: None,
         }
     }
-
-    pub(crate) fn rendered_diff(&self, previous: &Self) -> Option<String> {
-        match (previous.active, self.active.unwrap_or(false)) {
-            (Some(true), false) => Some(RealtimeEndInstructions::new("inactive").render()),
-            (Some(false), true) | (None, true) => Some(
-                if let Some(instructions) = self.start_instructions.as_deref() {
-                    RealtimeStartWithInstructions::new(instructions).render()
-                } else {
-                    RealtimeStartInstructions.render()
-                },
-            ),
-            (Some(true), true) | (Some(false), false) => None,
-            (None, false) => previous
-                .active_fallback
-                .filter(|active| *active)
-                .map(|_| RealtimeEndInstructions::new("inactive").render()),
-        }
-    }
 }
 
 impl WorldStateSection for RealtimeState {
-    fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
-        self.rendered_diff(previous).map(developer_message)
+    fn render_diff(&self, previous: Option<&Self>) -> Option<Box<dyn ContextualUserFragment>> {
+        let previous_active = previous.and_then(|previous| previous.active);
+        match (previous_active, self.active.unwrap_or(false)) {
+            (Some(true), false) => Some(Box::new(RealtimeEndInstructions::new("inactive"))),
+            (Some(false), true) | (None, true) => {
+                if let Some(instructions) = self.start_instructions.as_deref() {
+                    Some(Box::new(RealtimeStartWithInstructions::new(instructions)))
+                } else {
+                    Some(Box::new(RealtimeStartInstructions))
+                }
+            }
+            (Some(true), true) | (Some(false), false) => None,
+            (None, false) => previous
+                .and_then(|previous| previous.active_fallback)
+                .filter(|active| *active)
+                .map(|_| {
+                    Box::new(RealtimeEndInstructions::new("inactive"))
+                        as Box<dyn ContextualUserFragment>
+                }),
+        }
     }
 }

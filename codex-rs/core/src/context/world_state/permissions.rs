@@ -1,12 +1,10 @@
 use super::WorldStateSection;
-use super::developer_message;
 use crate::context::ContextualUserFragment;
 use crate::context::PermissionsInstructions;
 use crate::session::turn_context::TurnContext;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::TurnContextItem;
 
@@ -16,15 +14,15 @@ struct PermissionValues {
     approval_policy: AskForApproval,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct PermissionsState {
-    values: Option<PermissionValues>,
-    rendered: Option<String>,
+    values: PermissionValues,
+    instructions: Option<PermissionsInstructions>,
 }
 
 impl PermissionsState {
     pub(crate) fn from_turn_context(turn_context: &TurnContext, exec_policy: &Policy) -> Self {
-        let rendered = turn_context
+        let instructions = turn_context
             .config
             .include_permissions_instructions
             .then(|| {
@@ -44,31 +42,32 @@ impl PermissionsState {
                         .features
                         .enabled(Feature::RequestPermissionsTool),
                 )
-                .render()
             });
         Self {
-            values: Some(PermissionValues {
+            values: PermissionValues {
                 permission_profile: turn_context.permission_profile(),
                 approval_policy: turn_context.approval_policy.value(),
-            }),
-            rendered,
+            },
+            instructions,
         }
     }
 
     pub(crate) fn from_turn_context_item(turn_context_item: &TurnContextItem) -> Self {
         Self {
-            values: Some(PermissionValues {
+            values: PermissionValues {
                 permission_profile: turn_context_item.permission_profile(),
                 approval_policy: turn_context_item.approval_policy,
-            }),
-            rendered: None,
+            },
+            instructions: None,
         }
     }
 }
 
 impl WorldStateSection for PermissionsState {
-    fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
-        let rendered = self.rendered.as_ref()?;
-        (self.values != previous.values).then(|| developer_message(rendered.clone()))
+    fn render_diff(&self, previous: Option<&Self>) -> Option<Box<dyn ContextualUserFragment>> {
+        let instructions = self.instructions.as_ref()?;
+        previous
+            .is_none_or(|previous| self.values != previous.values)
+            .then(|| Box::new(instructions.clone()) as Box<dyn ContextualUserFragment>)
     }
 }

@@ -1,17 +1,15 @@
 use super::WorldStateSection;
-use super::developer_message;
 use crate::context::ContextualUserFragment;
 use crate::context::PersonalitySpecInstructions;
 use crate::session::turn_context::TurnContext;
 use codex_protocol::config_types::Personality;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct PersonalityState {
     enabled: bool,
-    model: Option<String>,
+    model: String,
     personality: Option<Personality>,
     spec: Option<String>,
 }
@@ -21,7 +19,7 @@ impl PersonalityState {
         let personality = turn_context.personality;
         Self {
             enabled,
-            model: Some(turn_context.model_info.slug.clone()),
+            model: turn_context.model_info.slug.clone(),
             personality,
             spec: personality
                 .and_then(|personality| Self::message(&turn_context.model_info, personality)),
@@ -31,7 +29,7 @@ impl PersonalityState {
     pub(crate) fn from_turn_context_item(turn_context_item: &TurnContextItem) -> Self {
         Self {
             enabled: false,
-            model: Some(turn_context_item.model.clone()),
+            model: turn_context_item.model.clone(),
             personality: turn_context_item.personality,
             spec: None,
         }
@@ -47,14 +45,17 @@ impl PersonalityState {
 }
 
 impl WorldStateSection for PersonalityState {
-    fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
-        if !self.enabled || self.model != previous.model || self.personality == previous.personality
+    fn render_diff(&self, previous: Option<&Self>) -> Option<Box<dyn ContextualUserFragment>> {
+        if !self.enabled
+            || previous.is_some_and(|previous| {
+                self.model != previous.model || self.personality == previous.personality
+            })
         {
             return None;
         }
         self.personality?;
-        self.spec
-            .as_ref()
-            .map(|spec| developer_message(PersonalitySpecInstructions::new(spec).render()))
+        self.spec.as_ref().map(|spec| {
+            Box::new(PersonalitySpecInstructions::new(spec)) as Box<dyn ContextualUserFragment>
+        })
     }
 }

@@ -35,6 +35,7 @@ use crate::context::RecommendedPluginsInstructions;
 use crate::context::world_state::ModelState;
 use crate::context::world_state::PersonalityState;
 use crate::context::world_state::RealtimeState;
+use crate::context::world_state::WorldStateSection;
 use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -1687,8 +1688,10 @@ impl Session {
             return Vec::new();
         };
 
-        self.build_world_state(current_context)
-            .render_diff(previous_world_state.as_ref())
+        crate::context_manager::updates::merge_contextual_fragments(
+            self.build_world_state(current_context)
+                .render_diff(previous_world_state.as_ref()),
+        )
     }
 
     /// Record a terminal CodexErr before the app-server completion notification is reduced.
@@ -3031,14 +3034,13 @@ impl Session {
                 state.auto_compact_window_id(),
             )
         };
-        if let Some(model_switch_message) = ModelState::from_turn_context(turn_context)
-            .rendered_diff(&ModelState::from_previous_model(
-                previous_turn_settings
-                    .as_ref()
-                    .map(|settings| settings.model.as_str()),
-            ))
+        let previous_model_state = previous_turn_settings
+            .as_ref()
+            .map(|settings| ModelState::from_previous_model(&settings.model));
+        if let Some(model_switch_fragment) =
+            ModelState::from_turn_context(turn_context).render_diff(previous_model_state.as_ref())
         {
-            developer_sections.push(model_switch_message);
+            developer_sections.push(model_switch_fragment.render());
         }
         if turn_context.config.include_permissions_instructions {
             developer_sections.push(
@@ -3078,17 +3080,18 @@ impl Session {
         {
             developer_sections.push(collab_instructions.render());
         }
-        if let Some(realtime_update) = RealtimeState::from_turn_context(turn_context).rendered_diff(
-            &RealtimeState::from_previous(
-                reference_context_item
-                    .as_ref()
-                    .and_then(|item| item.realtime_active),
-                previous_turn_settings
-                    .as_ref()
-                    .and_then(|settings| settings.realtime_active),
-            ),
-        ) {
-            developer_sections.push(realtime_update);
+        let previous_realtime_state = RealtimeState::from_previous(
+            reference_context_item
+                .as_ref()
+                .and_then(|item| item.realtime_active),
+            previous_turn_settings
+                .as_ref()
+                .and_then(|settings| settings.realtime_active),
+        );
+        if let Some(realtime_fragment) = RealtimeState::from_turn_context(turn_context)
+            .render_diff(Some(&previous_realtime_state))
+        {
+            developer_sections.push(realtime_fragment.render());
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality

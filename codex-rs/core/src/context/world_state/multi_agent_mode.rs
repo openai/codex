@@ -1,20 +1,18 @@
 use super::WorldStateSection;
-use super::developer_message;
 use crate::context::ContextualUserFragment;
 use crate::context::MultiAgentModeInstructions;
 use crate::session::multi_agents;
 use crate::session::turn_context::TurnContext;
 use codex_features::Feature;
 use codex_protocol::config_types::MultiAgentMode;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 
-#[derive(Debug, Default)]
-pub(crate) struct MultiAgentModeState(Option<Option<MultiAgentMode>>);
+#[derive(Debug)]
+pub(crate) struct MultiAgentModeState(Option<MultiAgentMode>);
 
 impl MultiAgentModeState {
     pub(crate) fn from_turn_context(turn_context: &TurnContext) -> Self {
-        Self(Some(multi_agents::effective_multi_agent_mode(
+        Self(multi_agents::effective_multi_agent_mode(
             turn_context.multi_agent_version,
             &turn_context.config.multi_agent_v2,
             &turn_context.session_source,
@@ -23,30 +21,28 @@ impl MultiAgentModeState {
                 .config
                 .features
                 .enabled(Feature::MultiAgentMode),
-        )))
+        ))
     }
 
     pub(crate) fn from_turn_context_item(turn_context_item: &TurnContextItem) -> Self {
-        Self(Some(turn_context_item.multi_agent_mode))
+        Self(turn_context_item.multi_agent_mode)
     }
 }
 
 impl WorldStateSection for MultiAgentModeState {
-    fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
-        let previous_mode = previous.0.as_ref()?;
-        let current_mode = self.0.as_ref()?;
-        if current_mode == previous_mode {
+    fn render_diff(&self, previous: Option<&Self>) -> Option<Box<dyn ContextualUserFragment>> {
+        if previous.is_some_and(|previous| self.0 == previous.0) {
             return None;
         }
-        let mode = match current_mode {
-            Some(mode) => *mode,
-            None if *previous_mode == Some(MultiAgentMode::Proactive) => {
+        let mode = match self.0 {
+            Some(mode) => mode,
+            None if previous
+                .is_some_and(|previous| previous.0 == Some(MultiAgentMode::Proactive)) =>
+            {
                 MultiAgentMode::ExplicitRequestOnly
             }
             None => return None,
         };
-        Some(developer_message(
-            MultiAgentModeInstructions::new(mode).render(),
-        ))
+        Some(Box::new(MultiAgentModeInstructions::new(mode)))
     }
 }

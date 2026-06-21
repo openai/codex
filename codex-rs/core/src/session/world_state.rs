@@ -48,9 +48,11 @@ pub(crate) fn build_world_state_from_turn_context_item(
     previous_turn_settings: Option<&PreviousTurnSettings>,
 ) -> WorldState {
     let mut world_state = WorldState::default();
-    world_state.add_section(ModelState::from_previous_model(
-        previous_turn_settings.map(|settings| settings.model.as_str()),
-    ));
+    if let Some(previous_turn_settings) = previous_turn_settings {
+        world_state.add_section(ModelState::from_previous_model(
+            &previous_turn_settings.model,
+        ));
+    }
     world_state.add_section(PermissionsState::from_turn_context_item(turn_context_item));
     world_state.add_section(CollaborationModeState::from_turn_context_item(
         turn_context_item,
@@ -95,10 +97,11 @@ impl Session {
             let state = self.state.lock().await;
             state.world_state()
         };
-        let items = match previous.as_deref() {
+        let fragments = match previous.as_deref() {
             Some(previous) => world_state.render_diff(previous),
             None => world_state.render_full(),
         };
+        let items = crate::context_manager::updates::merge_contextual_fragments(fragments);
         if !items.is_empty() {
             self.record_conversation_items(turn_context, &items).await;
         }
