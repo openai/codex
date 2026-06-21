@@ -254,8 +254,7 @@ pub(crate) async fn run_turn(
                 window_id,
                 CodexResponsesRequestKind::Turn,
             );
-            let tokens_before_sampling = sess.get_total_token_usage().await;
-            let (sampling_request_output, sampling_request_input) = run_sampling_request(
+            run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&turn_context),
                 Arc::clone(&turn_extension_data),
@@ -265,17 +264,11 @@ pub(crate) async fn run_turn(
                 sampling_request_input,
                 cancellation_token.child_token(),
             )
-            .await?;
-
-            Ok((
-                tokens_before_sampling,
-                sampling_request_output,
-                sampling_request_input,
-            ))
+            .await
         }
         .await;
         match sampling_request_result {
-            Ok((tokens_before_sampling, sampling_request_output, sampling_request_input)) => {
+            Ok((sampling_request_output, sampling_request_input)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -326,8 +319,6 @@ pub(crate) async fn run_turn(
                 super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    tokens_before_sampling,
-                    tokens_after_sampling,
                     tokens_until_compaction,
                 )
                 .await;
