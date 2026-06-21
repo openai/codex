@@ -22,14 +22,8 @@ pub(super) fn spawn_notification<H: CellHost>(
     cancellation_token: CancellationToken,
 ) {
     tasks.spawn(async move {
-        tokio::select! {
-            biased;
-            _ = cancellation_token.cancelled() => {}
-            result = host.notify(call_id, text, cancellation_token.clone()) => {
-                if let Err(err) = result {
-                    warn!("failed to deliver code mode notification: {err}");
-                }
-            }
+        if let Err(err) = host.notify(call_id, text, cancellation_token).await {
+            warn!("failed to deliver code mode notification: {err}");
         }
     });
 }
@@ -43,15 +37,9 @@ pub(super) fn spawn_tool<H: CellHost>(
 ) {
     tasks.spawn(async move {
         let id = invocation.id.clone();
-        let command = tokio::select! {
-            biased;
-            _ = cancellation_token.cancelled() => {
-                return;
-            }
-            result = host.invoke_tool(invocation, cancellation_token.clone()) => match result {
-                Ok(result) => RuntimeCommand::ToolResponse { id, result },
-                Err(error_text) => RuntimeCommand::ToolError { id, error_text },
-            }
+        let command = match host.invoke_tool(invocation, cancellation_token).await {
+            Ok(result) => RuntimeCommand::ToolResponse { id, result },
+            Err(error_text) => RuntimeCommand::ToolError { id, error_text },
         };
         let _ = runtime_tx.send(command);
     });
