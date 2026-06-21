@@ -43,7 +43,6 @@ use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::state::AutoCompactWindowSnapshot;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -313,11 +312,23 @@ pub(crate) async fn run_turn(
                     "post sampling token usage"
                 );
 
+                let tokens_after_sampling = token_status.active_context_tokens;
+                let full_context_remaining = token_status
+                    .full_context_window_limit
+                    .map_or(i64::MAX, |limit| {
+                        limit.saturating_sub(tokens_after_sampling)
+                    });
+                let tokens_until_compaction = token_status
+                    .auto_compact_scope_limit
+                    .saturating_sub(token_status.auto_compact_scope_tokens)
+                    .min(full_context_remaining)
+                    .max(0);
                 super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
                     tokens_before_sampling,
-                    token_budget_snapshot(&token_status, sess.auto_compact_window_snapshot().await),
+                    tokens_after_sampling,
+                    tokens_until_compaction,
                 )
                 .await;
 
@@ -785,27 +796,6 @@ struct AutoCompactTokenStatus {
     auto_compact_window_prefill_tokens: Option<i64>,
     full_context_window_limit_reached: bool,
     token_limit_reached: bool,
-}
-
-fn token_budget_snapshot(
-    status: &AutoCompactTokenStatus,
-    window: AutoCompactWindowSnapshot,
-) -> super::token_budget::TokenBudgetSnapshot {
-    let auto_compact_scope_remaining = status
-        .auto_compact_scope_limit
-        .saturating_sub(status.auto_compact_scope_tokens);
-    let tokens_until_compaction = status
-        .full_context_window_limit
-        .map(|limit| limit.saturating_sub(status.active_context_tokens))
-        .map_or(auto_compact_scope_remaining, |full_context_remaining| {
-            auto_compact_scope_remaining.min(full_context_remaining)
-        })
-        .max(0);
-    super::token_budget::TokenBudgetSnapshot {
-        active_context_tokens: status.active_context_tokens,
-        tokens_until_compaction,
-        reminder_delivered: window.token_budget_reminder_delivered,
-    }
 }
 
 async fn auto_compact_token_status(

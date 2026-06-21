@@ -11,7 +11,6 @@ pub(crate) struct AutoCompactWindowIds {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AutoCompactWindowSnapshot {
     pub(crate) prefill_input_tokens: Option<i64>,
-    pub(crate) token_budget_reminder_delivered: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +64,6 @@ impl AutoCompactWindow {
     pub(super) fn restore(&mut self, window_number: u64, ids: AutoCompactWindowIds) {
         self.window_number = window_number;
         self.ids = ids;
-        self.token_budget_reminder_delivered = false;
     }
 
     pub(super) fn advance(&mut self) -> (u64, AutoCompactWindowIds) {
@@ -77,12 +75,8 @@ impl AutoCompactWindow {
         (self.window_number, self.ids)
     }
 
-    pub(super) fn mark_token_budget_reminder_delivered(&mut self) {
-        self.token_budget_reminder_delivered = true;
-    }
-
-    pub(super) fn rearm_token_budget_reminder(&mut self) {
-        self.token_budget_reminder_delivered = false;
+    pub(super) fn claim_token_budget_reminder(&mut self) -> bool {
+        !std::mem::replace(&mut self.token_budget_reminder_delivered, true)
     }
 
     pub(super) fn request_new_context_window(&mut self) {
@@ -130,7 +124,6 @@ impl AutoCompactWindow {
         };
         AutoCompactWindowSnapshot {
             prefill_input_tokens,
-            token_budget_reminder_delivered: self.token_budget_reminder_delivered,
         }
     }
 }
@@ -156,8 +149,6 @@ mod tests {
             }
         );
         let first_window_id = initial_window_id;
-        window.mark_token_budget_reminder_delivered();
-        assert!(window.snapshot().token_budget_reminder_delivered);
         let restored_window_id = Uuid::now_v7();
         let restored_previous_window_id = Uuid::now_v7();
         window.restore(
@@ -170,9 +161,8 @@ mod tests {
         );
         assert_eq!(window.window_number(), 3);
         assert_eq!(window.ids().window_id, restored_window_id);
-        assert!(!window.snapshot().token_budget_reminder_delivered);
-        window.mark_token_budget_reminder_delivered();
-        assert!(window.snapshot().token_budget_reminder_delivered);
+        assert!(window.claim_token_budget_reminder());
+        assert!(!window.claim_token_budget_reminder());
         window.request_new_context_window();
         assert!(window.take_new_context_window_request());
         assert!(!window.take_new_context_window_request());
@@ -186,13 +176,12 @@ mod tests {
         assert_eq!(ids.window_id.get_version_num(), 7);
         assert_ne!(ids.window_id, restored_window_id);
         assert!(!window.take_new_context_window_request());
-        assert!(!window.snapshot().token_budget_reminder_delivered);
+        assert!(window.claim_token_budget_reminder());
 
         assert_eq!(
             window.snapshot(),
             AutoCompactWindowSnapshot {
                 prefill_input_tokens: None,
-                token_budget_reminder_delivered: false,
             }
         );
 
@@ -201,7 +190,6 @@ mod tests {
             window.snapshot(),
             AutoCompactWindowSnapshot {
                 prefill_input_tokens: Some(150),
-                token_budget_reminder_delivered: false,
             }
         );
 
@@ -214,7 +202,6 @@ mod tests {
             window.snapshot(),
             AutoCompactWindowSnapshot {
                 prefill_input_tokens: Some(120),
-                token_budget_reminder_delivered: false,
             }
         );
 
@@ -228,7 +215,6 @@ mod tests {
             window.snapshot(),
             AutoCompactWindowSnapshot {
                 prefill_input_tokens: Some(120),
-                token_budget_reminder_delivered: false,
             }
         );
     }

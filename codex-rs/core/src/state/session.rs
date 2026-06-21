@@ -109,7 +109,6 @@ impl SessionState {
         self.history
             .set_reference_context_item(reference_context_item);
         self.auto_compact_window.clear_prefill();
-        self.auto_compact_window.rearm_token_budget_reminder();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -149,9 +148,8 @@ impl SessionState {
         self.auto_compact_window.snapshot()
     }
 
-    pub(crate) fn mark_token_budget_reminder_delivered(&mut self) {
-        self.auto_compact_window
-            .mark_token_budget_reminder_delivered();
+    pub(crate) fn claim_token_budget_reminder(&mut self) -> bool {
+        self.auto_compact_window.claim_token_budget_reminder()
     }
 
     pub(crate) fn auto_compact_window_number(&self) -> u64 {

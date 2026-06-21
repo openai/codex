@@ -65,19 +65,17 @@ async fn set_rate_limits_defaults_limit_id_to_codex_when_missing() {
 }
 
 #[tokio::test]
-async fn replace_history_rearms_auto_compact_window_runtime_state() {
+async fn replace_history_clears_auto_compact_window_prefill() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);
 
     state.set_auto_compact_window_estimated_prefill(/*tokens*/ 100);
-    state.mark_token_budget_reminder_delivered();
     state.replace_history(Vec::new(), /*reference_context_item*/ None);
 
     assert_eq!(
         state.auto_compact_window_snapshot(),
         AutoCompactWindowSnapshot {
             prefill_input_tokens: None,
-            token_budget_reminder_delivered: false,
         }
     );
 }

@@ -1195,11 +1195,6 @@ impl Session {
         state.auto_compact_window_snapshot()
     }
 
-    pub(crate) async fn mark_token_budget_reminder_delivered(&self) {
-        let mut state = self.state.lock().await;
-        state.mark_token_budget_reminder_delivered();
-    }
-
     pub(crate) async fn estimated_tokens_after_last_model_generated_item(&self) -> i64 {
         let state = self.state.lock().await;
         state
