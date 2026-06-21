@@ -241,20 +241,6 @@ pub(crate) async fn run_turn(
             )
             .await?;
 
-            let token_status_before_sampling =
-                auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
-            let token_budget_status_before_sampling = token_budget_snapshot(
-                &token_status_before_sampling,
-                sess.auto_compact_window_snapshot().await,
-            );
-            super::token_budget::maybe_record(
-                sess.as_ref(),
-                turn_context.as_ref(),
-                token_budget_status_before_sampling,
-                token_budget_status_before_sampling,
-            )
-            .await;
-
             // Construct the input that we will send to the model.
             let sampling_request_input: Vec<ResponseItem> = async {
                 sess.clone_history()
@@ -269,6 +255,7 @@ pub(crate) async fn run_turn(
                 window_id,
                 CodexResponsesRequestKind::Turn,
             );
+            let tokens_before_sampling = sess.get_total_token_usage().await;
             let (sampling_request_output, sampling_request_input) = run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&turn_context),
@@ -282,18 +269,14 @@ pub(crate) async fn run_turn(
             .await?;
 
             Ok((
-                token_budget_status_before_sampling,
+                tokens_before_sampling,
                 sampling_request_output,
                 sampling_request_input,
             ))
         }
         .await;
         match sampling_request_result {
-            Ok((
-                token_budget_status_before_sampling,
-                sampling_request_output,
-                sampling_request_input,
-            )) => {
+            Ok((tokens_before_sampling, sampling_request_output, sampling_request_input)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -333,7 +316,7 @@ pub(crate) async fn run_turn(
                 super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    token_budget_status_before_sampling,
+                    tokens_before_sampling,
                     token_budget_snapshot(&token_status, sess.auto_compact_window_snapshot().await),
                 )
                 .await;

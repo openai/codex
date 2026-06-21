@@ -300,7 +300,7 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_reminder_emits_after_crossing_compaction_threshold() -> Result<()> {
+async fn token_budget_reminder_emits_once_after_crossing_compaction_threshold() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -312,6 +312,7 @@ async fn token_budget_reminder_emits_after_crossing_compaction_threshold() -> Re
                 ev_completed_with_tokens("resp-1", /*total_tokens*/ 8_000),
             ]),
             sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+            sse(vec![ev_response_created("resp-3"), ev_completed("resp-3")]),
         ],
     )
     .await;
@@ -332,9 +333,10 @@ async fn token_budget_reminder_emits_after_crossing_compaction_threshold() -> Re
 
     test.submit_turn("cross threshold").await?;
     test.submit_turn("observe reminder").await?;
+    test.submit_turn("observe reminder once").await?;
 
     let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     let initial_context = token_budget_texts(&requests[0]);
     assert_eq!(initial_context.len(), 1);
     let remaining_context =
@@ -342,55 +344,9 @@ async fn token_budget_reminder_emits_after_crossing_compaction_threshold() -> Re
             .to_string();
     let reminder = "<token_budget>\nYour context window is nearly exhausted (only 1000 tokens remaining) and will be automatically reset for you soon. Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows.\n</token_budget>"
         .to_string();
-    assert_eq!(
-        token_budget_texts(&requests[1]),
-        vec![initial_context[0].clone(), remaining_context, reminder]
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_reminder_is_level_triggered_once_per_window() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_completed_with_tokens("resp-1", /*total_tokens*/ 1_000),
-            ]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
-    )
-    .await;
-    let test = test_codex()
-        .with_config(|config| {
-            config.model_context_window = Some(10_000);
-            config.token_budget = Some(TokenBudgetConfig {
-                reminder_threshold_tokens: Some(10_000),
-                reminder_message_template: "Custom reminder.".to_string(),
-            });
-            config
-                .features
-                .enable(Feature::TokenBudget)
-                .expect("test config should allow token budget");
-        })
-        .build(&server)
-        .await?;
-
-    test.submit_turn("first turn").await?;
-    test.submit_turn("second turn").await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    let initial_context = token_budget_texts(&requests[0]);
-    assert_eq!(initial_context.len(), 2);
-    let reminder = "<token_budget>\nCustom reminder.\n</token_budget>".to_string();
-    assert_eq!(initial_context[1], reminder);
-    assert_eq!(token_budget_texts(&requests[1]), initial_context);
+    let expected = vec![initial_context[0].clone(), remaining_context, reminder];
+    assert_eq!(token_budget_texts(&requests[1]), expected);
+    assert_eq!(token_budget_texts(&requests[2]), expected);
 
     Ok(())
 }
