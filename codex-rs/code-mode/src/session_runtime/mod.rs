@@ -256,6 +256,7 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
         &self,
         stored_value_writes: HashMap<String, JsonValue>,
         event: CellEvent,
+        pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,
     ) -> CompletionCommit {
         let cancellation_token = cell_state.cancellation_token();
@@ -266,7 +267,9 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
             }
             stored_values = self.inner.stored_values.lock() => stored_values,
         };
-        cell_state.commit_completion(event, || stored_values.extend(stored_value_writes))
+        cell_state.commit_completion(event, pending_initial_yield_items, || {
+            stored_values.extend(stored_value_writes);
+        })
     }
 
     async fn closed(&self) {

@@ -173,7 +173,7 @@ async fn run_cell<H: CellHost>(
                 if response_tx.is_closed() {
                     continue;
                 }
-                let response_tx = match cell_state.route_observation(response_tx) {
+                let response_tx = match cell_state.route_observation(mode, response_tx) {
                     ObservationDelivery::Running(response_tx) => response_tx,
                     ObservationDelivery::Delivered => break,
                     ObservationDelivery::Buffered | ObservationDelivery::Closed => continue,
@@ -284,6 +284,7 @@ async fn run_cell<H: CellHost>(
                         .commit_completion(
                             HashMap::new(),
                             event,
+                            /*pending_initial_yield_items*/ None,
                             Arc::clone(&cell_state),
                         )
                         .await
@@ -429,6 +430,7 @@ async fn run_cell<H: CellHost>(
                             .commit_completion(
                                 stored_value_writes,
                                 event,
+                                /*pending_initial_yield_items*/ None,
                                 Arc::clone(&cell_state),
                             )
                             .await

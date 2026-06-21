@@ -45,9 +45,10 @@ impl CellHost for TestHost {
         &self,
         _stored_value_writes: HashMap<String, JsonValue>,
         event: CellEvent,
+        pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,
     ) -> CompletionCommit {
-        cell_state.commit_completion(event, || {})
+        cell_state.commit_completion(event, pending_initial_yield_items, || {})
     }
 
     async fn closed(&self) {}
@@ -76,9 +77,10 @@ impl CellHost for RecordingHost {
         &self,
         _stored_value_writes: HashMap<String, JsonValue>,
         event: CellEvent,
+        pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,
     ) -> CompletionCommit {
-        cell_state.commit_completion(event, || {})
+        cell_state.commit_completion(event, pending_initial_yield_items, || {})
     }
 
     async fn closed(&self) {}
@@ -397,7 +399,11 @@ async fn only_the_first_termination_claims_a_buffered_completion() {
         error_text: None,
     };
     assert_eq!(
-        cell_state.commit_completion(completion.clone(), || {}),
+        cell_state.commit_completion(
+            completion.clone(),
+            /*pending_initial_yield_items*/ None,
+            || {}
+        ),
         CompletionCommit::Committed
     );
     assert!(matches!(
@@ -430,7 +436,11 @@ async fn termination_claim_prevents_stored_value_commit() {
     };
 
     assert_eq!(
-        cell_state.commit_completion(completion.clone(), || commit_ran = true),
+        cell_state.commit_completion(
+            completion.clone(),
+            /*pending_initial_yield_items*/ None,
+            || commit_ran = true
+        ),
         CompletionCommit::Rejected(completion)
     );
     assert!(!commit_ran);
@@ -453,7 +463,11 @@ fn failed_completion_delivery_rebuffers_the_event() {
         error_text: None,
     };
     assert_eq!(
-        cell_state.commit_completion(event.clone(), || {}),
+        cell_state.commit_completion(
+            event.clone(),
+            /*pending_initial_yield_items*/ None,
+            || {}
+        ),
         CompletionCommit::Committed
     );
     let (response_tx, response_rx) = oneshot::channel();
@@ -466,8 +480,151 @@ fn failed_completion_delivery_rebuffers_the_event() {
 
     let (response_tx, mut response_rx) = oneshot::channel();
     assert!(matches!(
-        cell_state.route_observation(response_tx),
+        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
         ObservationDelivery::Delivered
     ));
     assert_eq!(response_rx.try_recv(), Ok(Ok(event)));
+}
+
+#[test]
+fn buffered_initial_yield_precedes_buffered_completion_for_yield_observer() {
+    let cell_state = CellState::new(CancellationToken::new());
+    let completion = CellEvent::Completed {
+        content_items: vec![OutputItem::Text {
+            text: "after".to_string(),
+        }],
+        error_text: None,
+    };
+    assert_eq!(
+        cell_state.commit_completion(
+            completion.clone(),
+            Some(vec![OutputItem::Text {
+                text: "before".to_string(),
+            }]),
+            || {}
+        ),
+        CompletionCommit::Committed
+    );
+    assert!(matches!(
+        cell_state.deliver_completion(/*response_tx*/ None),
+        CompletionDelivery::Buffered
+    ));
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    assert!(matches!(
+        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
+        ObservationDelivery::Buffered
+    ));
+    assert_eq!(
+        response_rx.try_recv(),
+        Ok(Ok(CellEvent::Yielded {
+            content_items: vec![OutputItem::Text {
+                text: "before".to_string(),
+            }],
+        }))
+    );
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    assert!(matches!(
+        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
+        ObservationDelivery::Delivered
+    ));
+    assert_eq!(response_rx.try_recv(), Ok(Ok(completion)));
+}
+
+#[test]
+fn pending_observer_merges_initial_yield_and_completion_output() {
+    let cell_state = CellState::new(CancellationToken::new());
+    assert_eq!(
+        cell_state.commit_completion(
+            CellEvent::Completed {
+                content_items: vec![OutputItem::Text {
+                    text: "after".to_string(),
+                }],
+                error_text: None,
+            },
+            Some(vec![OutputItem::Text {
+                text: "before".to_string(),
+            }]),
+            || {}
+        ),
+        CompletionCommit::Committed
+    );
+    assert!(matches!(
+        cell_state.deliver_completion(/*response_tx*/ None),
+        CompletionDelivery::Buffered
+    ));
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    assert!(matches!(
+        cell_state.route_observation(ObserveMode::PendingFrontier, response_tx),
+        ObservationDelivery::Delivered
+    ));
+    assert_eq!(
+        response_rx.try_recv(),
+        Ok(Ok(CellEvent::Completed {
+            content_items: vec![
+                OutputItem::Text {
+                    text: "before".to_string(),
+                },
+                OutputItem::Text {
+                    text: "after".to_string(),
+                },
+            ],
+            error_text: None,
+        }))
+    );
+}
+
+#[test]
+fn dropped_pending_observation_preserves_the_initial_yield_boundary() {
+    let cell_state = CellState::new(CancellationToken::new());
+    let completion = CellEvent::Completed {
+        content_items: vec![OutputItem::Text {
+            text: "after".to_string(),
+        }],
+        error_text: None,
+    };
+    assert_eq!(
+        cell_state.commit_completion(
+            completion.clone(),
+            Some(vec![OutputItem::Text {
+                text: "before".to_string(),
+            }]),
+            || {}
+        ),
+        CompletionCommit::Committed
+    );
+    assert!(matches!(
+        cell_state.deliver_completion(/*response_tx*/ None),
+        CompletionDelivery::Buffered
+    ));
+
+    let (response_tx, response_rx) = oneshot::channel();
+    drop(response_rx);
+    assert!(matches!(
+        cell_state.route_observation(ObserveMode::PendingFrontier, response_tx),
+        ObservationDelivery::Buffered
+    ));
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    assert!(matches!(
+        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
+        ObservationDelivery::Buffered
+    ));
+    assert_eq!(
+        response_rx.try_recv(),
+        Ok(Ok(CellEvent::Yielded {
+            content_items: vec![OutputItem::Text {
+                text: "before".to_string(),
+            }],
+        }))
+    );
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    assert!(matches!(
+        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
+        ObservationDelivery::Delivered
+    ));
+    assert_eq!(response_rx.try_recv(), Ok(Ok(completion)));
 }
