@@ -43,6 +43,7 @@ use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::state::AutoCompactWindowSnapshot;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -240,10 +241,12 @@ pub(crate) async fn run_turn(
             )
             .await?;
 
-            let token_budget_status_before_sampling =
-                auto_compact_token_status(sess.as_ref(), turn_context.as_ref())
-                    .await
-                    .token_budget_snapshot();
+            let token_status_before_sampling =
+                auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
+            let token_budget_status_before_sampling = token_budget_snapshot(
+                &token_status_before_sampling,
+                sess.auto_compact_window_snapshot().await,
+            );
             super::token_budget::maybe_record(
                 sess.as_ref(),
                 turn_context.as_ref(),
@@ -331,7 +334,7 @@ pub(crate) async fn run_turn(
                     sess.as_ref(),
                     turn_context.as_ref(),
                     token_budget_status_before_sampling,
-                    token_status.token_budget_snapshot(),
+                    token_budget_snapshot(&token_status, sess.auto_compact_window_snapshot().await),
                 )
                 .await;
 
@@ -797,30 +800,28 @@ struct AutoCompactTokenStatus {
     auto_compact_scope_limit: i64,
     full_context_window_limit: Option<i64>,
     auto_compact_window_prefill_tokens: Option<i64>,
-    token_budget_reminder_delivered: bool,
     full_context_window_limit_reached: bool,
     token_limit_reached: bool,
 }
 
-impl AutoCompactTokenStatus {
-    fn tokens_until_compaction(&self) -> i64 {
-        let auto_compact_scope_remaining = self
-            .auto_compact_scope_limit
-            .saturating_sub(self.auto_compact_scope_tokens);
-        self.full_context_window_limit
-            .map(|limit| limit.saturating_sub(self.active_context_tokens))
-            .map_or(auto_compact_scope_remaining, |full_context_remaining| {
-                auto_compact_scope_remaining.min(full_context_remaining)
-            })
-            .max(0)
-    }
-
-    fn token_budget_snapshot(&self) -> super::token_budget::TokenBudgetSnapshot {
-        super::token_budget::TokenBudgetSnapshot {
-            active_context_tokens: self.active_context_tokens,
-            tokens_until_compaction: self.tokens_until_compaction(),
-            reminder_delivered: self.token_budget_reminder_delivered,
-        }
+fn token_budget_snapshot(
+    status: &AutoCompactTokenStatus,
+    window: AutoCompactWindowSnapshot,
+) -> super::token_budget::TokenBudgetSnapshot {
+    let auto_compact_scope_remaining = status
+        .auto_compact_scope_limit
+        .saturating_sub(status.auto_compact_scope_tokens);
+    let tokens_until_compaction = status
+        .full_context_window_limit
+        .map(|limit| limit.saturating_sub(status.active_context_tokens))
+        .map_or(auto_compact_scope_remaining, |full_context_remaining| {
+            auto_compact_scope_remaining.min(full_context_remaining)
+        })
+        .max(0);
+    super::token_budget::TokenBudgetSnapshot {
+        active_context_tokens: status.active_context_tokens,
+        tokens_until_compaction,
+        reminder_delivered: window.token_budget_reminder_delivered,
     }
 }
 
@@ -829,7 +830,6 @@ async fn auto_compact_token_status(
     turn_context: &TurnContext,
 ) -> AutoCompactTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
-    let window = sess.auto_compact_window_snapshot().await;
     let mut auto_compact_window_prefill_tokens = None;
     let (auto_compact_scope_tokens, auto_compact_scope_limit, full_context_window_limit) =
         match turn_context.config.model_auto_compact_token_limit_scope {
@@ -842,6 +842,7 @@ async fn auto_compact_token_status(
                 None,
             ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
+                let window = sess.auto_compact_window_snapshot().await;
                 auto_compact_window_prefill_tokens = window.prefill_input_tokens;
                 let baseline = window.prefill_input_tokens.unwrap_or(active_context_tokens);
                 (
@@ -868,7 +869,6 @@ async fn auto_compact_token_status(
         auto_compact_scope_limit,
         full_context_window_limit,
         auto_compact_window_prefill_tokens,
-        token_budget_reminder_delivered: window.token_budget_reminder_delivered,
         full_context_window_limit_reached,
         token_limit_reached,
     }
