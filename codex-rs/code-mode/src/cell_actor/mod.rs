@@ -118,6 +118,7 @@ async fn run_cell<H: CellHost>(
     let callback_cancellation_token = cancellation_token.child_token();
     let mut content_items = Vec::new();
     let mut pending_tool_call_ids = Vec::new();
+    let mut pending_frontier_ready = false;
     let mut observer = Some(initial_observer);
     let mut termination = false;
     let mut runtime_closed = false;
@@ -169,6 +170,9 @@ async fn run_cell<H: CellHost>(
                     cancellation_token.cancel();
                     continue;
                 };
+                if response_tx.is_closed() {
+                    continue;
+                }
                 let response_tx = match cell_state.route_observation(response_tx) {
                     ObservationDelivery::Running(response_tx) => response_tx,
                     ObservationDelivery::Delivered => break,
@@ -185,8 +189,36 @@ async fn run_cell<H: CellHost>(
                     let _ = response_tx.send(Err(CellError::Busy));
                     continue;
                 }
+                if matches!(mode, ObserveMode::PendingFrontier) && pending_frontier_ready {
+                    pending_frontier_ready = false;
+                    match send_cell_event(
+                        response_tx,
+                        CellEvent::Pending {
+                            content_items: std::mem::take(&mut content_items),
+                            pending_tool_call_ids: std::mem::take(&mut pending_tool_call_ids),
+                        },
+                    ) {
+                        Ok(()) => {}
+                        Err(CellEvent::Pending {
+                            content_items: undelivered_items,
+                            pending_tool_call_ids: undelivered_tool_call_ids,
+                        }) => {
+                            content_items = undelivered_items;
+                            pending_tool_call_ids = undelivered_tool_call_ids;
+                            pending_frontier_ready = true;
+                        }
+                        Err(event) => {
+                            panic!("pending delivery returned an unexpected event: {event:?}")
+                        }
+                    }
+                    continue;
+                }
                 observer = Some(Observer { mode, response_tx });
                 yield_timer = observer.as_ref().and_then(observer_timer);
+                if runtime_paused && matches!(mode, ObserveMode::YieldAfter(_)) {
+                    pending_frontier_ready = false;
+                    pending_tool_call_ids.clear();
+                }
                 resume_for_observation(
                     mode,
                     &mut runtime_paused,
@@ -202,11 +234,14 @@ async fn run_cell<H: CellHost>(
                 }
             } => {
                 yield_timer = None;
-                send_observer_event(
-                    observer.take(),
-                    CellEvent::Yielded {
-                        content_items: std::mem::take(&mut content_items),
-                    },
+                restore_undelivered_yield(
+                    send_observer_event(
+                        observer.take(),
+                        CellEvent::Yielded {
+                            content_items: std::mem::take(&mut content_items),
+                        },
+                    ),
+                    &mut content_items,
                 );
             }
             maybe_event = async {
@@ -285,7 +320,8 @@ async fn run_cell<H: CellHost>(
                             Some(ObserveMode::PendingFrontier)
                         ) {
                             yield_timer = None;
-                            send_observer_event(
+                            pending_frontier_ready = false;
+                            match send_observer_event(
                                 observer.take(),
                                 CellEvent::Pending {
                                     content_items: std::mem::take(&mut content_items),
@@ -293,7 +329,20 @@ async fn run_cell<H: CellHost>(
                                         &mut pending_tool_call_ids,
                                     ),
                                 },
-                            );
+                            ) {
+                                Ok(()) => {}
+                                Err(CellEvent::Pending {
+                                    content_items: undelivered_items,
+                                    pending_tool_call_ids: undelivered_tool_call_ids,
+                                }) => {
+                                    content_items = undelivered_items;
+                                    pending_tool_call_ids = undelivered_tool_call_ids;
+                                    pending_frontier_ready = true;
+                                }
+                                Err(event) => {
+                                    panic!("pending delivery returned an unexpected event: {event:?}")
+                                }
+                            }
                         } else {
                             pending_tool_call_ids.clear();
                             let _ = runtime_control_tx.send(RuntimeControlCommand::Continue);
@@ -302,16 +351,20 @@ async fn run_cell<H: CellHost>(
                     }
                     RuntimeEvent::ContentItem(item) => content_items.push(output_item(item)),
                     RuntimeEvent::YieldRequested => {
-                        if matches!(
+                        let yield_observer = matches!(
                             observer.as_ref().map(|observer| observer.mode),
                             Some(ObserveMode::YieldAfter(_))
-                        ) {
+                        );
+                        if yield_observer {
                             yield_timer = None;
-                            send_observer_event(
-                                observer.take(),
-                                CellEvent::Yielded {
-                                    content_items: std::mem::take(&mut content_items),
-                                },
+                            restore_undelivered_yield(
+                                send_observer_event(
+                                    observer.take(),
+                                    CellEvent::Yielded {
+                                        content_items: std::mem::take(&mut content_items),
+                                    },
+                                ),
+                                &mut content_items,
                             );
                         }
                     }
@@ -429,9 +482,34 @@ async fn run_cell<H: CellHost>(
     host.closed().await;
 }
 
-fn send_observer_event(observer: Option<Observer>, event: CellEvent) {
-    if let Some(observer) = observer {
-        let _ = observer.response_tx.send(Ok(event));
+fn send_observer_event(observer: Option<Observer>, event: CellEvent) -> Result<(), CellEvent> {
+    let Some(observer) = observer else {
+        return Err(event);
+    };
+    send_cell_event(observer.response_tx, event)
+}
+
+fn send_cell_event(
+    response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
+    event: CellEvent,
+) -> Result<(), CellEvent> {
+    match response_tx.send(Ok(event)) {
+        Ok(()) => Ok(()),
+        Err(Ok(event)) => Err(event),
+        Err(Err(error)) => panic!("cell event delivery returned an actor error: {error:?}"),
+    }
+}
+
+fn restore_undelivered_yield(delivery: Result<(), CellEvent>, content_items: &mut Vec<OutputItem>) {
+    match delivery {
+        Ok(()) => {}
+        Err(CellEvent::Yielded {
+            content_items: mut undelivered_items,
+        }) => {
+            undelivered_items.append(content_items);
+            *content_items = undelivered_items;
+        }
+        Err(event) => panic!("yield delivery returned an unexpected event: {event:?}"),
     }
 }
 
