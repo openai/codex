@@ -25,6 +25,7 @@ SELECT
     threads.cwd,
     threads.cli_version,
     threads.title,
+    threads.name,
     threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
@@ -376,7 +377,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 search_term: None,
             },
         );
-        builder.push(" AND threads.title = ");
+        builder.push(" AND COALESCE(NULLIF(threads.name, ''), threads.title) = ");
         builder.push_bind(title);
         if let Some(cwd) = cwd {
             builder.push(" AND threads.cwd = ");
@@ -414,6 +415,57 @@ ON CONFLICT(child_thread_id) DO NOTHING
     ) -> anyhow::Result<crate::ThreadsPage> {
         self.list_threads_matching(page_size, filters, Some(parent_thread_id))
             .await
+    }
+
+    /// List lightweight thread summaries using the underlying database.
+    pub async fn list_thread_summaries(
+        &self,
+        page_size: usize,
+        filters: ThreadFilterOptions<'_>,
+    ) -> anyhow::Result<crate::ThreadListPage> {
+        self.list_thread_summaries_matching(page_size, filters, /*parent_thread_id*/ None)
+            .await
+    }
+
+    /// List lightweight direct children using persisted spawn edges.
+    pub async fn list_thread_summaries_by_parent(
+        &self,
+        page_size: usize,
+        parent_thread_id: ThreadId,
+        filters: ThreadFilterOptions<'_>,
+    ) -> anyhow::Result<crate::ThreadListPage> {
+        self.list_thread_summaries_matching(page_size, filters, Some(parent_thread_id))
+            .await
+    }
+
+    async fn list_thread_summaries_matching(
+        &self,
+        page_size: usize,
+        filters: ThreadFilterOptions<'_>,
+        parent_thread_id: Option<ThreadId>,
+    ) -> anyhow::Result<crate::ThreadListPage> {
+        let limit = page_size.saturating_add(1);
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        push_list_thread_summaries_query(&mut builder, filters, parent_thread_id, limit);
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
+        let mut items = rows
+            .into_iter()
+            .map(|row| thread_list_item_from_row(&row))
+            .collect::<Result<Vec<_>, _>>()?;
+        let num_scanned_rows = items.len();
+        let next_anchor = if items.len() > page_size {
+            items.pop();
+            items
+                .last()
+                .and_then(|item| anchor_from_list_item(item, filters.sort_key))
+        } else {
+            None
+        };
+        Ok(crate::ThreadListPage {
+            items,
+            next_anchor,
+            num_scanned_rows,
+        })
     }
 
     async fn list_threads_matching(
@@ -524,6 +576,7 @@ INSERT INTO threads (
     cwd,
     cli_version,
     title,
+    name,
     preview,
     sandbox_policy,
     approval_mode,
@@ -535,7 +588,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -568,6 +621,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
+        .bind(metadata.name.as_deref())
         .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
@@ -599,16 +653,45 @@ ON CONFLICT(id) DO NOTHING
         Ok(result.rows_affected() > 0)
     }
 
-    pub async fn update_thread_title(
+    pub async fn update_thread_name(
         &self,
         thread_id: ThreadId,
-        title: &str,
+        name: Option<&str>,
     ) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE threads SET title = ? WHERE id = ?")
-            .bind(title)
+        let result = sqlx::query("UPDATE threads SET name = ? WHERE id = ?")
+            .bind(name)
             .bind(thread_id.to_string())
             .execute(self.pool.as_ref())
             .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Repair location-owned fields without overwriting concurrently updated metadata.
+    pub async fn repair_thread_rollout_location(
+        &self,
+        thread_id: ThreadId,
+        rollout_path: &Path,
+        cwd: &Path,
+        archive_state: crate::ThreadArchiveState,
+    ) -> anyhow::Result<bool> {
+        let mut builder = QueryBuilder::<Sqlite>::new("UPDATE threads SET rollout_path = ");
+        builder.push_bind(rollout_path.display().to_string());
+        builder
+            .push(", cwd = ")
+            .push_bind(cwd.display().to_string());
+        match archive_state {
+            crate::ThreadArchiveState::Preserve => {}
+            crate::ThreadArchiveState::Active => {
+                builder.push(", archived = 0, archived_at = NULL");
+            }
+            crate::ThreadArchiveState::Archived => {
+                builder.push(", archived = 1, archived_at = COALESCE(archived_at, updated_at)");
+            }
+        }
+        builder
+            .push(" WHERE id = ")
+            .push_bind(thread_id.to_string());
+        let result = builder.build().execute(self.pool.as_ref()).await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -776,6 +859,7 @@ INSERT INTO threads (
     cwd,
     cli_version,
     title,
+    name,
     preview,
     sandbox_policy,
     approval_mode,
@@ -787,7 +871,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -807,6 +891,7 @@ ON CONFLICT(id) DO UPDATE SET
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
     title = excluded.title,
+    name = COALESCE(threads.name, excluded.name),
     preview = COALESCE(NULLIF(excluded.preview, ''), threads.preview),
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
@@ -848,6 +933,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
+        .bind(metadata.name.as_deref())
         .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
@@ -1125,6 +1211,62 @@ fn push_list_threads_query(
     );
 }
 
+fn push_list_thread_summaries_query(
+    builder: &mut QueryBuilder<Sqlite>,
+    filters: ThreadFilterOptions<'_>,
+    parent_thread_id: Option<ThreadId>,
+    limit: usize,
+) {
+    push_thread_list_select_columns(builder);
+    builder.push(" FROM threads");
+    push_thread_filters(builder, filters);
+    if let Some(parent_thread_id) = parent_thread_id {
+        builder.push(
+            " AND threads.id IN (SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ",
+        );
+        builder.push_bind(parent_thread_id.to_string());
+        builder.push(")");
+    }
+    let order_by_index = match filters.cwd_filters {
+        Some(cwd_filters) if cwd_filters.len() > 1 => OrderByIndex::Disabled,
+        Some(_) | None => OrderByIndex::Enabled,
+    };
+    push_thread_order_and_limit(
+        builder,
+        filters.sort_key,
+        filters.sort_direction,
+        order_by_index,
+        limit,
+    );
+}
+
+fn push_thread_list_select_columns(builder: &mut QueryBuilder<Sqlite>) {
+    builder.push(
+        r#"
+SELECT
+    threads.id,
+    threads.rollout_path,
+    threads.created_at_ms AS created_at,
+    threads.updated_at_ms AS updated_at,
+    threads.recency_at_ms AS recency_at,
+    threads.source,
+    (SELECT parent_thread_id FROM thread_spawn_edges WHERE child_thread_id = threads.id) AS parent_thread_id,
+    threads.agent_nickname,
+    threads.agent_role,
+    threads.model_provider,
+    threads.cwd,
+    threads.cli_version,
+    threads.title,
+    threads.name,
+    threads.preview,
+    threads.first_user_message,
+    threads.git_sha,
+    threads.git_branch,
+    threads.git_origin_url
+"#,
+    );
+}
+
 pub(super) fn push_thread_select_columns(builder: &mut QueryBuilder<Sqlite>) {
     builder.push(
         r#"
@@ -1145,6 +1287,7 @@ SELECT
     threads.cwd,
     threads.cli_version,
     threads.title,
+    threads.name,
     threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
@@ -1241,7 +1384,7 @@ pub(super) fn push_thread_filters<'a>(
         None => {}
     }
     if let Some(search_term) = search_term {
-        builder.push(" AND (instr(threads.title, ");
+        builder.push(" AND (instr(COALESCE(NULLIF(threads.name, ''), threads.title), ");
         builder.push_bind(search_term);
         builder.push(") > 0 OR instr(threads.preview, ");
         builder.push_bind(search_term);
@@ -1331,6 +1474,51 @@ fn metadata_preview(metadata: &crate::ThreadMetadata) -> &str {
         .as_deref()
         .or(metadata.first_user_message.as_deref())
         .unwrap_or_default()
+}
+
+fn thread_list_item_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> anyhow::Result<crate::ThreadListItem> {
+    let id: String = row.try_get("id")?;
+    let parent_thread_id = row
+        .try_get::<Option<String>, _>("parent_thread_id")?
+        .map(ThreadId::try_from)
+        .transpose()?;
+    let preview: String = row.try_get("preview")?;
+    let first_user_message: String = row.try_get("first_user_message")?;
+    Ok(crate::ThreadListItem {
+        id: ThreadId::try_from(id)?,
+        rollout_path: PathBuf::from(row.try_get::<String, _>("rollout_path")?),
+        created_at: epoch_millis_to_datetime(row.try_get("created_at")?)?,
+        updated_at: epoch_millis_to_datetime(row.try_get("updated_at")?)?,
+        recency_at: epoch_millis_to_datetime(row.try_get("recency_at")?)?,
+        source: row.try_get("source")?,
+        parent_thread_id,
+        agent_nickname: row.try_get("agent_nickname")?,
+        agent_role: row.try_get("agent_role")?,
+        model_provider: row.try_get("model_provider")?,
+        cwd: PathBuf::from(row.try_get::<String, _>("cwd")?),
+        cli_version: row.try_get("cli_version")?,
+        title: row.try_get("title")?,
+        name: row.try_get("name")?,
+        preview: (!preview.is_empty()).then_some(preview),
+        first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
+        git_sha: row.try_get("git_sha")?,
+        git_branch: row.try_get("git_branch")?,
+        git_origin_url: row.try_get("git_origin_url")?,
+    })
+}
+
+fn anchor_from_list_item(item: &crate::ThreadListItem, sort_key: SortKey) -> Option<crate::Anchor> {
+    let ts = match sort_key {
+        SortKey::CreatedAt => item.created_at,
+        SortKey::UpdatedAt => item.updated_at,
+        SortKey::RecencyAt => item.recency_at,
+    };
+    Some(crate::Anchor {
+        ts,
+        id: (sort_key == SortKey::RecencyAt).then_some(item.id),
+    })
 }
 
 #[cfg(test)]

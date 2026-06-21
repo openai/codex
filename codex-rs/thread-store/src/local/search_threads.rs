@@ -10,9 +10,9 @@ use codex_rollout::parse_cursor;
 use codex_rollout::search_rollout_matches;
 
 use super::LocalThreadStore;
-use super::helpers::distinct_thread_metadata_title;
 use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
+use super::helpers::thread_metadata_name;
 use super::list_threads::list_rollout_threads;
 use crate::ListThreadsParams;
 use crate::SearchThreadsParams;
@@ -211,7 +211,7 @@ async fn set_thread_search_result_names(
             let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
                 continue;
             };
-            if let Some(title) = distinct_thread_metadata_title(&metadata) {
+            if let Some(title) = thread_metadata_name(&metadata) {
                 names.insert(thread_id, title);
             }
         }
