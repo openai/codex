@@ -31,6 +31,7 @@ codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
