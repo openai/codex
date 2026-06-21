@@ -456,6 +456,7 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
     fs::create_dir_all(parent)?;
     let session_meta_line = SessionMetaLine {
         meta: SessionMeta {
+            session_id: thread_id.into(),
             id: thread_id,
             forked_from_id: None,
             parent_thread_id: None,

@@ -1123,6 +1123,7 @@ mod tests {
 
     fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
         CreateThreadParams {
+            session_id: thread_id.into(),
             thread_id,
             extra_config: None,
             forked_from_id: None,

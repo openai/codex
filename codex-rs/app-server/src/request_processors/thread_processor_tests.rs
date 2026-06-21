@@ -1004,6 +1004,7 @@ mod thread_processor_behavior_tests {
         let timestamp = "2025-09-05T16:53:11.850Z".to_string();
 
         let session_meta = SessionMeta {
+            session_id: conversation_id.into(),
             id: conversation_id,
             timestamp: timestamp.clone(),
             model_provider: None,
@@ -1060,6 +1061,7 @@ mod thread_processor_behavior_tests {
         let timestamp = "2025-09-05T16:53:11.850Z".to_string();
 
         let session_meta = SessionMeta {
+            session_id: parent_thread_id.into(),
             id: conversation_id,
             timestamp: timestamp.clone(),
             source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -1110,6 +1112,7 @@ mod thread_processor_behavior_tests {
         let timestamp = "2025-09-05T16:53:11.850Z".to_string();
 
         let session_meta = SessionMeta {
+            session_id: conversation_id.into(),
             id: conversation_id,
             forked_from_id: Some(forked_from_id),
             timestamp: timestamp.clone(),

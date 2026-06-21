@@ -33,6 +33,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
 
     let session_meta = SessionMeta {
+        session_id: id.into(),
         id,
         forked_from_id: None,
         parent_thread_id: None,
@@ -88,6 +89,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
 
     let session_meta = SessionMeta {
+        session_id: id.into(),
         id,
         forked_from_id: None,
         parent_thread_id: None,
@@ -355,6 +357,7 @@ fn write_rollout_in_sessions_with_cwd(
     std::fs::create_dir_all(sessions_dir.as_path()).expect("create sessions dir");
     let path = sessions_dir.join(format!("rollout-{filename_ts}-{thread_uuid}.jsonl"));
     let session_meta = SessionMeta {
+        session_id: id.into(),
         id,
         forked_from_id: None,
         parent_thread_id: None,

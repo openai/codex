@@ -28,6 +28,7 @@ pub(super) async fn create_thread(
     RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(
+            params.session_id,
             params.thread_id,
             params.forked_from_id,
             params.parent_thread_id,

@@ -350,6 +350,7 @@ async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(thread.id, subagent_thread_id);
+    assert_eq!(thread.session_id, parent_thread_id_str);
     assert_eq!(thread.parent_thread_id, Some(parent_thread_id_str.clone()));
     assert_eq!(
         thread.source,
@@ -390,6 +391,10 @@ async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -
         Some(parent_thread_id_str.as_str())
     );
     assert_eq!(metadata["subagent_kind"].as_str(), Some("guardian"));
+    assert_eq!(
+        metadata["session_id"].as_str(),
+        Some(thread.session_id.as_str())
+    );
     assert_eq!(metadata["thread_id"].as_str(), Some(thread.id.as_str()));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("forked_from_thread_id").is_none());

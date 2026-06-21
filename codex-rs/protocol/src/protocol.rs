@@ -2904,6 +2904,7 @@ pub enum MultiAgentVersion {
 /// and should be used when there is no config override.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
+    pub session_id: SessionId,
     pub id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
@@ -2946,8 +2947,10 @@ pub struct SessionMeta {
 
 impl Default for SessionMeta {
     fn default() -> Self {
+        let id = ThreadId::default();
         SessionMeta {
-            id: ThreadId::default(),
+            session_id: id.into(),
+            id,
             forked_from_id: None,
             parent_thread_id: None,
             timestamp: String::new(),
@@ -5380,6 +5383,7 @@ mod tests {
         let thread_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
         let older_meta = SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
@@ -5388,6 +5392,7 @@ mod tests {
         };
         let newer_meta_without_version = SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 multi_agent_version: None,
                 ..Default::default()

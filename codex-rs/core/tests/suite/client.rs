@@ -516,6 +516,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             "timestamp": "2024-01-01T00:00:00.000Z",
             "type": "session_meta",
             "payload": {
+                "session_id": convo_id,
                 "id": convo_id,
                 "timestamp": "2024-01-01T00:00:00Z",
                 "instructions": "be nice",

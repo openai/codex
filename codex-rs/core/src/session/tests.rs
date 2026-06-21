@@ -1900,6 +1900,7 @@ fn session_meta_item(
 ) -> RolloutItem {
     RolloutItem::SessionMeta(SessionMetaLine {
         meta: SessionMeta {
+            session_id: thread_id.into(),
             id: thread_id,
             multi_agent_version,
             ..SessionMeta::default()
@@ -3750,6 +3751,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
     let live_thread = LiveThread::create(
         Arc::clone(&session.services.thread_store),
         CreateThreadParams {
+            session_id: session.session_id(),
             thread_id: session.thread_id,
             extra_config: None,
             forked_from_id: None,
@@ -5453,7 +5455,7 @@ async fn resumed_root_session_uses_thread_id_as_session_id() {
 }
 
 #[tokio::test]
-async fn resumed_subagent_session_keeps_inherited_session_id() {
+async fn resumed_subagent_session_restores_persisted_session_id() {
     let parent_thread_id = ThreadId::new();
     let parent_session_id = SessionId::from(parent_thread_id);
     let thread_id = ThreadId::new();
@@ -5467,11 +5469,19 @@ async fn resumed_subagent_session_keeps_inherited_session_id() {
     let (session, rx_event) = make_session_with_history_source_and_agent_control_and_rx(
         InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
-            history: Vec::new(),
+            history: vec![RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    session_id: parent_session_id,
+                    id: thread_id,
+                    source: session_source.clone(),
+                    ..SessionMeta::default()
+                },
+                git: None,
+            })],
             rollout_path: None,
         }),
         session_source,
-        AgentControl::default().with_session_id(parent_session_id, /*max_threads*/ usize::MAX),
+        AgentControl::default(),
     )
     .await
     .expect("resume should succeed");
@@ -6590,6 +6600,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
     let live_thread = LiveThread::create(
         Arc::clone(&thread_store),
         CreateThreadParams {
+            session_id: session.session_id(),
             thread_id: session.thread_id,
             extra_config: None,
             forked_from_id: None,
