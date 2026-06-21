@@ -5,7 +5,7 @@ use codex_features::Feature;
 
 const TOKEN_BUDGET_USAGE_THRESHOLDS: [i64; 3] = [25, 50, 75];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(super) struct TokenBudgetSnapshot {
     pub(super) active_context_tokens: i64,
     pub(super) tokens_until_compaction: i64,

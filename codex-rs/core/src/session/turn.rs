@@ -240,15 +240,10 @@ pub(crate) async fn run_turn(
             )
             .await?;
 
-            let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
-                sess.installation_id.clone(),
-                window_id,
-                CodexResponsesRequestKind::Turn,
-            );
-            let token_status_before_sampling =
-                auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
             let token_budget_status_before_sampling =
-                token_status_before_sampling.token_budget_snapshot();
+                auto_compact_token_status(sess.as_ref(), turn_context.as_ref())
+                    .await
+                    .token_budget_snapshot();
             super::token_budget::maybe_record(
                 sess.as_ref(),
                 turn_context.as_ref(),
@@ -265,6 +260,12 @@ pub(crate) async fn run_turn(
             }
             .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
             .await;
+
+            let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+                sess.installation_id.clone(),
+                window_id,
+                CodexResponsesRequestKind::Turn,
+            );
             let (sampling_request_output, sampling_request_input) = run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&turn_context),
@@ -278,14 +279,18 @@ pub(crate) async fn run_turn(
             .await?;
 
             Ok((
-                token_status_before_sampling,
+                token_budget_status_before_sampling,
                 sampling_request_output,
                 sampling_request_input,
             ))
         }
         .await;
         match sampling_request_result {
-            Ok((token_status_before_sampling, sampling_request_output, sampling_request_input)) => {
+            Ok((
+                token_budget_status_before_sampling,
+                sampling_request_output,
+                sampling_request_input,
+            )) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -315,8 +320,6 @@ pub(crate) async fn run_turn(
                     auto_compact_window_prefill_tokens = ?token_status.auto_compact_window_prefill_tokens,
                     full_context_window_limit = ?token_status.full_context_window_limit,
                     full_context_window_limit_reached = token_status.full_context_window_limit_reached,
-                    tokens_until_compaction = token_status.tokens_until_compaction(),
-                    token_budget_reminder_delivered = token_status.token_budget_reminder_delivered,
                     token_limit_reached,
                     model_needs_follow_up,
                     has_pending_input,
@@ -327,7 +330,7 @@ pub(crate) async fn run_turn(
                 super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    token_status_before_sampling.token_budget_snapshot(),
+                    token_budget_status_before_sampling,
                     token_status.token_budget_snapshot(),
                 )
                 .await;
