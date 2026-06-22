@@ -7,8 +7,6 @@ use std::sync::Mutex as StdMutex;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 
-use codex_sandboxing::SandboxType;
-
 use crate::ExecServerError;
 use crate::ProcessId;
 use crate::protocol::ExecParams;
@@ -19,8 +17,6 @@ use crate::protocol::WriteResponse;
 
 pub struct StartedExecProcess {
     pub process: Arc<dyn ExecProcess>,
-    /// Concrete sandbox selected by the executor that owns `process`.
-    pub sandbox: SandboxType,
 }
 
 /// Pushed process events for consumers that want to follow process output as it
