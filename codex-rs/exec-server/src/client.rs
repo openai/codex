@@ -48,6 +48,9 @@ use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FILE_TRANSFER_CANCEL_METHOD;
+use crate::protocol::FILE_TRANSFER_PREPARE_UPLOAD_METHOD;
+use crate::protocol::FILE_TRANSFER_STATUS_METHOD;
 use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_CLOSE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
@@ -59,6 +62,12 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FileTransferCancelParams;
+use crate::protocol::FileTransferCancelResponse;
+use crate::protocol::FileTransferPrepareUploadParams;
+use crate::protocol::FileTransferPrepareUploadResponse;
+use crate::protocol::FileTransferStatusParams;
+use crate::protocol::FileTransferStatusResponse;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCloseParams;
@@ -406,6 +415,27 @@ impl LazyRemoteExecServerClient {
     pub(crate) async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
         self.get().await?.environment_info().await
     }
+
+    pub(crate) async fn file_transfer_prepare_upload(
+        &self,
+        params: FileTransferPrepareUploadParams,
+    ) -> Result<FileTransferPrepareUploadResponse, ExecServerError> {
+        self.get().await?.file_transfer_prepare_upload(params).await
+    }
+
+    pub(crate) async fn file_transfer_status(
+        &self,
+        transfer_id: String,
+    ) -> Result<FileTransferStatusResponse, ExecServerError> {
+        self.get().await?.file_transfer_status(transfer_id).await
+    }
+
+    pub(crate) async fn file_transfer_cancel(
+        &self,
+        transfer_id: String,
+    ) -> Result<FileTransferCancelResponse, ExecServerError> {
+        self.get().await?.file_transfer_cancel(transfer_id).await
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -507,6 +537,36 @@ impl ExecServerClient {
 
     pub async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
         self.call(ENVIRONMENT_INFO_METHOD, &()).await
+    }
+
+    pub async fn file_transfer_prepare_upload(
+        &self,
+        params: FileTransferPrepareUploadParams,
+    ) -> Result<FileTransferPrepareUploadResponse, ExecServerError> {
+        self.call(FILE_TRANSFER_PREPARE_UPLOAD_METHOD, &params)
+            .await
+    }
+
+    pub async fn file_transfer_status(
+        &self,
+        transfer_id: String,
+    ) -> Result<FileTransferStatusResponse, ExecServerError> {
+        self.call(
+            FILE_TRANSFER_STATUS_METHOD,
+            &FileTransferStatusParams { transfer_id },
+        )
+        .await
+    }
+
+    pub async fn file_transfer_cancel(
+        &self,
+        transfer_id: String,
+    ) -> Result<FileTransferCancelResponse, ExecServerError> {
+        self.call(
+            FILE_TRANSFER_CANCEL_METHOD,
+            &FileTransferCancelParams { transfer_id },
+        )
+        .await
     }
 
     pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {

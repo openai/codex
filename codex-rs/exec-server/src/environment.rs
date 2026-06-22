@@ -24,6 +24,10 @@ use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
 use crate::protocol::EnvironmentCapabilities;
 use crate::protocol::EnvironmentInfo;
+use crate::protocol::FileTransferCancelResponse;
+use crate::protocol::FileTransferPrepareUploadParams;
+use crate::protocol::FileTransferPrepareUploadResponse;
+use crate::protocol::FileTransferStatusResponse;
 use crate::protocol::ShellInfo;
 use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
@@ -560,6 +564,42 @@ impl Environment {
             Some(client) => client.environment_info().await,
             None => Ok(EnvironmentInfo::local()),
         }
+    }
+
+    pub async fn file_transfer_prepare_upload(
+        &self,
+        params: FileTransferPrepareUploadParams,
+    ) -> Result<FileTransferPrepareUploadResponse, ExecServerError> {
+        let client = self.remote_client.as_ref().ok_or_else(|| {
+            ExecServerError::Protocol(
+                "executor-owned file transfer requires a remote environment".to_string(),
+            )
+        })?;
+        client.file_transfer_prepare_upload(params).await
+    }
+
+    pub async fn file_transfer_status(
+        &self,
+        transfer_id: String,
+    ) -> Result<FileTransferStatusResponse, ExecServerError> {
+        let client = self.remote_client.as_ref().ok_or_else(|| {
+            ExecServerError::Protocol(
+                "executor-owned file transfer requires a remote environment".to_string(),
+            )
+        })?;
+        client.file_transfer_status(transfer_id).await
+    }
+
+    pub async fn file_transfer_cancel(
+        &self,
+        transfer_id: String,
+    ) -> Result<FileTransferCancelResponse, ExecServerError> {
+        let client = self.remote_client.as_ref().ok_or_else(|| {
+            ExecServerError::Protocol(
+                "executor-owned file transfer requires a remote environment".to_string(),
+            )
+        })?;
+        client.file_transfer_cancel(transfer_id).await
     }
 
     /// Starts connecting a remote environment without waiting for it.

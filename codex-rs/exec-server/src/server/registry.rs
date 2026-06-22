@@ -7,6 +7,9 @@ use crate::protocol::EXEC_SIGNAL_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
 use crate::protocol::ExecParams;
+use crate::protocol::FILE_TRANSFER_CANCEL_METHOD;
+use crate::protocol::FILE_TRANSFER_PREPARE_UPLOAD_METHOD;
+use crate::protocol::FILE_TRANSFER_STATUS_METHOD;
 use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_CLOSE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
@@ -18,6 +21,9 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FileTransferCancelParams;
+use crate::protocol::FileTransferPrepareUploadParams;
+use crate::protocol::FileTransferStatusParams;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCloseParams;
 use crate::protocol::FsCopyParams;
@@ -68,6 +74,24 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
     router.request(
         ENVIRONMENT_INFO_METHOD,
         |handler: Arc<ExecServerHandler>, _params: ()| async move { handler.environment_info() },
+    );
+    router.request(
+        FILE_TRANSFER_PREPARE_UPLOAD_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FileTransferPrepareUploadParams| async move {
+            handler.file_transfer_prepare_upload(params).await
+        },
+    );
+    router.request(
+        FILE_TRANSFER_STATUS_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FileTransferStatusParams| async move {
+            handler.file_transfer_status(params).await
+        },
+    );
+    router.request(
+        FILE_TRANSFER_CANCEL_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FileTransferCancelParams| async move {
+            handler.file_transfer_cancel(params).await
+        },
     );
     router.request(
         EXEC_READ_METHOD,

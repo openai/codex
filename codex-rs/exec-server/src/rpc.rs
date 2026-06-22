@@ -27,6 +27,7 @@ use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
+pub const FILE_TRANSFER_SESSION_LOST_ERROR_CODE: i64 = -32011;
 
 #[derive(Debug)]
 pub(crate) enum RpcCallError {
@@ -435,6 +436,14 @@ pub(crate) fn invalid_request(message: String) -> JSONRPCErrorError {
 pub(crate) fn session_already_attached(message: String) -> JSONRPCErrorError {
     JSONRPCErrorError {
         code: SESSION_ALREADY_ATTACHED_ERROR_CODE,
+        data: None,
+        message,
+    }
+}
+
+pub(crate) fn file_transfer_session_lost(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: FILE_TRANSFER_SESSION_LOST_ERROR_CODE,
         data: None,
         message,
     }
