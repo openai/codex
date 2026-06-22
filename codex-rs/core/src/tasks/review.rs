@@ -248,7 +248,7 @@ pub(crate) async fn exit_review_mode(
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
         )
         .await;
@@ -269,7 +269,7 @@ pub(crate) async fn exit_review_mode(
                     text: assistant_message,
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         )
         .await;
