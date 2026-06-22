@@ -319,6 +319,7 @@ fn find_marketplace_plugin_builds_manifest_fallback_from_entry() {
                 AbsolutePathBuf::try_from(plugin_root.join("assets/icon.svg")).unwrap()
             ),
             logo: Some(AbsolutePathBuf::try_from(plugin_root.join("assets/logo.png")).unwrap()),
+            logo_dark: None,
             screenshots: vec![
                 AbsolutePathBuf::try_from(plugin_root.join("assets/shot.png")).unwrap()
             ],
