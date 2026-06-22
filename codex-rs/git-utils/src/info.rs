@@ -288,8 +288,13 @@ pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
         return None;
     }
     let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
-    let output =
-        run_git_command_with_timeout_from(git, &["status", "--porcelain"], cwd, fsmonitor).await?;
+    let output = run_git_command_with_timeout_from(
+        git,
+        &["status", "--porcelain", "--ignore-submodules=dirty"],
+        cwd,
+        fsmonitor,
+    )
+    .await?;
     if !output.status.success() {
         return None;
     }
@@ -773,7 +778,14 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
     let output = run_git_command_with_timeout_from(
         git,
-        &["diff", "--no-textconv", "--no-ext-diff", &sha.0],
+        &[
+            "diff",
+            "--no-textconv",
+            "--no-ext-diff",
+            "--submodule=short",
+            "--ignore-submodules=dirty",
+            &sha.0,
+        ],
         cwd,
         fsmonitor,
     )
@@ -1019,6 +1031,47 @@ mod tests {
         output.status.success()
     }
 
+    async fn add_submodule_with_clean_filter(parent: &Path) {
+        let source = tempfile::tempdir().expect("submodule source");
+        let source_path = source.path();
+        run_git(source_path, &["init"]).await;
+        run_git(source_path, &["config", "user.name", "Test User"]).await;
+        run_git(source_path, &["config", "user.email", "test@example.com"]).await;
+        std::fs::write(source_path.join("nested.txt"), "original\n").expect("nested file");
+        std::fs::write(
+            source_path.join(".gitattributes"),
+            "nested.txt filter=codex-test\n",
+        )
+        .expect("nested attributes");
+        run_git(source_path, &["add", "."]).await;
+        run_git(source_path, &["commit", "-m", "seed"]).await;
+
+        run_git(
+            parent,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                source_path.to_str().expect("source path"),
+                "nested",
+            ],
+        )
+        .await;
+        run_git(parent, &["commit", "-m", "add submodule"]).await;
+        let nested = parent.join("nested");
+        run_git(
+            &nested,
+            &[
+                "config",
+                "filter.codex-test.clean",
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        )
+        .await;
+        std::fs::write(nested.join("nested.txt"), "modified\n").expect("dirty nested file");
+    }
+
     #[test]
     fn canonicalize_git_remote_url_normalizes_github_variants() {
         for remote in [
@@ -1064,6 +1117,39 @@ mod tests {
 
         assert_eq!(get_has_changes(&repo_path).await, None);
         assert!(!configured_filter_ran(&repo_path).await);
+    }
+
+    #[tokio::test]
+    async fn get_has_changes_does_not_enter_dirty_submodules() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        add_submodule_with_clean_filter(&repo_path).await;
+
+        assert_eq!(get_has_changes(&repo_path).await, Some(false));
+        assert!(!configured_filter_ran(&repo_path.join("nested")).await);
+    }
+
+    #[tokio::test]
+    async fn diff_against_sha_does_not_enter_dirty_submodules() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        add_submodule_with_clean_filter(&repo_path).await;
+        run_git(&repo_path, &["config", "diff.submodule", "diff"]).await;
+        let head = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("read HEAD");
+        assert!(head.status.success());
+        let head = String::from_utf8(head.stdout).expect("utf8 HEAD");
+
+        assert!(
+            diff_against_sha(&repo_path, &GitSha::new(head.trim()))
+                .await
+                .is_some()
+        );
+        assert!(!configured_filter_ran(&repo_path.join("nested")).await);
     }
 
     #[tokio::test]

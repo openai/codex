@@ -130,10 +130,11 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 }
 
 fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
+    let requested_cwd = std::fs::canonicalize(cwd)?;
     let out = std::process::Command::new("git")
         .arg("rev-parse")
         .arg("--show-toplevel")
-        .current_dir(cwd)
+        .current_dir(&requested_cwd)
         .output()?;
     let code = out.status.code().unwrap_or(-1);
     if code != 0 {
@@ -143,8 +144,19 @@ fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
             String::from_utf8_lossy(&out.stderr)
         )));
     }
-    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Ok(PathBuf::from(root))
+    let reported_root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let root = std::fs::canonicalize(&reported_root)?;
+    if !requested_cwd.starts_with(&root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to apply a patch because Git resolved worktree {} outside requested cwd {}",
+                root.display(),
+                requested_cwd.display()
+            ),
+        ));
+    }
+    Ok(root)
 }
 
 fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, PathBuf)> {
@@ -345,11 +357,56 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     if existing.is_empty() {
         return Ok(());
     }
+    ensure_paths_do_not_enter_submodules(git_root, &existing)?;
     let mut args = vec!["add".to_string(), "--".to_string()];
     args.extend(existing);
     let config_parts = safe_git_config_parts();
     let (_code, _, _) = run_git(git_root, &config_parts, &args)?;
     // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.
+    Ok(())
+}
+
+fn ensure_paths_do_not_enter_submodules(git_root: &Path, paths: &[String]) -> io::Result<()> {
+    let mut candidates = std::collections::BTreeSet::new();
+    for path in paths {
+        let mut components = path.split('/').filter(|component| !component.is_empty());
+        let Some(first) = components.next() else {
+            continue;
+        };
+        let mut candidate = first.to_string();
+        candidates.insert(candidate.clone());
+        for component in components {
+            candidate.push('/');
+            candidate.push_str(component);
+            candidates.insert(candidate.clone());
+        }
+    }
+
+    let mut args = vec![
+        "ls-files".to_string(),
+        "--stage".to_string(),
+        "-z".to_string(),
+        "--".to_string(),
+    ];
+    args.extend(candidates);
+    let config_parts = safe_git_config_parts();
+    let (code, stdout, stderr) = run_git(git_root, &config_parts, &args)?;
+    if code != 0 {
+        return Err(io::Error::other(format!(
+            "failed to inspect patch paths for submodules (exit {code}): {}",
+            stderr.trim()
+        )));
+    }
+    if stdout
+        .split('\0')
+        .filter(|record| !record.is_empty())
+        .any(|record| record.starts_with("160000 "))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "refusing to stage a patch path that is a submodule or enters a submodule",
+        ));
+    }
     Ok(())
 }
 
@@ -694,6 +751,54 @@ mod tests {
         assert_eq!(config_code, 0, "configure merge driver: {config_err}");
     }
 
+    fn init_submodule_with_clean_filter(parent: &Path) {
+        let source = tempfile::tempdir().expect("submodule source");
+        let source_root = source.path();
+        let _ = run(source_root, &["git", "init"]);
+        let _ = run(
+            source_root,
+            &["git", "config", "user.email", "codex@example.com"],
+        );
+        let _ = run(source_root, &["git", "config", "user.name", "Codex"]);
+        std::fs::write(source_root.join("file.txt"), "original\n").expect("write submodule file");
+        std::fs::write(
+            source_root.join(".gitattributes"),
+            "file.txt filter=codex-test\n",
+        )
+        .expect("write submodule attributes");
+        let _ = run(source_root, &["git", "add", "."]);
+        let _ = run(source_root, &["git", "commit", "-m", "seed"]);
+
+        let source_path = source_root.to_string_lossy().into_owned();
+        let (add_code, _, add_err) = run(
+            parent,
+            &[
+                "git",
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &source_path,
+                "nested",
+            ],
+        );
+        assert_eq!(add_code, 0, "add submodule: {add_err}");
+        let _ = run(parent, &["git", "commit", "-m", "add submodule"]);
+
+        let nested = parent.join("nested");
+        let (config_code, _, config_err) = run(
+            &nested,
+            &[
+                "git",
+                "config",
+                "filter.codex-test.clean",
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        );
+        assert_eq!(config_code, 0, "configure submodule filter: {config_err}");
+        std::fs::write(nested.join("file.txt"), "modified\n").expect("dirty submodule file");
+    }
+
     #[test]
     fn extract_paths_handles_quoted_headers() {
         let diff = "diff --git \"a/hello world.txt\" \"b/hello world.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello world.txt\n@@ -0,0 +1 @@\n+hi\n";
@@ -959,5 +1064,40 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
         let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
         assert_ne!(marker_code, 0, "merge driver must not run");
         assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
+    }
+
+    #[test]
+    fn resolve_git_root_rejects_core_worktree_outside_requested_cwd() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let buried_repo = temp.path().join("attacker");
+        let victim = temp.path().join("victim");
+        std::fs::create_dir_all(buried_repo.join("objects")).expect("objects");
+        std::fs::create_dir_all(buried_repo.join("refs")).expect("refs");
+        std::fs::create_dir_all(&victim).expect("victim");
+        std::fs::write(buried_repo.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+        std::fs::write(
+            buried_repo.join("config"),
+            format!(
+                "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = {}\n",
+                victim.display()
+            ),
+        )
+        .expect("config");
+
+        let error = resolve_git_root(&buried_repo).expect_err("reject redirected worktree");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn stage_paths_rejects_gitlink_before_entering_submodule() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        init_submodule_with_clean_filter(root);
+
+        let diff = "diff --git a/nested b/nested\nindex 1111111..2222222 160000\n--- a/nested\n+++ b/nested\n@@ -1 +1 @@\n-Subproject commit 1111111111111111111111111111111111111111\n+Subproject commit 2222222222222222222222222222222222222222\n";
+        let error = stage_paths(root, diff).expect_err("reject gitlink staging");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(!configured_filter_ran(&root.join("nested")));
     }
 }
