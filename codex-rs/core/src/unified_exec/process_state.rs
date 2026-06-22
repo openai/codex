@@ -3,7 +3,6 @@ pub(crate) struct ProcessState {
     pub(crate) has_exited: bool,
     pub(crate) exit_code: Option<i32>,
     pub(crate) failure_message: Option<String>,
-    pub(crate) sandbox_denied: bool,
 }
 
 impl ProcessState {
@@ -12,7 +11,6 @@ impl ProcessState {
             has_exited: true,
             exit_code,
             failure_message: self.failure_message.clone(),
-            sandbox_denied: self.sandbox_denied,
         }
     }
 
@@ -21,7 +19,6 @@ impl ProcessState {
             has_exited: true,
             exit_code: self.exit_code,
             failure_message: Some(message),
-            sandbox_denied: self.sandbox_denied,
         }
     }
 }

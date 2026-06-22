@@ -285,9 +285,8 @@ impl UnifiedExecProcess {
         &self,
         text: &str,
     ) -> Result<(), UnifiedExecError> {
-        let executor_reported_denial = self.state_rx.borrow().sandbox_denied;
         let sandbox_type = self.sandbox_type();
-        if !self.has_exited() || (!executor_reported_denial && sandbox_type == SandboxType::None) {
+        if sandbox_type == SandboxType::None || !self.has_exited() {
             return Ok(());
         }
 
@@ -298,7 +297,7 @@ impl UnifiedExecProcess {
             aggregated_output: StreamOutput::new(text.to_string()),
             ..Default::default()
         };
-        if executor_reported_denial || is_likely_sandbox_denied(sandbox_type, &exec_output) {
+        if is_likely_sandbox_denied(sandbox_type, &exec_output) {
             let snippet = formatted_truncate_text(
                 text,
                 TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
@@ -376,12 +375,9 @@ impl UnifiedExecProcess {
     pub(super) async fn from_exec_server_started(
         started: StartedExecProcess,
     ) -> Result<Self, UnifiedExecError> {
+        let sandbox_type = started.sandbox;
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
-        let mut managed = Self::new(
-            process_handle,
-            SandboxType::None,
-            /*spawn_lifecycle*/ None,
-        );
+        let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
         let output_handles = managed.output_handles();
         managed.output_task = Some(Self::spawn_exec_server_output_task(
             started,
@@ -441,7 +437,6 @@ impl UnifiedExecProcess {
                             exit_code,
                             closed,
                             failure,
-                            sandbox_denied,
                         } = response;
 
                         for chunk in chunks {
@@ -460,12 +455,6 @@ impl UnifiedExecProcess {
                             output_closed_notify.notify_waiters();
                             cancellation_token.cancel();
                             break;
-                        }
-
-                        if sandbox_denied {
-                            let mut state = state_tx.borrow().clone();
-                            state.sandbox_denied = true;
-                            let _ = state_tx.send_replace(state);
                         }
 
                         if exited {

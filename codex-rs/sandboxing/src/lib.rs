@@ -1,6 +1,5 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
-mod denial;
 pub mod landlock;
 mod manager;
 pub mod policy_transforms;
@@ -12,7 +11,6 @@ mod windows;
 pub use bwrap::find_system_bwrap_in_path;
 #[cfg(target_os = "linux")]
 pub use bwrap::system_bwrap_warning;
-pub use denial::is_likely_sandbox_denied;
 pub use manager::SandboxCommand;
 pub use manager::SandboxDirectSpawnTransformRequest;
 pub use manager::SandboxExecRequest;
