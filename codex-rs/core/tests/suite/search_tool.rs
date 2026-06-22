@@ -4,7 +4,6 @@
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
@@ -30,7 +29,6 @@ use core_test_support::apps_test_server::SEARCH_CALENDAR_APP_ONLY_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_LIST_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
-use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::apps_test_server::configure_search_capable_apps;
 use core_test_support::apps_test_server::configure_search_capable_model;
 use core_test_support::apps_test_server::recorded_apps_tool_call_by_call_id;
@@ -180,7 +178,7 @@ async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
+async fn small_app_tool_sets_are_deferred_by_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -195,13 +193,7 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
     )
     .await;
 
-    let mut builder =
-        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
-            config
-                .features
-                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
@@ -232,30 +224,42 @@ async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> R
     let server = start_mock_server().await;
     let apps_server =
         AppsTestServer::mount_with_app_only_tool(&server, AppsTestToolLoading::Direct).await?;
+    let search_call_id = "app-only-search";
     let call_id = "app-only-direct-call";
     let mock = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
+                ev_tool_search_call(
+                    search_call_id,
+                    &json!({
+                        "query": "create calendar event",
+                        "limit": 8,
+                    }),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
                 ev_function_call_with_namespace(
                     call_id,
                     SEARCH_CALENDAR_NAMESPACE,
                     SEARCH_CALENDAR_APP_ONLY_TOOL,
                     "{}",
                 ),
-                ev_completed("resp-1"),
+                ev_completed("resp-2"),
             ]),
             sse(vec![
-                ev_response_created("resp-2"),
+                ev_response_created("resp-3"),
                 ev_assistant_message("msg-1", "done"),
-                ev_completed("resp-2"),
+                ev_completed("resp-3"),
             ]),
         ],
     )
     .await;
 
-    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone());
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
     test.submit_turn_with_approval_and_permission_profile(
         "Try to call the app-only calendar tool.",
@@ -266,25 +270,25 @@ async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> R
 
     let requests = mock.requests();
     assert!(
-        namespace_child_tool(
-            &requests[0].body_json(),
+        tool_search_output_has_namespace_child(
+            &requests[1],
+            search_call_id,
             SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_CREATE_TOOL
-        )
-        .is_some(),
-        "visible tool from the app-only tool's connector should be declared"
+        ),
+        "visible tool from the app-only tool's connector should be searchable"
     );
     assert!(
-        namespace_child_tool(
-            &requests[0].body_json(),
+        !tool_search_output_has_namespace_child(
+            &requests[1],
+            search_call_id,
             SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_APP_ONLY_TOOL
-        )
-        .is_none(),
-        "app-only tool should not be declared to a direct model"
+        ),
+        "app-only tool should not be returned to the model by tool_search"
     );
     assert!(
-        requests[1]
+        requests[2]
             .function_call_output(call_id)
             .get("output")
             .and_then(Value::as_str)
@@ -423,7 +427,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_app_mentions_respect_always_defer() -> Result<()> {
+async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -438,13 +442,7 @@ async fn explicit_app_mentions_respect_always_defer() -> Result<()> {
     )
     .await;
 
-    let mut builder =
-        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
-            config
-                .features
-                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
@@ -458,7 +456,7 @@ async fn explicit_app_mentions_respect_always_defer() -> Result<()> {
     let tools = tool_names(&body);
     assert!(
         tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "explicit app mentions should leave app tools deferred when always-defer is active: {tools:?}"
+        "explicit app mentions should leave app tools deferred: {tools:?}"
     );
     assert!(
         namespace_child_tool(
@@ -1214,10 +1212,6 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
     let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder =
         configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
-            config
-                .features
-                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
-                .expect("test config should allow feature update");
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 "rmcp".to_string(),

@@ -35,10 +35,6 @@ async fn code_mode_only_exposes_direct_model_only_mcp_namespaces() -> Result<()>
                 .features
                 .enable(Feature::CodeModeOnly)
                 .expect("test config should allow feature update");
-            config
-                .features
-                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
-                .expect("test config should allow feature update");
             config.code_mode.direct_only_tool_namespaces =
                 vec![SEARCH_CALENDAR_NAMESPACE.to_string()];
         });
