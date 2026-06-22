@@ -16,6 +16,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
@@ -67,6 +68,9 @@ fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
+    // TODO(anp): Let fs RPCs target the selected filesystem in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let file_path = codex_home.path().join("note.txt");
     std::fs::write(&file_path, "hello")?;
@@ -121,6 +125,10 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_methods_return_error_when_local_environment_is_disabled() -> Result<()> {
+    // TODO(anp): Cover the fs RPC disabled-environment errors with a cross-OS test configuration
+    // that does not replace the Wine harness's executor registration.
+    skip_if_wine_exec!(Ok(()), "uses an explicit executor-disable override");
+
     let codex_home = TempDir::new()?;
     let absolute_file = codex_home.path().join("absolute.txt");
 
@@ -144,6 +152,9 @@ async fn fs_methods_return_error_when_local_environment_is_disabled() -> Result<
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_get_metadata_reports_symlink() -> Result<()> {
+    // TODO(anp): Add Windows reparse-point coverage equivalent to this Unix symlink metadata case.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let file_path = codex_home.path().join("note.txt");
     let symlink_path = codex_home.path().join("note-link.txt");
@@ -172,6 +183,9 @@ async fn fs_get_metadata_reports_symlink() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
+    // TODO(anp): Let fs RPCs target the selected filesystem in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let source_dir = codex_home.path().join("source");
     let nested_dir = source_dir.join("nested");
@@ -323,6 +337,9 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
+    // TODO(anp): Let fs RPCs target the selected filesystem in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let file_path = codex_home.path().join("blob.bin");
     let bytes = [0_u8, 1, 2, 255];
@@ -518,6 +535,9 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_copy_rejects_directory_without_recursive() -> Result<()> {
+    // TODO(anp): Let fs RPCs target the selected filesystem in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let source_dir = codex_home.path().join("source");
     std::fs::create_dir_all(&source_dir)?;
@@ -545,6 +565,9 @@ async fn fs_copy_rejects_directory_without_recursive() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_copy_rejects_copying_directory_into_descendant() -> Result<()> {
+    // TODO(anp): Let fs RPCs target the selected filesystem in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let source_dir = codex_home.path().join("source");
     std::fs::create_dir_all(source_dir.join("nested"))?;
@@ -573,6 +596,9 @@ async fn fs_copy_rejects_copying_directory_into_descendant() -> Result<()> {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_copy_preserves_symlinks_in_recursive_copy() -> Result<()> {
+    // TODO(anp): Add Windows reparse-point coverage equivalent to this Unix symlink-copy case.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let source_dir = codex_home.path().join("source");
     let nested_dir = source_dir.join("nested");
@@ -605,6 +631,10 @@ async fn fs_copy_preserves_symlinks_in_recursive_copy() -> Result<()> {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_copy_ignores_unknown_special_files_in_recursive_copy() -> Result<()> {
+    // TODO(anp): Exercise this Unix FIFO-copy behavior through an explicit Unix environment when
+    // the default environment uses Windows paths.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let source_dir = codex_home.path().join("source");
     let copied_dir = codex_home.path().join("copied");
@@ -646,6 +676,10 @@ async fn fs_copy_ignores_unknown_special_files_in_recursive_copy() -> Result<()>
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_copy_rejects_standalone_fifo_source() -> Result<()> {
+    // TODO(anp): Exercise this Unix FIFO rejection through an explicit Unix environment when the
+    // default environment uses Windows paths.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let fifo_path = codex_home.path().join("named-pipe");
     let output = Command::new("mkfifo").arg(&fifo_path).output()?;
@@ -678,6 +712,9 @@ async fn fs_copy_rejects_standalone_fifo_source() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_watch_directory_reports_changed_child_paths_and_unwatch_stops_notifications()
 -> Result<()> {
+    // TODO(anp): Let fs RPCs target the selected filesystem in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let git_dir = codex_home.path().join("repo").join(".git");
     let fetch_head = git_dir.join("FETCH_HEAD");
@@ -746,6 +783,9 @@ async fn fs_watch_directory_reports_changed_child_paths_and_unwatch_stops_notifi
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_watch_file_reports_atomic_replace_events() -> Result<()> {
+    // TODO(anp): Let fs RPCs target the selected filesystem in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let git_dir = codex_home.path().join("repo").join(".git");
     let head_path = git_dir.join("HEAD");
@@ -786,6 +826,9 @@ async fn fs_watch_file_reports_atomic_replace_events() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_watch_allows_missing_file_targets() -> Result<()> {
+    // TODO(anp): Let fs RPCs target the selected filesystem in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "fs RPCs require the local filesystem");
+
     let codex_home = TempDir::new()?;
     let git_dir = codex_home.path().join("repo").join(".git");
     let fetch_head = git_dir.join("FETCH_HEAD");

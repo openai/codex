@@ -1,13 +1,27 @@
 use std::ffi::OsStr;
+use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
+use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::Environment;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::REMOTE_ENVIRONMENT_ID;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
+use tempfile::TempDir;
 
 pub const TEST_ENVIRONMENT_ENV_VAR: &str = "CODEX_TEST_ENVIRONMENT";
 pub const LEGACY_REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";
 pub const DOCKER_CONTAINER_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_CONTAINER_NAME";
+const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
+static REMOTE_TEST_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TestEnvironment {
@@ -27,32 +41,154 @@ impl TestEnvironment {
             Self::Local | Self::WineExec => None,
         }
     }
+}
 
-    pub(crate) fn remote_cwd(&self, instance_id: &str) -> Result<Option<LegacyAppPathString>> {
-        let path_uri = match self {
-            Self::Local => return Ok(None),
-            Self::Docker { .. } => {
-                PathUri::parse(&format!("file:///tmp/codex-core-test-cwd-{instance_id}"))?
-            }
-            Self::WineExec => {
-                // Each Wine-exec test process has an isolated filesystem root, so this drive-root
-                // path cannot collide with a different Bazel shard.
-                PathUri::parse(&format!("file:///C:/codex-core-test-cwd-{instance_id}"))?
-            }
-        };
-        Ok(Some(LegacyAppPathString::from_path_uri(
-            &path_uri,
-            self.path_convention(),
-        )?))
-    }
+/// Owns the execution environment and workspace selected for an integration test.
+///
+/// Local tests receive a temporary local directory. Docker and Wine-exec tests receive a unique
+/// directory created through the configured remote exec server.
+#[derive(Debug)]
+pub struct TestExecutionEnvironment {
+    environment: Environment,
+    cwd: AbsolutePathBuf,
+    environment_cwd: LegacyAppPathString,
+    state: TestExecutionEnvironmentState,
+}
 
-    pub(crate) fn path_convention(&self) -> PathConvention {
-        match self {
-            Self::Local => PathConvention::native(),
-            Self::Docker { .. } => PathConvention::Posix,
-            Self::WineExec => PathConvention::Windows,
+impl TestExecutionEnvironment {
+    pub async fn new() -> Result<Self> {
+        match test_environment() {
+            TestEnvironment::Local => Self::local().await,
+            TestEnvironment::Docker { container_name } => {
+                Self::remote(RemoteTestEnvironment::Docker { container_name }).await
+            }
+            TestEnvironment::WineExec => Self::remote(RemoteTestEnvironment::WineExec).await,
         }
     }
+
+    async fn remote(remote: RemoteTestEnvironment) -> Result<Self> {
+        let websocket_url = remote_exec_server_url()?;
+        let environment = Environment::create_for_tests(Some(websocket_url))?;
+        let instance_id = remote_test_instance_id();
+        let (cwd_uri, path_convention) = match &remote {
+            RemoteTestEnvironment::Docker { .. } => (
+                PathUri::parse(&format!("file:///tmp/codex-test-cwd-{instance_id}"))?,
+                PathConvention::Posix,
+            ),
+            RemoteTestEnvironment::WineExec => {
+                // Each Wine-exec test process has an isolated filesystem root, so this drive-root
+                // path cannot collide with a different Bazel shard.
+                (
+                    PathUri::parse(&format!("file:///C:/codex-test-cwd-{instance_id}"))?,
+                    PathConvention::Windows,
+                )
+            }
+        };
+        let environment_cwd = LegacyAppPathString::from_path_uri(&cwd_uri, path_convention)?;
+        environment
+            .get_filesystem()
+            .create_directory(
+                &cwd_uri,
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
+            .await?;
+        let cwd = match &remote {
+            RemoteTestEnvironment::Docker { .. } => cwd_uri.to_abs_path()?,
+            RemoteTestEnvironment::WineExec => {
+                // TODO(anp): Change `Config::cwd` to `LegacyAppPathString` so this host-compatible
+                // projection can be removed.
+                let path = cwd_uri.to_url().to_file_path().map_err(|()| {
+                    anyhow!("remote test cwd URI cannot be projected onto the host: {cwd_uri}")
+                })?;
+                AbsolutePathBuf::try_from(path)?
+            }
+        };
+        let state = match remote {
+            RemoteTestEnvironment::Docker { container_name } => {
+                TestExecutionEnvironmentState::Docker { container_name }
+            }
+            RemoteTestEnvironment::WineExec => TestExecutionEnvironmentState::WineExec,
+        };
+        Ok(Self {
+            environment,
+            cwd,
+            environment_cwd,
+            state,
+        })
+    }
+
+    pub async fn local() -> Result<Self> {
+        let local_cwd_temp_dir = Arc::new(TempDir::new()?);
+        let cwd = AbsolutePathBuf::from_absolute_path_checked(local_cwd_temp_dir.path())?;
+        let environment = Environment::create_for_tests(/*exec_server_url*/ None)?;
+        Ok(Self {
+            environment,
+            environment_cwd: LegacyAppPathString::from_abs_path(&cwd),
+            cwd,
+            state: TestExecutionEnvironmentState::Local {
+                temp_dir: local_cwd_temp_dir,
+            },
+        })
+    }
+
+    pub fn environment_id(&self) -> &'static str {
+        match self.state {
+            TestExecutionEnvironmentState::Local { .. } => LOCAL_ENVIRONMENT_ID,
+            TestExecutionEnvironmentState::Docker { .. }
+            | TestExecutionEnvironmentState::WineExec => REMOTE_ENVIRONMENT_ID,
+        }
+    }
+
+    pub fn exec_server_url(&self) -> Option<&str> {
+        self.environment.exec_server_url()
+    }
+
+    pub fn cwd(&self) -> &AbsolutePathBuf {
+        &self.cwd
+    }
+
+    pub fn environment_cwd(&self) -> &LegacyAppPathString {
+        &self.environment_cwd
+    }
+
+    pub fn environment(&self) -> &Environment {
+        &self.environment
+    }
+
+    pub(crate) fn local_cwd_temp_dir(&self) -> Option<Arc<TempDir>> {
+        match &self.state {
+            TestExecutionEnvironmentState::Local { temp_dir, .. } => Some(Arc::clone(temp_dir)),
+            TestExecutionEnvironmentState::Docker { .. }
+            | TestExecutionEnvironmentState::WineExec => None,
+        }
+    }
+}
+
+impl Drop for TestExecutionEnvironment {
+    fn drop(&mut self) {
+        if let TestExecutionEnvironmentState::Docker { container_name } = &self.state {
+            let script = format!("rm -rf {}", self.cwd.as_path().display());
+            let _ = docker_command_capture_stdout(["exec", container_name, "sh", "-lc", &script]);
+        }
+    }
+}
+
+#[derive(Debug)]
+enum TestExecutionEnvironmentState {
+    Local { temp_dir: Arc<TempDir> },
+    Docker { container_name: String },
+    WineExec,
+}
+
+#[derive(Debug)]
+enum RemoteTestEnvironment {
+    Docker { container_name: String },
+    WineExec,
+}
+
+pub async fn test_execution_environment() -> Result<TestExecutionEnvironment> {
+    TestExecutionEnvironment::new().await
 }
 
 pub fn test_environment() -> TestEnvironment {
@@ -127,6 +263,40 @@ fn non_empty_utf8(name: &str, value: &OsStr) -> Result<String, String> {
         return Err(format!("{name} must not be empty"));
     }
     Ok(value.to_string())
+}
+
+fn remote_exec_server_url() -> Result<String> {
+    let listen_url = std::env::var(REMOTE_EXEC_SERVER_URL_ENV_VAR).with_context(|| {
+        format!("{REMOTE_EXEC_SERVER_URL_ENV_VAR} must be set for remote tests")
+    })?;
+    let listen_url = listen_url.trim();
+    if listen_url.is_empty() {
+        return Err(anyhow!(
+            "{REMOTE_EXEC_SERVER_URL_ENV_VAR} must not be empty"
+        ));
+    }
+    Ok(listen_url.to_string())
+}
+
+fn remote_test_instance_id() -> String {
+    let instance = REMOTE_TEST_INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{instance}", std::process::id())
+}
+
+fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<String> {
+    let output = Command::new("docker")
+        .args(args)
+        .output()
+        .with_context(|| format!("run docker {args:?}"))?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "docker {:?} failed: stdout={} stderr={}",
+            args,
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout).context("docker stdout must be utf-8")
 }
 
 #[cfg(test)]

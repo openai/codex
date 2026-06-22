@@ -19,6 +19,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
@@ -39,6 +40,9 @@ use super::connection_handling_websocket::spawn_websocket_server;
 
 #[tokio::test]
 async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -89,6 +93,9 @@ async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
 
 #[tokio::test]
 async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -137,6 +144,9 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
 #[tokio::test]
 async fn command_exec_env_overrides_merge_with_server_environment_and_support_unset() -> Result<()>
 {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -195,6 +205,9 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
 
 #[tokio::test]
 async fn command_exec_accepts_permission_profile() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -242,6 +255,9 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
 
 #[tokio::test]
 async fn command_exec_permission_profile_starts_selected_network_proxy() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -293,6 +309,9 @@ async fn command_exec_permission_profile_starts_selected_network_proxy() -> Resu
 
 #[tokio::test]
 async fn command_exec_permission_profile_does_not_reuse_default_network_proxy() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -342,6 +361,9 @@ async fn command_exec_permission_profile_does_not_reuse_default_network_proxy() 
 #[cfg(unix)]
 #[tokio::test]
 async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     let command_dir = codex_home.path().join("command-cwd");
@@ -403,6 +425,10 @@ async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Resu
 
 #[tokio::test]
 async fn command_exec_returns_error_when_local_environment_is_disabled() -> Result<()> {
+    // TODO(anp): Cover the command/exec disabled-environment error with a cross-OS test
+    // configuration that does not replace the Wine harness's executor registration.
+    skip_if_wine_exec!(Ok(()), "uses an explicit executor-disable override");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -442,6 +468,9 @@ async fn command_exec_returns_error_when_local_environment_is_disabled() -> Resu
 
 #[tokio::test]
 async fn command_exec_rejects_sandbox_policy_with_permission_profile() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -480,6 +509,9 @@ async fn command_exec_rejects_sandbox_policy_with_permission_profile() -> Result
 
 #[tokio::test]
 async fn command_exec_rejects_disable_timeout_with_timeout_ms() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -518,6 +550,9 @@ async fn command_exec_rejects_disable_timeout_with_timeout_ms() -> Result<()> {
 
 #[tokio::test]
 async fn command_exec_rejects_disable_output_cap_with_output_bytes_cap() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -556,6 +591,9 @@ async fn command_exec_rejects_disable_output_cap_with_output_bytes_cap() -> Resu
 
 #[tokio::test]
 async fn command_exec_rejects_negative_timeout_ms() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -594,6 +632,9 @@ async fn command_exec_rejects_negative_timeout_ms() -> Result<()> {
 
 #[tokio::test]
 async fn command_exec_without_process_id_rejects_streaming() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -632,6 +673,9 @@ async fn command_exec_without_process_id_rejects_streaming() -> Result<()> {
 
 #[tokio::test]
 async fn command_exec_non_streaming_respects_output_cap() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -679,6 +723,9 @@ async fn command_exec_non_streaming_respects_output_cap() -> Result<()> {
 
 #[tokio::test]
 async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -743,6 +790,9 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
 
 #[tokio::test]
 async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -819,6 +869,9 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
 
 #[tokio::test]
 async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -890,6 +943,9 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
 
 #[tokio::test]
 async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
+    // TODO(anp): Let command/exec target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "command/exec requires the local environment");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;

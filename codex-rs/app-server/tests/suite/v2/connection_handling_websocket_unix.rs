@@ -17,6 +17,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use core_test_support::responses;
+use core_test_support::skip_if_wine_exec;
 use futures::SinkExt;
 use futures::StreamExt;
 use std::process::Command as StdCommand;
@@ -33,6 +34,9 @@ use wiremock::matchers::path_regex;
 
 #[tokio::test]
 async fn websocket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Result<()> {
+    // TODO(anp): Add Windows console-control coverage equivalent to this Unix signal behavior.
+    skip_if_wine_exec!(Ok(()), "tests Unix signal shutdown");
+
     let GracefulCtrlCFixture {
         _codex_home,
         _server,
@@ -58,6 +62,9 @@ async fn websocket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Resu
 
 #[tokio::test]
 async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> Result<()> {
+    // TODO(anp): Add Windows console-control coverage equivalent to this Unix signal behavior.
+    skip_if_wine_exec!(Ok(()), "tests Unix signal shutdown");
+
     let GracefulCtrlCFixture {
         _codex_home,
         _server,
@@ -84,6 +91,9 @@ async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> R
 
 #[tokio::test]
 async fn websocket_transport_sigterm_waits_for_running_turn_before_exit() -> Result<()> {
+    // TODO(anp): Add Windows console-control coverage equivalent to this Unix signal behavior.
+    skip_if_wine_exec!(Ok(()), "tests Unix signal shutdown");
+
     let GracefulCtrlCFixture {
         _codex_home,
         _server,
@@ -109,6 +119,9 @@ async fn websocket_transport_sigterm_waits_for_running_turn_before_exit() -> Res
 
 #[tokio::test]
 async fn websocket_transport_second_sigterm_forces_exit_while_turn_running() -> Result<()> {
+    // TODO(anp): Add Windows console-control coverage equivalent to this Unix signal behavior.
+    skip_if_wine_exec!(Ok(()), "tests Unix signal shutdown");
+
     let GracefulCtrlCFixture {
         _codex_home,
         _server,
@@ -135,6 +148,9 @@ async fn websocket_transport_second_sigterm_forces_exit_while_turn_running() -> 
 
 #[tokio::test]
 async fn websocket_transport_repeated_sighup_keeps_waiting_for_running_turn() -> Result<()> {
+    // TODO(anp): Add Windows console-control coverage equivalent to this Unix signal behavior.
+    skip_if_wine_exec!(Ok(()), "tests Unix signal shutdown");
+
     let GracefulCtrlCFixture {
         _codex_home,
         _server,

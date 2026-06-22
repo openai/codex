@@ -81,6 +81,7 @@ use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -2191,6 +2192,9 @@ async fn turn_start_forwards_custom_local_image_detail() -> Result<()> {
 #[tokio::test]
 async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Support approval-policy changes across host/target OS configurations by using an
+    // executor-native command and asserting the selected environment.
+    skip_if_wine_exec!(Ok(()), "uses a host-local Python shell command");
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().to_path_buf();
@@ -2817,6 +2821,10 @@ stream_max_retries = 0
 
 #[tokio::test]
 async fn turn_start_resolves_sticky_thread_local_environment_and_turn_overrides() -> Result<()> {
+    // TODO(anp): Provide target-native Wine executor fixtures for sticky and turn-level
+    // environment selection so this resolution matrix can run cross-OS.
+    skip_if_wine_exec!(Ok(()), "uses test-owned environment configuration");
+
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -2965,6 +2973,9 @@ fn environment_params(ids: Option<&[&str]>, cwd: &Path) -> Option<Vec<TurnEnviro
 #[tokio::test]
 async fn turn_start_file_change_approval_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Support file-change approval across host/target OS configurations by creating the
+    // patch workspace and asserting the result through the selected environment's filesystem.
+    skip_if_wine_exec!(Ok(()), "uses a host-local patch workspace");
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -3951,6 +3962,9 @@ config_file = "./custom-role.toml"
 #[tokio::test]
 async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Support session-scoped file-change approval across host/target OS configurations
+    // by creating and inspecting the patch workspace through the selected environment.
+    skip_if_wine_exec!(Ok(()), "uses a host-local patch workspace");
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");

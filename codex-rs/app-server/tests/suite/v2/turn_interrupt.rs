@@ -22,6 +22,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use core_test_support::skip_if_wine_exec;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -30,6 +31,10 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
 async fn turn_interrupt_aborts_running_turn() -> Result<()> {
+    // TODO(anp): Support turn interruption across host/target OS configurations by creating the
+    // workdir in the selected environment and using its native sleep command.
+    skip_if_wine_exec!(Ok(()), "uses a host-local workdir and sleep command");
+
     // Use a portable sleep command to keep the turn running.
     #[cfg(target_os = "windows")]
     let shell_command = vec![

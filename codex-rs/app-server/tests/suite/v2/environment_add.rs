@@ -6,6 +6,7 @@ use app_test_support::to_response;
 use codex_app_server_protocol::EnvironmentAddResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use core_test_support::skip_if_wine_exec;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::io::AsyncReadExt;
@@ -17,6 +18,10 @@ const CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::test]
 async fn environment_add_applies_connect_timeout() -> Result<()> {
+    // TODO(anp): Cover environment/add timeouts in cross-OS configurations by registering a
+    // second target-native environment without relying on the injected default selection.
+    skip_if_wine_exec!(Ok(()), "uses an explicit environment");
+
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
     let stalled_server = tokio::spawn(async move {

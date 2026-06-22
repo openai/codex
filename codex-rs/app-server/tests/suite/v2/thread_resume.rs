@@ -85,6 +85,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs::FileTimes;
@@ -262,6 +263,10 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
 
 #[tokio::test]
 async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Result<()> {
+    // TODO(anp): Support cached instruction sources across host/target OS configurations by
+    // seeding AGENTS.md in the selected environment and asserting its target-native path.
+    skip_if_wine_exec!(Ok(()), "uses host-local instruction source paths");
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;

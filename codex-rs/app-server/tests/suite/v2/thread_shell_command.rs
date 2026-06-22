@@ -35,6 +35,7 @@ use codex_core::shell::default_user_shell;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_features::FEATURES;
 use codex_features::Feature;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -46,6 +47,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test]
 async fn thread_shell_command_history_responses_exclude_persisted_command_executions() -> Result<()>
 {
+    // TODO(anp): Support thread/shellCommand history in cross-OS configurations by targeting the
+    // selected environment instead of requiring the app-server host.
+    skip_if_wine_exec!(Ok(()), "exercises the local thread shell command");
+
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -182,6 +187,10 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
 
 #[tokio::test]
 async fn thread_shell_command_returns_error_when_local_environment_is_disabled() -> Result<()> {
+    // TODO(anp): Let the Wine harness distinguish an intentionally environment-disabled thread
+    // from an unsafe fallback so this error path can run in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "intentionally disables all environments");
+
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -225,6 +234,9 @@ async fn thread_shell_command_returns_error_when_local_environment_is_disabled()
 
 #[tokio::test]
 async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
+    // TODO(anp): Support thread/shellCommand on selected environments in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "thread/shellCommand requires the local environment");
+
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;

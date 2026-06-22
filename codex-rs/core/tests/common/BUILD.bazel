@@ -7,4 +7,5 @@ codex_rust_crate(
     deps_extra = [
         "@crates//:similar",
     ],
+    run_tests_with_wine_exec = True,
 )

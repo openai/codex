@@ -16,12 +16,17 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use core_test_support::skip_if_wine_exec;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_permissions_round_trip() -> Result<()> {
+    // TODO(anp): Support request_permissions across host/target OS configurations by preserving
+    // the selected environment's cwd and granted filesystem paths without host projection.
+    skip_if_wine_exec!(Ok(()), "requires host-native permission paths");
+
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![
         create_request_permissions_sse_response("call1")?,

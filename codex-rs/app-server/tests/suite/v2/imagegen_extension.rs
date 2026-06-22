@@ -18,6 +18,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use core_test_support::responses;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -227,6 +228,10 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
 
 #[tokio::test]
 async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()> {
+    // TODO(anp): Support attached-image editing across host/target OS configurations by copying
+    // the fixture into the selected environment and passing its target-native path.
+    skip_if_wine_exec!(Ok(()), "uses a host-local image path");
+
     let edit_request = run_image_edit_test(|codex_home| {
         let image_path = codex_home.join("attached.png");
         std::fs::write(&image_path, TINY_PNG_BYTES)?;

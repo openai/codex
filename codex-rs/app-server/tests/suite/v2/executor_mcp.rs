@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use core_test_support::responses;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -32,6 +33,10 @@ const TOOL_CALL_ID: &str = "executor-mcp-call";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn selected_executor_plugin_exposes_its_stdio_mcp_only_to_that_thread() -> Result<()> {
+    // TODO(anp): Support executor-provided stdio MCP servers across host/target OS combinations by
+    // using the host runfile locally and a copied target-native path remotely.
+    skip_if_wine_exec!(Ok(()), "uses a host-local stdio MCP fixture");
+
     let responses_server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(

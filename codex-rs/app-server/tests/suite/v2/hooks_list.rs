@@ -26,6 +26,7 @@ use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::skip_if_windows;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use tempfile::TempDir;
@@ -652,6 +653,9 @@ async fn config_batch_write_toggles_user_hook() -> Result<()> {
 #[tokio::test]
 async fn config_batch_write_updates_hook_trust_for_loaded_session() -> Result<()> {
     skip_if_windows!(Ok(()));
+    // TODO(anp): Support hook execution across host/target OS configurations by copying a
+    // cross-platform fixture into the selected environment and reading its log there.
+    skip_if_wine_exec!(Ok(()), "uses a host-local hook command");
 
     let responses = vec![
         create_final_assistant_message_sse_response("Warmup")?,
@@ -903,6 +907,9 @@ command = "python3 {hook_script_path}"
 #[tokio::test]
 async fn config_batch_write_disables_hook_for_loaded_session() -> Result<()> {
     skip_if_windows!(Ok(()));
+    // TODO(anp): Support hook execution across host/target OS configurations by copying a
+    // cross-platform fixture into the selected environment and reading its log there.
+    skip_if_wine_exec!(Ok(()), "uses a host-local hook command");
 
     let responses = vec![
         create_final_assistant_message_sse_response("Warmup")?,

@@ -32,6 +32,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::responses;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::ListResourcesResult;
@@ -129,6 +130,10 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -> Result<()> {
+    // TODO(anp): Support orchestrator resource reads with an explicit empty environment list in
+    // cross-OS configurations without injecting the remote default.
+    skip_if_wine_exec!(Ok(()), "uses explicit environments");
+
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
@@ -365,6 +370,10 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_executor_does_not_expose_orchestrator_skills() -> Result<()> {
+    // TODO(anp): Support local-executor capability filtering assertions in cross-OS
+    // configurations that also select a remote default environment.
+    skip_if_wine_exec!(Ok(()), "asserts local executor capabilities");
+
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, _apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
@@ -438,6 +447,10 @@ async fn local_executor_does_not_expose_orchestrator_skills() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn disabled_orchestrator_skills_do_not_expose_skills_namespace() -> Result<()> {
+    // TODO(anp): Cover disabled orchestrator skills in cross-OS configurations without replacing
+    // the harness-selected remote environment with an explicit empty selection.
+    skip_if_wine_exec!(Ok(()), "explicitly disables thread environments");
+
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;

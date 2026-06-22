@@ -3,16 +3,13 @@ use std::io::ErrorKind;
 use std::mem::swap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::anyhow;
 use codex_config::CloudConfigBundleLoader;
 use codex_core::CodexThread;
 use codex_core::StartThreadOptions;
@@ -57,9 +54,6 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-use crate::TempDirExt;
-use crate::TestEnvironment;
-use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cloud_config_bundle;
 use crate::responses::WebSocketTestServer;
@@ -76,9 +70,10 @@ type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
 type WorkspaceSetup = dyn FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -> BoxFuture<'static, Result<()>>
     + Send;
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
-const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
-static REMOTE_TEST_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const SUBMIT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub use crate::test_environment::TestExecutionEnvironment as TestEnv;
+pub use crate::test_environment::test_execution_environment as test_env;
 
 pub struct RecordingUserInstructionsProvider {
     inner: Arc<dyn UserInstructionsProvider>,
@@ -114,130 +109,6 @@ pub fn local(cwd: AbsolutePathBuf) -> TurnEnvironmentSelection {
 
 pub fn local_selections(cwd: AbsolutePathBuf) -> TurnEnvironmentSelections {
     TurnEnvironmentSelections::new(cwd.clone(), vec![local(cwd)])
-}
-
-#[derive(Debug)]
-pub struct TestEnv {
-    environment: codex_exec_server::Environment,
-    exec_server_url: Option<String>,
-    cwd: AbsolutePathBuf,
-    local_cwd_temp_dir: Option<Arc<TempDir>>,
-    remote_container_name: Option<String>,
-}
-
-impl TestEnv {
-    pub async fn local() -> Result<Self> {
-        let local_cwd_temp_dir = Arc::new(TempDir::new()?);
-        let cwd = local_cwd_temp_dir.abs();
-        let environment =
-            codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?;
-        Ok(Self {
-            environment,
-            exec_server_url: None,
-            cwd,
-            local_cwd_temp_dir: Some(local_cwd_temp_dir),
-            remote_container_name: None,
-        })
-    }
-
-    pub fn cwd(&self) -> &AbsolutePathBuf {
-        &self.cwd
-    }
-
-    pub fn environment(&self) -> &codex_exec_server::Environment {
-        &self.environment
-    }
-
-    fn local_cwd_temp_dir(&self) -> Option<Arc<TempDir>> {
-        self.local_cwd_temp_dir.clone()
-    }
-}
-
-impl Drop for TestEnv {
-    fn drop(&mut self) {
-        if let Some(container_name) = &self.remote_container_name {
-            let script = format!("rm -rf {}", self.cwd.as_path().display());
-            let _ = docker_command_capture_stdout(["exec", container_name, "sh", "-lc", &script]);
-        }
-    }
-}
-
-pub async fn test_env() -> Result<TestEnv> {
-    match get_remote_test_env() {
-        Some(remote_env) => {
-            let websocket_url = remote_exec_server_url()?;
-            let environment =
-                codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
-            let cwd = remote_env
-                .remote_cwd(&remote_test_instance_id())?
-                .context("remote test environment should define a cwd")?;
-            let cwd_uri = cwd.to_path_uri(remote_env.path_convention())?;
-            environment
-                .get_filesystem()
-                .create_directory(
-                    &cwd_uri,
-                    CreateDirectoryOptions { recursive: true },
-                    /*sandbox*/ None,
-                )
-                .await?;
-            let cwd = if remote_env == TestEnvironment::WineExec {
-                // TODO(anp): Convert `Config::cwd` to `LegacyAppPathString` and remove this
-                // compatibility projection.
-                // `Config::cwd` still requires `AbsolutePathBuf`. Preserve the test harness's
-                // Linux-absolute `/C:/...` compatibility spelling so converting it back to a
-                // `PathUri` recovers the remote Windows convention. Production conversions stay
-                // strict: `PathUri::to_abs_path` intentionally rejects foreign paths.
-                let path = cwd_uri.to_url().to_file_path().map_err(|()| {
-                    anyhow!("remote test cwd URI cannot be projected onto the host: {cwd_uri}")
-                })?;
-                AbsolutePathBuf::try_from(path)?
-            } else {
-                cwd_uri.to_abs_path()?
-            };
-            Ok(TestEnv {
-                environment,
-                exec_server_url: Some(websocket_url),
-                cwd,
-                local_cwd_temp_dir: None,
-                remote_container_name: remote_env.docker_container_name().map(str::to_owned),
-            })
-        }
-        None => TestEnv::local().await,
-    }
-}
-
-fn remote_exec_server_url() -> Result<String> {
-    let listen_url = std::env::var(REMOTE_EXEC_SERVER_URL_ENV_VAR).with_context(|| {
-        format!("{REMOTE_EXEC_SERVER_URL_ENV_VAR} must be set for remote tests")
-    })?;
-    let listen_url = listen_url.trim();
-    if listen_url.is_empty() {
-        return Err(anyhow!(
-            "{REMOTE_EXEC_SERVER_URL_ENV_VAR} must not be empty"
-        ));
-    }
-    Ok(listen_url.to_string())
-}
-
-fn remote_test_instance_id() -> String {
-    let instance = REMOTE_TEST_INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{instance}", std::process::id())
-}
-
-fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<String> {
-    let output = Command::new("docker")
-        .args(args)
-        .output()
-        .with_context(|| format!("run docker {args:?}"))?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "docker {:?} failed: stdout={} stderr={}",
-            args,
-            String::from_utf8_lossy(&output.stdout).trim(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    String::from_utf8(output.stdout).context("docker stdout must be utf-8")
 }
 
 /// Non-default apply_patch model output shapes used by compatibility tests.
@@ -515,7 +386,7 @@ impl TestCodexBuilder {
         let exec_server_url = self
             .exec_server_url
             .clone()
-            .or_else(|| test_env.exec_server_url.clone());
+            .or_else(|| test_env.exec_server_url().map(str::to_owned));
         #[cfg(target_os = "linux")]
         let codex_linux_sandbox_exe = Some(
             crate::find_codex_linux_sandbox_exe()

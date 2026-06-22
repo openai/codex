@@ -19,6 +19,7 @@ use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_protocol::protocol::RealtimeOutputModality;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::time::Duration;
@@ -225,6 +226,10 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
 
 #[tokio::test]
 async fn thread_start_mock_field_requires_experimental_api_capability() -> Result<()> {
+    // TODO(anp): Let the Wine harness supply a target-native default cwd without using the
+    // experimental thread environment field so this capability check can run cross-OS.
+    skip_if_wine_exec!(Ok(()), "requires a non-experimental thread/start");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -264,6 +269,10 @@ async fn thread_start_mock_field_requires_experimental_api_capability() -> Resul
 #[tokio::test]
 async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capability()
 -> Result<()> {
+    // TODO(anp): Let the Wine harness supply a target-native default cwd without using the
+    // experimental thread environment field so this capability check can run cross-OS.
+    skip_if_wine_exec!(Ok(()), "requires a non-experimental thread/start");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -302,6 +311,10 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
 #[tokio::test]
 async fn thread_start_granular_approval_policy_requires_experimental_api_capability() -> Result<()>
 {
+    // TODO(anp): Let the Wine harness supply a target-native default cwd without using the
+    // experimental thread environment field so this capability check can run cross-OS.
+    skip_if_wine_exec!(Ok(()), "requires a non-experimental thread/start");
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;

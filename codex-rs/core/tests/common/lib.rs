@@ -37,6 +37,7 @@ pub mod tracing;
 pub mod zsh_fork;
 
 pub use test_environment::TestEnvironment;
+pub use test_environment::TestExecutionEnvironment;
 pub use test_environment::get_remote_test_env;
 pub use test_environment::test_environment;
 

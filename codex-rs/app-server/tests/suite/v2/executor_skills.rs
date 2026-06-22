@@ -12,6 +12,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use core_test_support::responses;
+use core_test_support::skip_if_wine_exec;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -22,6 +23,10 @@ const LOCAL_SKILL_MARKER: &str = "LOCAL_SKILL_BODY_MARKER";
 
 #[tokio::test]
 async fn selected_executor_root_exposes_plugin_skill() -> Result<()> {
+    // TODO(anp): Support executor plugin skills across host/target OS combinations by staging the
+    // fixture in the selected environment and using its target-native capability-root path.
+    skip_if_wine_exec!(Ok(()), "uses an explicit host-local capability root");
+
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_once(
         &server,

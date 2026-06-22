@@ -56,6 +56,7 @@ use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -2491,6 +2492,9 @@ async fn websocket_v2_background_agent_progress_is_sent_before_function_output()
 #[tokio::test]
 async fn websocket_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Support delegated shell execution across host/target OS configurations by
+    // choosing the command for the selected execution environment.
+    skip_if_wine_exec!(Ok(()), "uses a POSIX shell command");
 
     // Phase 1: keep the two mocked OpenAI conversations explicit. The realtime sideband only
     // calls the `background_agent` function; the shell command is requested by the delegated

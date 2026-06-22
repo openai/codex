@@ -4,4 +4,5 @@ codex_rust_crate(
     name = "common",
     crate_name = "app_test_support",
     crate_srcs = glob(["*.rs"]),
+    run_tests_with_wine_exec = True,
 )

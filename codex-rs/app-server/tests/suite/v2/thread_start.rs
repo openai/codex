@@ -33,6 +33,7 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -281,6 +282,10 @@ async fn thread_start_excludes_profile_workspace_roots_from_runtime_workspace_ro
 
 #[tokio::test]
 async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result<()> {
+    // TODO(anp): Support unknown-environment validation in cross-OS configurations while
+    // preserving the caller's explicit selection over the injected default.
+    skip_if_wine_exec!(Ok(()), "uses explicit environments");
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -317,6 +322,10 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
 
 #[tokio::test]
 async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> Result<()> {
+    // TODO(anp): Exercise malformed environment cwd validation in cross-OS configurations without
+    // replacing the Wine harness's required target-native selection.
+    skip_if_wine_exec!(Ok(()), "uses an explicit invalid environment cwd");
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
@@ -351,6 +360,10 @@ async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> R
 
 #[tokio::test]
 async fn thread_start_response_includes_loaded_instruction_sources() -> Result<()> {
+    // TODO(anp): Support instruction-source reporting across host/target OS configurations by
+    // seeding project AGENTS.md in the selected environment and preserving both path conventions.
+    skip_if_wine_exec!(Ok(()), "uses host-local instruction source paths");
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
@@ -442,6 +455,10 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
 #[tokio::test]
 async fn thread_start_without_selected_environment_includes_only_global_instruction_source()
 -> Result<()> {
+    // TODO(anp): Support explicit empty environment selections in cross-OS configurations while
+    // suppressing project instruction discovery from the remote default.
+    skip_if_wine_exec!(Ok(()), "uses explicit environments");
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;

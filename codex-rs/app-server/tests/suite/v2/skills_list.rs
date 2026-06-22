@@ -21,6 +21,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -403,6 +404,10 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
 
 #[tokio::test]
 async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
+    // TODO(anp): Cover disabled-environment skill discovery with a cross-OS test configuration
+    // that does not replace the Wine harness's executor registration.
+    skip_if_wine_exec!(Ok(()), "uses an explicit executor-disable override");
+
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     write_skill(&codex_home, "home-skill")?;
@@ -518,6 +523,10 @@ async fn skills_list_preserves_requested_cwd_order() -> Result<()> {
 
 #[tokio::test]
 async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
+    // TODO(anp): Support skills/list cache invalidation across host/target OS configurations by
+    // reading each cwd through its selected environment.
+    skip_if_wine_exec!(Ok(()), "uses a host-local skills cwd");
+
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
 
@@ -740,6 +749,10 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
 
 #[tokio::test]
 async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<()> {
+    // TODO(anp): Support skills-change notifications across host/target OS configurations by
+    // watching each user-skill root through its owning environment.
+    skip_if_wine_exec!(Ok(()), "uses host-local skill watcher paths");
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml_with_chatgpt_base_url(

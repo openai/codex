@@ -8,6 +8,7 @@ use codex_app_server_protocol::ProcessSpawnParams;
 use codex_app_server_protocol::RequestId;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
@@ -22,6 +23,9 @@ use super::connection_handling_websocket::create_config_toml;
 
 #[tokio::test]
 async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Result<()> {
+    // TODO(anp): Let process RPCs target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "process RPCs require the local environment");
+
     let codex_home = TempDir::new()?;
     let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
 
@@ -105,6 +109,10 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
 
 #[tokio::test]
 async fn process_spawn_returns_error_when_local_environment_is_disabled() -> Result<()> {
+    // TODO(anp): Cover the process/spawn disabled-environment error with a cross-OS test
+    // configuration that does not replace the Wine harness's executor registration.
+    skip_if_wine_exec!(Ok(()), "uses an explicit executor-disable override");
+
     let codex_home = TempDir::new()?;
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -132,6 +140,9 @@ async fn process_spawn_returns_error_when_local_environment_is_disabled() -> Res
 
 #[tokio::test]
 async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
+    // TODO(anp): Let process RPCs target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "process RPCs require the local environment");
+
     let codex_home = TempDir::new()?;
     let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
 
@@ -181,6 +192,9 @@ async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
 
 #[tokio::test]
 async fn process_kill_terminates_running_process() -> Result<()> {
+    // TODO(anp): Let process RPCs target the selected environment in cross-OS configurations.
+    skip_if_wine_exec!(Ok(()), "process RPCs require the local environment");
+
     let codex_home = TempDir::new()?;
     let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
 
