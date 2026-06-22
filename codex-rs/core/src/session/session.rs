@@ -1217,7 +1217,6 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);
             }
-
             Ok(sess)
         }
         .await;

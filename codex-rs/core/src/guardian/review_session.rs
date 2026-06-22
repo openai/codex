@@ -27,6 +27,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
+use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -56,6 +57,7 @@ use super::prompt::GuardianTranscriptCursor;
 use super::prompt::build_guardian_prompt_items_with_parent_turn;
 use super::prompt::guardian_policy_prompt;
 use super::prompt::guardian_policy_prompt_with_config;
+use super::review::guardian_review_session_config;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug)]
@@ -92,6 +94,7 @@ pub(crate) struct GuardianReviewSessionParams {
 #[derive(Default)]
 pub(crate) struct GuardianReviewSessionManager {
     state: Arc<Mutex<GuardianReviewSessionState>>,
+    cancellation_token: CancellationToken,
 }
 
 #[derive(Default)]
@@ -289,6 +292,42 @@ impl Drop for EphemeralReviewCleanup {
 }
 
 impl GuardianReviewSessionManager {
+    pub(crate) fn initialize(
+        &self,
+        parent_session: Arc<Session>,
+        parent_turn: Arc<TurnContext>,
+    ) -> BoxFuture<'_, anyhow::Result<()>> {
+        // Boxing breaks the Session::new -> Guardian -> Session::new future recursion.
+        Box::pin(async move {
+            let spawn_config = guardian_review_session_config(&parent_session, &parent_turn)
+                .await?
+                .spawn_config;
+            let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+                &spawn_config,
+                parent_session.user_instructions().await,
+            );
+            let spawn_cancel_token = self.cancellation_token.child_token();
+            let spawn_cancel_guard = spawn_cancel_token.clone().drop_guard();
+            let review_session = spawn_guardian_review_session(
+                &parent_session,
+                &parent_turn,
+                spawn_config,
+                reuse_key,
+                spawn_cancel_token.clone(),
+                /*fork_snapshot*/ None,
+            )
+            .await?;
+            // A first review or shutdown may win while eager initialization is in flight;
+            // install only if neither has happened.
+            let mut state = self.state.lock().await;
+            if !spawn_cancel_token.is_cancelled() && state.trunk.is_none() {
+                state.trunk = Some(Arc::new(review_session));
+                drop(spawn_cancel_guard.disarm());
+            }
+            Ok(())
+        })
+    }
+
     pub(crate) async fn trunk_rollout_path(&self) -> Option<PathBuf> {
         let trunk = self.state.lock().await.trunk.clone()?;
         trunk.codex.session.ensure_rollout_materialized().await;
@@ -302,6 +341,7 @@ impl GuardianReviewSessionManager {
     }
 
     pub(crate) async fn shutdown(&self) {
+        self.cancellation_token.cancel();
         let (review_session, ephemeral_reviews) = {
             let mut state = self.state.lock().await;
             (
@@ -348,13 +388,14 @@ impl GuardianReviewSessionManager {
                 }
 
                 if state.trunk.is_none() {
-                    let spawn_cancel_token = CancellationToken::new();
+                    let spawn_cancel_token = self.cancellation_token.child_token();
                     let review_session = match run_before_review_deadline_with_cancel(
                         deadline,
                         params.external_cancel.as_ref(),
                         &spawn_cancel_token,
                         Box::pin(spawn_guardian_review_session(
-                            &params,
+                            &params.parent_session,
+                            &params.parent_turn,
                             params.spawn_config.clone(),
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
@@ -556,7 +597,7 @@ impl GuardianReviewSessionManager {
         deadline: tokio::time::Instant,
         fork_snapshot: Option<GuardianReviewForkSnapshot>,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
-        let spawn_cancel_token = CancellationToken::new();
+        let spawn_cancel_token = self.cancellation_token.child_token();
         let mut fork_config = params.spawn_config.clone();
         fork_config.ephemeral = true;
         let review_session = match run_before_review_deadline_with_cancel(
@@ -564,7 +605,8 @@ impl GuardianReviewSessionManager {
             params.external_cancel.as_ref(),
             &spawn_cancel_token,
             Box::pin(spawn_guardian_review_session(
-                &params,
+                &params.parent_session,
+                &params.parent_turn,
                 fork_config,
                 reuse_key,
                 spawn_cancel_token.clone(),
@@ -605,7 +647,8 @@ impl GuardianReviewSessionManager {
 }
 
 async fn spawn_guardian_review_session(
-    params: &GuardianReviewSessionParams,
+    parent_session: &Arc<Session>,
+    parent_turn: &Arc<TurnContext>,
     spawn_config: Config,
     reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: CancellationToken,
@@ -621,10 +664,10 @@ async fn spawn_guardian_review_session(
     };
     let codex = Box::pin(run_codex_thread_interactive(
         spawn_config,
-        params.parent_session.services.auth_manager.clone(),
-        params.parent_session.services.models_manager.clone(),
-        Arc::clone(&params.parent_session),
-        Arc::clone(&params.parent_turn),
+        parent_session.services.auth_manager.clone(),
+        parent_session.services.models_manager.clone(),
+        Arc::clone(parent_session),
+        Arc::clone(parent_turn),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
@@ -1546,6 +1589,7 @@ mod tests {
                 trunk: Some(Arc::new(review_session)),
                 ephemeral_reviews: Vec::new(),
             })),
+            ..Default::default()
         };
         drop(tx_event);
 
