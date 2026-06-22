@@ -2714,6 +2714,7 @@ impl Session {
                 continue;
             }
             let prefix = match item {
+                ResponseItem::AdditionalTools { .. } => "at",
                 ResponseItem::Message { .. } => "msg",
                 ResponseItem::Reasoning { .. } => "rs",
                 ResponseItem::LocalShellCall { .. } => "lsh",

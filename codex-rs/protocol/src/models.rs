@@ -935,6 +935,8 @@ pub enum ResponseItem {
     #[schemars(skip)]
     #[ts(skip)]
     AdditionalTools {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         role: String,
         tools: Vec<serde_json::Value>,
     },
@@ -1166,7 +1168,8 @@ impl ResponseItem {
     /// Returns the non-empty Responses API item ID, if present.
     pub fn id(&self) -> Option<&str> {
         match self {
-            Self::Message { id, .. }
+            Self::AdditionalTools { id, .. }
+            | Self::Message { id, .. }
             | Self::AgentMessage { id, .. }
             | Self::LocalShellCall { id, .. }
             | Self::FunctionCall { id, .. }
@@ -1187,7 +1190,8 @@ impl ResponseItem {
     /// Sets or clears the Responses API item ID for variants that carry one.
     pub fn set_id(&mut self, new_id: Option<String>) {
         match self {
-            Self::Message { id, .. }
+            Self::AdditionalTools { id, .. }
+            | Self::Message { id, .. }
             | Self::AgentMessage { id, .. }
             | Self::LocalShellCall { id, .. }
             | Self::FunctionCall { id, .. }
@@ -2243,6 +2247,14 @@ mod tests {
         item.set_id(/*new_id*/ None);
 
         assert_eq!(item.id(), None);
+
+        let mut additional_tools = ResponseItem::AdditionalTools {
+            id: None,
+            role: "developer".to_string(),
+            tools: Vec::new(),
+        };
+        additional_tools.set_id(Some("at_test".to_string()));
+        assert_eq!(additional_tools.id(), Some("at_test"));
     }
 
     fn response_item_with_passthrough_metadata(

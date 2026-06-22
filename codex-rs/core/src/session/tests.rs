@@ -222,6 +222,19 @@ fn assign_missing_response_item_ids_skips_agent_messages() {
     assert!(items[1].id().is_some_and(|id| id.starts_with("msg_")));
 }
 
+#[test]
+fn assign_missing_response_item_ids_assigns_additional_tools_ids() {
+    let items = Cow::Owned(vec![ResponseItem::AdditionalTools {
+        id: None,
+        role: "developer".to_string(),
+        tools: Vec::new(),
+    }]);
+
+    let items = Session::assign_missing_response_item_ids(items);
+
+    assert!(items[0].id().is_some_and(|id| id.starts_with("at_")));
+}
+
 fn assistant_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,

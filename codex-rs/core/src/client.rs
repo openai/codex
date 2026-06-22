@@ -790,6 +790,7 @@ impl ModelClient {
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let (instructions, tools) = if model_info.use_responses_lite {
             let additional_tools = ResponseItem::AdditionalTools {
+                id: None,
                 role: "developer".to_string(),
                 tools,
             };
