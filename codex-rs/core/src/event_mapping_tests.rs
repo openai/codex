@@ -61,7 +61,7 @@ fn parses_user_message_with_text_and_two_images() {
             },
         ],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected user message turn item");
@@ -111,7 +111,7 @@ fn skips_local_image_label_text() {
             },
         ],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected user message turn item");
@@ -144,7 +144,7 @@ fn parses_assistant_message_input_text_for_backward_compatibility() {
                 .to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected assistant message turn item");
@@ -194,7 +194,7 @@ fn skips_unnamed_image_label_text() {
             },
         ],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected user message turn item");
@@ -227,7 +227,7 @@ fn skips_user_instructions_and_env() {
                     text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
             phase: None,
-                metadata: None,},
+                internal_chat_message_metadata_passthrough: None,},
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -235,7 +235,7 @@ fn skips_user_instructions_and_env() {
                     text: "<environment_context>test_text</environment_context>".to_string(),
                 }],
             phase: None,
-                metadata: None,},
+                internal_chat_message_metadata_passthrough: None,},
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -243,7 +243,7 @@ fn skips_user_instructions_and_env() {
                     text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
             phase: None,
-                metadata: None,},
+                internal_chat_message_metadata_passthrough: None,},
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -252,7 +252,7 @@ fn skips_user_instructions_and_env() {
                         .to_string(),
                 }],
             phase: None,
-                metadata: None,},
+                internal_chat_message_metadata_passthrough: None,},
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -260,7 +260,7 @@ fn skips_user_instructions_and_env() {
                     text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
                 }],
             phase: None,
-                metadata: None,},
+                internal_chat_message_metadata_passthrough: None,},
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -275,7 +275,7 @@ fn skips_user_instructions_and_env() {
                     },
                 ],
                 phase: None,
-                metadata: None,},
+                internal_chat_message_metadata_passthrough: None,},
         ];
 
     for item in items {
@@ -325,7 +325,7 @@ fn parses_hook_prompt_and_hides_other_contextual_fragments() {
             },
         ],
         phase: None,
-        metadata: None,};
+        internal_chat_message_metadata_passthrough: None,};
 
     let turn_item = parse_turn_item(&item).expect("expected hook prompt turn item");
 
@@ -357,7 +357,7 @@ fn internal_model_context_does_not_parse_as_visible_turn_item() {
             .render(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     assert!(parse_turn_item(&item).is_none());
@@ -372,7 +372,7 @@ fn parses_agent_message() {
             text: "Hello from Codex".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected agent message turn item");
@@ -404,7 +404,7 @@ fn parses_reasoning_summary_and_raw_content() {
             text: "raw details".to_string(),
         }]),
         encrypted_content: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected reasoning turn item");
@@ -437,7 +437,7 @@ fn parses_reasoning_including_raw_content() {
             },
         ]),
         encrypted_content: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected reasoning turn item");
@@ -463,7 +463,7 @@ fn parses_web_search_call() {
             query: Some("weather".to_string()),
             queries: None,
         }),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected web search turn item");
@@ -492,7 +492,7 @@ fn parses_web_search_open_page_call() {
         action: Some(WebSearchAction::OpenPage {
             url: Some("https://example.com".to_string()),
         }),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected web search turn item");
@@ -521,7 +521,7 @@ fn parses_web_search_find_in_page_call() {
             url: Some("https://example.com".to_string()),
             pattern: Some("needle".to_string()),
         }),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected web search turn item");
@@ -548,7 +548,7 @@ fn parses_partial_web_search_call_without_action_as_other() {
         id: Some("ws_partial".to_string()),
         status: Some("in_progress".to_string()),
         action: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected web search turn item");

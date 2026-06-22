@@ -753,7 +753,9 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                         composer_icon: None,
                         composer_icon_url: None,
                         logo: None,
+                        logo_dark: None,
                         logo_url: None,
+                        logo_url_dark: None,
                         screenshots: Vec::new(),
                         screenshot_urls: Vec::new(),
                     }),
@@ -1761,6 +1763,14 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         .respond_with(ResponseTemplate::new(200).set_body_string(empty_page_body))
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/featured"))
+        .and(query_param("platform", "codex"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"["linear@openai-curated-remote"]"#),
+        )
+        .mount(&server)
+        .await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -1854,7 +1864,10 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         cached_plugin_ids,
         vec!["plugins~Plugin_00000000000000000000000000000000".to_string()]
     );
-    assert_eq!(response.featured_plugin_ids, Vec::<String>::new());
+    assert_eq!(
+        response.featured_plugin_ids,
+        vec!["linear@openai-curated-remote".to_string()]
+    );
     assert!(
         !server
             .received_requests()

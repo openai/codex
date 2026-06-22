@@ -19,7 +19,6 @@ use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
 
-use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use codex_app_server_protocol::RequestId;
 
 use crate::hooks_rpc::fetch_hooks_list;
@@ -90,7 +89,8 @@ impl App {
                         .and_then(|result| result.map_err(|err| err.to_string()))
                 }
                 RateLimitRefreshOrigin::StartupPrefetch { .. }
-                | RateLimitRefreshOrigin::StatusCommand { .. } => {
+                | RateLimitRefreshOrigin::StatusCommand { .. }
+                | RateLimitRefreshOrigin::UsageMenu { .. } => {
                     request.await.map_err(|err| err.to_string())
                 }
             };
@@ -127,7 +127,7 @@ impl App {
         tokio::spawn(async move {
             let result = tokio::time::timeout(
                 RATE_LIMIT_RESET_REQUEST_TIMEOUT,
-                fetch_rate_limit_reset_credits(request_handle),
+                fetch_account_rate_limits(request_handle),
             )
             .await
             .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
@@ -787,24 +787,6 @@ pub(super) async fn fetch_account_token_activity(
         })
         .await
         .wrap_err("account/usage/read failed in TUI")
-}
-
-pub(super) async fn fetch_rate_limit_reset_credits(
-    request_handle: AppServerRequestHandle,
-) -> Result<RateLimitResetCreditsSummary> {
-    let request_id = RequestId::String(format!("account-rate-limit-resets-{}", Uuid::new_v4()));
-    let response: GetAccountRateLimitsResponse = request_handle
-        .request_typed(ClientRequest::GetAccountRateLimits {
-            request_id,
-            params: None,
-        })
-        .await
-        .wrap_err("account/rateLimits/read failed in TUI")?;
-    response.rate_limit_reset_credits.ok_or_else(|| {
-        color_eyre::eyre::eyre!(
-            "account/rateLimits/read response did not include rateLimitResetCredits"
-        )
-    })
 }
 
 pub(super) async fn consume_rate_limit_reset_credit_request(

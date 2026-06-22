@@ -77,7 +77,9 @@ fn local_plugin_interface_to_info(interface: PluginManifestInterface) -> PluginI
         composer_icon: interface.composer_icon,
         composer_icon_url: None,
         logo: interface.logo,
+        logo_dark: interface.logo_dark,
         logo_url: None,
+        logo_url_dark: None,
         screenshots: interface.screenshots,
         screenshot_urls: Vec::new(),
     }
@@ -745,11 +747,10 @@ impl PluginRequestProcessor {
             );
         }
 
-        let featured_plugin_ids = if !plugins_input.remote_plugin_enabled
-            && data
-                .iter()
-                .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
-        {
+        let featured_plugin_ids = if data.iter().any(|marketplace| {
+            marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME
+                || marketplace.name == REMOTE_GLOBAL_MARKETPLACE_NAME
+        }) {
             match plugins_manager
                 .featured_plugin_ids_for_config(&plugins_input, auth.as_ref())
                 .await

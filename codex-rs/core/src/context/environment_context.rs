@@ -1,118 +1,12 @@
-use crate::session::step_context::StepContext;
-use crate::session::turn_context::TurnContext;
-use crate::session::turn_context::TurnEnvironment;
-use crate::shell::Shell;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
-use codex_protocol::protocol::TurnContextItem;
-use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathUri;
 use std::collections::HashSet;
 use std::path::PathBuf;
-
-use super::ContextualUserFragment;
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct EnvironmentContext {
-    pub(crate) environments: EnvironmentContextEnvironments,
-    pub(crate) current_date: Option<String>,
-    pub(crate) timezone: Option<String>,
-    pub(crate) network: Option<NetworkContext>,
-    pub(crate) filesystem: Option<FileSystemContext>,
-    pub(crate) subagents: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EnvironmentContextEnvironment {
-    pub(crate) id: String,
-    pub(crate) cwd: PathUri,
-    status: EnvironmentContextEnvironmentStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum EnvironmentContextEnvironmentStatus {
-    Starting,
-    Ready { shell: String },
-}
-
-impl EnvironmentContextEnvironment {
-    fn from_turn_environments(environments: &[TurnEnvironment], shell: &Shell) -> Vec<Self> {
-        environments
-            .iter()
-            .map(|environment| Self {
-                id: environment.environment_id.clone(),
-                cwd: environment.cwd().clone(),
-                status: EnvironmentContextEnvironmentStatus::Ready {
-                    shell: environment
-                        .shell
-                        .as_ref()
-                        .map(|shell| shell.name().to_string())
-                        .unwrap_or_else(|| shell.name().to_string()),
-                },
-            })
-            .collect()
-    }
-}
-
-impl EnvironmentContextEnvironmentStatus {
-    fn equals_except_shell(&self, other: &Self) -> bool {
-        matches!(
-            (self, other),
-            (Self::Starting, Self::Starting) | (Self::Ready { .. }, Self::Ready { .. })
-        )
-    }
-
-    fn render(&self, indent: &str) -> String {
-        match self {
-            Self::Starting => format!("{indent}<status>starting</status>"),
-            Self::Ready { shell } => format!("{indent}<shell>{shell}</shell>"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum EnvironmentContextEnvironments {
-    None,
-    Single(EnvironmentContextEnvironment),
-    Multiple(Vec<EnvironmentContextEnvironment>),
-}
-
-impl EnvironmentContextEnvironments {
-    fn from_vec(environments: Vec<EnvironmentContextEnvironment>) -> Self {
-        let mut environments = environments;
-        match environments.pop() {
-            None => Self::None,
-            Some(environment) if environments.is_empty() => Self::Single(environment),
-            Some(environment) => {
-                environments.push(environment);
-                Self::Multiple(environments)
-            }
-        }
-    }
-
-    fn equals_except_shell(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::None, Self::None) => true,
-            (Self::Single(left), Self::Single(right)) => {
-                left.cwd == right.cwd && left.status.equals_except_shell(&right.status)
-            }
-            (Self::Multiple(left), Self::Multiple(right)) => {
-                left.len() == right.len()
-                    && left.iter().zip(right.iter()).all(|(left, right)| {
-                        left.id == right.id
-                            && left.cwd == right.cwd
-                            && left.status.equals_except_shell(&right.status)
-                    })
-            }
-            _ => false,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileSystemContext {
@@ -137,7 +31,7 @@ enum ManagedFileSystemContext {
 }
 
 impl FileSystemContext {
-    fn from_permission_profile(
+    pub(super) fn from_permission_profile(
         permission_profile: &PermissionProfile,
         workspace_roots: &[AbsolutePathBuf],
     ) -> Self {
@@ -163,7 +57,7 @@ impl FileSystemContext {
         }
     }
 
-    fn render(&self) -> String {
+    pub(super) fn render(&self) -> String {
         let mut rendered = "<filesystem>".to_string();
         if !self.workspace_roots.is_empty() {
             rendered.push_str("<workspace_roots>");
@@ -303,7 +197,7 @@ fn push_text_element(rendered: &mut String, name: &str, value: &str) {
     rendered.push_str(&format!("</{name}>"));
 }
 
-fn push_xml_escaped_text(rendered: &mut String, value: &str) {
+pub(crate) fn push_xml_escaped_text(rendered: &mut String, value: &str) {
     for ch in value.chars() {
         match ch {
             '&' => rendered.push_str("&amp;"),
@@ -330,7 +224,7 @@ impl NetworkContext {
         }
     }
 
-    fn render(&self) -> String {
+    pub(super) fn render(&self) -> String {
         let mut rendered = "<network enabled=\"true\">".to_string();
         Self::push_rendered_domain_element(&mut rendered, "allowed", &self.allowed_domains);
         Self::push_rendered_domain_element(&mut rendered, "denied", &self.denied_domains);
@@ -348,302 +242,3 @@ impl NetworkContext {
         rendered_network.push_str(&format!("</{name}>"));
     }
 }
-
-impl EnvironmentContext {
-    pub(crate) fn new(
-        environments: Vec<EnvironmentContextEnvironment>,
-        current_date: Option<String>,
-        timezone: Option<String>,
-        network: Option<NetworkContext>,
-        subagents: Option<String>,
-    ) -> Self {
-        Self {
-            environments: EnvironmentContextEnvironments::from_vec(environments),
-            current_date,
-            timezone,
-            network,
-            filesystem: None,
-            subagents,
-        }
-    }
-
-    fn new_with_environments(
-        environments: EnvironmentContextEnvironments,
-        current_date: Option<String>,
-        timezone: Option<String>,
-        network: Option<NetworkContext>,
-        filesystem: Option<FileSystemContext>,
-        subagents: Option<String>,
-    ) -> Self {
-        Self {
-            environments,
-            current_date,
-            timezone,
-            network,
-            filesystem,
-            subagents,
-        }
-    }
-
-    pub(crate) fn from_step_context(step_context: &StepContext, shell: &Shell) -> Option<Self> {
-        let mut environments = EnvironmentContextEnvironment::from_turn_environments(
-            &step_context.environments.turn_environments,
-            shell,
-        );
-        environments.extend(
-            step_context
-                .environments
-                .starting
-                .iter()
-                .map(|environment| EnvironmentContextEnvironment {
-                    id: environment.selection.environment_id.clone(),
-                    cwd: environment.selection.cwd.clone(),
-                    status: EnvironmentContextEnvironmentStatus::Starting,
-                }),
-        );
-
-        Self::environment_only(environments)
-    }
-
-    pub(crate) fn from_attached_environments(
-        environments: &[TurnEnvironment],
-        shell: &Shell,
-    ) -> Option<Self> {
-        Self::environment_only(EnvironmentContextEnvironment::from_turn_environments(
-            environments,
-            shell,
-        ))
-    }
-
-    fn environment_only(environments: Vec<EnvironmentContextEnvironment>) -> Option<Self> {
-        (!environments.is_empty()).then(|| {
-            Self::new(
-                environments,
-                /*current_date*/ None,
-                /*timezone*/ None,
-                /*network*/ None,
-                /*subagents*/ None,
-            )
-        })
-    }
-
-    /// Compares two environment contexts, ignoring the shell. Useful when
-    /// comparing turn to turn, since the initial environment_context will
-    /// include the shell, and then it is not configurable from turn to turn.
-    pub(crate) fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
-        self.environments.equals_except_shell(&other.environments)
-            && self.current_date == other.current_date
-            && self.timezone == other.timezone
-            && self.network == other.network
-            && self.filesystem == other.filesystem
-            && self.subagents == other.subagents
-    }
-
-    pub(crate) fn diff_from_turn_context_item(
-        before: &TurnContextItem,
-        after: &EnvironmentContext,
-    ) -> Self {
-        let before_network = Self::network_from_turn_context_item(before);
-        let before_filesystem = Self::filesystem_from_turn_context_item(before);
-        let environments = match &after.environments {
-            EnvironmentContextEnvironments::Single(environment) => {
-                if PathUri::from_abs_path(&before.cwd) != environment.cwd {
-                    EnvironmentContextEnvironments::Single(EnvironmentContextEnvironment {
-                        id: String::new(),
-                        cwd: environment.cwd.clone(),
-                        status: environment.status.clone(),
-                    })
-                } else {
-                    EnvironmentContextEnvironments::None
-                }
-            }
-            EnvironmentContextEnvironments::Multiple(environments) => {
-                EnvironmentContextEnvironments::Multiple(environments.clone())
-            }
-            EnvironmentContextEnvironments::None => EnvironmentContextEnvironments::None,
-        };
-        let network = if before_network != after.network {
-            after.network.clone()
-        } else {
-            before_network
-        };
-        let filesystem = if before_filesystem != after.filesystem {
-            after.filesystem.clone()
-        } else {
-            before_filesystem
-        };
-        EnvironmentContext::new_with_environments(
-            environments,
-            after.current_date.clone(),
-            after.timezone.clone(),
-            network,
-            filesystem,
-            /*subagents*/ None,
-        )
-    }
-
-    pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
-        let mut context = Self::new(
-            EnvironmentContextEnvironment::from_turn_environments(
-                &turn_context.environments.turn_environments,
-                shell,
-            ),
-            turn_context.current_date.clone(),
-            turn_context.timezone.clone(),
-            Self::network_from_turn_context(turn_context),
-            /*subagents*/ None,
-        );
-        context.filesystem = Some(FileSystemContext::from_permission_profile(
-            &turn_context.permission_profile,
-            &turn_context.config.effective_workspace_roots(),
-        ));
-        context
-    }
-
-    pub(crate) fn from_turn_context_item(
-        turn_context_item: &TurnContextItem,
-        shell: String,
-    ) -> Self {
-        Self::new_with_environments(
-            EnvironmentContextEnvironments::from_vec(vec![EnvironmentContextEnvironment {
-                id: String::new(),
-                cwd: PathUri::from_abs_path(&turn_context_item.cwd),
-                status: EnvironmentContextEnvironmentStatus::Ready { shell },
-            }]),
-            turn_context_item.current_date.clone(),
-            turn_context_item.timezone.clone(),
-            Self::network_from_turn_context_item(turn_context_item),
-            Self::filesystem_from_turn_context_item(turn_context_item),
-            /*subagents*/ None,
-        )
-    }
-
-    pub(crate) fn with_subagents(mut self, subagents: String) -> Self {
-        if !subagents.is_empty() {
-            self.subagents = Some(subagents);
-        }
-        self
-    }
-
-    fn network_from_turn_context(turn_context: &TurnContext) -> Option<NetworkContext> {
-        let network = turn_context
-            .config
-            .config_layer_stack
-            .requirements()
-            .network
-            .as_ref()?;
-
-        Some(NetworkContext::new(
-            network
-                .domains
-                .as_ref()
-                .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
-                .unwrap_or_default(),
-            network
-                .domains
-                .as_ref()
-                .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
-                .unwrap_or_default(),
-        ))
-    }
-
-    fn network_from_turn_context_item(
-        turn_context_item: &TurnContextItem,
-    ) -> Option<NetworkContext> {
-        let TurnContextNetworkItem {
-            allowed_domains,
-            denied_domains,
-        } = turn_context_item.network.as_ref()?;
-        Some(NetworkContext::new(
-            allowed_domains.clone(),
-            denied_domains.clone(),
-        ))
-    }
-
-    fn filesystem_from_turn_context_item(
-        turn_context_item: &TurnContextItem,
-    ) -> Option<FileSystemContext> {
-        Some(FileSystemContext::from_permission_profile(
-            &turn_context_item.permission_profile(),
-            &workspace_roots_from_turn_context_item(turn_context_item),
-        ))
-    }
-}
-
-fn workspace_roots_from_turn_context_item(
-    turn_context_item: &TurnContextItem,
-) -> Vec<AbsolutePathBuf> {
-    if let Some(workspace_roots) = turn_context_item.workspace_roots.as_ref() {
-        return workspace_roots.clone();
-    }
-
-    vec![turn_context_item.cwd.clone()]
-}
-
-impl ContextualUserFragment for EnvironmentContext {
-    fn role(&self) -> &'static str {
-        "user"
-    }
-
-    fn markers(&self) -> (&'static str, &'static str) {
-        Self::type_markers()
-    }
-
-    fn type_markers() -> (&'static str, &'static str) {
-        (
-            codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG,
-            codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG,
-        )
-    }
-
-    fn body(&self) -> String {
-        let mut lines = Vec::new();
-        match &self.environments {
-            EnvironmentContextEnvironments::Single(environment) => {
-                let cwd = environment.cwd.inferred_native_path_string();
-                lines.push(format!("  <cwd>{cwd}</cwd>"));
-                lines.push(environment.status.render("  "));
-            }
-            EnvironmentContextEnvironments::Multiple(environments) => {
-                lines.push("  <environments>".to_string());
-                for environment in environments {
-                    lines.push(format!("    <environment id=\"{}\">", environment.id));
-                    let cwd = environment.cwd.inferred_native_path_string();
-                    lines.push(format!("      <cwd>{cwd}</cwd>"));
-                    lines.push(environment.status.render("      "));
-                    lines.push("    </environment>".to_string());
-                }
-                lines.push("  </environments>".to_string());
-            }
-            EnvironmentContextEnvironments::None => {}
-        }
-        if let Some(current_date) = &self.current_date {
-            lines.push(format!("  <current_date>{current_date}</current_date>"));
-        }
-        if let Some(timezone) = &self.timezone {
-            lines.push(format!("  <timezone>{timezone}</timezone>"));
-        }
-        match &self.network {
-            Some(network) => {
-                lines.push(format!("  {}", network.render()));
-            }
-            None => {
-                // TODO(mbolin): Include this line if it helps the model.
-                // lines.push("  <network enabled=\"false\" />".to_string());
-            }
-        }
-        if let Some(filesystem) = &self.filesystem {
-            lines.push(format!("  {}", filesystem.render()));
-        }
-        if let Some(subagents) = &self.subagents {
-            lines.push("  <subagents>".to_string());
-            lines.extend(subagents.lines().map(|line| format!("    {line}")));
-            lines.push("  </subagents>".to_string());
-        }
-        format!("\n{}\n", lines.join("\n"))
-    }
-}
-
-#[cfg(test)]
-#[path = "environment_context_tests.rs"]
-mod tests;
