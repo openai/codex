@@ -745,11 +745,10 @@ impl PluginRequestProcessor {
             );
         }
 
-        let featured_plugin_ids = if !plugins_input.remote_plugin_enabled
-            && data
-                .iter()
-                .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
-        {
+        let featured_plugin_ids = if data.iter().any(|marketplace| {
+            marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME
+                || marketplace.name == REMOTE_GLOBAL_MARKETPLACE_NAME
+        }) {
             match plugins_manager
                 .featured_plugin_ids_for_config(&plugins_input, auth.as_ref())
                 .await
