@@ -6,8 +6,4 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/cli:codex",
     ],
-    test_sizes = {
-        "rmcp-client-streamable_http_recovery-test-windows-cross": "medium",
-        "rmcp-client-unit-tests-windows-cross": "medium",
-    },
 )

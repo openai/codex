@@ -9,16 +9,4 @@ codex_rust_crate(
         "migrations/**",
     ]),
     crate_name = "codex_state",
-    test_sizes = {
-        "state-unit-tests-windows-cross": "medium",
-    },
-    # Cold Windows runs exceed the 60s short timeout, while remote results have
-    # reported about 15s and made the medium budget look oversized. Run it alone
-    # and bypass remote test-result caching so CI measures the cold runtime.
-    test_tags_by_target = {
-        "state-unit-tests-windows-cross": [
-            "exclusive-if-local",
-            "no-remote-cache",
-        ],
-    },
 )

@@ -7,7 +7,4 @@ codex_rust_crate(
         ["schema/**"],
         allow_empty = True,
     ),
-    test_sizes = {
-        "app-server-protocol-schema_fixtures-test-windows-cross": "medium",
-    },
 )

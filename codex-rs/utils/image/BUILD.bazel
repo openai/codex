@@ -4,10 +4,10 @@ codex_rust_crate(
     name = "image",
     crate_name = "codex_utils_image",
     test_shard_counts = {
+        # The native test needs four shards to stay inside its short budget.
         "image-unit-tests": 4,
+        # Windows-cross gets a medium budget automatically and fits in one
+        # shard, avoiding extra local Windows process startup overhead.
         "image-unit-tests-windows-cross": 1,
-    },
-    test_sizes = {
-        "image-unit-tests-windows-cross": "medium",
     },
 )

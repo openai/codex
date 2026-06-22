@@ -11,7 +11,4 @@ codex_rust_crate(
         ],
     ),
     crate_name = "codex_features",
-    test_sizes = {
-        "features-unit-tests-windows-cross": "medium",
-    },
 )

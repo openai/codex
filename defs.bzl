@@ -35,6 +35,13 @@ WINDOWS_GNULLVM_ONLY = select({
     "//conditions:default": ["@platforms//:incompatible"],
 })
 
+_NEXT_TEST_SIZE = {
+    "small": "medium",
+    "medium": "large",
+    "large": "enormous",
+    "enormous": "enormous",
+}
+
 # libwebrtc uses Objective-C categories from native archives. Any Bazel-linked
 # macOS binary/test that can pull it in must keep category symbols alive.
 MACOS_WEBRTC_RUSTC_LINK_FLAGS = select({
@@ -198,7 +205,6 @@ def codex_rust_crate(
         test_shard_counts = {},
         test_sizes = {},
         test_tags = [],
-        test_tags_by_target = {},
         unit_test_timeout = None,
         extra_binaries = [],
         extra_binaries_non_windows = [],
@@ -244,12 +250,11 @@ def codex_rust_crate(
             variants inherit the native target's count unless callers
             override the generated variant name explicitly.
         test_sizes: Mapping from generated test target name to Bazel test size.
-            All generated tests default to small. Callers can override slower
-            targets individually, including Windows-cross and Wine tests.
+            Native and Wine tests default to small. Windows-cross tests default
+            to one size larger than the corresponding native target, capped at
+            enormous. Callers can override generated targets individually.
         test_tags: Tags applied to unit + integration test targets.
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
-        test_tags_by_target: Mapping from generated test target name to
-            additional Bazel tags for that target.
         unit_test_timeout: Optional Bazel timeout for the unit-test target
             generated from `src/**/*.rs`.
         extra_binaries: Additional binary labels to surface as test data and
@@ -381,7 +386,7 @@ def codex_rust_crate(
                 test_bin = ":" + unit_test_binary,
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = target_compatible_with,
-                tags = _test_tags(test_tags, test_tags_by_target, unit_test_target_name),
+                tags = test_tags,
                 **unit_test_kwargs
             )
 
@@ -531,7 +536,7 @@ def codex_rust_crate(
                 test_bin = ":" + integration_test_binary,
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
-                tags = _test_tags(test_tags, test_tags_by_target, test_name),
+                tags = test_tags,
                 **test_kwargs
             )
         else:
@@ -557,7 +562,7 @@ def codex_rust_crate(
                 rustc_env = rustc_env,
                 env = integration_test_cargo_env,
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
-                tags = _test_tags(test_tags, test_tags_by_target, test_name),
+                tags = test_tags,
                 **test_kwargs
             )
 
@@ -607,7 +612,7 @@ def codex_rust_crate(
                 test_bin = "//codex-rs/exec-server/testing:wine-exec-test-runner",
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINE_TEST_TARGET_COMPATIBLE_WITH,
-                tags = _test_tags(test_tags, test_tags_by_target, wine_test_name) + ["manual"],
+                tags = test_tags + ["manual"],
                 **wine_test_kwargs
             )
 
@@ -645,7 +650,7 @@ def codex_rust_crate(
             test_bin = ":" + windows_cross_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             target_compatible_with = WINDOWS_GNULLVM_ONLY,
-            tags = _test_tags(test_tags, test_tags_by_target, windows_cross_test_name),
+            tags = test_tags,
             **windows_cross_test_kwargs
         )
 
@@ -665,14 +670,6 @@ def codex_rust_crate(
     if unknown_test_shard_counts:
         fail("test_shard_counts contains unknown generated test targets: {}".format(", ".join(unknown_test_shard_counts)))
 
-    unknown_test_tags = sorted([
-        test_name
-        for test_name in test_tags_by_target
-        if test_name not in generated_test_names
-    ])
-    if unknown_test_tags:
-        fail("test_tags_by_target contains unknown generated test targets: {}".format(", ".join(unknown_test_tags)))
-
 def _test_shard_count(test_shard_counts, test_name):
     shard_count = test_shard_counts.get(test_name)
     if shard_count == None:
@@ -683,12 +680,17 @@ def _test_shard_count(test_shard_counts, test_name):
 
     return shard_count
 
-def _test_tags(test_tags, test_tags_by_target, test_name):
-    return test_tags + test_tags_by_target.get(test_name, [])
-
 def _test_size(test_sizes, test_name):
-    size = test_sizes.get(test_name, "small")
-    if size not in ["small", "medium", "large", "enormous"]:
+    size = test_sizes.get(test_name)
+    if size == None and test_name.endswith("-windows-cross"):
+        native_test_name = test_name.removesuffix("-windows-cross")
+        native_size = test_sizes.get(native_test_name, "small")
+        if native_size not in _NEXT_TEST_SIZE:
+            fail("test_sizes[{}] must be a valid Bazel test size".format(native_test_name))
+        size = _NEXT_TEST_SIZE[native_size]
+    if size == None:
+        size = "small"
+    if size not in _NEXT_TEST_SIZE:
         fail("test_sizes[{}] must be a valid Bazel test size".format(test_name))
 
     return size

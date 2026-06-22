@@ -6,16 +6,4 @@ codex_rust_crate(
         "codex-windows-sandbox-setup.manifest",
     ],
     crate_name = "codex_windows_sandbox",
-    test_sizes = {
-        "windows-sandbox-rs-unit-tests-windows-cross": "medium",
-    },
-    # Cold Windows runs exceed the 60s short timeout, while remote results have
-    # reported about 3s and made the medium budget look oversized. Run it alone
-    # and bypass remote test-result caching so CI measures the cold runtime.
-    test_tags_by_target = {
-        "windows-sandbox-rs-unit-tests-windows-cross": [
-            "exclusive-if-local",
-            "no-remote-cache",
-        ],
-    },
 )
