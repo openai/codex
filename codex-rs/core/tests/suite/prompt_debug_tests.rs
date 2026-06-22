@@ -8,7 +8,7 @@ use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
-use core_test_support::responses::normalized_response_item;
+use core_test_support::responses::strip_metadata;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -53,7 +53,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         internal_chat_message_metadata_passthrough: None,
     };
     assert_eq!(
-        input.last().cloned().map(normalized_response_item),
+        input.last().cloned().map(strip_metadata),
         Some(expected_user_message)
     );
     assert!(input.iter().any(|item| {

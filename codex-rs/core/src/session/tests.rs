@@ -150,9 +150,9 @@ use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::normalized_response_items;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::responses::strip_metadata_from_items;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
@@ -1820,7 +1820,7 @@ async fn prepares_image_failures_before_history_insertion() {
         },
         internal_chat_message_metadata_passthrough: None,
     }];
-    assert_eq!(normalized_response_items(history.raw_items()), expected);
+    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
 }
 
 #[tokio::test]
@@ -8269,7 +8269,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
         ),
     );
     let expected = vec![image_message, item];
-    assert_eq!(normalized_response_items(history.raw_items()), expected);
+    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
@@ -8312,7 +8312,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
 
     let history = session.clone_history().await;
     let expected = vec![item];
-    assert_eq!(normalized_response_items(history.raw_items()), expected);
+    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
     assert!(!expected_saved_path.exists());
 }
 
@@ -9062,7 +9062,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         internal_chat_message_metadata_passthrough: None,
     };
     assert!(
-        normalized_response_items(history.raw_items()).contains(&expected),
+        strip_metadata_from_items(history.raw_items()).contains(&expected),
         "expected pending input to be persisted into history on turn completion"
     );
 

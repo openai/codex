@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseItem;
 use codex_tools::ConversationHistory;
 use codex_tools::ExtensionTurnItem;
 use codex_tools::ToolCall as ExtensionToolCall;
@@ -111,11 +110,8 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 }
 
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
-    let mut conversation_history = invocation.session.clone_history().await.into_raw_items();
-    conversation_history
-        .iter_mut()
-        .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
-    let conversation_history = ConversationHistory::new(conversation_history);
+    let conversation_history =
+        ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
     let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
     for environment in &invocation.turn.environments.turn_environments {
         // TODO(anp): Migrate extension ToolEnvironment and granted-permission lookup to PathUri
@@ -173,7 +169,6 @@ mod tests {
     use codex_tools::ExtensionTurnItem;
     use codex_utils_absolute_path::test_support::PathExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
-    use core_test_support::responses::normalized_response_item;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::Mutex;
@@ -339,14 +334,13 @@ mod tests {
         session
             .record_conversation_items(&turn, std::slice::from_ref(&history_item))
             .await;
+        let mut expected_history_item = history_item.clone();
+        expected_history_item.set_turn_id_if_missing(&turn_id);
         let raw_history_event = rx.recv().await.expect("history raw response item event");
         let EventMsg::RawResponseItem(raw_history_item) = raw_history_event.msg else {
             panic!("expected raw response item event");
         };
-        assert_eq!(
-            normalized_response_item(raw_history_item.item),
-            history_item
-        );
+        assert_eq!(raw_history_item.item, expected_history_item);
         let invocation = ToolInvocation {
             session,
             turn,
@@ -385,7 +379,7 @@ mod tests {
         );
         assert_eq!(
             captured_call.conversation_history.items(),
-            std::slice::from_ref(&history_item)
+            std::slice::from_ref(&expected_history_item)
         );
         match captured_call.payload {
             ToolPayload::Function { arguments } => {

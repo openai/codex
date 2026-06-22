@@ -3332,8 +3332,7 @@ impl Session {
         {
             items.push(guardian_developer_message);
         }
-        // Some callers insert initial context into prompt/replacement history without first
-        // passing through `record_conversation_items`.
+        // New context windows and compaction install these items directly into replacement history.
         for item in &mut items {
             item.set_turn_id_if_missing(&turn_context.sub_id);
         }

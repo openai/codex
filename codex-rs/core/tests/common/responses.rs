@@ -99,39 +99,36 @@ fn decode_body_bytes(body: &[u8], content_encoding: Option<&str>) -> Vec<u8> {
 }
 
 /// Returns a response item without internal transport metadata for semantic assertions.
-pub fn normalized_response_item(mut item: ResponseItem) -> ResponseItem {
+pub fn strip_metadata(mut item: ResponseItem) -> ResponseItem {
     item.clear_internal_chat_message_metadata_passthrough();
     item
 }
 
 /// Returns response items without internal transport metadata for semantic assertions.
-pub fn normalized_response_items(items: &[ResponseItem]) -> Vec<ResponseItem> {
-    items
-        .iter()
-        .cloned()
-        .map(normalized_response_item)
-        .collect()
+pub fn strip_metadata_from_items(items: &[ResponseItem]) -> Vec<ResponseItem> {
+    items.iter().cloned().map(strip_metadata).collect()
 }
 
-fn normalized_responses_request_body(mut body: Value) -> Value {
-    // General request assertions should not churn on internal item transport metadata.
-    if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
-        for item in input {
-            normalize_response_item_json(item);
+/// Returns JSON without internal transport metadata for semantic assertions.
+pub fn strip_metadata_from_json(value: Value) -> Value {
+    match value {
+        Value::Array(values) => {
+            Value::Array(values.into_iter().map(strip_metadata_from_json).collect())
         }
-    }
-    body
-}
-
-fn normalize_response_item_json(item: &mut Value) {
-    if let Some(item) = item.as_object_mut() {
-        item.remove("internal_chat_message_metadata_passthrough");
+        Value::Object(mut map) => {
+            map.remove("internal_chat_message_metadata_passthrough");
+            Value::Object(
+                map.into_iter()
+                    .map(|(key, value)| (key, strip_metadata_from_json(value)))
+                    .collect(),
+            )
+        }
+        value => value,
     }
 }
 
 impl ResponsesRequest {
-    /// Returns the decoded wire body, including internal item transport metadata.
-    pub fn raw_body_json(&self) -> Value {
+    pub fn body_json(&self) -> Value {
         let body = decode_body_bytes(
             &self.0.body,
             self.0
@@ -140,11 +137,6 @@ impl ResponsesRequest {
                 .and_then(|value| value.to_str().ok()),
         );
         serde_json::from_slice(&body).unwrap()
-    }
-
-    /// Returns the decoded request body without internal item transport metadata.
-    pub fn body_json(&self) -> Value {
-        normalized_responses_request_body(self.raw_body_json())
     }
 
     pub fn body_bytes(&self) -> Vec<u8> {
@@ -222,14 +214,6 @@ impl ResponsesRequest {
                     .map(str::to_owned)
             })
             .collect()
-    }
-
-    /// Returns wire input items, including internal item transport metadata.
-    pub fn raw_input(&self) -> Vec<Value> {
-        self.raw_body_json()["input"]
-            .as_array()
-            .expect("input array not found in request")
-            .clone()
     }
 
     pub fn input(&self) -> Vec<Value> {

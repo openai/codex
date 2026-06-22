@@ -66,6 +66,7 @@ use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
+use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -207,8 +208,8 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
-    let first = requests[0].raw_body_json();
-    let second = requests[1].raw_body_json();
+    let first = requests[0].body_json();
+    let second = requests[1].body_json();
     let first_turn_id = first["client_metadata"]["turn_id"]
         .as_str()
         .expect("first request should include turn id");
@@ -282,7 +283,7 @@ async fn non_openai_responses_requests_omit_item_passthrough_metadata() {
         .unwrap();
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let body = response_mock.single_request().raw_body_json();
+    let body = response_mock.single_request().body_json();
     let input = body["input"]
         .as_array()
         .expect("request should include input items");
@@ -3671,7 +3672,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let tail_len = r3_tail_expected.as_array().unwrap().len();
     let actual_tail = &r3_input_array[r3_input_array.len() - tail_len..];
     assert_eq!(
-        serde_json::Value::Array(actual_tail.to_vec()),
+        strip_metadata_from_json(serde_json::Value::Array(actual_tail.to_vec())),
         r3_tail_expected,
         "request 3 tail mismatch",
     );
