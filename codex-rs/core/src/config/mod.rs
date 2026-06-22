@@ -1098,10 +1098,10 @@ impl Default for TokenBudgetConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RolloutBudgetConfig {
     pub limit_tokens: i64,
-    pub reminder_interval_tokens: i64,
+    pub reminder_at_remaining_tokens: Vec<i64>,
     pub sampling_token_weight: f64,
     pub prefill_token_weight: f64,
 }
@@ -2606,13 +2606,23 @@ fn resolve_rollout_budget_config(
             "features.rollout_budget.limit_tokens must be positive",
         ));
     }
-    let reminder_interval_tokens = config
-        .reminder_interval_tokens
-        .unwrap_or_else(|| (limit_tokens / 10).max(1));
-    if reminder_interval_tokens <= 0 {
+    let reminder_at_remaining_tokens =
+        config
+            .reminder_at_remaining_tokens
+            .clone()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "features.rollout_budget.reminder_at_remaining_tokens is required when rollout_budget is enabled",
+                )
+            })?;
+    if reminder_at_remaining_tokens
+        .iter()
+        .any(|&tokens| tokens <= 0 || tokens >= limit_tokens)
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "features.rollout_budget.reminder_interval_tokens must be positive",
+            "features.rollout_budget.reminder_at_remaining_tokens must contain only positive values below limit_tokens",
         ));
     }
     let sampling_token_weight = config.sampling_token_weight.unwrap_or(1.0);
@@ -2630,7 +2640,7 @@ fn resolve_rollout_budget_config(
     }
     Ok(Some(RolloutBudgetConfig {
         limit_tokens,
-        reminder_interval_tokens,
+        reminder_at_remaining_tokens,
         sampling_token_weight,
         prefill_token_weight,
     }))

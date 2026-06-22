@@ -25,12 +25,14 @@ use std::time::Duration;
 use test_case::test_case;
 use tokio::time::timeout;
 
-const ROLLOUT_BUDGET: RolloutBudgetConfig = RolloutBudgetConfig {
-    limit_tokens: 100,
-    reminder_interval_tokens: 25,
-    sampling_token_weight: 1.0,
-    prefill_token_weight: 1.0,
-};
+fn rollout_budget() -> RolloutBudgetConfig {
+    RolloutBudgetConfig {
+        limit_tokens: 100,
+        reminder_at_remaining_tokens: vec![75, 50, 25],
+        sampling_token_weight: 1.0,
+        prefill_token_weight: 1.0,
+    }
+}
 
 fn rollout_budget_texts(request: &ResponsesRequest) -> Vec<String> {
     request
@@ -51,7 +53,7 @@ fn wire_request_contains(request: &wiremock::Request, text: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn adds_weighted_initial_and_periodic_reminders() -> Result<()> {
+async fn adds_weighted_initial_and_threshold_reminders() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -83,7 +85,7 @@ async fn adds_weighted_initial_and_periodic_reminders() -> Result<()> {
             config.rollout_budget = Some(RolloutBudgetConfig {
                 sampling_token_weight: 2.0,
                 prefill_token_weight: 0.5,
-                ..ROLLOUT_BUDGET
+                ..rollout_budget()
             });
         })
         .build(&server)
@@ -171,7 +173,7 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
                 .features
                 .enable(Feature::MultiAgentV2)
                 .expect("test config should allow multi-agent v2");
-            config.rollout_budget = Some(ROLLOUT_BUDGET);
+            config.rollout_budget = Some(rollout_budget());
         })
         .build(&server)
         .await?;
@@ -218,8 +220,8 @@ async fn exhausted_budget_aborts_current_and_later_turns() -> Result<()> {
         .with_config(|config| {
             config.rollout_budget = Some(RolloutBudgetConfig {
                 limit_tokens: 30,
-                reminder_interval_tokens: 10,
-                ..ROLLOUT_BUDGET
+                reminder_at_remaining_tokens: vec![20, 10],
+                ..rollout_budget()
             });
         })
         .build(&server)
@@ -293,8 +295,8 @@ async fn compaction_budget_exhaustion_aborts_without_error_or_retry(remote_v2: b
             config.model_provider = model_provider;
             config.rollout_budget = Some(RolloutBudgetConfig {
                 limit_tokens: 10,
-                reminder_interval_tokens: 5,
-                ..ROLLOUT_BUDGET
+                reminder_at_remaining_tokens: vec![5],
+                ..rollout_budget()
             });
             if remote_v2 {
                 config
@@ -354,8 +356,8 @@ async fn restates_the_current_remainder_after_compaction() -> Result<()> {
         .with_config(move |config| {
             config.model_provider = model_provider;
             config.rollout_budget = Some(RolloutBudgetConfig {
-                reminder_interval_tokens: 50,
-                ..ROLLOUT_BUDGET
+                reminder_at_remaining_tokens: vec![50],
+                ..rollout_budget()
             });
         })
         .build(&server)
@@ -409,8 +411,8 @@ async fn restates_the_current_remainder_after_rollback() -> Result<()> {
     let test = test_codex()
         .with_config(|config| {
             config.rollout_budget = Some(RolloutBudgetConfig {
-                reminder_interval_tokens: 50,
-                ..ROLLOUT_BUDGET
+                reminder_at_remaining_tokens: vec![50],
+                ..rollout_budget()
             });
         })
         .build(&server)

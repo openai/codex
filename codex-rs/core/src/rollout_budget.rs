@@ -57,18 +57,22 @@ impl RolloutBudget {
         window_id: &str,
     ) -> Option<RolloutBudgetReminder> {
         let state = self.lock()?;
-        let reminder_index = (state.weighted_tokens_used
-            / state.config.reminder_interval_tokens as f64)
+        let remaining_tokens = (state.config.limit_tokens as f64 - state.weighted_tokens_used)
+            .max(0.0)
             .floor() as i64;
+        let reminder_index = state
+            .config
+            .reminder_at_remaining_tokens
+            .iter()
+            .filter(|&&threshold| remaining_tokens <= threshold)
+            .count() as i64;
         if state.deliveries.get(&thread_id).is_some_and(|delivery| {
             delivery.window_id.as_str() == window_id && delivery.reminder_index >= reminder_index
         }) {
             return None;
         }
         Some(RolloutBudgetReminder {
-            remaining_tokens: (state.config.limit_tokens as f64 - state.weighted_tokens_used)
-                .max(0.0)
-                .floor() as i64,
+            remaining_tokens,
             reminder_index,
         })
     }
