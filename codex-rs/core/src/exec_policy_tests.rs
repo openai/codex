@@ -1179,6 +1179,27 @@ fn git_branch_requires_approval_for_untrusted_projects() {
 }
 
 #[test]
+fn path_qualified_safe_basename_requires_approval_for_untrusted_projects() {
+    let executable = if cfg!(windows) { r".\cat.exe" } else { "./cat" };
+    let command = vec![executable.to_string(), "Cargo.toml".to_string()];
+
+    assert_eq!(
+        Decision::Prompt,
+        render_decision_for_unmatched_command(
+            &command,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: &PermissionProfile::workspace_write(),
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Generic,
+            },
+        )
+    );
+}
+
+#[test]
 fn managed_cwd_write_profile_has_filesystem_restrictions() {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {

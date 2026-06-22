@@ -64,6 +64,12 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
     let Some(cmd0) = command.first().map(String::as_str) else {
         return false;
     };
+    if std::path::Path::new(cmd0).components().count() != 1 {
+        // A workspace executable can impersonate an allowlisted utility by
+        // reusing its basename. Only bare names resolved through the trusted
+        // process PATH are eligible for generic safe-command classification.
+        return false;
+    }
 
     match executable_name_lookup_key(cmd0).as_deref() {
         Some(cmd) if cfg!(target_os = "linux") && matches!(cmd, "numfmt" | "tac") => true,
@@ -248,6 +254,35 @@ mod tests {
             assert!(!is_safe_to_call_with_exec(&vec_str(&["numfmt", "1000"])));
             assert!(!is_safe_to_call_with_exec(&vec_str(&["tac", "Cargo.toml"])));
         }
+    }
+
+    #[test]
+    fn path_qualified_safe_command_names_require_approval() {
+        let absolute_cat = if cfg!(windows) {
+            r"C:\workspace\cat.exe"
+        } else {
+            "/tmp/workspace/cat"
+        };
+        let parent_relative_cat = if cfg!(windows) {
+            r"..\cat.exe"
+        } else {
+            "../cat"
+        };
+
+        for args in [
+            vec_str(&["./cat", "Cargo.toml"]),
+            vec_str(&[parent_relative_cat, "Cargo.toml"]),
+            vec_str(&[absolute_cat, "Cargo.toml"]),
+            vec_str(&["bash", "-lc", "./cat Cargo.toml"]),
+        ] {
+            assert!(
+                !is_known_safe_command(&args),
+                "expected path-qualified executable {args:?} to require approval",
+            );
+        }
+
+        let bare_cat = if cfg!(windows) { "cat.exe" } else { "cat" };
+        assert!(is_known_safe_command(&vec_str(&[bare_cat, "Cargo.toml"])));
     }
 
     #[test]
