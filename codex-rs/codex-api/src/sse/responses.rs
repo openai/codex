@@ -446,7 +446,6 @@ pub async fn process_sse(
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
-    let mut safety_buffering_emitted = false;
 
     loop {
         let start = Instant::now();
@@ -517,9 +516,7 @@ pub async fn process_sse(
         {
             return;
         }
-        if let Some(buffering) = safety_buffering
-            && !safety_buffering_emitted
-        {
+        if let Some(buffering) = safety_buffering {
             if tx_event
                 .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
                 .await
@@ -527,7 +524,6 @@ pub async fn process_sse(
             {
                 return;
             }
-            safety_buffering_emitted = true;
         }
 
         match process_responses_event(event) {
@@ -1315,7 +1311,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_sse_emits_safety_buffering_once_without_dropping_response_events() {
+    async fn process_sse_emits_all_safety_buffering_notifications_without_dropping_response_events()
+    {
         let events = run_sse(vec![
             json!({
                 "type": "response.created",
@@ -1349,7 +1346,7 @@ mod tests {
         ])
         .await;
 
-        assert_eq!(events.len(), 5);
+        assert_eq!(events.len(), 7);
         assert_matches!(&events[0], ResponseEvent::Created);
         assert_matches!(
             &events[1],
@@ -1357,8 +1354,18 @@ mod tests {
                 if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
         );
         assert_matches!(&events[2], ResponseEvent::OutputTextDelta(delta) if delta == "hello");
-        assert_matches!(&events[3], ResponseEvent::OutputTextDelta(delta) if delta == " world");
-        assert_matches!(&events[4], ResponseEvent::Completed { response_id, .. } if response_id == "resp-1");
+        assert_matches!(
+            &events[3],
+            ResponseEvent::SafetyBuffering(buffering)
+                if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
+        );
+        assert_matches!(&events[4], ResponseEvent::OutputTextDelta(delta) if delta == " world");
+        assert_matches!(
+            &events[5],
+            ResponseEvent::SafetyBuffering(buffering)
+                if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
+        );
+        assert_matches!(&events[6], ResponseEvent::Completed { response_id, .. } if response_id == "resp-1");
     }
 
     #[test]

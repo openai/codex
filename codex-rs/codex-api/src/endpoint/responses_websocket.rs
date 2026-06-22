@@ -634,7 +634,6 @@ async fn run_websocket_response_stream(
     turn_state: Option<&OnceLock<String>>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
-    let mut safety_buffering_emitted = false;
     send_websocket_request(
         ws_stream,
         request_text,
@@ -726,9 +725,7 @@ async fn run_websocket_response_stream(
                         "response event consumer dropped".to_string(),
                     ));
                 }
-                if let Some(buffering) = safety_buffering
-                    && !safety_buffering_emitted
-                {
+                if let Some(buffering) = safety_buffering {
                     if tx_event
                         .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
                         .await
@@ -738,7 +735,6 @@ async fn run_websocket_response_stream(
                             "response event consumer dropped".to_string(),
                         ));
                     }
-                    safety_buffering_emitted = true;
                 }
                 match process_responses_event(event) {
                     Ok(Some(event)) => {
