@@ -1032,7 +1032,9 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
         composer_icon: None,
         composer_icon_url: None,
         logo: None,
+        logo_dark: None,
         logo_url: None,
+        logo_url_dark: None,
         screenshots: Vec::new(),
         screenshot_urls: Vec::new(),
     });

@@ -181,6 +181,51 @@ fn find_marketplace_plugin_supports_git_subdir_sources() {
 }
 
 #[test]
+fn find_marketplace_plugin_omits_interface_asset_paths_for_git_sources() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "remote-plugin",
+      "source": {
+        "source": "git-subdir",
+        "url": "openai/joey_marketplace3",
+        "path": "plugins/toolkit"
+      },
+      "interface": {
+        "displayName": "Remote Plugin",
+        "composerIcon": "./assets/icon.svg",
+        "logo": "./assets/logo.png",
+        "logoDark": "./assets/logo-dark.png",
+        "screenshots": ["./assets/shot.png"]
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let resolved = find_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "remote-plugin",
+    )
+    .unwrap();
+
+    let interface = resolved.interface.expect("fallback interface");
+    assert_eq!(interface.display_name.as_deref(), Some("Remote Plugin"));
+    assert_eq!(interface.composer_icon, None);
+    assert_eq!(interface.logo, None);
+    assert_eq!(interface.logo_dark, None);
+    assert!(interface.screenshots.is_empty());
+}
+
+#[test]
 fn find_marketplace_plugin_builds_manifest_fallback_from_entry() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
@@ -319,6 +364,7 @@ fn find_marketplace_plugin_builds_manifest_fallback_from_entry() {
                 AbsolutePathBuf::try_from(plugin_root.join("assets/icon.svg")).unwrap()
             ),
             logo: Some(AbsolutePathBuf::try_from(plugin_root.join("assets/logo.png")).unwrap()),
+            logo_dark: None,
             screenshots: vec![
                 AbsolutePathBuf::try_from(plugin_root.join("assets/shot.png")).unwrap()
             ],
@@ -634,6 +680,7 @@ fn list_marketplaces_supports_alternate_manifest_layout() {
                     brand_color: None,
                     composer_icon: None,
                     logo: None,
+                    logo_dark: None,
                     screenshots: Vec::new(),
                 }),
                 keywords: Vec::new(),
@@ -720,6 +767,7 @@ fn list_marketplaces_supports_repo_root_local_plugin_sources() {
                         brand_color: None,
                         composer_icon: None,
                         logo: None,
+                        logo_dark: None,
                         screenshots: Vec::new(),
                     }),
                     keywords: Vec::new(),
@@ -1625,6 +1673,7 @@ fn list_marketplaces_resolves_plugin_interface_paths_to_absolute() {
                 AbsolutePathBuf::try_from(plugin_root.join("assets/icon.png")).unwrap(),
             ),
             logo: Some(AbsolutePathBuf::try_from(plugin_root.join("assets/logo.png")).unwrap()),
+            logo_dark: None,
             screenshots: vec![
                 AbsolutePathBuf::try_from(plugin_root.join("assets/shot1.png")).unwrap(),
             ],
@@ -1739,6 +1788,7 @@ fn list_marketplaces_ignores_plugin_interface_assets_without_dot_slash() {
             brand_color: None,
             composer_icon: None,
             logo: None,
+            logo_dark: None,
             screenshots: Vec::new(),
         })
     );

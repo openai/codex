@@ -103,6 +103,7 @@ impl MarketplacePluginManifestFallback {
         if let Some(interface) = manifest.interface.as_mut() {
             interface.composer_icon = None;
             interface.logo = None;
+            interface.logo_dark = None;
             interface.screenshots.clear();
         }
         Some(manifest)
