@@ -219,7 +219,10 @@ pub(super) fn cache_payload_bytes(
 }
 
 pub(super) fn sign_cache_payload(payload_bytes: &[u8]) -> Option<String> {
-    sign_cache_payload_with_key(payload_bytes, CLOUD_CONFIG_BUNDLE_CACHE_WRITE_HMAC_KEY)
+    let mut mac = HmacSha256::new_from_slice(CLOUD_CONFIG_BUNDLE_CACHE_WRITE_HMAC_KEY).ok()?;
+    mac.update(payload_bytes);
+    let signature = mac.finalize().into_bytes();
+    Some(BASE64_STANDARD.encode(signature))
 }
 
 pub(super) fn verify_cache_signature(payload_bytes: &[u8], signature: &str) -> bool {
@@ -231,13 +234,6 @@ pub(super) fn verify_cache_signature(payload_bytes: &[u8], signature: &str) -> b
     CLOUD_CONFIG_BUNDLE_CACHE_READ_HMAC_KEYS
         .iter()
         .any(|key| verify_cache_signature_with_key(payload_bytes, &signature_bytes, key))
-}
-
-fn sign_cache_payload_with_key(payload_bytes: &[u8], key: &[u8]) -> Option<String> {
-    let mut mac = HmacSha256::new_from_slice(key).ok()?;
-    mac.update(payload_bytes);
-    let signature = mac.finalize().into_bytes();
-    Some(BASE64_STANDARD.encode(signature))
 }
 
 fn verify_cache_signature_with_key(
