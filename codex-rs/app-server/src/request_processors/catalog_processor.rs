@@ -419,24 +419,22 @@ impl CatalogRequestProcessor {
         params: PermissionProfileListParams,
     ) -> Result<PermissionProfileListResponse, JSONRPCErrorError> {
         let PermissionProfileListParams { cursor, limit, cwd } = params;
-        let (config_layer_stack, policy_cwd) = match cwd {
+        let config_layer_stack = match cwd {
             Some(cwd) => {
                 let cwd = PathBuf::from(cwd);
                 let (_, config_layer_stack) = self
                     .resolve_cwd_config(&cwd)
                     .await
                     .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
-                (config_layer_stack, cwd)
+                config_layer_stack
             }
-            None => (
-                self.config_manager
-                    .load_config_layers(/*cwd*/ None)
-                    .await
-                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
-                self.config.cwd.to_path_buf(),
-            ),
+            None => self
+                .config_manager
+                .load_config_layers(/*cwd*/ None)
+                .await
+                .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
         };
-        let profiles = permission_profile_catalog(&config_layer_stack, &policy_cwd)
+        let profiles = permission_profile_catalog(&config_layer_stack)
             .map_err(|err| internal_error(format!("failed to resolve permission profiles: {err}")))?
             .into_iter()
             .map(|profile| PermissionProfileSummary {

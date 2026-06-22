@@ -1771,7 +1771,7 @@ extends = ":workspace"
         .await?;
 
     assert_eq!(
-        permission_profile_catalog(&config.config_layer_stack, cwd.as_path())?,
+        permission_profile_catalog(&config.config_layer_stack)?,
         vec![
             PermissionProfileCatalogEntry {
                 id: ":read-only".to_string(),

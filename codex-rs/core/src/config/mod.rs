@@ -3105,7 +3105,6 @@ impl Config {
             );
         let custom_permission_profiles = permission_profile_catalog_from_permissions(
             &config_layer_stack,
-            resolved_cwd.as_path(),
             effective_permission_selection.profiles.as_ref(),
         )?
         .into_iter()

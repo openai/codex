@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use codex_config::ConfigLayerStack;
 use codex_config::RequirementSource;
 use codex_config::SandboxModeRequirement;
@@ -30,7 +28,6 @@ pub struct PermissionProfileCatalogEntry {
 /// Builds the effective permission profile catalog for a config layer stack.
 pub fn permission_profile_catalog(
     config_layer_stack: &ConfigLayerStack,
-    policy_cwd: &Path,
 ) -> std::io::Result<Vec<PermissionProfileCatalogEntry>> {
     let permissions = config_layer_stack
         .effective_config()
@@ -42,16 +39,11 @@ pub fn permission_profile_catalog(
     let requirements_toml = config_layer_stack.requirements_toml();
     let permissions = merge_managed_permission_profiles(permissions.as_ref(), requirements_toml)?;
 
-    permission_profile_catalog_from_permissions(
-        config_layer_stack,
-        policy_cwd,
-        permissions.as_ref(),
-    )
+    permission_profile_catalog_from_permissions(config_layer_stack, permissions.as_ref())
 }
 
 pub(super) fn permission_profile_catalog_from_permissions(
     config_layer_stack: &ConfigLayerStack,
-    policy_cwd: &Path,
     permissions: Option<&PermissionsToml>,
 ) -> std::io::Result<Vec<PermissionProfileCatalogEntry>> {
     let requirements_toml = config_layer_stack.requirements_toml();
@@ -84,7 +76,6 @@ pub(super) fn permission_profile_catalog_from_permissions(
                 Some(permissions),
                 id,
                 /*workspace_write*/ None,
-                policy_cwd,
                 &mut warnings,
             )
             .map(|(file_system, network)| {
