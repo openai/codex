@@ -516,14 +516,13 @@ pub async fn process_sse(
         {
             return;
         }
-        if let Some(buffering) = safety_buffering {
-            if tx_event
+        if let Some(buffering) = safety_buffering
+            && tx_event
                 .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
                 .await
                 .is_err()
-            {
-                return;
-            }
+        {
+            return;
         }
 
         match process_responses_event(event) {
