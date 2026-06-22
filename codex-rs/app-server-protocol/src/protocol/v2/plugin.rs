@@ -101,6 +101,40 @@ pub struct MarketplaceRemoveResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct MarketplaceCheckUpdatesParams {
+    #[ts(optional = nullable)]
+    pub marketplace_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceCheckUpdatesResponse {
+    pub results: Vec<MarketplaceUpdateCheckResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "status", rename_all = "camelCase")]
+#[ts(tag = "status", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum MarketplaceUpdateCheckResult {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    UpToDate { marketplace_name: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    UpdateAvailable { marketplace_name: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Error {
+        marketplace_name: String,
+        message: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct MarketplaceUpgradeParams {
     #[ts(optional = nullable)]
     pub marketplace_name: Option<String>,

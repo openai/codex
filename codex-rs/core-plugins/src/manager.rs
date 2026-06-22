@@ -34,8 +34,10 @@ use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::plugin_interface_with_marketplace_category;
+use crate::marketplace_upgrade::ConfiguredMarketplaceUpdateCheckOutcome;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
+use crate::marketplace_upgrade::check_configured_git_marketplace_updates;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
@@ -1958,15 +1960,7 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         marketplace_name: Option<&str>,
     ) -> Result<ConfiguredMarketplaceUpgradeOutcome, String> {
-        if let Some(marketplace_name) = marketplace_name
-            && !configured_git_marketplace_names(&config.config_layer_stack)
-                .iter()
-                .any(|name| name == marketplace_name)
-        {
-            return Err(format!(
-                "marketplace `{marketplace_name}` is not configured as a Git marketplace"
-            ));
-        }
+        validate_configured_git_marketplace_selection(config, marketplace_name)?;
 
         let mut outcome = upgrade_configured_git_marketplaces(
             self.codex_home.as_path(),
@@ -1995,6 +1989,19 @@ impl PluginsManager {
             }
         }
         Ok(outcome)
+    }
+
+    pub fn check_configured_marketplace_updates_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        marketplace_name: Option<&str>,
+    ) -> Result<ConfiguredMarketplaceUpdateCheckOutcome, String> {
+        validate_configured_git_marketplace_selection(config, marketplace_name)?;
+        Ok(check_configured_git_marketplace_updates(
+            self.codex_home.as_path(),
+            &config.config_layer_stack,
+            marketplace_name,
+        ))
     }
 
     pub fn maybe_start_non_curated_plugin_cache_refresh(
@@ -2399,6 +2406,22 @@ impl PluginsManager {
         roots.dedup();
         roots
     }
+}
+
+fn validate_configured_git_marketplace_selection(
+    config: &PluginsConfigInput,
+    marketplace_name: Option<&str>,
+) -> Result<(), String> {
+    if let Some(marketplace_name) = marketplace_name
+        && !configured_git_marketplace_names(&config.config_layer_stack)
+            .iter()
+            .any(|name| name == marketplace_name)
+    {
+        return Err(format!(
+            "marketplace `{marketplace_name}` is not configured as a Git marketplace"
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn remote_plugin_install_required_description(

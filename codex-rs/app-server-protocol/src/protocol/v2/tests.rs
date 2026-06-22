@@ -2807,6 +2807,58 @@ fn skills_extra_roots_set_params_rejects_relative_roots() {
 }
 
 #[test]
+fn marketplace_check_updates_payloads_use_tagged_results() {
+    assert_eq!(
+        serde_json::to_value(MarketplaceCheckUpdatesParams {
+            marketplace_name: None,
+        })
+        .unwrap(),
+        json!({ "marketplaceName": null }),
+    );
+    assert_eq!(
+        serde_json::to_value(MarketplaceCheckUpdatesParams {
+            marketplace_name: Some("tools".to_string()),
+        })
+        .unwrap(),
+        json!({ "marketplaceName": "tools" }),
+    );
+    assert_eq!(
+        serde_json::to_value(MarketplaceCheckUpdatesResponse {
+            results: vec![
+                MarketplaceUpdateCheckResult::UpToDate {
+                    marketplace_name: "current".to_string(),
+                },
+                MarketplaceUpdateCheckResult::UpdateAvailable {
+                    marketplace_name: "changed".to_string(),
+                },
+                MarketplaceUpdateCheckResult::Error {
+                    marketplace_name: "broken".to_string(),
+                    message: "unable to resolve remote revision".to_string(),
+                },
+            ],
+        })
+        .unwrap(),
+        json!({
+            "results": [
+                {
+                    "status": "upToDate",
+                    "marketplaceName": "current",
+                },
+                {
+                    "status": "updateAvailable",
+                    "marketplaceName": "changed",
+                },
+                {
+                    "status": "error",
+                    "marketplaceName": "broken",
+                    "message": "unable to resolve remote revision",
+                },
+            ],
+        }),
+    );
+}
+
+#[test]
 fn plugin_source_serializes_local_git_and_remote_variants() {
     let local_path = if cfg!(windows) {
         r"C:\plugins\linear"

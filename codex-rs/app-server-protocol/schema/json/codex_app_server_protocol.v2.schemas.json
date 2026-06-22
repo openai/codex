@@ -1848,6 +1848,30 @@
             },
             "method": {
               "enum": [
+                "marketplace/checkUpdates"
+              ],
+              "title": "Marketplace/checkUpdatesRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MarketplaceCheckUpdatesParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/checkUpdatesRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "marketplace/upgrade"
               ],
               "title": "Marketplace/upgradeRequestMethod",
@@ -8177,6 +8201,35 @@
       "title": "MarketplaceAddResponse",
       "type": "object"
     },
+    "MarketplaceCheckUpdatesParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "MarketplaceCheckUpdatesParams",
+      "type": "object"
+    },
+    "MarketplaceCheckUpdatesResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "results": {
+          "items": {
+            "$ref": "#/definitions/MarketplaceUpdateCheckResult"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "results"
+      ],
+      "title": "MarketplaceCheckUpdatesResponse",
+      "type": "object"
+    },
     "MarketplaceInterface": {
       "properties": {
         "displayName": {
@@ -8238,6 +8291,68 @@
       ],
       "title": "MarketplaceRemoveResponse",
       "type": "object"
+    },
+    "MarketplaceUpdateCheckResult": {
+      "oneOf": [
+        {
+          "properties": {
+            "marketplaceName": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "upToDate"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "marketplaceName",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "marketplaceName": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "updateAvailable"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "marketplaceName",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "marketplaceName": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "error"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "marketplaceName",
+            "message",
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "MarketplaceUpgradeErrorInfo": {
       "properties": {

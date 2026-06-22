@@ -38,6 +38,24 @@ pub struct ConfiguredMarketplaceUpgradeOutcome {
     pub errors: Vec<ConfiguredMarketplaceUpgradeError>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ConfiguredMarketplaceUpdateCheckOutcome {
+    pub results: Vec<ConfiguredMarketplaceUpdateCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfiguredMarketplaceUpdateCheck {
+    pub marketplace_name: String,
+    pub status: ConfiguredMarketplaceUpdateStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfiguredMarketplaceUpdateStatus {
+    UpToDate,
+    UpdateAvailable,
+    Error { message: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ConfiguredGitMarketplace {
     name: String,
@@ -60,6 +78,39 @@ pub fn configured_git_marketplace_names(config_layer_stack: &ConfigLayerStack) -
         .collect::<Vec<_>>();
     names.sort_unstable();
     names
+}
+
+pub fn check_configured_git_marketplace_updates(
+    codex_home: &Path,
+    config_layer_stack: &ConfigLayerStack,
+    marketplace_name: Option<&str>,
+) -> ConfiguredMarketplaceUpdateCheckOutcome {
+    let install_root = marketplace_install_root(codex_home);
+    let results = configured_git_marketplaces(config_layer_stack)
+        .into_iter()
+        .filter(|marketplace| marketplace_name.is_none_or(|name| marketplace.name == name))
+        .map(|marketplace| {
+            let status = match configured_git_marketplace_remote_revision(&marketplace) {
+                Ok(remote_revision)
+                    if configured_git_marketplace_is_up_to_date(
+                        &install_root,
+                        &marketplace,
+                        &remote_revision,
+                    ) =>
+                {
+                    ConfiguredMarketplaceUpdateStatus::UpToDate
+                }
+                Ok(_) => ConfiguredMarketplaceUpdateStatus::UpdateAvailable,
+                Err(message) => ConfiguredMarketplaceUpdateStatus::Error { message },
+            };
+            ConfiguredMarketplaceUpdateCheck {
+                marketplace_name: marketplace.name,
+                status,
+            }
+        })
+        .collect();
+
+    ConfiguredMarketplaceUpdateCheckOutcome { results }
 }
 
 pub fn upgrade_configured_git_marketplaces(
@@ -170,19 +221,12 @@ fn upgrade_configured_git_marketplace(
     install_root: &Path,
     marketplace: &ConfiguredGitMarketplace,
 ) -> Result<Option<AbsolutePathBuf>, String> {
-    validate_plugin_segment(&marketplace.name, "marketplace name")?;
-    let remote_revision = git_remote_revision(
-        &marketplace.source,
-        marketplace.ref_name.as_deref(),
-        MARKETPLACE_UPGRADE_GIT_TIMEOUT,
-    )?;
-    let destination = install_root.join(&marketplace.name);
-    if find_marketplace_manifest_path(&destination).is_some()
-        && marketplace.last_revision.as_deref() == Some(remote_revision.as_str())
-        && installed_marketplace_metadata_matches(&destination, marketplace, &remote_revision)
-    {
+    let remote_revision = configured_git_marketplace_remote_revision(marketplace)?;
+    if configured_git_marketplace_is_up_to_date(install_root, marketplace, &remote_revision) {
         return Ok(None);
     }
+
+    let destination = install_root.join(&marketplace.name);
 
     let staging_parent = install_root.join(".staging");
     std::fs::create_dir_all(&staging_parent).map_err(|err| {
@@ -240,6 +284,28 @@ fn upgrade_configured_git_marketplace(
     AbsolutePathBuf::try_from(destination)
         .map(Some)
         .map_err(|err| format!("upgraded marketplace path is not absolute: {err}"))
+}
+
+fn configured_git_marketplace_remote_revision(
+    marketplace: &ConfiguredGitMarketplace,
+) -> Result<String, String> {
+    validate_plugin_segment(&marketplace.name, "marketplace name")?;
+    git_remote_revision(
+        &marketplace.source,
+        marketplace.ref_name.as_deref(),
+        MARKETPLACE_UPGRADE_GIT_TIMEOUT,
+    )
+}
+
+fn configured_git_marketplace_is_up_to_date(
+    install_root: &Path,
+    marketplace: &ConfiguredGitMarketplace,
+    remote_revision: &str,
+) -> bool {
+    let destination = install_root.join(&marketplace.name);
+    find_marketplace_manifest_path(&destination).is_some()
+        && marketplace.last_revision.as_deref() == Some(remote_revision)
+        && installed_marketplace_metadata_matches(&destination, marketplace, remote_revision)
 }
 fn ensure_configured_git_marketplace_unchanged(
     codex_home: &Path,

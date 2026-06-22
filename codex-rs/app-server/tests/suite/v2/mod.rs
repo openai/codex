@@ -25,6 +25,7 @@ mod hooks_list;
 mod imagegen_extension;
 mod initialize;
 mod marketplace_add;
+mod marketplace_check_updates;
 mod marketplace_remove;
 mod marketplace_upgrade;
 mod mcp_resource;

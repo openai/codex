@@ -1551,6 +1551,17 @@
       ],
       "type": "object"
     },
+    "MarketplaceCheckUpdatesParams": {
+      "properties": {
+        "marketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "MarketplaceRemoveParams": {
       "properties": {
         "marketplaceName": {
@@ -5380,6 +5391,30 @@
         "params"
       ],
       "title": "Marketplace/removeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "marketplace/checkUpdates"
+          ],
+          "title": "Marketplace/checkUpdatesRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/MarketplaceCheckUpdatesParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Marketplace/checkUpdatesRequest",
       "type": "object"
     },
     {

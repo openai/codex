@@ -1254,6 +1254,11 @@ impl MessageProcessor {
             ClientRequest::MarketplaceRemove { params, .. } => {
                 self.marketplace_processor.marketplace_remove(params).await
             }
+            ClientRequest::MarketplaceCheckUpdates { params, .. } => {
+                self.marketplace_processor
+                    .marketplace_check_updates(params)
+                    .await
+            }
             ClientRequest::MarketplaceUpgrade { params, .. } => {
                 self.marketplace_processor.marketplace_upgrade(params).await
             }

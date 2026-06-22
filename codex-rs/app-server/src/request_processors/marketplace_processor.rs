@@ -38,6 +38,15 @@ impl MarketplaceRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn marketplace_check_updates(
+        &self,
+        params: MarketplaceCheckUpdatesParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.marketplace_check_updates_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn marketplace_upgrade(
         &self,
         params: MarketplaceUpgradeParams,
@@ -65,6 +74,51 @@ impl MarketplaceRequestProcessor {
         .map_err(|err| match err {
             MarketplaceRemoveError::InvalidRequest(message) => invalid_request(message),
             MarketplaceRemoveError::Internal(message) => internal_error(message),
+        })
+    }
+
+    async fn marketplace_check_updates_inner(
+        &self,
+        params: MarketplaceCheckUpdatesParams,
+    ) -> Result<MarketplaceCheckUpdatesResponse, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let MarketplaceCheckUpdatesParams { marketplace_name } = params;
+        let plugins_input = config.plugins_config_input();
+
+        let outcome = tokio::task::spawn_blocking(move || {
+            plugins_manager.check_configured_marketplace_updates_for_config(
+                &plugins_input,
+                marketplace_name.as_deref(),
+            )
+        })
+        .await
+        .map_err(|err| internal_error(format!("failed to check marketplace updates: {err}")))?
+        .map_err(invalid_request)?;
+
+        Ok(MarketplaceCheckUpdatesResponse {
+            results: outcome
+                .results
+                .into_iter()
+                .map(|result| match result.status {
+                    PluginMarketplaceUpdateStatus::UpToDate => {
+                        MarketplaceUpdateCheckResult::UpToDate {
+                            marketplace_name: result.marketplace_name,
+                        }
+                    }
+                    PluginMarketplaceUpdateStatus::UpdateAvailable => {
+                        MarketplaceUpdateCheckResult::UpdateAvailable {
+                            marketplace_name: result.marketplace_name,
+                        }
+                    }
+                    PluginMarketplaceUpdateStatus::Error { message } => {
+                        MarketplaceUpdateCheckResult::Error {
+                            marketplace_name: result.marketplace_name,
+                            message,
+                        }
+                    }
+                })
+                .collect(),
         })
     }
 
