@@ -6,6 +6,7 @@ use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -36,6 +37,8 @@ pub(crate) fn prepare_exec_request(
     };
     let runtime_paths = runtime_paths
         .ok_or_else(|| invalid_params("sandbox runtime paths are not configured".to_string()))?;
+    // TODO(jif): Transport permissions before orchestrator-local paths are materialized,
+    // then resolve executor-local helper and workspace paths here.
     let permissions: PermissionProfile = sandbox_context
         .permissions
         .clone()
@@ -86,6 +89,8 @@ pub(crate) fn prepare_exec_request(
         .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
             workspace_roots,
             transform: SandboxTransformRequest {
+                // TODO(jif): Preserve params.arg0 for the inner command across the sandbox
+                // wrapper, or reject sandboxed requests with a custom arg0.
                 command: SandboxCommand {
                     program: program.into(),
                     args: args.to_vec(),
