@@ -21,6 +21,8 @@ use rama_net::client::EstablishedClientConnection;
 use rama_net::http::RequestContext;
 use rama_tls_rustls::client::TlsConnectorDataBuilder;
 use rama_tls_rustls::client::TlsConnectorLayer;
+use rama_tls_rustls::client::client_root_certs;
+use rama_tls_rustls::dep::rustls;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::info;
@@ -104,6 +106,7 @@ impl UpstreamClient {
         Self::new(
             ProxyConfig::default(),
             TargetCheckedTcpConnector::new(state),
+            client_root_certs(),
         )
     }
 
@@ -111,20 +114,29 @@ impl UpstreamClient {
         Self::new(
             ProxyConfig::from_env(),
             TargetCheckedTcpConnector::new(state),
+            client_root_certs(),
         )
     }
 
-    pub(crate) fn direct_with_allow_local_binding(allow_local_binding: bool) -> Self {
+    pub(crate) fn direct_with_allow_local_binding(
+        allow_local_binding: bool,
+        tls_root_store: Arc<rustls::RootCertStore>,
+    ) -> Self {
         Self::new(
             ProxyConfig::default(),
             TargetCheckedTcpConnector::from_allow_local_binding(allow_local_binding),
+            tls_root_store,
         )
     }
 
-    pub(crate) fn from_env_proxy_with_allow_local_binding(allow_local_binding: bool) -> Self {
+    pub(crate) fn from_env_proxy_with_allow_local_binding(
+        allow_local_binding: bool,
+        tls_root_store: Arc<rustls::RootCertStore>,
+    ) -> Self {
         Self::new(
             ProxyConfig::from_env(),
             TargetCheckedTcpConnector::from_allow_local_binding(allow_local_binding),
+            tls_root_store,
         )
     }
 
@@ -137,8 +149,12 @@ impl UpstreamClient {
         }
     }
 
-    fn new(proxy_config: ProxyConfig, transport: TargetCheckedTcpConnector) -> Self {
-        let connector = build_http_connector(transport);
+    fn new(
+        proxy_config: ProxyConfig,
+        transport: TargetCheckedTcpConnector,
+        tls_root_store: Arc<rustls::RootCertStore>,
+    ) -> Self {
+        let connector = build_http_connector(transport, tls_root_store);
         Self {
             connector,
             proxy_config,
@@ -221,6 +237,7 @@ impl Service<Request<Body>> for UpstreamClient {
 
 fn build_http_connector(
     transport: TargetCheckedTcpConnector,
+    tls_root_store: Arc<rustls::RootCertStore>,
 ) -> BoxService<
     Request<Body>,
     EstablishedClientConnection<HttpClientService<Body>, Request<Body>>,
@@ -228,7 +245,10 @@ fn build_http_connector(
 > {
     ensure_rustls_crypto_provider();
     let proxy = HttpProxyConnectorLayer::optional().into_layer(transport);
-    let tls_config = TlsConnectorDataBuilder::new()
+    let client_config = rustls::ClientConfig::builder_with_protocol_versions(rustls::ALL_VERSIONS)
+        .with_root_certificates(tls_root_store)
+        .with_no_client_auth();
+    let tls_config = TlsConnectorDataBuilder::from(client_config)
         .with_alpn_protocols_http_auto()
         .build();
     let tls = TlsConnectorLayer::auto()
@@ -238,6 +258,10 @@ fn build_http_connector(
     let connector = HttpConnector::new(tls);
     connector.boxed()
 }
+
+#[cfg(test)]
+#[path = "upstream_tests.rs"]
+mod tests;
 
 #[cfg(target_os = "macos")]
 fn build_unix_connector(

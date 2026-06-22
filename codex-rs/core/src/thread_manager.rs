@@ -1024,7 +1024,7 @@ impl ThreadManager {
     }
 
     fn agent_control_for_config(&self, config: &Config) -> AgentControl {
-        AgentControl::new(Arc::downgrade(&self.state), config.rollout_budget)
+        AgentControl::new(Arc::downgrade(&self.state), config.rollout_budget.clone())
     }
 
     #[cfg(test)]

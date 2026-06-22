@@ -104,7 +104,7 @@ async fn auth_manager_with_agent_identity_business_plan() -> Arc<AuthManager> {
                 agent_private_key: key_material.private_key_pkcs8_base64,
                 account_id: "account-12345".to_string(),
                 chatgpt_user_id: "user-12345".to_string(),
-                email: "user@example.com".to_string(),
+                email: Some("user@example.com".to_string()),
                 plan_type: PlanType::Business,
                 chatgpt_account_is_fedramp: false,
                 task_id: Some("task-123".to_string()),
