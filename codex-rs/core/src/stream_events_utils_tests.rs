@@ -42,7 +42,7 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> 
             text: text.to_string(),
         }],
         phase,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -53,7 +53,7 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
             id: None,
             status: Some("completed".to_string()),
             action: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -61,7 +61,7 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "calendar"}),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -69,7 +69,7 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
             status: "completed".to_string(),
             execution: "client".to_string(),
             tools: Vec::new(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -94,7 +94,7 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
                 env: None,
                 user: None,
             }),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -102,13 +102,13 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -116,14 +116,14 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
             call_id: "custom-1".to_string(),
             name: "apply_patch".to_string(),
             input: "*** Begin Patch\n*** End Patch\n".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCallOutput {
             id: None,
             call_id: "custom-1".to_string(),
             name: Some("apply_patch".to_string()),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         assistant_output_text("plain assistant text"),
     ];
@@ -425,7 +425,7 @@ fn completed_item_defers_mailbox_delivery_for_image_generation_calls() {
         status: "completed".to_string(),
         revised_prompt: None,
         result: "Zm9v".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     assert!(completed_item_defers_mailbox_delivery_to_next_turn(

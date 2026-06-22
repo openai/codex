@@ -76,7 +76,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -84,13 +84,13 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "mcp-call".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "mcp-call".to_string(),
             output: image_output("mcp"),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -98,27 +98,27 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             call_id: "code-mode-call".to_string(),
             name: "exec".to_string(),
             input: String::new(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCallOutput {
             id: None,
             call_id: "code-mode-call".to_string(),
             name: Some("exec".to_string()),
             output: image_output("code-mode"),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ImageGenerationCall {
             id: Some("generated-call".to_string()),
             status: "completed".to_string(),
             revised_prompt: None,
             result: "generated".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "orphan-call".to_string(),
             output: image_output("orphan"),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -206,7 +206,7 @@ async fn recent_image_fallback_requires_requested_count() {
             role: "user".to_string(),
             content: vec![input_image("only-image")],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }],
         &[],
     )

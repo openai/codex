@@ -504,7 +504,7 @@ mod tests {
                 text: "raw reasoning".to_string(),
             }]),
             encrypted_content: Some("encoded".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
 
         let normal = serde_json::to_value(&item).expect("response item serializes");

@@ -162,7 +162,7 @@ mod tests {
                             },
                         ],
                         phase: None,
-                        metadata: None,
+                        internal_chat_message_metadata_passthrough: None,
                     }])),
                     commands: Some(SearchCommands {
                         search_query: Some(vec![SearchQuery {

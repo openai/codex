@@ -2059,7 +2059,7 @@ fn message_item(text: &str) -> ResponseItem {
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -2069,7 +2069,7 @@ fn assistant_message_item(id: &str, text: &str) -> ResponseItem {
         role: "assistant".into(),
         content: vec![ContentItem::OutputText { text: text.into() }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 

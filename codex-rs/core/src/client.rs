@@ -781,7 +781,9 @@ impl ModelClient {
         let instructions = &prompt.base_instructions.text;
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
         if !self.state.provider.info().is_openai() {
-            input.iter_mut().for_each(ResponseItem::clear_metadata);
+            input
+                .iter_mut()
+                .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
         }
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = Self::build_reasoning(model_info, effort, summary);
@@ -1072,7 +1074,7 @@ impl ModelClientSession {
         if !self.client.state.provider.info().is_openai() {
             response_items
                 .iter_mut()
-                .for_each(ResponseItem::clear_metadata);
+                .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
         }
         let Some(incremental_items) = after_previous_input.strip_prefix(response_items.as_slice())
         else {

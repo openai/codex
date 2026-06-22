@@ -72,7 +72,7 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
             text: text.to_string(),
         }],
         phase,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -92,7 +92,7 @@ fn spawn_agent_call(call_id: &str) -> ResponseItem {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: call_id.to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -909,7 +909,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                         text: "Parent root guidance.".to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -918,7 +918,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                         text: "Parent subagent guidance.".to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
@@ -928,7 +928,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     summary: Vec::new(),
                     content: None,
                     encrypted_content: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 trigger_message.to_response_input_item().into(),
                 spawn_agent_call(&parent_spawn_call_id),
@@ -996,7 +996,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 text: "parent seed context".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
         ResponseItem::Message {
@@ -1006,7 +1006,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 text: "Child subagent guidance.".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     assert_eq!(
@@ -1125,7 +1125,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 text: "compacted parent summary".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -1134,7 +1134,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 text: "Parent root guidance.".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     parent_thread
@@ -1449,7 +1449,7 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
                     text: "parent startup developer context".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
         )
         .await;
@@ -1571,7 +1571,7 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
                         text: "Parent root guidance.".to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 spawn_agent_call(&parent_spawn_call_id),
             ],

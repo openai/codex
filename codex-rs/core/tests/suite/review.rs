@@ -532,7 +532,7 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: earlier user message".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let user_json = serde_json::to_value(&user).unwrap();
         let user_line = serde_json::json!({
@@ -552,7 +552,7 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: assistant reply".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let assistant_json = serde_json::to_value(&assistant).unwrap();
         let assistant_line = serde_json::json!({

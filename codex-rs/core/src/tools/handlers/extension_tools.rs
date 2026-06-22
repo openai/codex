@@ -329,7 +329,7 @@ mod tests {
                 text: "extension history".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         session
             .record_conversation_items(&turn, std::slice::from_ref(&history_item))
