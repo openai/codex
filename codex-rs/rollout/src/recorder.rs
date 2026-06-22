@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
+use std::io::BufRead;
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
@@ -868,59 +869,38 @@ impl RolloutRecorder {
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
+        if let Some(existing_path) = compression::existing_rollout_path(path).await
+            && compression::RolloutFile::from_path(existing_path.clone())
+                .is_some_and(|rollout_file| !rollout_file.is_compressed())
+        {
+            match tokio::task::spawn_blocking(move || {
+                load_plain_rollout_items_blocking(existing_path.as_path())
+            })
+            .await
+            .map_err(IoError::other)?
+            {
+                Ok(result) => return Ok(result),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
         let mut parse_errors = 0usize;
         let mut reader = compression::open_rollout_line_reader(path).await?;
         let mut saw_non_empty_line = false;
         while let Some(line) = reader.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
-            }
-            saw_non_empty_line = true;
-            let mut v: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                    continue;
-                }
-            };
-            if strip_legacy_ghost_snapshot_rollout_line(&mut v) {
-                trace!("skipping legacy ghost_snapshot rollout line");
-                continue;
-            }
-
-            // Parse the rollout line structure
-            match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => {
-                    let item = rollout_line.item;
-                    // Use the FIRST SessionMeta encountered in the file as the canonical
-                    // thread id and main session information. Keep all items intact.
-                    if thread_id.is_none()
-                        && let RolloutItem::SessionMeta(session_meta_line) = &item
-                    {
-                        thread_id = Some(session_meta_line.meta.id);
-                    }
-                    items.push(item);
-                }
-                Err(e) => {
-                    trace!("failed to parse rollout line: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                }
-            }
-        }
-        if !saw_non_empty_line {
-            return Err(IoError::other("empty session file"));
+            parse_rollout_item_line(
+                line.as_str(),
+                &mut items,
+                &mut thread_id,
+                &mut parse_errors,
+                &mut saw_non_empty_line,
+            );
         }
 
-        tracing::debug!(
-            "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
-            items.len(),
-            thread_id,
-            parse_errors,
-        );
-        Ok((items, thread_id, parse_errors))
+        finish_loaded_rollout(items, thread_id, parse_errors, saw_non_empty_line)
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
@@ -966,6 +946,90 @@ impl RolloutRecorder {
         };
         Ok(())
     }
+}
+
+fn load_plain_rollout_items_blocking(
+    path: &Path,
+) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+    let reader = std::io::BufReader::new(File::open(path)?);
+    let mut items = Vec::new();
+    let mut thread_id = None;
+    let mut parse_errors = 0usize;
+    let mut saw_non_empty_line = false;
+    for line in reader.lines() {
+        parse_rollout_item_line(
+            line?.as_str(),
+            &mut items,
+            &mut thread_id,
+            &mut parse_errors,
+            &mut saw_non_empty_line,
+        );
+    }
+    finish_loaded_rollout(items, thread_id, parse_errors, saw_non_empty_line)
+}
+
+fn parse_rollout_item_line(
+    line: &str,
+    items: &mut Vec<RolloutItem>,
+    thread_id: &mut Option<ThreadId>,
+    parse_errors: &mut usize,
+    saw_non_empty_line: &mut bool,
+) {
+    if line.trim().is_empty() {
+        return;
+    }
+    *saw_non_empty_line = true;
+    let rollout_line = if line.contains("ghost_snapshot") {
+        let mut value: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(err) => {
+                warn!("failed to parse line as JSON: {line:?}, error: {err}");
+                *parse_errors = parse_errors.saturating_add(1);
+                return;
+            }
+        };
+        if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
+            trace!("skipping legacy ghost_snapshot rollout line");
+            return;
+        }
+        serde_json::from_value::<RolloutLine>(value)
+    } else {
+        serde_json::from_str::<RolloutLine>(line)
+    };
+
+    match rollout_line {
+        Ok(rollout_line) => {
+            let item = rollout_line.item;
+            if thread_id.is_none()
+                && let RolloutItem::SessionMeta(session_meta_line) = &item
+            {
+                *thread_id = Some(session_meta_line.meta.id);
+            }
+            items.push(item);
+        }
+        Err(err) => {
+            trace!("failed to parse rollout line: {err}");
+            *parse_errors = parse_errors.saturating_add(1);
+        }
+    }
+}
+
+fn finish_loaded_rollout(
+    items: Vec<RolloutItem>,
+    thread_id: Option<ThreadId>,
+    parse_errors: usize,
+    saw_non_empty_line: bool,
+) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+    if !saw_non_empty_line {
+        return Err(IoError::other("empty session file"));
+    }
+    tracing::debug!(
+        "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
+        items.len(),
+        thread_id,
+        parse_errors,
+    );
+    Ok((items, thread_id, parse_errors))
 }
 
 fn strip_legacy_ghost_snapshot_rollout_line(value: &mut Value) -> bool {

@@ -422,6 +422,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
+    pub(crate) include_initial_messages: bool,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
@@ -511,6 +512,7 @@ impl Codex {
             mcp_manager,
             extensions,
             conversation_history,
+            include_initial_messages,
             session_source,
             forked_from_thread_id,
             parent_thread_id,
@@ -666,6 +668,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
+            include_initial_messages,
             session_source_clone,
             skills_service,
             plugins_manager,
@@ -901,8 +904,19 @@ pub(crate) fn session_loop_termination_from_handle(
 async fn thread_title_from_thread_store(
     live_thread: Option<&LiveThread>,
     thread_store: &Arc<dyn ThreadStore>,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
     conversation_id: ThreadId,
 ) -> Option<String> {
+    if let Some(state_db) = state_db_ctx
+        && let Ok(Some(metadata)) = state_db.get_thread(conversation_id).await
+        && let Some(name) = metadata.name.as_deref()
+    {
+        let name = name.trim();
+        if !name.is_empty() && metadata.preview.as_deref().map(str::trim) != Some(name) {
+            return Some(name.to_string());
+        }
+    }
+
     let thread = match live_thread {
         Some(live_thread) => {
             live_thread

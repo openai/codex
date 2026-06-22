@@ -656,6 +656,7 @@ impl ThreadManager {
             options.environments,
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
+            /*include_initial_messages*/ true,
             /*user_shell_override*/ None,
         ))
         .await
@@ -726,6 +727,46 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         supports_openai_form_elicitation: bool,
     ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_inner(
+            config,
+            initial_history,
+            auth_manager,
+            parent_trace,
+            supports_openai_form_elicitation,
+            /*include_initial_messages*/ true,
+        )
+        .await
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    pub async fn resume_thread_with_history_without_initial_messages(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
+    ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_inner(
+            config,
+            initial_history,
+            auth_manager,
+            parent_trace,
+            supports_openai_form_elicitation,
+            /*include_initial_messages*/ false,
+        )
+        .await
+    }
+
+    async fn resume_thread_with_history_inner(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
+        include_initial_messages: bool,
+    ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -753,6 +794,7 @@ impl ThreadManager {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
+            include_initial_messages,
             /*user_shell_override*/ None,
         ))
         .await
@@ -784,6 +826,7 @@ impl ThreadManager {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
+            /*include_initial_messages*/ true,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -825,6 +868,7 @@ impl ThreadManager {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
+            /*include_initial_messages*/ true,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -1014,6 +1058,7 @@ impl ThreadManager {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
+            /*include_initial_messages*/ true,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1278,6 +1323,7 @@ impl ThreadManagerState {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
+            /*include_initial_messages*/ true,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1318,6 +1364,7 @@ impl ThreadManagerState {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
+            /*include_initial_messages*/ true,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1359,6 +1406,7 @@ impl ThreadManagerState {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
+            /*include_initial_messages*/ true,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1382,6 +1430,7 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
+        include_initial_messages: bool,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -1402,6 +1451,7 @@ impl ThreadManagerState {
             environments,
             thread_extension_init,
             supports_openai_form_elicitation,
+            include_initial_messages,
             user_shell_override,
         ))
         .await
@@ -1427,6 +1477,7 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
+        include_initial_messages: bool,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
@@ -1480,6 +1531,7 @@ impl ThreadManagerState {
             mcp_manager: Arc::clone(&self.mcp_manager),
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
+            include_initial_messages,
             session_source,
             forked_from_thread_id,
             parent_thread_id,

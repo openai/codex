@@ -108,11 +108,15 @@ impl ThreadMetadataSync {
             defer_resume_update_until_append: false,
         };
         if let Some(history) = params.history.as_deref() {
-            let update = sync.observe_resume_history(history);
-            sync.merge_pending_update(update);
-            sync.defer_resume_update_until_append = sync.pending_update.is_some();
+            sync.observe_loaded_resume_history(history);
         }
         sync
+    }
+
+    pub(crate) fn observe_loaded_resume_history(&mut self, items: &[RolloutItem]) {
+        let update = self.derive_resume_history_update(items);
+        self.merge_pending_update(update);
+        self.defer_resume_update_until_append = self.pending_update.is_some();
     }
 
     pub(crate) fn take_pending_update(&self) -> Option<PendingThreadMetadataPatch> {
@@ -190,7 +194,10 @@ impl ThreadMetadataSync {
         )
     }
 
-    fn observe_resume_history(&mut self, items: &[RolloutItem]) -> Option<ThreadMetadataPatch> {
+    fn derive_resume_history_update(
+        &mut self,
+        items: &[RolloutItem],
+    ) -> Option<ThreadMetadataPatch> {
         self.observe_items_with_update(items, ThreadMetadataPatch::default())
     }
 
