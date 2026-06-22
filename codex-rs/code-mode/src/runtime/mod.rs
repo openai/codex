@@ -351,6 +351,7 @@ mod tests {
 
     fn execute_request(source: &str) -> CreateCellRequest {
         CreateCellRequest {
+            idempotency_key: format!("call_1:{source}"),
             tool_call_id: "call_1".to_string(),
             enabled_tools: Vec::new(),
             source: source.to_string(),

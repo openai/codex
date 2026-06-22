@@ -40,11 +40,13 @@ impl CodeModeExecuteHandler {
         let enabled_tools =
             codex_tools::collect_code_mode_tool_definitions(&self.nested_tool_specs);
         let started_at = std::time::Instant::now();
+        let idempotency_key = format!("{}:{call_id}", exec.session.thread_id());
         let cell_id = exec
             .session
             .services
             .code_mode_service
             .create_cell(codex_code_mode::CreateCellRequest {
+                idempotency_key: idempotency_key.clone(),
                 tool_call_id: call_id.clone(),
                 enabled_tools,
                 source: args.code.clone(),
@@ -77,6 +79,7 @@ impl CodeModeExecuteHandler {
             .services
             .code_mode_service
             .observe(codex_code_mode::ObserveRequest {
+                idempotency_key,
                 cell_id: cell_id.clone(),
                 yield_time_ms: args
                     .yield_time_ms

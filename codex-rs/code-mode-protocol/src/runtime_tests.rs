@@ -34,6 +34,7 @@ fn image(image_url: &str, detail: Option<ImageDetail>) -> FunctionCallOutputCont
 #[test]
 fn requests_round_trip_with_exact_tool_and_namespace_fields() {
     let create = CreateCellRequest {
+        idempotency_key: "thread-3:response-call-7".to_string(),
         tool_call_id: "response-call-7".to_string(),
         enabled_tools: vec![
             ToolDefinition {
@@ -61,6 +62,7 @@ fn requests_round_trip_with_exact_tool_and_namespace_fields() {
     assert_json_round_trip(
         &create,
         json!({
+            "idempotency_key": "thread-3:response-call-7",
             "tool_call_id": "response-call-7",
             "enabled_tools": [
                 {
@@ -89,10 +91,15 @@ fn requests_round_trip_with_exact_tool_and_namespace_fields() {
 
     assert_json_round_trip(
         &ObserveRequest {
+            idempotency_key: "thread-3:wait-call-2".to_string(),
             cell_id: CellId::new("cell-a7".to_string()),
             yield_time_ms: 250,
         },
-        json!({"cell_id": "cell-a7", "yield_time_ms": 250}),
+        json!({
+            "idempotency_key": "thread-3:wait-call-2",
+            "cell_id": "cell-a7",
+            "yield_time_ms": 250,
+        }),
     );
 }
 

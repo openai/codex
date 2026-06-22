@@ -156,6 +156,7 @@ fn cell_id(value: &str) -> CellId {
 
 fn execute_request(source: &str) -> CreateCellRequest {
     CreateCellRequest {
+        idempotency_key: format!("call-1:{source}"),
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
@@ -174,6 +175,7 @@ async fn execute_with_yield_time(
     let cell_id = service.create_cell(request).await.unwrap();
     service
         .observe(ObserveRequest {
+            idempotency_key: format!("observe:{cell_id}"),
             cell_id,
             yield_time_ms,
         })
@@ -215,6 +217,74 @@ async fn next_event(events_rx: &mut mpsc::UnboundedReceiver<DelegateEvent>) -> D
 }
 
 #[tokio::test]
+async fn create_retry_returns_the_cell_from_the_original_ambiguous_request() {
+    let service = CodeModeService::new();
+    let request = execute_request("await new Promise(() => {});");
+
+    let original_cell_id = service.create_cell(request.clone()).await.unwrap();
+    let retry_cell_id = service.create_cell(request).await.unwrap();
+
+    assert_eq!(retry_cell_id, original_cell_id);
+    service.terminate(original_cell_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_observation_is_replayed_by_its_idempotency_key() {
+    let (delegate, mut events_rx) = BlockingDelegate::new();
+    let service = Arc::new(CodeModeService::with_delegate(delegate.clone()));
+    let created_cell_id = service
+        .create_cell(CreateCellRequest {
+            idempotency_key: "ambiguous-observation-cell".to_string(),
+            enabled_tools: vec![blocking_tool()],
+            source: r#"await tools.block({}); text("done");"#.to_string(),
+            ..execute_request("")
+        })
+        .await
+        .unwrap();
+    assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
+    let request = ObserveRequest {
+        idempotency_key: "lost-observation-response".to_string(),
+        cell_id: created_cell_id,
+        yield_time_ms: 60_000,
+    };
+
+    let first_attempt = tokio::spawn({
+        let service = Arc::clone(&service);
+        let request = request.clone();
+        async move { service.observe(request).await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if service
+                .observations
+                .lock()
+                .await
+                .contains_key("lost-observation-response")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("observation registration timed out");
+    first_attempt.abort();
+    assert!(first_attempt.await.unwrap_err().is_cancelled());
+    delegate.release_tool();
+
+    assert_eq!(
+        service.observe(request).await,
+        Ok(ObserveOutcome::Completed {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "done".to_string(),
+            }],
+            error_text: None,
+        })
+    );
+}
+
+#[tokio::test]
 async fn yields_and_resumes() {
     let service = CodeModeService::new();
     let cell = execute_with_yield_time(
@@ -239,6 +309,7 @@ async fn yields_and_resumes() {
     assert_eq!(
         service
             .observe(ObserveRequest {
+                idempotency_key: "observe-after-yield".to_string(),
                 cell_id: cell_id("1"),
                 yield_time_ms: 60_000,
             })
@@ -326,7 +397,7 @@ async fn observed_natural_completion_wins_over_termination() {
             let response = create_and_observe_to_pending(
                 &service,
                 CreateCellRequest {
-                    tool_call_id: format!("completion-probe-{probe_generation}"),
+                    idempotency_key: format!("completion-probe-{probe_generation}"),
                     ..execute_request(r#"text(String(load("finished")));"#)
                 },
             )
@@ -547,6 +618,7 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
 
     let first_observer = service
         .begin_observe(ObserveRequest {
+            idempotency_key: "first-observer".to_string(),
             cell_id: cell_id("1"),
             yield_time_ms: 60_000,
         })
@@ -554,6 +626,7 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
     assert_eq!(
         service
             .observe(ObserveRequest {
+                idempotency_key: "second-observer".to_string(),
                 cell_id: cell_id("1"),
                 yield_time_ms: 60_000,
             })
@@ -598,6 +671,7 @@ async fn natural_completion_cleans_up_callbacks_before_responding() {
     assert_eq!(
         service
             .observe(ObserveRequest {
+                idempotency_key: "observe-created-cell".to_string(),
                 cell_id: created_cell_id,
                 yield_time_ms: 60_000,
             })

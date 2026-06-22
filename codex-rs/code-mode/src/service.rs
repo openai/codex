@@ -22,6 +22,7 @@ use codex_code_mode_protocol::TerminateOutcome;
 use codex_code_mode_protocol::ToolInvocationFuture;
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::session_runtime as runtime;
@@ -94,8 +95,15 @@ impl CodeModeSessionProvider for InProcessCodeModeSessionProvider {
 }
 
 pub struct CodeModeService {
-    runtime: SessionRuntime<ProtocolDelegate>,
+    runtime: Arc<SessionRuntime<ProtocolDelegate>>,
+    observations: Mutex<HashMap<String, ObservationRecord>>,
+    #[cfg(test)]
     pending_generations: Mutex<HashMap<runtime::CellId, runtime::PendingGeneration>>,
+}
+
+struct ObservationRecord {
+    request: ObserveRequest,
+    result_rx: watch::Receiver<Option<Result<ObserveOutcome, String>>>,
 }
 
 impl CodeModeService {
@@ -105,7 +113,9 @@ impl CodeModeService {
 
     pub fn with_delegate(delegate: Arc<dyn CodeModeSessionDelegate>) -> Self {
         Self {
-            runtime: SessionRuntime::new(Arc::new(ProtocolDelegate { delegate })),
+            runtime: Arc::new(SessionRuntime::new(Arc::new(ProtocolDelegate { delegate }))),
+            observations: Mutex::new(HashMap::new()),
+            #[cfg(test)]
             pending_generations: Mutex::new(HashMap::new()),
         }
     }
@@ -130,44 +140,51 @@ impl CodeModeService {
     }
 
     pub async fn observe(&self, request: ObserveRequest) -> Result<ObserveOutcome, String> {
-        self.begin_observe(request).await.await
+        let idempotency_key = request.idempotency_key.clone();
+        let mut result_rx = {
+            let mut observations = self.observations.lock().await;
+            if let Some(existing) = observations.get(&idempotency_key) {
+                if existing.request != request {
+                    return Err(format!(
+                        "observation idempotency key `{idempotency_key}` was reused for a different request"
+                    ));
+                }
+                existing.result_rx.clone()
+            } else {
+                let (result_tx, result_rx) = watch::channel(None);
+                observations.insert(
+                    idempotency_key,
+                    ObservationRecord {
+                        request: request.clone(),
+                        result_rx: result_rx.clone(),
+                    },
+                );
+                let runtime = Arc::clone(&self.runtime);
+                tokio::spawn(async move {
+                    let result = begin_observe_runtime(runtime, request).await.await;
+                    result_tx.send_replace(Some(result));
+                });
+                result_rx
+            }
+        };
+
+        result_rx
+            .wait_for(Option::is_some)
+            .await
+            .map_err(|_| "observation ended before producing a result".to_string())?;
+
+        result_rx
+            .borrow()
+            .clone()
+            .ok_or_else(|| "observation ended before producing a result".to_string())?
     }
 
+    #[allow(dead_code)]
     async fn begin_observe(
         &self,
         request: ObserveRequest,
     ) -> CodeModeSessionResultFuture<'static, ObserveOutcome> {
-        let ObserveRequest {
-            cell_id,
-            yield_time_ms,
-        } = request;
-        let runtime_cell_id = runtime_cell_id(&cell_id);
-        let cell = match self.runtime.cell(&runtime_cell_id).await {
-            Ok(cell) => cell,
-            Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
-                return missing_observation(cell_id);
-            }
-            Err(error) => return Box::pin(async move { Err(error.to_string()) }),
-        };
-        match self
-            .runtime
-            .begin_wait(&cell, Duration::from_millis(yield_time_ms))
-            .await
-        {
-            Ok(pending_event) => Box::pin(async move {
-                match pending_event.event().await {
-                    Ok(event) => Ok(observe_outcome(&cell_id, event)),
-                    Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
-                        Ok(ObserveOutcome::Missing { cell_id })
-                    }
-                    Err(error) => Err(error.to_string()),
-                }
-            }),
-            Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
-                missing_observation(cell_id)
-            }
-            Err(error) => Box::pin(async move { Err(error.to_string()) }),
-        }
+        begin_observe_runtime(Arc::clone(&self.runtime), request).await
     }
 
     pub async fn terminate(&self, cell_id: CellId) -> Result<TerminateOutcome, String> {
@@ -179,6 +196,7 @@ impl CodeModeService {
             }
             Err(error) => Err(error.to_string()),
         };
+        #[cfg(test)]
         self.pending_generations
             .lock()
             .await
@@ -254,8 +272,46 @@ impl CodeModeService {
             .shutdown()
             .await
             .map_err(|error| error.to_string());
+        #[cfg(test)]
         self.pending_generations.lock().await.clear();
         result
+    }
+}
+
+async fn begin_observe_runtime(
+    runtime: Arc<SessionRuntime<ProtocolDelegate>>,
+    request: ObserveRequest,
+) -> CodeModeSessionResultFuture<'static, ObserveOutcome> {
+    let ObserveRequest {
+        idempotency_key: _,
+        cell_id,
+        yield_time_ms,
+    } = request;
+    let runtime_cell_id = runtime_cell_id(&cell_id);
+    let cell = match runtime.cell(&runtime_cell_id).await {
+        Ok(cell) => cell,
+        Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
+            return missing_observation(cell_id);
+        }
+        Err(error) => return Box::pin(async move { Err(error.to_string()) }),
+    };
+    match runtime
+        .begin_wait(&cell, Duration::from_millis(yield_time_ms))
+        .await
+    {
+        Ok(pending_event) => Box::pin(async move {
+            match pending_event.event().await {
+                Ok(event) => Ok(observe_outcome(&cell_id, event)),
+                Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
+                    Ok(ObserveOutcome::Missing { cell_id })
+                }
+                Err(error) => Err(error.to_string()),
+            }
+        }),
+        Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
+            missing_observation(cell_id)
+        }
+        Err(error) => Box::pin(async move { Err(error.to_string()) }),
     }
 }
 
@@ -349,9 +405,8 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
 }
 
 fn runtime_request(request: CreateCellRequest) -> runtime::CreateCellRequest {
-    let idempotency_key = format!("{}:{}", request.tool_call_id, request.source);
     runtime::CreateCellRequest {
-        idempotency_key,
+        idempotency_key: request.idempotency_key,
         tool_call_id: request.tool_call_id,
         enabled_tools: request
             .enabled_tools

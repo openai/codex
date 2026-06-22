@@ -14,6 +14,7 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL: usize = 10_000;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct CreateCellRequest {
+    pub idempotency_key: String,
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,
@@ -21,6 +22,7 @@ pub struct CreateCellRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ObserveRequest {
+    pub idempotency_key: String,
     pub cell_id: CellId,
     pub yield_time_ms: u64,
 }

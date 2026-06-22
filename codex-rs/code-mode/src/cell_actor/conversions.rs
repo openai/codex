@@ -12,6 +12,7 @@ use crate::session_runtime::ToolKind as CellToolKind;
 
 pub(super) fn runtime_request(request: CellRequest) -> CreateCellRequest {
     CreateCellRequest {
+        idempotency_key: request.idempotency_key,
         tool_call_id: request.tool_call_id,
         enabled_tools: request
             .enabled_tools

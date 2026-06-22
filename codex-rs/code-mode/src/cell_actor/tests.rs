@@ -121,6 +121,7 @@ fn spawn_cell_actor_harness_with_policy<H: CellHost>(
     let (runtime_tx, runtime_pause_tx, runtime_terminate_handle) = spawn_runtime(
         HashMap::new(),
         CreateCellRequest {
+            idempotency_key: "cell-actor-harness".to_string(),
             tool_call_id: "call-1".to_string(),
             enabled_tools: Vec::new(),
             source: "await new Promise(() => {});".to_string(),
