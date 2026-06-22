@@ -25,6 +25,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const MODEL_KEY: &str = "model";
@@ -91,6 +92,7 @@ pub(crate) struct TurnMetadataState {
     parent_thread_id: Option<ThreadId>,
     subagent_header: Option<String>,
     subagent_kind: Option<String>,
+    thread_source: Option<ThreadSource>,
     turn_id: String,
     sandbox: Option<String>,
     enriched_workspaces: Arc<RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>>,
@@ -108,6 +110,7 @@ impl TurnMetadataState {
         forked_from_thread_id: Option<ThreadId>,
         parent_thread_id: Option<ThreadId>,
         session_source: &SessionSource,
+        thread_source: Option<ThreadSource>,
         turn_id: String,
         cwd: AbsolutePathBuf,
         permission_profile: &PermissionProfile,
@@ -132,6 +135,7 @@ impl TurnMetadataState {
             parent_thread_id,
             subagent_header: subagent_header_value(session_source),
             subagent_kind: subagent_metadata_kind(session_source),
+            thread_source,
             turn_id,
             sandbox,
             enriched_workspaces: Arc::new(RwLock::new(None)),
@@ -225,6 +229,7 @@ impl TurnMetadataState {
             parent_thread_id: self.parent_thread_id,
             subagent_header: self.subagent_header.clone(),
             subagent_kind: self.subagent_kind.clone(),
+            thread_source: self.thread_source.clone(),
             sandbox: self.sandbox.clone(),
             workspaces: self.current_workspaces(),
             turn_started_at_unix_ms: self.current_turn_started_at_unix_ms(),

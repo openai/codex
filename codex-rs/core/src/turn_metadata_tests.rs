@@ -13,6 +13,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -187,6 +188,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -229,6 +231,7 @@ fn turn_metadata_state_includes_root_fork_lineage() {
         Some(source_thread_id),
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -267,6 +270,7 @@ fn turn_metadata_state_includes_thread_spawn_subagent_parent_without_fork() {
             agent_nickname: None,
             agent_role: None,
         }),
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -305,6 +309,7 @@ fn turn_metadata_state_includes_forked_thread_spawn_subagent_lineage() {
             agent_nickname: None,
             agent_role: None,
         }),
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -349,6 +354,7 @@ fn turn_metadata_state_includes_known_parent_for_non_thread_spawn_subagents_with
             /*forked_from_thread_id*/ None,
             Some(parent_thread_id),
             &SessionSource::SubAgent(subagent_source),
+            /*thread_source*/ None,
             "turn-a".to_string(),
             cwd.clone(),
             &permission_profile,
@@ -380,6 +386,7 @@ fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -409,6 +416,7 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -457,6 +465,7 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -509,6 +518,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -562,6 +572,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             agent_nickname: None,
             agent_role: None,
         }),
+        Some(ThreadSource::Feature("automation".to_string())),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -637,7 +648,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         Some("55555555-5555-4555-8555-555555555555")
     );
     assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
-    assert_eq!(json["thread_source"].as_str(), Some("client-supplied"));
+    assert_eq!(json["thread_source"].as_str(), Some("automation"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
     assert!(json.get("request_kind").is_none());
     assert!(json.get(WINDOW_ID_KEY).is_none());
@@ -650,6 +661,10 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     let model_request_json: Value =
         serde_json::from_str(&model_request_header).expect("model request json");
     assert_eq!(model_request_json["request_kind"].as_str(), Some("turn"));
+    assert_eq!(
+        model_request_json["thread_source"].as_str(),
+        Some("automation")
+    );
     assert_eq!(
         model_request_json[INSTALLATION_ID_KEY].as_str(),
         Some("installation-a")
@@ -679,6 +694,7 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -741,6 +757,7 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
             agent_nickname: None,
             agent_role: None,
         }),
+        /*thread_source*/ None,
         "turn-a".to_string(),
         repo_path,
         &permission_profile,
