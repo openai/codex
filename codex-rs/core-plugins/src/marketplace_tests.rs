@@ -20,6 +20,17 @@ fn write_alternate_plugin_manifest(plugin_root: &Path, contents: &str) {
     fs::write(manifest_path, contents).unwrap();
 }
 
+fn minimal_manifest_fallback(name: &str) -> MarketplacePluginManifestFallback {
+    MarketplacePluginManifestFallback {
+        contents: format!(
+            r#"{{
+  "name": "{name}"
+}}"#
+        ),
+        has_metadata: false,
+    }
+}
+
 #[test]
 fn find_marketplace_plugin_finds_repo_marketplace_plugin() {
     let tmp = tempdir().unwrap();
@@ -65,6 +76,7 @@ fn find_marketplace_plugin_finds_repo_marketplace_plugin() {
             },
             interface: None,
             manifest: None,
+            manifest_fallback: minimal_manifest_fallback("local-plugin"),
         }
     );
 }
@@ -108,6 +120,7 @@ fn find_marketplace_plugin_supports_alternate_layout_and_string_local_source() {
             },
             interface: None,
             manifest: None,
+            manifest_fallback: minimal_manifest_fallback("string-source-plugin"),
         }
     );
 }
@@ -162,8 +175,217 @@ fn find_marketplace_plugin_supports_git_subdir_sources() {
             },
             interface: None,
             manifest: None,
+            manifest_fallback: minimal_manifest_fallback("remote-plugin"),
         }
     );
+}
+
+#[test]
+fn find_marketplace_plugin_builds_manifest_fallback_from_entry() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("plugins/quality-review");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(plugin_root.join("skills/thermo-nuclear-code-quality-review")).unwrap();
+    fs::create_dir_all(plugin_root.join("skills/second-review")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r##"{
+  "name": "team-marketplace",
+  "plugins": [
+    {
+      "name": "quality-review",
+      "version": "1.2.3",
+      "description": "Strict code quality review focused on maintainability.",
+      "displayName": "Quality Review",
+      "source": "./plugins/quality-review",
+      "author": {
+        "name": "Byron Grogan"
+      },
+      "homepage": "https://example.com/quality",
+      "repository": "https://github.com/example/quality-review",
+      "license": "MIT",
+      "skills": [
+        "./skills/thermo-nuclear-code-quality-review",
+        "./skills/second-review"
+      ],
+      "commands": ["./commands/review.md"],
+      "mcpServers": {
+        "review": {
+          "type": "stdio",
+          "command": "review-mcp"
+        }
+      },
+      "apps": "./apps/app.json",
+      "hooks": ["./hooks/session.json"],
+      "agents": [
+        "./agents/thermo-nuclear-code-quality-review.md"
+      ],
+      "category": "code-review",
+      "keywords": ["quality", "review"],
+      "strict": false,
+      "interface": {
+        "shortDescription": "Interface short description.",
+        "longDescription": "Runs strict reviews focused on maintainability and boundaries.",
+        "category": "interface-category",
+        "capabilities": ["review", "quality"],
+        "privacyPolicyURL": "https://example.com/privacy",
+        "termsOfServiceUrl": "https://example.com/terms",
+        "defaultPrompt": [
+          "Review this change",
+          "Find structural issues"
+        ],
+        "brandColor": "#00AAFF",
+        "composerIcon": "./assets/icon.svg",
+        "logo": "./assets/logo.png",
+        "screenshots": ["./assets/shot.png"]
+      }
+    }
+  ]
+}"##,
+    )
+    .unwrap();
+
+    let resolved = find_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "quality-review",
+    )
+    .unwrap();
+
+    let manifest = resolved.manifest.as_ref().expect("fallback manifest");
+    assert_eq!(manifest.name, "quality-review");
+    assert_eq!(manifest.version.as_deref(), Some("1.2.3"));
+    assert_eq!(
+        manifest.description.as_deref(),
+        Some("Strict code quality review focused on maintainability.")
+    );
+    assert_eq!(
+        manifest.paths.skills,
+        vec![
+            AbsolutePathBuf::try_from(
+                plugin_root.join("skills/thermo-nuclear-code-quality-review")
+            )
+            .unwrap(),
+            AbsolutePathBuf::try_from(plugin_root.join("skills/second-review")).unwrap(),
+        ]
+    );
+    let Some(crate::manifest::PluginManifestMcpServers::Object(mcp_servers)) =
+        manifest.paths.mcp_servers.as_ref()
+    else {
+        panic!("fallback mcpServers should be inline");
+    };
+    assert_eq!(
+        serde_json::from_str::<JsonValue>(mcp_servers).unwrap(),
+        serde_json::json!({
+            "review": {
+                "type": "stdio",
+                "command": "review-mcp"
+            }
+        })
+    );
+    assert_eq!(
+        manifest.paths.apps.as_ref(),
+        Some(&AbsolutePathBuf::try_from(plugin_root.join("apps/app.json")).unwrap())
+    );
+    assert_eq!(
+        manifest.paths.hooks.as_ref(),
+        Some(&crate::manifest::PluginManifestHooks::Paths(vec![
+            AbsolutePathBuf::try_from(plugin_root.join("hooks/session.json")).unwrap()
+        ]))
+    );
+    assert_eq!(manifest.keywords, vec!["quality", "review"]);
+    let interface = manifest.interface.as_ref().expect("fallback interface");
+    assert_eq!(
+        interface,
+        &PluginManifestInterface {
+            display_name: Some("Quality Review".to_string()),
+            short_description: Some("Interface short description.".to_string()),
+            long_description: Some(
+                "Runs strict reviews focused on maintainability and boundaries.".to_string()
+            ),
+            developer_name: Some("Byron Grogan".to_string()),
+            category: Some("code-review".to_string()),
+            capabilities: vec!["review".to_string(), "quality".to_string()],
+            website_url: Some("https://example.com/quality".to_string()),
+            privacy_policy_url: Some("https://example.com/privacy".to_string()),
+            terms_of_service_url: Some("https://example.com/terms".to_string()),
+            default_prompt: Some(vec![
+                "Review this change".to_string(),
+                "Find structural issues".to_string()
+            ]),
+            brand_color: Some("#00AAFF".to_string()),
+            composer_icon: Some(
+                AbsolutePathBuf::try_from(plugin_root.join("assets/icon.svg")).unwrap()
+            ),
+            logo: Some(AbsolutePathBuf::try_from(plugin_root.join("assets/logo.png")).unwrap()),
+            screenshots: vec![
+                AbsolutePathBuf::try_from(plugin_root.join("assets/shot.png")).unwrap()
+            ],
+        }
+    );
+
+    let fallback_json: JsonValue =
+        serde_json::from_str(resolved.manifest_fallback.contents()).unwrap();
+    assert_eq!(
+        fallback_json["skills"],
+        serde_json::json!([
+            "./skills/thermo-nuclear-code-quality-review",
+            "./skills/second-review"
+        ])
+    );
+    assert_eq!(
+        fallback_json["mcpServers"],
+        serde_json::json!({
+            "review": {
+                "type": "stdio",
+                "command": "review-mcp"
+            }
+        })
+    );
+    assert_eq!(
+        fallback_json["displayName"],
+        JsonValue::String("Quality Review".to_string())
+    );
+    assert_eq!(
+        fallback_json["interface"]["websiteUrl"],
+        JsonValue::String("https://example.com/quality".to_string())
+    );
+    assert_eq!(
+        fallback_json["interface"]["privacyPolicyURL"],
+        JsonValue::String("https://example.com/privacy".to_string())
+    );
+    assert!(fallback_json["interface"].get("privacyPolicyUrl").is_none());
+    assert_eq!(
+        fallback_json["author"],
+        serde_json::json!({ "name": "Byron Grogan" })
+    );
+    assert_eq!(
+        fallback_json["agents"],
+        serde_json::json!(["./agents/thermo-nuclear-code-quality-review.md"])
+    );
+    assert_eq!(
+        fallback_json["commands"],
+        serde_json::json!(["./commands/review.md"])
+    );
+    assert_eq!(fallback_json["strict"], JsonValue::Bool(false));
+    assert_eq!(
+        fallback_json["homepage"],
+        JsonValue::String("https://example.com/quality".to_string())
+    );
+    assert_eq!(
+        fallback_json["repository"],
+        JsonValue::String("https://github.com/example/quality-review".to_string())
+    );
+    assert_eq!(
+        fallback_json["license"],
+        JsonValue::String("MIT".to_string())
+    );
+    assert_eq!(
+        fallback_json["category"],
+        JsonValue::String("code-review".to_string())
+    );
+    assert!(resolved.manifest_fallback.has_metadata);
 }
 
 #[test]
@@ -415,9 +637,97 @@ fn list_marketplaces_supports_alternate_manifest_layout() {
                     screenshots: Vec::new(),
                 }),
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
+}
+
+#[test]
+fn list_marketplaces_supports_repo_root_local_plugin_sources() {
+    for path in [".", "./"] {
+        let tmp = tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+        fs::create_dir_all(repo_root.join(".codex-plugin")).unwrap();
+        fs::write(
+            repo_root.join(".agents/plugins/marketplace.json"),
+            format!(
+                r#"{{
+  "name": "repo-root-marketplace",
+  "plugins": [
+    {{
+      "name": "repo-root-plugin",
+      "source": {{
+        "source": "local",
+        "path": "{path}"
+      }}
+    }}
+  ]
+}}"#
+            ),
+        )
+        .unwrap();
+        fs::write(
+            repo_root.join(".codex-plugin/plugin.json"),
+            r#"{
+  "name":"repo-root-plugin",
+  "interface": {
+    "displayName": "Repo Root Plugin"
+  }
+}"#,
+        )
+        .unwrap();
+
+        let marketplaces = list_marketplaces_with_home(
+            &[AbsolutePathBuf::try_from(repo_root.clone()).unwrap()],
+            /*home_dir*/ None,
+        )
+        .unwrap()
+        .marketplaces;
+
+        assert_eq!(
+            marketplaces,
+            vec![Marketplace {
+                name: "repo-root-marketplace".to_string(),
+                path: AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json"))
+                    .unwrap(),
+                interface: None,
+                plugins: vec![MarketplacePlugin {
+                    name: "repo-root-plugin".to_string(),
+                    local_version: None,
+                    source: MarketplacePluginSource::Local {
+                        path: AbsolutePathBuf::try_from(repo_root).unwrap(),
+                    },
+                    policy: MarketplacePluginPolicy {
+                        installation: MarketplacePluginInstallPolicy::Available,
+                        authentication: MarketplacePluginAuthPolicy::OnInstall,
+                        products: None,
+                    },
+                    interface: Some(PluginManifestInterface {
+                        display_name: Some("Repo Root Plugin".to_string()),
+                        short_description: None,
+                        long_description: None,
+                        developer_name: None,
+                        category: None,
+                        capabilities: Vec::new(),
+                        website_url: None,
+                        privacy_policy_url: None,
+                        terms_of_service_url: None,
+                        default_prompt: None,
+                        brand_color: None,
+                        composer_icon: None,
+                        logo: None,
+                        screenshots: Vec::new(),
+                    }),
+                    keywords: Vec::new(),
+                    manifest_fallback: None,
+                }],
+            }]
+        );
+    }
 }
 
 #[test]
@@ -466,6 +776,7 @@ fn list_marketplaces_includes_plugins_without_discoverable_manifest() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
@@ -573,6 +884,7 @@ fn list_marketplaces_supports_explicit_api_marketplace_manifest_path() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
@@ -664,6 +976,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                         },
                         interface: None,
                         keywords: Vec::new(),
+                        manifest_fallback: None,
                     },
                     MarketplacePlugin {
                         name: "home-only".to_string(),
@@ -678,6 +991,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                         },
                         interface: None,
                         keywords: Vec::new(),
+                        manifest_fallback: None,
                     },
                 ],
             },
@@ -701,6 +1015,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                         },
                         interface: None,
                         keywords: Vec::new(),
+                        manifest_fallback: None,
                     },
                     MarketplacePlugin {
                         name: "repo-only".to_string(),
@@ -715,6 +1030,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                         },
                         interface: None,
                         keywords: Vec::new(),
+                        manifest_fallback: None,
                     },
                 ],
             },
@@ -794,6 +1110,7 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
                     },
                     interface: None,
                     keywords: Vec::new(),
+                    manifest_fallback: None,
                 }],
             },
             Marketplace {
@@ -813,6 +1130,7 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
                     },
                     interface: None,
                     keywords: Vec::new(),
+                    manifest_fallback: None,
                 }],
             },
         ]
@@ -888,6 +1206,7 @@ fn list_marketplaces_dedupes_multiple_roots_in_same_repo() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
@@ -1052,6 +1371,7 @@ fn list_marketplaces_skips_plugins_with_invalid_names_but_keeps_marketplace() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             }],
         }]
     );
@@ -1134,6 +1454,9 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
     },
     {
       "name": "git-subdir-plugin",
+      "version": "1.2.3",
+      "displayName": "Git Subdir Plugin",
+      "keywords": ["git", "remote"],
       "source": {
         "source": "git-subdir",
         "url": "owner/repo",
@@ -1154,8 +1477,11 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
     .marketplaces;
 
     assert_eq!(marketplaces.len(), 1);
+    let mut plugins = marketplaces[0].plugins.clone();
+    assert!(plugins[2].manifest_fallback.is_some());
+    plugins[2].manifest_fallback = None;
     assert_eq!(
-        marketplaces[0].plugins,
+        plugins,
         vec![
             MarketplacePlugin {
                 name: "local-plugin".to_string(),
@@ -1171,6 +1497,7 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             },
             MarketplacePlugin {
                 name: "url-plugin".to_string(),
@@ -1188,10 +1515,11 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
                 },
                 interface: None,
                 keywords: Vec::new(),
+                manifest_fallback: None,
             },
             MarketplacePlugin {
                 name: "git-subdir-plugin".to_string(),
-                local_version: None,
+                local_version: Some("1.2.3".to_string()),
                 source: MarketplacePluginSource::Git {
                     url: "https://github.com/owner/repo.git".to_string(),
                     path: Some("plugins/example".to_string()),
@@ -1203,8 +1531,12 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
                     authentication: MarketplacePluginAuthPolicy::OnInstall,
                     products: None,
                 },
-                interface: None,
-                keywords: Vec::new(),
+                interface: Some(PluginManifestInterface {
+                    display_name: Some("Git Subdir Plugin".to_string()),
+                    ..Default::default()
+                }),
+                keywords: vec!["git".to_string(), "remote".to_string()],
+                manifest_fallback: None,
             },
         ]
     );
@@ -1423,37 +1755,41 @@ fn list_marketplaces_ignores_plugin_interface_assets_without_dot_slash() {
 
 #[test]
 fn find_marketplace_plugin_skips_invalid_local_paths() {
-    let tmp = tempdir().unwrap();
-    let repo_root = tmp.path().join("repo");
-    fs::create_dir_all(repo_root.join(".git")).unwrap();
-    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
-    fs::write(
-        repo_root.join(".agents/plugins/marketplace.json"),
-        r#"{
+    for path in ["", "plugin-1", "././", "./plugins/../", "../plugin-1"] {
+        let tmp = tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+        fs::write(
+            repo_root.join(".agents/plugins/marketplace.json"),
+            format!(
+                r#"{{
   "name": "codex-curated",
   "plugins": [
-    {
+    {{
       "name": "local-plugin",
-      "source": {
+      "source": {{
         "source": "local",
-        "path": "../plugin-1"
-      }
-    }
+        "path": "{path}"
+      }}
+    }}
   ]
-}"#,
-    )
-    .unwrap();
+}}"#
+            ),
+        )
+        .unwrap();
 
-    let err = find_marketplace_plugin(
-        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
-        "local-plugin",
-    )
-    .unwrap_err();
+        let err = find_marketplace_plugin(
+            &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+            "local-plugin",
+        )
+        .unwrap_err();
 
-    assert_eq!(
-        err.to_string(),
-        "plugin `local-plugin` was not found in marketplace `codex-curated`"
-    );
+        assert_eq!(
+            err.to_string(),
+            "plugin `local-plugin` was not found in marketplace `codex-curated`"
+        );
+    }
 }
 
 #[test]

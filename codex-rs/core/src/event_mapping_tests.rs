@@ -29,7 +29,7 @@ fn recognizes_skills_instructions_as_contextual_developer_content() {
 }
 
 #[test]
-fn recognizes_token_budget_as_contextual_developer_content() {
+fn recognizes_legacy_token_budget_as_contextual_developer_content() {
     let content = vec![ContentItem::InputText {
         text: "<token_budget>\nYou have 710 tokens left in this context window.\n</token_budget>"
             .to_string(),
@@ -391,7 +391,7 @@ fn parses_agent_message() {
 #[test]
 fn parses_reasoning_summary_and_raw_content() {
     let item = ResponseItem::Reasoning {
-        id: "reasoning_1".to_string(),
+        id: Some("reasoning_1".to_string()),
         summary: vec![
             ReasoningItemReasoningSummary::SummaryText {
                 text: "Step 1".to_string(),
@@ -424,7 +424,7 @@ fn parses_reasoning_summary_and_raw_content() {
 #[test]
 fn parses_reasoning_including_raw_content() {
     let item = ResponseItem::Reasoning {
-        id: "reasoning_2".to_string(),
+        id: Some("reasoning_2".to_string()),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "Summarized step".to_string(),
         }],

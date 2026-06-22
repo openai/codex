@@ -25,6 +25,7 @@ fn write_rollout_with_metadata(path: &Path, thread_id: ThreadId) -> std::io::Res
         timestamp: timestamp.clone(),
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 forked_from_id: None,
                 parent_thread_id: None,

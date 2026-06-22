@@ -181,6 +181,18 @@ async fn status_line_setup_popup_hardcoded_only_snapshot() {
 }
 
 #[tokio::test]
+async fn status_line_setup_popup_workspace_headline_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_workspace_headline = Some("Workspace maintenance starts at 5pm".to_string());
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+
+    assert_chatwidget_snapshot!(
+        "status_line_setup_popup_workspace_headline",
+        status_line_popup_snapshot(&mut chat)
+    );
+}
+
+#[tokio::test]
 async fn status_surface_preview_lines_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("feature/mixed-preview".to_string());

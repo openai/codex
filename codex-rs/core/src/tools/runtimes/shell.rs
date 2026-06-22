@@ -236,6 +236,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                 tty: None,
             },
             command: req.hook_command.clone(),
+            environment_id: req.turn_environment.environment_id.clone(),
         })
     }
 
@@ -321,7 +322,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let env = attempt
-            .env_for(command, options, managed_network)
+            .env_for(
+                command,
+                options,
+                managed_network,
+                Some(&req.turn_environment.environment_id),
+            )
             .map_err(ToolError::Codex)?;
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await

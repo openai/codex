@@ -76,9 +76,9 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted();
     let network_sandbox_policy = codex_protocol::permissions::NetworkSandboxPolicy::Restricted;
     let permission_profile = codex_protocol::models::PermissionProfile::Disabled;
-    let request = ExecRequest {
+    let mut request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-        cwd: cwd.clone(),
+        cwd: cwd.clone().into(),
         env: HashMap::from([
             ("HOME".to_string(), "/client-home".to_string()),
             ("PATH".to_string(), "/sandbox-path".to_string()),
@@ -98,25 +98,28 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
             ]),
         }),
         network: None,
+        network_environment_id: None,
         expiration: crate::exec::ExecExpiration::DefaultTimeout,
         capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
         sandbox: codex_sandboxing::SandboxType::None,
-        windows_sandbox_policy_cwd: cwd.clone(),
+        windows_sandbox_policy_cwd: cwd.clone().into(),
         windows_sandbox_workspace_roots: vec![cwd],
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
-        permission_profile,
+        permission_profile: permission_profile.clone(),
         file_system_sandbox_policy,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
+        exec_server_sandbox: None,
+        exec_server_enforce_managed_network: false,
     };
 
     let params =
         exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
 
     assert_eq!(params.process_id.as_str(), "123");
-    assert_eq!(params.cwd, PathUri::from_abs_path(&request.cwd));
+    assert_eq!(params.cwd, request.cwd);
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,
@@ -125,11 +128,16 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
             ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
         ])
     );
-}
-
-#[test]
-fn exec_server_process_id_matches_unified_exec_process_id() {
-    assert_eq!(exec_server_process_id(/*process_id*/ 4321), "4321");
+    request.exec_server_sandbox = Some(
+        codex_exec_server::FileSystemSandboxContext::from_permission_profile(permission_profile),
+    );
+    let first =
+        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+    let second =
+        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+    assert!(first.process_id.as_str().starts_with("123-"));
+    assert!(second.process_id.as_str().starts_with("123-"));
+    assert_ne!(first.process_id, second.process_id);
 }
 
 #[cfg(windows)]
@@ -200,9 +208,9 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         yield_time_ms: 1000,
         max_output_tokens: None,
         #[allow(deprecated)]
-        cwd: turn.cwd.clone(),
+        cwd: turn.cwd.clone().into(),
         #[allow(deprecated)]
-        sandbox_cwd: turn.cwd.clone(),
+        sandbox_cwd: turn.cwd.clone().into(),
         turn_environment: turn
             .environments
             .primary()
@@ -229,7 +237,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         &context,
         &request,
         #[allow(deprecated)]
-        turn.cwd.clone(),
+        turn.cwd.clone().into(),
         transcript,
         "PRE_DENIAL_MARKER".to_string(),
         "Network access denied".to_string(),
