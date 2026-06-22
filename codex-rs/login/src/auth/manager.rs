@@ -179,8 +179,13 @@ fn fingerprint_auth_dot_json(
         ApiAuthMode::AgentIdentity => {
             let record = auth_dot_json
                 .agent_identity
-                .as_deref()
-                .and_then(|jwt| AgentIdentityAuthRecord::from_agent_identity_jwt(jwt).ok())?;
+                .as_ref()
+                .and_then(|agent_identity| match agent_identity {
+                    AgentIdentityStorage::Jwt(jwt) => {
+                        AgentIdentityAuthRecord::from_agent_identity_jwt(jwt).ok()
+                    }
+                    AgentIdentityStorage::Record(record) => Some(record.clone()),
+                })?;
             Some(fingerprint_agent_identity_record(
                 kind,
                 serde_json::to_vec(&record).ok()?.as_slice(),

@@ -1757,8 +1757,10 @@ async fn forced_server_auth_rejection_clears_stale_persistent_external_auth() {
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
     let rejected_auth_fingerprint =
