@@ -308,10 +308,7 @@ struct NetworkProxyRuntimeSettings {
 impl NetworkProxyRuntimeSettings {
     fn from_config(config: &config::NetworkProxyConfig) -> Result<Self> {
         let mitm_ca_trust_bundle = if config.network.mitm {
-            let env = crate::certs::CUSTOM_CA_ENV_KEYS
-                .into_iter()
-                .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
-                .collect();
+            let env = crate::certs::ca_env_from_process();
             Some(crate::certs::managed_ca_trust_bundle(&env)?)
         } else {
             None
