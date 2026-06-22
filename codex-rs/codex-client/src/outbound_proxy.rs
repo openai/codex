@@ -18,6 +18,7 @@ use thiserror::Error;
 
 const SYSTEM_PROXY_SUCCESS_CACHE_TTL: Duration = Duration::from_secs(60);
 const SYSTEM_PROXY_UNAVAILABLE_CACHE_TTL: Duration = Duration::from_secs(5);
+const SYSTEM_PROXY_CACHE_MAX_ENTRIES: usize = 256;
 
 /// Coarse semantic bucket for the HTTP or WebSocket client being constructed.
 ///
@@ -256,6 +257,18 @@ fn cached_system_proxy_decision(request_url: &str) -> Option<SystemProxyDecision
 }
 
 fn cache_system_proxy_decision(request_url: &str, decision: SystemProxyDecision) {
+    let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        insert_system_proxy_cache_entry(&mut cache, request_url, decision, Instant::now());
+    }
+}
+
+fn insert_system_proxy_cache_entry(
+    cache: &mut HashMap<String, CachedSystemProxyDecision>,
+    request_url: &str,
+    decision: SystemProxyDecision,
+    now: Instant,
+) {
     let ttl = match &decision {
         SystemProxyDecision::Direct | SystemProxyDecision::Proxy { .. } => {
             SYSTEM_PROXY_SUCCESS_CACHE_TTL
@@ -263,18 +276,23 @@ fn cache_system_proxy_decision(request_url: &str, decision: SystemProxyDecision)
         SystemProxyDecision::Unavailable { .. } => SYSTEM_PROXY_UNAVAILABLE_CACHE_TTL,
     };
 
-    let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut cache) = cache.lock() {
-        let now = Instant::now();
-        cache.retain(|_, cached| cached.expires_at > now);
-        cache.insert(
-            request_url.to_string(),
-            CachedSystemProxyDecision {
-                decision,
-                expires_at: now + ttl,
-            },
-        );
+    cache.retain(|_, cached| cached.expires_at > now);
+    if cache.len() >= SYSTEM_PROXY_CACHE_MAX_ENTRIES
+        && !cache.contains_key(request_url)
+        && let Some(request_url_to_evict) = cache
+            .iter()
+            .min_by_key(|(_, cached)| cached.expires_at)
+            .map(|(request_url, _)| request_url.clone())
+    {
+        cache.remove(&request_url_to_evict);
     }
+    cache.insert(
+        request_url.to_string(),
+        CachedSystemProxyDecision {
+            decision,
+            expires_at: now + ttl,
+        },
+    );
 }
 
 trait EnvSource {

@@ -114,3 +114,20 @@ fn unavailable_system_proxy_decision_is_cached() {
 
     assert_eq!(cached_system_proxy_decision(request_url), Some(decision));
 }
+
+#[test]
+fn system_proxy_cache_is_bounded() {
+    let mut cache = HashMap::new();
+    let now = Instant::now();
+
+    for index in 0..=SYSTEM_PROXY_CACHE_MAX_ENTRIES {
+        insert_system_proxy_cache_entry(
+            &mut cache,
+            &format!("https://bounded-cache.test/{index}"),
+            SystemProxyDecision::Direct,
+            now,
+        );
+    }
+
+    assert_eq!(cache.len(), SYSTEM_PROXY_CACHE_MAX_ENTRIES);
+}
