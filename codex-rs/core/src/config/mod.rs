@@ -3207,7 +3207,6 @@ impl Config {
                     effective_permission_selection.profiles.as_ref(),
                     default_permissions,
                     builtin_workspace_write_settings,
-                    resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
             let mut configured_workspace_roots = compile_permission_profile_workspace_roots(
