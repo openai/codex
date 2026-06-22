@@ -60,10 +60,7 @@ fn raw_file_uri_cwd_is_converted_for_command_actions() {
         path: PathBuf::from("file.txt"),
     }];
 
-    assert_eq!(
-        normalized_app_server_cwd(&cwd),
-        LegacyAppPathString::from(cwd_uri),
-    );
+    assert_eq!(cwd.normalize_file_uri(), LegacyAppPathString::from(cwd_uri));
     assert_eq!(
         command_actions_for_legacy_cwd(&parsed_cmd, &cwd),
         vec![CommandAction::Read {

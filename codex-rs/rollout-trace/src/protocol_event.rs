@@ -182,10 +182,7 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
             turn_id,
             started_at_ms: *started_at_ms,
             command,
-            cwd: cwd
-                .to_file_uri()
-                .map(|cwd| cwd.inferred_native_path_string())
-                .unwrap_or_else(|| cwd.as_str().to_string()),
+            cwd: cwd.normalize_file_uri().into_string(),
             parsed_cmd,
             source: *source,
             interaction_input: interaction_input.as_deref(),
@@ -244,10 +241,7 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
             turn_id,
             completed_at_ms: *completed_at_ms,
             command,
-            cwd: cwd
-                .to_file_uri()
-                .map(|cwd| cwd.inferred_native_path_string())
-                .unwrap_or_else(|| cwd.as_str().to_string()),
+            cwd: cwd.normalize_file_uri().into_string(),
             parsed_cmd,
             source: *source,
             interaction_input: interaction_input.as_deref(),

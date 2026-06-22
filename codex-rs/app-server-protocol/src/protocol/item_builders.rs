@@ -94,7 +94,7 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: normalized_app_server_cwd(&payload.cwd),
+        cwd: payload.cwd.normalize_file_uri(),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: CommandExecutionStatus::InProgress,
@@ -117,7 +117,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: normalized_app_server_cwd(&payload.cwd),
+        cwd: payload.cwd.normalize_file_uri(),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: (&payload.status).into(),
@@ -126,12 +126,6 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
         exit_code: Some(payload.exit_code),
         duration_ms: Some(duration_ms),
     }
-}
-
-fn normalized_app_server_cwd(cwd: &LegacyAppPathString) -> LegacyAppPathString {
-    cwd.to_file_uri()
-        .map(LegacyAppPathString::from)
-        .unwrap_or_else(|| cwd.clone())
 }
 
 fn command_actions_for_legacy_cwd(
