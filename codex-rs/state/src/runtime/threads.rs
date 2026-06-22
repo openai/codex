@@ -659,11 +659,13 @@ ON CONFLICT(id) DO NOTHING
         name: Option<&str>,
     ) -> anyhow::Result<bool> {
         let result = match name {
-            Some(name) => sqlx::query("UPDATE threads SET name = ? WHERE id = ?")
-                .bind(name)
-                .bind(thread_id.to_string())
-                .execute(self.pool.as_ref())
-                .await?,
+            Some(name) => sqlx::query(
+                "UPDATE threads SET title = CASE WHEN name IS NOT NULL AND title = name THEN '' ELSE title END, name = ? WHERE id = ?",
+            )
+            .bind(name)
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?,
             None => sqlx::query(
                 "UPDATE threads SET title = CASE WHEN name IS NOT NULL AND title = name THEN '' ELSE title END, name = '' WHERE id = ?",
             )
@@ -682,11 +684,11 @@ ON CONFLICT(id) DO NOTHING
         cwd: &Path,
         archive_state: crate::ThreadArchiveState,
     ) -> anyhow::Result<bool> {
+        let rollout_path = rollout_path.display().to_string();
+        let cwd = cwd.display().to_string();
         let mut builder = QueryBuilder::<Sqlite>::new("UPDATE threads SET rollout_path = ");
-        builder.push_bind(rollout_path.display().to_string());
-        builder
-            .push(", cwd = ")
-            .push_bind(cwd.display().to_string());
+        builder.push_bind(rollout_path.clone());
+        builder.push(", cwd = ").push_bind(cwd.clone());
         match archive_state {
             crate::ThreadArchiveState::Preserve => {}
             crate::ThreadArchiveState::Active => {
@@ -699,6 +701,21 @@ ON CONFLICT(id) DO NOTHING
         builder
             .push(" WHERE id = ")
             .push_bind(thread_id.to_string());
+        builder
+            .push(" AND (rollout_path <> ")
+            .push_bind(rollout_path)
+            .push(" OR cwd <> ")
+            .push_bind(cwd);
+        match archive_state {
+            crate::ThreadArchiveState::Preserve => {}
+            crate::ThreadArchiveState::Active => {
+                builder.push(" OR archived <> 0 OR archived_at IS NOT NULL");
+            }
+            crate::ThreadArchiveState::Archived => {
+                builder.push(" OR archived <> 1 OR archived_at IS NULL");
+            }
+        }
+        builder.push(")");
         let result = builder.build().execute(self.pool.as_ref()).await?;
         Ok(result.rows_affected() > 0)
     }
@@ -898,8 +915,14 @@ ON CONFLICT(id) DO UPDATE SET
     reasoning_effort = excluded.reasoning_effort,
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
+    name = COALESCE(
+        threads.name,
+        CASE
+            WHEN threads.title <> '' AND threads.title <> excluded.title THEN threads.title
+            ELSE excluded.name
+        END
+    ),
     title = excluded.title,
-    name = COALESCE(threads.name, excluded.name),
     preview = COALESCE(NULLIF(excluded.preview, ''), threads.preview),
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
