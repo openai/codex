@@ -49,7 +49,7 @@ fn preparation_preserves_small_image_bytes_and_non_data_urls() {
             },
         ],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
 
     prepare_response_items(&mut items);
@@ -86,7 +86,7 @@ fn detail_policies_apply_the_expected_budgets() {
             role: "user".to_string(),
             content: vec![ContentItem::InputImage { image_url, detail }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }];
 
         prepare_response_items(&mut items);
@@ -133,7 +133,7 @@ fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
             ]),
             success: Some(true),
         },
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
 
     prepare_response_items(&mut items);
@@ -165,7 +165,7 @@ fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
                 ]),
                 success: Some(true),
             },
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }]
     );
 }

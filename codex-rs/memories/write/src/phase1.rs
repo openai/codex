@@ -303,7 +303,7 @@ mod job {
                 )?,
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }];
         prompt.base_instructions = BaseInstructions {
             text: crate::stage_one::PROMPT.to_string(),
@@ -429,7 +429,7 @@ mod job {
             role,
             content,
             phase,
-            metadata,
+            internal_chat_message_metadata_passthrough: metadata,
         } = item
         else {
             return should_persist_response_item_for_memories(item).then(|| item.clone());
@@ -457,7 +457,7 @@ mod job {
             role: role.clone(),
             content,
             phase: phase.clone(),
-            metadata: metadata.clone(),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
         })
     }
 
@@ -687,7 +687,7 @@ mod tests {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let skill_message = ResponseItem::Message {
             id: None,
@@ -698,7 +698,7 @@ mod tests {
                         .to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let subagent_message = ResponseItem::Message {
             id: None,
@@ -708,7 +708,7 @@ mod tests {
                     .to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
 
         let serialized = job::serialize_filtered_rollout_response_items(&[
@@ -730,7 +730,7 @@ mod tests {
                             .to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 subagent_message,
             ]
@@ -750,7 +750,7 @@ mod tests {
                         ),
                         success: Some(true),
                     },
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
             )])
             .expect("serialize");
