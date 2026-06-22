@@ -26,9 +26,11 @@ use crate::ExecProcessEvent;
 use crate::ExecProcessEventReceiver;
 use crate::ExecProcessFuture;
 use crate::ExecServerError;
+use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::process::ExecProcessEventLog;
+use crate::process_sandbox::prepare_exec_request;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecEnvPolicy;
@@ -133,6 +135,7 @@ struct Inner {
 #[derive(Clone)]
 pub(crate) struct LocalProcess {
     inner: Arc<Inner>,
+    runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
 struct LocalExecProcess {
@@ -144,20 +147,39 @@ struct LocalExecProcess {
 
 impl Default for LocalProcess {
     fn default() -> Self {
-        let (outgoing_tx, mut outgoing_rx) =
-            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
-        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::new(RpcNotificationSender::new(outgoing_tx))
+        Self::with_discarded_notifications(/*runtime_paths*/ None)
     }
 }
 
 impl LocalProcess {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn with_local_runtime_paths(runtime_paths: ExecServerRuntimePaths) -> Self {
+        Self::with_discarded_notifications(Some(runtime_paths))
+    }
+
+    fn with_discarded_notifications(runtime_paths: Option<ExecServerRuntimePaths>) -> Self {
+        let (outgoing_tx, mut outgoing_rx) =
+            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
+        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
+        Self::with_runtime_paths(RpcNotificationSender::new(outgoing_tx), runtime_paths)
+    }
+
+    pub(crate) fn new(
+        notifications: RpcNotificationSender,
+        runtime_paths: ExecServerRuntimePaths,
+    ) -> Self {
+        Self::with_runtime_paths(notifications, Some(runtime_paths))
+    }
+
+    fn with_runtime_paths(
+        notifications: RpcNotificationSender,
+        runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 processes: Mutex::new(HashMap::new()),
             }),
+            runtime_paths,
         }
     }
 
@@ -191,16 +213,12 @@ impl LocalProcess {
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
-        let (program, args) = params
-            .argv
+        let prepared =
+            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref())?;
+        let (program, args) = prepared
+            .command
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
-        let native_cwd = params.cwd.to_abs_path().map_err(|err| {
-            invalid_params(format!(
-                "cwd URI `{}` is not valid on this exec-server host: {err}",
-                params.cwd
-            ))
-        })?;
 
         let start = Arc::new(ProcessStart);
         {
@@ -216,14 +234,13 @@ impl LocalProcess {
             );
         }
 
-        let env = child_env(&params);
         let spawned_result = if params.tty {
             codex_utils_pty::spawn_pty_process(
                 program,
                 args,
-                native_cwd.as_path(),
-                &env,
-                &params.arg0,
+                prepared.cwd.as_path(),
+                &prepared.env,
+                &prepared.arg0,
                 TerminalSize::default(),
             )
             .await
@@ -231,18 +248,18 @@ impl LocalProcess {
             codex_utils_pty::spawn_pipe_process(
                 program,
                 args,
-                native_cwd.as_path(),
-                &env,
-                &params.arg0,
+                prepared.cwd.as_path(),
+                &prepared.env,
+                &prepared.arg0,
             )
             .await
         } else {
             codex_utils_pty::spawn_pipe_process_no_stdin(
                 program,
                 args,
-                native_cwd.as_path(),
-                &env,
-                &params.arg0,
+                prepared.cwd.as_path(),
+                &prepared.env,
+                &prepared.arg0,
             )
             .await
         };
