@@ -2136,6 +2136,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-utils-cli",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "tokio",
@@ -2403,12 +2404,14 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "windows-sys 0.52.0",
  "zstd 0.13.3",
 ]
 
@@ -3534,6 +3537,8 @@ dependencies = [
  "rama-tls-rustls",
  "rama-unix",
  "rustls-native-certs",
+ "schannel",
+ "security-framework 3.5.1",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4021,6 +4026,7 @@ name = "codex-tui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "app_test_support",
  "arboard",
  "assert_matches",
  "base64 0.22.1",
@@ -6029,8 +6035,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b375d6465b98090a5f25b1c7703f3859783755aa9a80433b36e0379a3ec2f369"
 dependencies = [
  "crc32fast",
- "libz-sys",
  "miniz_oxide",
+ "zlib-rs 0.5.5",
 ]
 
 [[package]]
@@ -6718,7 +6724,7 @@ dependencies = [
  "prodash",
  "thiserror 2.0.18",
  "walkdir",
- "zlib-rs",
+ "zlib-rs 0.6.3",
 ]
 
 [[package]]
@@ -8772,17 +8778,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libz-sys"
-version = "1.1.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15d118bbf3771060e7311cc7bb0545b01d08a8b4a7de949198dec1fa0ca1c0f7"
-dependencies = [
- "cc",
- "pkg-config",
- "vcpkg",
-]
-
-[[package]]
 name = "link-cplusplus"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9458,7 +9453,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
@@ -10544,7 +10539,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -13609,7 +13604,7 @@ dependencies = [
 [[package]]
 name = "tokio-tungstenite"
 version = "0.28.0"
-source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=e5e64b86722c5453c4038131c3193faa49a648ad#e5e64b86722c5453c4038131c3193faa49a648ad"
+source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186#0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186"
 dependencies = [
  "futures-util",
  "log",
@@ -14047,7 +14042,7 @@ dependencies = [
 [[package]]
 name = "tungstenite"
 version = "0.27.0"
-source = "git+https://github.com/openai-oss-forks/tungstenite-rs?rev=9200079d3b54a1ff51072e24d81fd354f085156f#9200079d3b54a1ff51072e24d81fd354f085156f"
+source = "git+https://github.com/openai-oss-forks/tungstenite-rs?rev=4fffad30fe373adbdcffab9545e9e9bf4f2fc19f#4fffad30fe373adbdcffab9545e9e9bf4f2fc19f"
 dependencies = [
  "bytes",
  "data-encoding",
@@ -15807,6 +15802,12 @@ dependencies = [
  "zopfli",
  "zstd 0.13.3",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
 
 [[package]]
 name = "zlib-rs"

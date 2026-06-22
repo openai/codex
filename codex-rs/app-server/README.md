@@ -202,7 +202,7 @@ Example with notification opt-out:
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with model-advertised string reasoning effort options in the catalog's intended progression order, `additionalSpeedTiers`, `serviceTiers`, optional `defaultServiceTier`, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata. Clients should preserve the `supportedReasoningEfforts` array order rather than deriving order from the effort names.
 - `modelProvider/capabilities/read` — read provider-level capabilities for the currently configured model provider.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. Pass `threadId` when showing feature state for an existing loaded thread so `enabled` is computed from that thread's refreshed config, including project-local config for the thread's cwd; if omitted, the server uses its default config resolution context. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
-- `permissionProfile/list` — beta; list available permission profile ids with optional display `description` text, using cursor pagination. Pass `cwd` when the caller needs project-local `[permissions.<id>]` entries to be included in the current catalog view.
+- `permissionProfile/list` — beta; list available permission profile ids with optional display `description` text and an `allowed` flag reflecting effective requirements, using cursor pagination. Pass `cwd` when the caller needs project-local `[permissions.<id>]` entries to be included in the current catalog view.
 - `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for currently supported feature keys. For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default. Invalid keys will be ignored.
 - `environment/add` — experimental; add or replace a named remote environment by `environmentId` and `execServerUrl` for later selection by `thread/start` or `turn/start`; optional `connectTimeoutMs` overrides the WebSocket connection timeout; returns `{}` and does not change the default environment.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). Built-in presets do not select a model; the Plan preset selects medium reasoning effort. This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
@@ -1941,6 +1941,7 @@ Response examples:
 { "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
 { "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true } }
 { "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true } }
+{ "id": 1, "result": { "account": { "type": "chatgpt", "email": null, "planType": "enterprise" }, "requiresOpenaiAuth": true } }
 { "id": 1, "result": { "account": { "type": "amazonBedrock", "credentialSource": "codexManaged" }, "requiresOpenaiAuth": false } }
 { "id": 1, "result": { "account": { "type": "amazonBedrock", "credentialSource": "awsManaged" }, "requiresOpenaiAuth": false } }
 ```
@@ -1948,6 +1949,7 @@ Response examples:
 Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh.
+- `email` is `null` when the ChatGPT account does not have an email address.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
 - Amazon Bedrock reports `credentialSource: "codexManaged"` when it uses a Bedrock API key managed by Codex. Otherwise it reports `credentialSource: "awsManaged"` for the external AWS credential path. This identifies the selected credential source; it does not validate that the AWS credential chain can resolve credentials.
 

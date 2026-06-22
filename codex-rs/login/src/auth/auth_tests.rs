@@ -607,7 +607,7 @@ async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() 
     )?;
     let mut record = agent_identity_record("account-123");
     record.chatgpt_user_id = "user-12345".to_string();
-    record.email = "user@example.com".to_string();
+    record.email = Some("user@example.com".to_string());
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
     let auth_path = get_auth_file(codex_home.path());
     let mut auth_json = storage.try_read_auth_json(&auth_path)?;
@@ -1926,7 +1926,7 @@ fn agent_identity_record(account_id: &str) -> AgentIdentityAuthRecord {
         agent_private_key: key_material.private_key_pkcs8_base64,
         account_id: account_id.to_string(),
         chatgpt_user_id: "user-id".to_string(),
-        email: "user@example.com".to_string(),
+        email: Some("user@example.com".to_string()),
         plan_type: AccountPlanType::Pro,
         chatgpt_account_is_fedramp: false,
         task_id: None,

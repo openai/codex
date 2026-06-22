@@ -255,7 +255,7 @@ mod tests {
             .expect("token_budget should be enableable in tests");
         config.rollout_budget = Some(crate::config::RolloutBudgetConfig {
             limit_tokens: 100_000,
-            reminder_interval_tokens: 10_000,
+            reminder_at_remaining_tokens: vec![50_000, 25_000, 10_000],
             sampling_token_weight: 1.0,
             prefill_token_weight: 0.25,
         });
@@ -348,7 +348,7 @@ mod tests {
             Some(FeatureToml::Config(RolloutBudgetConfigToml {
                 enabled: Some(true),
                 limit_tokens: Some(100_000),
-                reminder_interval_tokens: Some(10_000),
+                reminder_at_remaining_tokens: Some(vec![50_000, 25_000, 10_000]),
                 sampling_token_weight: Some(1.0),
                 prefill_token_weight: Some(0.25),
             }))

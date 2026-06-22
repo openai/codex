@@ -2854,7 +2854,7 @@ mod tests {
         );
 
         let chatgpt = v2::Account::Chatgpt {
-            email: "user@example.com".to_string(),
+            email: Some("user@example.com".to_string()),
             plan_type: PlanType::Plus,
         };
         assert_eq!(
@@ -2864,6 +2864,19 @@ mod tests {
                 "planType": "plus",
             }),
             serde_json::to_value(&chatgpt)?,
+        );
+
+        let chatgpt_without_email = v2::Account::Chatgpt {
+            email: None,
+            plan_type: PlanType::Pro,
+        };
+        assert_eq!(
+            json!({
+                "type": "chatgpt",
+                "email": null,
+                "planType": "pro",
+            }),
+            serde_json::to_value(&chatgpt_without_email)?,
         );
 
         let codex_managed_bedrock = v2::Account::AmazonBedrock {

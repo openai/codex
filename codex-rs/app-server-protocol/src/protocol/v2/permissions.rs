@@ -378,6 +378,8 @@ pub struct PermissionProfileSummary {
     pub id: String,
     /// Optional user-facing description for display in clients.
     pub description: Option<String>,
+    /// Whether the effective requirements allow selecting this profile.
+    pub allowed: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
