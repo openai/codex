@@ -5,7 +5,6 @@ use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::safety_buffering::treatment_from_headers;
-use crate::safety_buffering::treatment_from_json_headers;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
@@ -58,7 +57,8 @@ pub fn spawn_response_stream(
         .get(REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let safety_buffering_treatment = treatment_from_headers(&stream_response.headers);
+    let safety_buffering_treatment =
+        treatment_from_headers(&stream_response.headers).unwrap_or_default();
     if let Some(turn_state) = turn_state.as_ref()
         && let Some(header_value) = stream_response
             .headers
@@ -160,7 +160,7 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
-    headers: Option<Value>,
+    pub(crate) headers: Option<Value>,
     metadata: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
@@ -233,10 +233,6 @@ impl ResponsesStreamEvent {
 
     pub(crate) fn safety_buffering(&self) -> Option<SafetyBuffering> {
         serde_json::from_value(self.safety_buffering.as_ref()?.clone()).ok()
-    }
-
-    pub(crate) fn safety_buffering_treatment(&self) -> Option<SafetyBufferingTreatment> {
-        treatment_from_json_headers(self.headers.as_ref()?)
     }
 }
 
