@@ -175,11 +175,14 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let call_id = "shell-command-call";
+    let mut shell_command_call = ev_shell_command_call(call_id, "echo websocket");
+    shell_command_call["item"]["internal_chat_message_metadata_passthrough"] =
+        serde_json::json!({"turn_id": "turn-123"});
     let server = start_websocket_server(vec![vec![
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_shell_command_call(call_id, "echo websocket"),
+            shell_command_call,
             ev_completed("resp-1"),
         ],
         vec![

@@ -1564,10 +1564,13 @@ async fn responses_websocket_uses_incremental_create_on_prefix() {
 async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_create() {
     skip_if_no_network!();
 
+    let mut first_output_item = ev_assistant_message("msg-1", "assistant output");
+    first_output_item["item"]["internal_chat_message_metadata_passthrough"] =
+        json!({"turn_id": "turn-123"});
     let server = start_websocket_server(vec![vec![
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "assistant output"),
+            first_output_item,
             ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
@@ -1577,9 +1580,11 @@ async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_c
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let mut prior_assistant_output = assistant_message_item("msg-1", "assistant output");
+    prior_assistant_output.set_turn_id_if_missing("turn-123");
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
-        assistant_message_item("msg-1", "assistant output"),
+        prior_assistant_output,
         message_item("second"),
     ]);
     let first_responses_metadata = turn_metadata(&harness, Some("turn-123"));

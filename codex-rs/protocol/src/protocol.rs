@@ -38,6 +38,7 @@ use crate::models::AgentMessageInputContent;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::ImageDetail;
+use crate::models::InternalChatMessageMetadataPassthrough;
 use crate::models::MessagePhase;
 use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
@@ -698,6 +699,9 @@ pub struct InterAgentCommunication {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub encrypted_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     pub trigger_turn: bool,
 }
 
@@ -715,6 +719,7 @@ impl InterAgentCommunication {
             other_recipients,
             content,
             encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
             trigger_turn,
         }
     }
@@ -732,15 +737,25 @@ impl InterAgentCommunication {
             other_recipients,
             content: String::new(),
             encrypted_content: Some(encrypted_content),
+            internal_chat_message_metadata_passthrough: None,
             trigger_turn,
         }
     }
 
+    pub fn set_turn_id_if_missing(&mut self, turn_id: &str) {
+        InternalChatMessageMetadataPassthrough::set_turn_id_if_missing(
+            &mut self.internal_chat_message_metadata_passthrough,
+            turn_id,
+        );
+    }
+
     pub fn to_response_input_item(&self) -> ResponseInputItem {
+        let mut communication = self.clone();
+        communication.internal_chat_message_metadata_passthrough = None;
         ResponseInputItem::Message {
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
-                text: serde_json::to_string(self).unwrap_or_default(),
+                text: serde_json::to_string(&communication).unwrap_or_default(),
             }],
             phase: Some(MessagePhase::Commentary),
         }
@@ -775,7 +790,9 @@ impl InterAgentCommunication {
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
             content,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: self
+                .internal_chat_message_metadata_passthrough
+                .clone(),
         }
     }
 
@@ -4339,21 +4356,26 @@ mod tests {
 
     #[test]
     fn inter_agent_communication_response_input_item_preserves_commentary_phase() {
-        let communication = InterAgentCommunication {
+        let mut communication = InterAgentCommunication {
             author: AgentPath::root(),
             recipient: AgentPath::root().join("reviewer").expect("recipient path"),
             other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],
             content: "review the diff".to_string(),
             encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
             trigger_turn: true,
         };
+        communication.set_turn_id_if_missing("turn-1");
+        let mut serialized_communication = communication.clone();
+        serialized_communication.internal_chat_message_metadata_passthrough = None;
 
         assert_eq!(
             communication.to_response_input_item(),
             ResponseInputItem::Message {
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
-                    text: serde_json::to_string(&communication).expect("serialize communication"),
+                    text: serde_json::to_string(&serialized_communication)
+                        .expect("serialize communication"),
                 }],
                 phase: Some(MessagePhase::Commentary),
             }

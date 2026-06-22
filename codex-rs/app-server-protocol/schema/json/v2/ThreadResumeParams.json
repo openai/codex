@@ -1074,16 +1074,6 @@
         },
         {
           "properties": {
-            "internal_chat_message_metadata_passthrough": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "enum": [
                 "compaction_trigger"
