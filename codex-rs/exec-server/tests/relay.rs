@@ -157,7 +157,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
     assert_eq!(
         response,
         ExecResponse {
-            process_id: ProcessId::from("proc-1")
+            process_id: ProcessId::from("proc-1"),
         }
     );
 

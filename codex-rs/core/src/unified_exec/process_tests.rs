@@ -10,7 +10,6 @@ use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
-use codex_sandboxing::SandboxType;
 use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -40,6 +39,7 @@ impl MockExecProcess {
                 exit_code: None,
                 closed: false,
                 failure: None,
+                sandbox_denied: false,
             }))
     }
 
@@ -103,7 +103,7 @@ async fn remote_process(
         }),
     };
 
-    UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
+    UnifiedExecProcess::from_exec_server_started(started)
         .await
         .expect("remote process should start")
 }
@@ -190,6 +190,7 @@ async fn remote_process_waits_for_early_exit_event() {
                 exit_code: Some(17),
                 closed: true,
                 failure: None,
+                sandbox_denied: false,
             }])),
             terminate_error: None,
             wake_tx: wake_tx.clone(),
@@ -201,7 +202,7 @@ async fn remote_process_waits_for_early_exit_event() {
         let _ = wake_tx.send(1);
     });
 
-    let process = UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
+    let process = UnifiedExecProcess::from_exec_server_started(started)
         .await
         .expect("remote process should observe early exit");
 
