@@ -539,20 +539,33 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
 
     let call_id = "call-123";
+    let search_call_id = "search-rmcp-echo";
     let server_name = "rmcp";
     let namespace = format!("mcp__{server_name}");
 
-    let call_mock = mount_sse_once(
+    mount_sse_once(
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
+            responses::ev_tool_search_call(
+                search_call_id,
+                &json!({"query": "echo message and environment data"}),
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let call_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-2"),
             responses::ev_function_call_with_namespace(
                 call_id,
                 &namespace,
                 "echo",
                 "{\"message\":\"ping\"}",
             ),
-            responses::ev_completed("resp-1"),
+            responses::ev_completed("resp-2"),
         ]),
     )
     .await;
@@ -560,7 +573,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         &server,
         responses::sse(vec![
             responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
-            responses::ev_completed("resp-2"),
+            responses::ev_completed("resp-3"),
         ]),
     )
     .await;
@@ -645,13 +658,14 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let output_item = final_mock.single_request().function_call_output(call_id);
-    let request = call_mock.single_request();
+    let search_output = call_mock
+        .single_request()
+        .tool_search_output(search_call_id);
     assert!(
-        request.tool_by_name(&namespace, "echo").is_some(),
-        "direct MCP tool should be sent as a namespace child tool: {:?}",
-        request.body_json()
+        responses::namespace_child_tool(&search_output, &namespace, "echo").is_some(),
+        "tool_search should surface the RMCP echo tool: {search_output:?}"
     );
+    let output_item = final_mock.single_request().function_call_output(call_id);
 
     let output_text = output_item
         .get("output")
@@ -860,7 +874,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let server_name = "rmcp";
     let namespace = format!("mcp__{server_name}");
 
-    let call_mock = mount_sse_once(
+    mount_sse_once(
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
@@ -902,13 +916,6 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
             PermissionProfile::read_only(),
         )
         .await?;
-
-    let request = call_mock.single_request();
-    assert!(
-        request.tool_by_name(&namespace, "sandbox_meta").is_some(),
-        "direct MCP tool should be sent as a namespace child tool: {:?}",
-        request.body_json()
-    );
 
     let output_item = final_mock.single_request().function_call_output(call_id);
     let output_text = output_item

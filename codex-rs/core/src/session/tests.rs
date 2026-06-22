@@ -152,6 +152,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::responses::strip_metadata_from_items;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
@@ -1693,6 +1694,67 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 }
 
 #[tokio::test]
+async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing_turn_id() {
+    let (session, turn_context) = make_session_and_context().await;
+    let fresh_item = user_message("fresh");
+    let mut existing_item = assistant_message("existing");
+    existing_item.set_turn_id_if_missing("older-turn");
+
+    session
+        .record_conversation_items(&turn_context, &[fresh_item.clone(), existing_item.clone()])
+        .await;
+
+    let mut expected_fresh_item = fresh_item;
+    expected_fresh_item.set_turn_id_if_missing(&turn_context.sub_id);
+    let expected_items = vec![expected_fresh_item, existing_item];
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        expected_items.as_slice()
+    );
+}
+
+#[tokio::test]
+async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::root().join("worker").expect("worker path"),
+        AgentPath::root(),
+        Vec::new(),
+        "child done".to_string(),
+        /*trigger_turn*/ false,
+    );
+    let mut expected_item = communication.to_model_input_item();
+    expected_item.set_turn_id_if_missing(&turn_context.sub_id);
+
+    session
+        .record_inter_agent_communication(&turn_context, communication)
+        .await;
+
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        std::slice::from_ref(&expected_item)
+    );
+
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+
+    let (resumed_session, _resumed_turn_context) = make_session_and_context().await;
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(resumed))
+        .await;
+    assert_eq!(
+        resumed_session.clone_history().await.raw_items(),
+        std::slice::from_ref(&expected_item)
+    );
+}
+
+#[tokio::test]
 async fn prepares_image_failures_before_history_insertion() {
     let (session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -1749,16 +1811,16 @@ async fn prepares_image_failures_before_history_insertion() {
                 FunctionCallOutputContentItem::InputText {
                     text: "image content omitted because it could not be processed".to_string(),
                 },
-                FunctionCallOutputContentItem::InputImage {
-                    image_url: "https://example.com/image.png".to_string(),
-                    detail: Some(ImageDetail::High),
+                FunctionCallOutputContentItem::InputText {
+                    text: "image content omitted because remote image URLs are not supported"
+                        .to_string(),
                 },
             ]),
             success: Some(true),
         },
         internal_chat_message_metadata_passthrough: None,
     }];
-    assert_eq!(history.raw_items(), expected.as_slice());
+    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
 }
 
 #[tokio::test]
@@ -1770,6 +1832,10 @@ async fn prepares_resumed_history_before_installing_it() {
         content: vec![
             ContentItem::InputImage {
                 image_url: "data:image/png;base64,%%%".to_string(),
+                detail: Some(ImageDetail::High),
+            },
+            ContentItem::InputImage {
+                image_url: "https://example.com/image.png".to_string(),
                 detail: Some(ImageDetail::High),
             },
             ContentItem::InputText {
@@ -1796,6 +1862,10 @@ async fn prepares_resumed_history_before_installing_it() {
             content: vec![
                 ContentItem::InputText {
                     text: "image content omitted because it could not be processed".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "image content omitted because remote image URLs are not supported"
+                        .to_string(),
                 },
                 ContentItem::InputText {
                     text: "keep me".to_string(),
@@ -8216,7 +8286,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
         ),
     );
     let expected = vec![image_message, item];
-    assert_eq!(history.raw_items(), expected.as_slice());
+    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
@@ -8259,7 +8329,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
 
     let history = session.clone_history().await;
     let expected = vec![item];
-    assert_eq!(history.raw_items(), expected.as_slice());
+    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
     assert!(!expected_saved_path.exists());
 }
 
@@ -9011,7 +9081,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         internal_chat_message_metadata_passthrough: None,
     };
     assert!(
-        history.raw_items().iter().any(|item| item == &expected),
+        strip_metadata_from_items(history.raw_items()).contains(&expected),
         "expected pending input to be persisted into history on turn completion"
     );
 

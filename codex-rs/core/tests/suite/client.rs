@@ -66,6 +66,7 @@ use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
+use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -183,6 +184,65 @@ fn assert_codex_client_metadata(
         client_metadata["x-codex-window-id"].as_str(),
         turn_metadata["window_id"].as_str()
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_turns() {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp1"),
+                ev_assistant_message("msg-1", "first answer"),
+                ev_completed("resp1"),
+            ]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+    let test = test_codex().build(&server).await.unwrap();
+
+    test.submit_turn("turn one").await.unwrap();
+    test.submit_turn("turn two").await.unwrap();
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let first = requests[0].body_json();
+    let second = requests[1].body_json();
+    let first_turn_id = first["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("first request should include turn id");
+    let second_turn_id = second["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("second request should include turn id");
+    assert_ne!(first_turn_id, second_turn_id);
+
+    let first_input = first["input"].as_array().expect("first input");
+    let second_input = second["input"].as_array().expect("second input");
+    assert_eq!(&second_input[..first_input.len()], first_input.as_slice());
+    for item in first_input {
+        assert_eq!(
+            item["internal_chat_message_metadata_passthrough"]["turn_id"].as_str(),
+            Some(first_turn_id)
+        );
+    }
+
+    let item_turn_id = |text: &str| {
+        second_input
+            .iter()
+            .find(|item| {
+                item["content"].as_array().is_some_and(|content| {
+                    content
+                        .iter()
+                        .any(|content_item| content_item["text"].as_str() == Some(text))
+                })
+            })
+            .and_then(|item| item["internal_chat_message_metadata_passthrough"]["turn_id"].as_str())
+    };
+    assert_eq!(item_turn_id("turn one"), Some(first_turn_id));
+    assert_eq!(item_turn_id("first answer"), Some(first_turn_id));
+    assert_eq!(item_turn_id("turn two"), Some(second_turn_id));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3612,7 +3672,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let tail_len = r3_tail_expected.as_array().unwrap().len();
     let actual_tail = &r3_input_array[r3_input_array.len() - tail_len..];
     assert_eq!(
-        serde_json::Value::Array(actual_tail.to_vec()),
+        strip_metadata_from_json(serde_json::Value::Array(actual_tail.to_vec())),
         r3_tail_expected,
         "request 3 tail mismatch",
     );
