@@ -325,7 +325,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             launch_sandbox_permissions,
         );
         let env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
-        let (mut env, managed_network_context) = match managed_network {
+        let (env, managed_network_context) = match managed_network {
             Some(network) => {
                 let prepared = network
                     .prepare_for_optional_environment(
@@ -343,6 +343,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             None => (env, None),
         };
         let explicit_env_overrides = req.explicit_env_overrides.clone();
+        #[cfg(unix)]
+        let mut env = env;
         #[cfg(unix)]
         let runtime_path_prepends = {
             let mut runtime_path_prepends = RuntimePathPrepends::default();
