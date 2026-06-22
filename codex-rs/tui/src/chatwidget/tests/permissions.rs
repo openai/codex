@@ -1,6 +1,7 @@
 use super::*;
 use crate::legacy_core::config::PermissionProfileCatalogEntry;
 use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -283,7 +284,7 @@ async fn profile_permissions_full_access_opens_confirmation() {
                 display_label,
             }),
         } if preset.id == "full-access"
-            && profile_id == ":danger-full-access"
+            && profile_id == BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
             && display_label == "Full Access"
     ));
 }
