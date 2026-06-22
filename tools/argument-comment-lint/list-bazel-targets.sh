@@ -18,8 +18,17 @@ if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
   manual_rust_test_targets="$(printf '%s\n' "${manual_rust_test_targets}" | grep -v -- '-windows-cross-bin$' || true)"
 fi
 
-# The lint configuration does not register the transitioned Windows toolchain.
+# Wine-exec wrappers have no Rust sources of their own and require the transitioned Windows
+# toolchain, which the lint configuration does not register. Their native Rust test binaries are
+# already covered through the corresponding native test targets.
+wine_exec_test_targets="$(
+  ./.github/scripts/run-bazel-query-ci.sh \
+    --output=label \
+    -- 'filter(".*-wine-exec-test$", //codex-rs/...)'
+)"
+
 printf '%s\n' \
   "//codex-rs/..." \
   "-//codex-rs/core/tests/remote_env_windows:smoke-test"
+printf '%s\n' "${wine_exec_test_targets}" | sed 's#^#-#'
 printf '%s\n' "${manual_rust_test_targets}"
