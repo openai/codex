@@ -51,6 +51,7 @@ pub(crate) struct NetworkApprovalSpec {
     pub mode: NetworkApprovalMode,
     pub trigger: GuardianNetworkAccessTrigger,
     pub command: String,
+    pub environment_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -120,14 +121,20 @@ impl ActiveNetworkApproval {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct HostApprovalKey {
+    environment_id: String,
     host: String,
     protocol: &'static str,
     port: u16,
 }
 
 impl HostApprovalKey {
-    fn from_request(request: &NetworkPolicyRequest, protocol: NetworkApprovalProtocol) -> Self {
+    fn from_request(
+        request: &NetworkPolicyRequest,
+        protocol: NetworkApprovalProtocol,
+        environment_id: String,
+    ) -> Self {
         Self {
+            environment_id,
             host: request.host.to_ascii_lowercase(),
             protocol: protocol_key_label(protocol),
             port: request.port,
@@ -224,7 +231,14 @@ struct ActiveNetworkApprovalCall {
     turn_id: String,
     trigger: GuardianNetworkAccessTrigger,
     command: String,
+    environment_id: String,
     cancellation_token: CancellationToken,
+}
+
+enum ActiveNetworkApprovalAttribution {
+    None,
+    Single(Arc<ActiveNetworkApprovalCall>),
+    Ambiguous,
 }
 
 #[derive(Default)]
@@ -267,6 +281,7 @@ impl NetworkApprovalService {
         turn_id: String,
         trigger: GuardianNetworkAccessTrigger,
         command: String,
+        environment_id: String,
         cancellation_token: CancellationToken,
     ) {
         let mut calls = self.calls.lock().await;
@@ -278,6 +293,7 @@ impl NetworkApprovalService {
                 turn_id,
                 trigger,
                 command,
+                environment_id,
                 cancellation_token,
             }),
         );
@@ -297,6 +313,18 @@ impl NetworkApprovalService {
         }
 
         None
+    }
+
+    async fn resolve_active_call_attribution(&self) -> ActiveNetworkApprovalAttribution {
+        let calls = self.calls.lock().await;
+        match calls.active_calls.len() {
+            0 => ActiveNetworkApprovalAttribution::None,
+            1 => calls.active_calls.values().next().cloned().map_or(
+                ActiveNetworkApprovalAttribution::None,
+                ActiveNetworkApprovalAttribution::Single,
+            ),
+            _ => ActiveNetworkApprovalAttribution::Ambiguous,
+        }
     }
 
     async fn get_or_create_pending_approval(
@@ -384,7 +412,10 @@ impl NetworkApprovalService {
     }
 
     fn approval_id_for_key(key: &HostApprovalKey) -> String {
-        format!("network#{}#{}#{}", key.protocol, key.host, key.port)
+        format!(
+            "network#{}#{}#{}#{}",
+            key.environment_id, key.protocol, key.host, key.port
+        )
     }
 
     pub(crate) async fn handle_inline_policy_request(
@@ -400,7 +431,38 @@ impl NetworkApprovalService {
             NetworkProtocol::Socks5Tcp => NetworkApprovalProtocol::Socks5Tcp,
             NetworkProtocol::Socks5Udp => NetworkApprovalProtocol::Socks5Udp,
         };
-        let key = HostApprovalKey::from_request(&request, protocol);
+        let (owner_call, active_environment_id) =
+            if let Some(environment_id) = request.environment_id.clone() {
+                let owner_call = match self.resolve_active_call_attribution().await {
+                    ActiveNetworkApprovalAttribution::Single(call) => {
+                        (call.environment_id == environment_id).then_some(call)
+                    }
+                    ActiveNetworkApprovalAttribution::None
+                    | ActiveNetworkApprovalAttribution::Ambiguous => None,
+                };
+                (owner_call, Some(environment_id))
+            } else {
+                match self.resolve_active_call_attribution().await {
+                    ActiveNetworkApprovalAttribution::None => (None, None),
+                    ActiveNetworkApprovalAttribution::Single(call) => {
+                        let environment_id = call.environment_id.clone();
+                        (Some(call), Some(environment_id))
+                    }
+                    ActiveNetworkApprovalAttribution::Ambiguous => {
+                        return NetworkDecision::deny(REASON_NOT_ALLOWED);
+                    }
+                }
+            };
+        let turn_context = Self::active_turn_context(session.as_ref()).await;
+        let Some(environment_id) = active_environment_id.or_else(|| {
+            turn_context
+                .as_ref()
+                .and_then(|turn_context| turn_context.environments.primary())
+                .map(|environment| environment.environment_id.clone())
+        }) else {
+            return NetworkDecision::deny(REASON_NOT_ALLOWED);
+        };
+        let key = HostApprovalKey::from_request(&request, protocol, environment_id.clone());
 
         {
             let denied_hosts = self.session_denied_hosts.lock().await;
@@ -426,35 +488,43 @@ impl NetworkApprovalService {
             format!("Network access to \"{target}\" was blocked by policy.");
         let prompt_reason = format!("{} is not in the allowed_domains", request.host);
 
-        let Some(turn_context) = Self::active_turn_context(session.as_ref()).await else {
+        let Some(turn_context) = turn_context else {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
-            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
-                policy_denial_message,
-            ))
-            .await;
+            if let Some(owner_call) = owner_call.as_ref() {
+                self.record_call_outcome(
+                    &owner_call.registration_id,
+                    NetworkApprovalOutcome::DeniedByPolicy(policy_denial_message),
+                )
+                .await;
+            }
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
         if !permission_profile_allows_network_approval_flow(&turn_context.permission_profile()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
-            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
-                policy_denial_message,
-            ))
-            .await;
+            if let Some(owner_call) = owner_call.as_ref() {
+                self.record_call_outcome(
+                    &owner_call.registration_id,
+                    NetworkApprovalOutcome::DeniedByPolicy(policy_denial_message),
+                )
+                .await;
+            }
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
         if !allows_network_approval_flow(turn_context.approval_policy.value()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
-            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
-                policy_denial_message,
-            ))
-            .await;
+            if let Some(owner_call) = owner_call.as_ref() {
+                self.record_call_outcome(
+                    &owner_call.registration_id,
+                    NetworkApprovalOutcome::DeniedByPolicy(policy_denial_message),
+                )
+                .await;
+            }
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
 
-        let owner_call = self.resolve_single_active_call().await;
         let network_approval_context = NetworkApprovalContext {
             host: request.host.clone(),
             protocol,
@@ -519,15 +589,28 @@ impl NetworkApprovalService {
             .await
         } else {
             let available_decisions = None;
+            let cwd = if let Some(owner_call) = owner_call.as_ref() {
+                owner_call.trigger.cwd.clone()
+            } else {
+                turn_context
+                    .environments
+                    .turn_environments
+                    .iter()
+                    .find(|environment| environment.environment_id == environment_id)
+                    .and_then(|environment| environment.cwd().to_abs_path().ok())
+                    .unwrap_or_else(|| {
+                        #[allow(deprecated)]
+                        turn_context.cwd.clone()
+                    })
+            };
             session
                 .request_command_approval(
                     turn_context.as_ref(),
                     guardian_approval_id,
                     /*approval_id*/ None,
-                    /*environment_id*/ None,
+                    Some(environment_id),
                     prompt_command,
-                    #[allow(deprecated)]
-                    turn_context.cwd.clone(),
+                    cwd,
                     Some(prompt_reason),
                     Some(network_approval_context.clone()),
                     /*proposed_execpolicy_amendment*/ None,
@@ -712,6 +795,7 @@ pub(crate) async fn begin_network_approval(
         mode,
         trigger,
         command,
+        environment_id,
     } = spec?;
     if !managed_network_active || network.is_none() {
         return None;
@@ -727,6 +811,7 @@ pub(crate) async fn begin_network_approval(
             turn_id.to_string(),
             trigger,
             command,
+            environment_id,
             cancellation_token.clone(),
         )
         .await;

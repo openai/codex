@@ -209,6 +209,7 @@ pub enum SandboxTransformError {
         source: io::Error,
     },
     MissingLinuxSandboxExecutable,
+    EnvironmentNetworkProxy(String),
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
@@ -233,6 +234,9 @@ impl std::fmt::Display for SandboxTransformError {
             Self::MissingLinuxSandboxExecutable => {
                 write!(f, "missing codex-linux-sandbox executable path")
             }
+            Self::EnvironmentNetworkProxy(err) => {
+                write!(f, "failed to prepare environment network proxy: {err}")
+            }
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
@@ -251,6 +255,7 @@ impl std::error::Error for SandboxTransformError {
             Self::InvalidCommandCwd { source, .. }
             | Self::InvalidSandboxPolicyCwd { source, .. } => Some(source),
             Self::MissingLinuxSandboxExecutable => None,
+            Self::EnvironmentNetworkProxy(_) => None,
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => None,
             #[cfg(not(target_os = "macos"))]
@@ -277,24 +282,36 @@ impl SandboxManager {
         windows_sandbox_level: WindowsSandboxLevel,
         has_managed_network_requirements: bool,
     ) -> SandboxType {
+        if self.should_sandbox(
+            file_system_policy,
+            network_policy,
+            pref,
+            has_managed_network_requirements,
+        ) {
+            get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
+                .unwrap_or(SandboxType::None)
+        } else {
+            SandboxType::None
+        }
+    }
+
+    /// Returns whether the request needs a sandbox, independently of whether
+    /// this host can provide a concrete sandbox implementation.
+    pub fn should_sandbox(
+        &self,
+        file_system_policy: &FileSystemSandboxPolicy,
+        network_policy: NetworkSandboxPolicy,
+        pref: SandboxablePreference,
+        has_managed_network_requirements: bool,
+    ) -> bool {
         match pref {
-            SandboxablePreference::Forbid => SandboxType::None,
-            SandboxablePreference::Require => {
-                get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
-                    .unwrap_or(SandboxType::None)
-            }
-            SandboxablePreference::Auto => {
-                if should_require_platform_sandbox(
-                    file_system_policy,
-                    network_policy,
-                    has_managed_network_requirements,
-                ) {
-                    get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
-                        .unwrap_or(SandboxType::None)
-                } else {
-                    SandboxType::None
-                }
-            }
+            SandboxablePreference::Forbid => false,
+            SandboxablePreference::Require => true,
+            SandboxablePreference::Auto => should_require_platform_sandbox(
+                file_system_policy,
+                network_policy,
+                has_managed_network_requirements,
+            ),
         }
     }
 
@@ -347,9 +364,11 @@ impl SandboxManager {
                     network_sandbox_policy: pending.effective_network_policy,
                     sandbox_policy_cwd: pending.native_sandbox_policy_cwd.as_path(),
                     enforce_managed_network,
+                    environment_id,
                     network,
                     extra_allow_unix_sockets: &[],
-                });
+                })
+                .map_err(SandboxTransformError::EnvironmentNetworkProxy)?;
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);

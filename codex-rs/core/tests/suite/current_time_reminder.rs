@@ -23,6 +23,7 @@ use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -269,6 +270,48 @@ async fn time_provider_failure_stops_before_inference() -> Result<()> {
     })
     .await;
     assert!(responses.requests().is_empty());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn current_time_tool_returns_the_latest_time() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const CALL_ID: &str = "current-time";
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(CALL_ID, "clock", "curr_time", "{}"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            enable_current_time_reminder(config, /*interval*/ 50, CurrentTimeSource::External)
+        })
+        .with_external_time_provider(Arc::new(TestTimeProvider::default()))
+        .build(&server)
+        .await?;
+
+    test.submit_turn("check the current time").await?;
+
+    let requests = responses.requests();
+    assert!(
+        requests[0].tool_by_name("clock", "curr_time").is_some(),
+        "clock.curr_time should be exposed when current-time reminders are enabled"
+    );
+    assert_eq!(
+        requests[1].function_call_output_text(CALL_ID),
+        Some(SECOND_REMINDER.to_string())
+    );
 
     Ok(())
 }

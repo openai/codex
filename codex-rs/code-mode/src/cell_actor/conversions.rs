@@ -5,10 +5,10 @@ use codex_code_mode_protocol::ImageDetail;
 use codex_code_mode_protocol::ToolDefinition;
 use codex_protocol::ToolName;
 
-use super::CellImageDetail;
-use super::CellOutputItem;
-use super::CellRequest;
-use super::CellToolKind;
+use crate::session_runtime::CreateCellRequest as CellRequest;
+use crate::session_runtime::ImageDetail as CellImageDetail;
+use crate::session_runtime::OutputItem as CellOutputItem;
+use crate::session_runtime::ToolKind as CellToolKind;
 
 pub(super) fn runtime_request(request: CellRequest) -> ExecuteRequest {
     ExecuteRequest {

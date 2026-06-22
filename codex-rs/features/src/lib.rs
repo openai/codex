@@ -26,6 +26,7 @@ pub use feature_configs::NetworkProxyModeToml;
 pub use feature_configs::NetworkProxyUnixSocketPermissionToml;
 use feature_configs::RemovedAppsMcpPathOverrideConfigToml;
 pub use feature_configs::RolloutBudgetConfigToml;
+pub use feature_configs::TokenBudgetConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -124,6 +125,8 @@ pub enum Feature {
     UseLegacyLandlock,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Allow turns to start while selected executors are still starting.
+    DeferredExecutor,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
     /// Enable startup memory extraction and file-backed memory consolidation.
@@ -142,6 +145,8 @@ pub enum Feature {
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
+    /// Removed compatibility flag retained as a no-op.
+    MultiAgentMode,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
     /// Enable apps.
@@ -188,8 +193,10 @@ pub enum Feature {
     ImageGeneration,
     /// Replace hosted image generation with the standalone image-generation extension.
     ImageGenExt,
-    /// Resize all inline data-URL images before recording them in history.
+    /// Removed compatibility flag for always-on centralized image preparation.
     ResizeAllImages,
+    /// Generate Responses API item IDs for client-created history items.
+    ItemIds,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -224,6 +231,8 @@ pub enum Feature {
     RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
+    /// Enable automatic context compaction before or during a turn.
+    AutoCompaction,
     /// Enable remote compaction v2 over the normal Responses API.
     RemoteCompactionV2,
     /// Use Agent Identity for ChatGPT-authenticated sessions.
@@ -463,7 +472,7 @@ impl Features {
                 "tool_search" | "apps_mcp_path_override" => {
                     continue;
                 }
-                "image_detail_original" => {
+                "image_detail_original" | "resize_all_images" => {
                     continue;
                 }
                 "plugin_hooks" => {
@@ -593,7 +602,7 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
 }
 
 fn web_search_details() -> &'static str {
-    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
+    "Set `web_search` to `\"live\"`, `\"indexed\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
 }
 
 /// Keys accepted in `[features]` tables.
@@ -625,6 +634,8 @@ pub struct FeaturesToml {
     pub code_mode: Option<FeatureToml<CodeModeConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<FeatureToml<TokenBudgetConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollout_budget: Option<FeatureToml<RolloutBudgetConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -661,6 +672,9 @@ impl FeaturesToml {
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
+        if let Some(enabled) = self.token_budget.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::TokenBudget.key().to_string(), enabled);
+        }
         if let Some(enabled) = self.rollout_budget.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::RolloutBudget.key().to_string(), enabled);
         }
@@ -682,6 +696,7 @@ impl FeaturesToml {
         let Self {
             code_mode,
             multi_agent_v2,
+            token_budget,
             rollout_budget,
             current_time_reminder,
             removed_apps_mcp_path_override: _,
@@ -697,6 +712,8 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(code_mode, enabled);
             } else if spec.id == Feature::MultiAgentV2 {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
+            } else if spec.id == Feature::TokenBudget {
+                materialize_resolved_feature_enabled(token_budget, enabled);
             } else if spec.id == Feature::RolloutBudget {
                 materialize_resolved_feature_enabled(rollout_budget, enabled);
             } else if spec.id == Feature::CurrentTimeReminder {
@@ -813,6 +830,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "shell_snapshot",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::DeferredExecutor,
+        key: "deferred_executor",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::JsRepl,
@@ -1009,6 +1032,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::MultiAgentMode,
+        key: "multi_agent_mode",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::SpawnCsv,
         key: "enable_fanout",
         stage: Stage::UnderDevelopment,
@@ -1131,6 +1160,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResizeAllImages,
         key: "resize_all_images",
+        stage: Stage::Removed,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ItemIds,
+        key: "item_ids",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -1301,6 +1336,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "responses_websockets_v2",
         stage: Stage::Removed,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AutoCompaction,
+        key: "auto_compaction",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RemoteCompactionV2,

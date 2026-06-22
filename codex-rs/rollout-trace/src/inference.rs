@@ -515,6 +515,7 @@ mod tests {
             traced,
             json!({
                 "type": "reasoning",
+                "id": "rs-1",
                 "summary": [{"type": "summary_text", "text": "summary"}],
                 "content": [{"type": "text", "text": "raw reasoning"}],
                 "encrypted_content": "encoded",

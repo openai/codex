@@ -10,6 +10,14 @@ use crate::catalog::SkillPackageId;
 
 const SKILL_PATH_PREFIX: &str = "skill://";
 
+#[tracing::instrument(
+    level = "trace",
+    skip_all,
+    fields(
+        input_count = inputs.len(),
+        catalog_entry_count = catalog.entries.len()
+    )
+)]
 pub(crate) fn collect_explicit_skill_mentions(
     inputs: &[UserInput],
     catalog: &SkillCatalog,

@@ -254,8 +254,8 @@ async fn run_compact_task_inner_impl(
             Ok(()) => {
                 break;
             }
-            Err(CodexErr::Interrupted) => {
-                return Err(CodexErr::Interrupted);
+            Err(err @ (CodexErr::Interrupted | CodexErr::TurnAborted)) => {
+                return Err(err);
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input_len > 1 {
@@ -302,7 +302,7 @@ async fn run_compact_task_inner_impl(
     let user_messages = collect_user_messages(history_items);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
-    let window_id = sess.advance_auto_compact_window_id().await;
+    let (window_number, window_ids) = sess.advance_auto_compact_window().await;
 
     if matches!(
         initial_context_injection,
@@ -319,10 +319,18 @@ async fn run_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
-        window_id: Some(window_id),
+        window_number: Some(window_number),
+        first_window_id: Some(window_ids.first_window_id.to_string()),
+        previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
+        window_id: Some(window_ids.window_id.to_string()),
     };
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    sess.replace_compacted_history(
+        turn_context.as_ref(),
+        new_history,
+        reference_context_item,
+        compacted_item,
+    )
+    .await;
     sess.recompute_token_usage(&turn_context).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)
@@ -651,7 +659,7 @@ async fn drain_to_completed(
             }
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await;
+                    .await?;
                 return Ok(());
             }
             Ok(_) => continue,

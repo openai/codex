@@ -41,6 +41,7 @@ use codex_shell_command::parse_command::parse_command;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::SessionTaskResult;
 use crate::session::session::Session;
 use codex_protocol::models::PermissionProfile;
 
@@ -82,7 +83,7 @@ impl SessionTask for UserShellCommandTask {
         turn_context: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> SessionTaskResult {
         execute_user_shell_command(
             session.clone_session(),
             turn_context,
@@ -91,7 +92,7 @@ impl SessionTask for UserShellCommandTask {
             UserShellCommandMode::StandaloneTurn,
         )
         .await;
-        None
+        Ok(None)
     }
 }
 
@@ -223,6 +224,8 @@ pub(crate) async fn execute_user_shell_command(
         network_sandbox_policy: permission_profile.network_sandbox_policy(),
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
+        exec_server_sandbox: None,
+        exec_server_enforce_managed_network: false,
     };
 
     let stdout_stream = Some(StdoutStream {

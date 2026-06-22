@@ -108,7 +108,7 @@ async fn exec_command_with_tty(
 
     let process = Arc::new(
         manager
-            .open_session_with_exec_env(
+            .open_session_with_prepared_exec_env(
                 process_id,
                 &request,
                 tty,
@@ -811,7 +811,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
 
     let environment = codex_exec_server::Environment::default_for_tests();
     let process = UnifiedExecProcessManager::default()
-        .open_session_with_exec_env(
+        .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ false,
@@ -853,7 +853,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
 
     let manager = UnifiedExecProcessManager::default();
     let process = manager
-        .open_session_with_exec_env(
+        .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ true,
@@ -910,7 +910,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
 
     let manager = UnifiedExecProcessManager::default();
     let err = manager
-        .open_session_with_exec_env(
+        .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ true,

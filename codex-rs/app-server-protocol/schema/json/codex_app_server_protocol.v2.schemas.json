@@ -2920,6 +2920,29 @@
             },
             "method": {
               "enum": [
+                "account/workspaceMessages/read"
+              ],
+              "title": "Account/workspaceMessages/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/workspaceMessages/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/sendAddCreditsNudgeEmail"
               ],
               "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
@@ -6705,6 +6728,28 @@
       "title": "GetAccountTokenUsageResponse",
       "type": "object"
     },
+    "GetWorkspaceMessagesResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "featureEnabled": {
+          "description": "Whether the workspace-message backend route is available for this client.",
+          "type": "boolean"
+        },
+        "messages": {
+          "description": "Active workspace messages returned by the backend.",
+          "items": {
+            "$ref": "#/definitions/WorkspaceMessage"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "featureEnabled",
+        "messages"
+      ],
+      "title": "GetWorkspaceMessagesResponse",
+      "type": "object"
+    },
     "GitInfo": {
       "properties": {
         "branch": {
@@ -8983,6 +9028,41 @@
       "title": "ModelReroutedNotification",
       "type": "object"
     },
+    "ModelSafetyBufferingUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "useCases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "model",
+        "reasons",
+        "threadId",
+        "turnId",
+        "useCases"
+      ],
+      "title": "ModelSafetyBufferingUpdatedNotification",
+      "type": "object"
+    },
     "ModelServiceTier": {
       "properties": {
         "description": {
@@ -9060,6 +9140,15 @@
       ],
       "title": "ModelVerificationNotification",
       "type": "object"
+    },
+    "MultiAgentMode": {
+      "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
+      "enum": [
+        "none",
+        "explicitRequestOnly",
+        "proactive"
+      ],
+      "type": "string"
     },
     "NetworkAccess": {
       "enum": [
@@ -10754,13 +10843,6 @@
       "title": "RawResponseItemCompletedNotification",
       "type": "object"
     },
-    "RealtimeConversationArchitecture": {
-      "enum": [
-        "realtimeapi",
-        "avas"
-      ],
-      "type": "string"
-    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -11264,6 +11346,12 @@
               },
               "type": "array"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -11314,6 +11402,12 @@
               },
               "type": "array"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -11362,6 +11456,12 @@
                 "null"
               ]
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -11405,6 +11505,13 @@
                 "null"
               ]
             },
+            "id": {
+              "description": "Legacy id field retained for compatibility with older payloads.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -11441,6 +11548,12 @@
             },
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -11490,6 +11603,12 @@
             "execution": {
               "type": "string"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -11527,6 +11646,12 @@
             "call_id": {
               "type": "string"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -11560,6 +11685,12 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "input": {
               "type": "string"
@@ -11604,6 +11735,12 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -11651,6 +11788,12 @@
             "execution": {
               "type": "string"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -11697,6 +11840,12 @@
                 }
               ]
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -11730,7 +11879,6 @@
         {
           "properties": {
             "id": {
-              "description": "Existing provider ID retained on serialized history for compatibility.",
               "type": [
                 "string",
                 "null"
@@ -11778,6 +11926,12 @@
           "properties": {
             "encrypted_content": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -11833,6 +11987,12 @@
         {
           "properties": {
             "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
               "type": [
                 "string",
                 "null"
@@ -13331,6 +13491,26 @@
             "params"
           ],
           "title": "Turn/moderationMetadataNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "model/safetyBuffering/updated"
+              ],
+              "title": "Model/safetyBuffering/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelSafetyBufferingUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/safetyBuffering/updatedNotification",
           "type": "object"
         },
         {
@@ -18055,6 +18235,7 @@
       "enum": [
         "disabled",
         "cached",
+        "indexed",
         "live"
       ],
       "type": "string"
@@ -18206,6 +18387,49 @@
       ],
       "title": "WindowsWorldWritableWarningNotification",
       "type": "object"
+    },
+    "WorkspaceMessage": {
+      "properties": {
+        "archivedAt": {
+          "description": "Unix timestamp (in seconds) when the message was archived.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "description": "Unix timestamp (in seconds) when the message was created.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "messageBody": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "messageType": {
+          "$ref": "#/definitions/WorkspaceMessageType"
+        }
+      },
+      "required": [
+        "messageBody",
+        "messageId",
+        "messageType"
+      ],
+      "type": "object"
+    },
+    "WorkspaceMessageType": {
+      "enum": [
+        "headline",
+        "announcement",
+        "unknown"
+      ],
+      "type": "string"
     },
     "WriteStatus": {
       "enum": [

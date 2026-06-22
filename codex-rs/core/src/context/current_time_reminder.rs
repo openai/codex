@@ -11,6 +11,12 @@ impl CurrentTimeReminder {
     pub(crate) fn new(current_time: DateTime<Utc>) -> Self {
         Self { current_time }
     }
+
+    pub(crate) fn formatted_time(&self) -> String {
+        self.current_time
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string()
+    }
 }
 
 impl ContextualUserFragment for CurrentTimeReminder {
@@ -27,9 +33,6 @@ impl ContextualUserFragment for CurrentTimeReminder {
     }
 
     fn body(&self) -> String {
-        format!(
-            "It is {}.",
-            self.current_time.format("%Y-%m-%d %H:%M:%S UTC")
-        )
+        format!("It is {}.", self.formatted_time())
     }
 }
