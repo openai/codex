@@ -25,11 +25,10 @@ fn sandbox_request_wraps_native_argv_on_executor() {
     let self_exe = std::env::current_exe().expect("current executable");
     let runtime_paths =
         ExecServerRuntimePaths::new(self_exe.clone(), Some(self_exe)).expect("runtime paths");
-    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+    let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
         PermissionProfile::workspace_write(),
         cwd_uri.clone(),
     );
-    sandbox.workspace_roots = vec![cwd_uri.clone()];
     let params = ExecParams {
         process_id: ProcessId::from("process-1"),
         argv: vec![
