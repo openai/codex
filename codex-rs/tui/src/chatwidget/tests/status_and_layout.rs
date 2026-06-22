@@ -2211,6 +2211,47 @@ async fn workspace_headline_update_applies_available_headline() {
 }
 
 #[tokio::test]
+async fn account_update_clears_workspace_headline_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Old workspace headline".to_string());
+    chat.status_line_workspace_headline_pending = true;
+    chat.status_line_workspace_headline_last_requested_at = Some(Instant::now());
+    chat.status_line_workspace_messages_disabled = true;
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ false,
+    );
+
+    assert_eq!(
+        (
+            status_line_text(&chat),
+            chat.status_line_workspace_headline_pending,
+            chat.status_line_workspace_headline_last_requested_at,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (None, false, None, false)
+    );
+}
+
+#[tokio::test]
+async fn workspace_headline_fetch_allows_backend_auth_without_chatgpt_account() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
+    );
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RefreshStatusLineWorkspaceHeadline)
+    );
+}
+
+#[tokio::test]
 async fn status_line_branch_state_resets_when_git_branch_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("main".to_string());

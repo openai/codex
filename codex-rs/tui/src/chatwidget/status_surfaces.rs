@@ -580,7 +580,6 @@ impl ChatWidget {
     fn status_line_workspace_headline_should_fetch(&self, now: Instant) -> bool {
         if self.status_line_workspace_headline_pending
             || self.status_line_workspace_messages_disabled
-            || !self.has_chatgpt_account
             || !self.has_codex_backend_auth
         {
             return false;
