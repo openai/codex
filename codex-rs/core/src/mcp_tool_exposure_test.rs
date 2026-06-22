@@ -96,7 +96,7 @@ fn with_visibility(mut tool: ToolInfo, visibility: &[&str]) -> ToolInfo {
 #[tokio::test]
 async fn directly_exposes_effective_tool_sets_when_search_is_unavailable() {
     let config = test_config().await;
-    let mcp_tools = numbered_mcp_tools(2);
+    let mcp_tools = numbered_mcp_tools(/*count*/ 2);
 
     let exposure = build_mcp_tool_exposure(
         &mcp_tools, /*connectors*/ None, &config, /*search_tool_enabled*/ false,
@@ -238,7 +238,7 @@ enabled = true
 #[tokio::test]
 async fn defers_effective_tool_sets_when_search_is_available() {
     let config = test_config().await;
-    let mcp_tools = numbered_mcp_tools(2);
+    let mcp_tools = numbered_mcp_tools(/*count*/ 2);
 
     let exposure = build_mcp_tool_exposure(
         &mcp_tools, /*connectors*/ None, &config, /*search_tool_enabled*/ true,
