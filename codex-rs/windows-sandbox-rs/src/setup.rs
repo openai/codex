@@ -67,6 +67,7 @@ const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\Program Files (x86)",
     r"C:\ProgramData",
 ];
+const LEGACY_PROTECTED_WORKSPACE_CHILDREN: &[&str] = &[".git", ".codex", ".agents"];
 
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
@@ -960,7 +961,37 @@ fn build_payload_deny_write_paths(
         .map(|path| canonicalize_path(&path))
         .collect();
     deny_write_paths.extend(allow_deny_paths.deny);
+    let writable_root_keys: HashSet<String> = request
+        .permissions
+        .writable_roots_for_cwd(request.command_cwd, request.env_map)
+        .into_iter()
+        .map(|root| canonical_path_key(&root.root))
+        .collect();
+    deny_write_paths.retain(|path| {
+        !is_missing_legacy_protected_workspace_child(path, &writable_root_keys)
+    });
     deny_write_paths
+}
+
+fn is_missing_legacy_protected_workspace_child(
+    path: &Path,
+    writable_root_keys: &HashSet<String>,
+) -> bool {
+    if path.exists() {
+        return false;
+    }
+
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if !LEGACY_PROTECTED_WORKSPACE_CHILDREN.contains(&file_name) {
+        return false;
+    }
+
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    writable_root_keys.contains(&canonical_path_key(parent))
 }
 
 fn build_payload_deny_read_paths(explicit_deny_read_paths: Option<Vec<PathBuf>>) -> Vec<PathBuf> {
@@ -1845,6 +1876,49 @@ mod tests {
             .collect::<HashSet<PathBuf>>(),
             deny_write_paths.into_iter().collect()
         );
+    }
+
+    #[test]
+    fn payload_deny_write_paths_skip_missing_legacy_protected_children() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let extra_write_root = tmp.path().join("extra-write-root");
+        let explicit_deny = tmp.path().join("explicit-deny");
+        fs::create_dir_all(&command_cwd).expect("create command cwd");
+        fs::create_dir_all(&extra_write_root).expect("create extra write root");
+        let missing_command_git = command_cwd.join(".git");
+        let missing_command_agents = command_cwd.join(".agents");
+        let missing_extra_codex = extra_write_root.join(".codex");
+        let writable_roots = vec![
+            AbsolutePathBuf::from_absolute_path(&extra_write_root).expect("absolute writable root"),
+        ];
+        let permission_profile = workspace_write_profile(
+            &writable_roots,
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
+        let workspace_roots = workspace_roots_for(command_cwd.as_path());
+        let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
+        let request = super::SandboxSetupRequest {
+            permissions: &permissions,
+            command_cwd: &command_cwd,
+            env_map: &HashMap::new(),
+            codex_home: &codex_home,
+            proxy_enforced: false,
+        };
+
+        let deny_write_paths = super::build_payload_deny_write_paths(
+            &request,
+            Some(vec![
+                explicit_deny.clone(),
+                missing_command_git,
+                missing_command_agents,
+                missing_extra_codex,
+            ]),
+        );
+
+        assert_eq!(vec![explicit_deny], deny_write_paths);
     }
 
     #[test]
