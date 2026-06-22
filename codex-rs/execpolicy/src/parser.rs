@@ -81,6 +81,10 @@ impl PolicyParser {
     pub fn build(self) -> crate::policy::Policy {
         self.builder.into_inner().build()
     }
+
+    pub fn merge_overlay(&mut self, overlay: &crate::policy::Policy) {
+        self.builder.borrow_mut().merge_overlay(overlay);
+    }
 }
 
 #[derive(Debug, ProvidesStaticType)]
@@ -157,6 +161,22 @@ impl PolicyBuilder {
             self.network_rules,
             self.host_executables_by_name,
         )
+    }
+
+    fn merge_overlay(&mut self, overlay: &crate::policy::Policy) {
+        for (program, rules) in overlay.rules().iter_all() {
+            for rule in rules {
+                self.rules_by_program.insert(program.clone(), rule.clone());
+            }
+        }
+        self.network_rules
+            .extend(overlay.network_rules().iter().cloned());
+        self.host_executables_by_name.extend(
+            overlay
+                .host_executables()
+                .iter()
+                .map(|(name, paths)| (name.clone(), paths.clone())),
+        );
     }
 }
 
@@ -257,6 +277,16 @@ fn parse_network_rule_decision(raw: &str) -> Result<Decision> {
     }
 }
 
+fn parse_permissions(permissions: Option<&str>) -> Result<Option<String>> {
+    match permissions {
+        Some(raw) if raw.trim().is_empty() => Err(Error::InvalidRule(
+            "permissions cannot be empty".to_string(),
+        )),
+        Some(raw) => Ok(Some(raw.to_string())),
+        None => Ok(None),
+    }
+}
+
 fn error_location_from_file_span(span: FileSpan) -> ErrorLocation {
     let resolved = span.resolve_span();
     ErrorLocation {
@@ -352,6 +382,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         r#match: Option<UnpackList<Value<'v>>>,
         not_match: Option<UnpackList<Value<'v>>>,
         justification: Option<&'v str>,
+        permissions: Option<&'v str>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let decision = match decision {
@@ -366,6 +397,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             Some(raw) => Some(raw.to_string()),
             None => None,
         };
+        let permissions = parse_permissions(permissions)?;
 
         let pattern_tokens = parse_pattern(pattern)?;
 
@@ -398,6 +430,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                     },
                     decision,
                     justification: justification.clone(),
+                    permissions: permissions.clone(),
                 }) as RuleRef
             })
             .collect();

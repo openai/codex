@@ -3447,6 +3447,7 @@ mod requirements_exec_policy_tests {
     use codex_config::RequirementsExecPolicyToml;
     use codex_execpolicy::Decision;
     use codex_execpolicy::Evaluation;
+    use codex_execpolicy::MatchOptions;
     use codex_execpolicy::RuleMatch;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -3504,6 +3505,7 @@ prefix_rules = [
                     }],
                     decision: Some(RequirementsExecPolicyDecisionToml::Forbidden),
                     justification: None,
+                    permissions: None,
                 }],
             }
         );
@@ -3533,6 +3535,7 @@ prefix_rules = [
                         }],
                         decision: Some(RequirementsExecPolicyDecisionToml::Forbidden),
                         justification: None,
+                        permissions: None,
                     },
                     RequirementsExecPolicyPrefixRuleToml {
                         pattern: vec![
@@ -3547,6 +3550,7 @@ prefix_rules = [
                         ],
                         decision: Some(RequirementsExecPolicyDecisionToml::Prompt),
                         justification: Some("review changes before push or commit".to_string()),
+                        permissions: None,
                     },
                 ],
             }
@@ -3575,6 +3579,58 @@ prefix_rules = [
                     decision: Decision::Forbidden,
                     resolved_program: None,
                     justification: None,
+                }],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn converts_rules_toml_permissions_scope() -> anyhow::Result<()> {
+        let toml_str = r#"
+prefix_rules = [
+    { pattern = [{ token = "git" }, { token = "status" }], decision = "prompt", permissions = "strict" },
+]
+"#;
+
+        let parsed: RequirementsExecPolicyToml = from_str(toml_str)?;
+        let policy = parsed.to_policy()?;
+        let command = tokens(&["git", "status"]);
+
+        assert_eq!(
+            policy.check_with_options(
+                &command,
+                &|_| Decision::Allow,
+                &MatchOptions {
+                    active_permission_profile: Some("strict".to_string()),
+                    ..MatchOptions::default()
+                }
+            ),
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: command.clone(),
+                    decision: Decision::Prompt,
+                    resolved_program: None,
+                    justification: None,
+                }],
+            }
+        );
+        assert_eq!(
+            policy.check_with_options(
+                &command,
+                &|_| Decision::Allow,
+                &MatchOptions {
+                    active_permission_profile: Some("relaxed".to_string()),
+                    ..MatchOptions::default()
+                }
+            ),
+            Evaluation {
+                decision: Decision::Allow,
+                matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                    command,
+                    decision: Decision::Allow,
                 }],
             }
         );

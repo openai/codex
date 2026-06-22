@@ -22,6 +22,7 @@ type HeuristicsFallback<'a> = Option<&'a dyn Fn(&[String]) -> Decision>;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MatchOptions {
     pub resolve_host_executables: bool,
+    pub active_permission_profile: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +76,9 @@ impl Policy {
                 if prefix_rule.decision != Decision::Allow {
                     continue;
                 }
+                if prefix_rule.permissions.is_some() {
+                    continue;
+                }
 
                 let mut prefix = Vec::with_capacity(prefix_rule.pattern.rest.len() + 1);
                 prefix.push(prefix_rule.pattern.first.as_ref().to_string());
@@ -104,6 +108,7 @@ impl Policy {
             },
             decision,
             justification: None,
+            permissions: None,
         });
 
         self.rules_by_program.insert(first_token.clone(), rule);
@@ -272,12 +277,12 @@ impl Policy {
         options: &MatchOptions,
     ) -> Vec<RuleMatch> {
         let matched_rules = self
-            .match_exact_rules(cmd)
+            .match_exact_rules(cmd, options)
             .filter(|matched_rules| !matched_rules.is_empty())
             .or_else(|| {
                 options
                     .resolve_host_executables
-                    .then(|| self.match_host_executable_rules(cmd))
+                    .then(|| self.match_host_executable_rules(cmd, options))
                     .filter(|matched_rules| !matched_rules.is_empty())
             })
             .unwrap_or_default();
@@ -294,17 +299,26 @@ impl Policy {
         }
     }
 
-    fn match_exact_rules(&self, cmd: &[String]) -> Option<Vec<RuleMatch>> {
+    fn match_exact_rules(&self, cmd: &[String], options: &MatchOptions) -> Option<Vec<RuleMatch>> {
         let first = cmd.first()?;
         Some(
             self.rules_by_program
                 .get_vec(first)
-                .map(|rules| rules.iter().filter_map(|rule| rule.matches(cmd)).collect())
+                .map(|rules| {
+                    rules
+                        .iter()
+                        .filter_map(|rule| rule.matches(cmd, options))
+                        .collect()
+                })
                 .unwrap_or_default(),
         )
     }
 
-    fn match_host_executable_rules(&self, cmd: &[String]) -> Vec<RuleMatch> {
+    fn match_host_executable_rules(
+        &self,
+        cmd: &[String],
+        options: &MatchOptions,
+    ) -> Vec<RuleMatch> {
         let Some(first) = cmd.first() else {
             return Vec::new();
         };
@@ -328,7 +342,7 @@ impl Policy {
             .collect::<Vec<_>>();
         rules
             .iter()
-            .filter_map(|rule| rule.matches(&basename_command))
+            .filter_map(|rule| rule.matches(&basename_command, options))
             .map(|rule_match| rule_match.with_resolved_program(&program))
             .collect()
     }
