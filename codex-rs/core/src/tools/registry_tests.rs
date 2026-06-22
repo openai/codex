@@ -140,7 +140,7 @@ impl codex_extension_api::ToolLifecycleContributor for ToolLifecycleRecorder {
 }
 
 #[test]
-fn handler_looks_up_namespaced_aliases_explicitly() {
+fn handler_normalizes_only_the_default_namespace() {
     let namespace = "mcp__codex_apps__gmail";
     let tool_name = "gmail_get_recent_emails";
     let plain_name = codex_tools::ToolName::plain(tool_name);
@@ -151,23 +151,25 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     let namespaced_handler = Arc::new(TestHandler {
         tool_name: namespaced_name.clone(),
     }) as Arc<dyn CoreToolRuntime>;
-    let registry = ToolRegistry::new(HashMap::from([
-        (plain_name.clone(), Arc::clone(&plain_handler)),
-        (namespaced_name.clone(), Arc::clone(&namespaced_handler)),
-    ]));
+    let registry =
+        ToolRegistry::from_tools([Arc::clone(&plain_handler), Arc::clone(&namespaced_handler)]);
 
     let plain = registry.tool(&plain_name);
+    let default_namespaced = registry.tool(&codex_tools::ToolName::function(tool_name));
     let namespaced = registry.tool(&namespaced_name);
     let missing_namespaced = registry.tool(&codex_tools::ToolName::namespaced(
         "mcp__codex_apps__calendar",
         tool_name,
     ));
 
-    assert_eq!(plain.is_some(), true);
-    assert_eq!(namespaced.is_some(), true);
-    assert_eq!(missing_namespaced.is_none(), true);
+    assert!(missing_namespaced.is_none());
     assert!(
         plain
+            .as_ref()
+            .is_some_and(|handler| Arc::ptr_eq(handler, &plain_handler))
+    );
+    assert!(
+        default_namespaced
             .as_ref()
             .is_some_and(|handler| Arc::ptr_eq(handler, &plain_handler))
     );
@@ -390,10 +392,7 @@ async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
         tool_name: failing_tool.clone(),
         result: LifecycleTestResult::Err,
     }) as Arc<dyn CoreToolRuntime>;
-    let registry = ToolRegistry::new(HashMap::from([
-        (ok_tool.clone(), ok_handler),
-        (failing_tool.clone(), failing_handler),
-    ]));
+    let registry = ToolRegistry::from_tools([ok_handler, failing_handler]);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 

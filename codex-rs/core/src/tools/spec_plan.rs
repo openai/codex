@@ -241,7 +241,7 @@ fn build_model_visible_specs_and_registry(
     let mut specs = Vec::new();
     let mut seen_tool_names = HashSet::new();
     for runtime in &runtimes {
-        let tool_name = runtime.tool_name();
+        let tool_name = runtime.tool_name().with_default_namespace();
         if !seen_tool_names.insert(tool_name.clone()) {
             continue;
         }
@@ -464,6 +464,9 @@ fn is_hidden_by_code_mode_only(
 }
 
 fn is_excluded_from_code_mode(turn_context: &TurnContext, tool_name: &ToolName) -> bool {
+    if tool_name.is_default_namespace() {
+        return false;
+    }
     tool_name.namespace.as_ref().is_some_and(|namespace| {
         turn_context
             .config
@@ -565,12 +568,9 @@ fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
             continue;
         };
 
-        namespace.tools.sort_by(|left, right| match (left, right) {
-            (
-                ResponsesApiNamespaceTool::Function(left),
-                ResponsesApiNamespaceTool::Function(right),
-            ) => left.name.cmp(&right.name),
-        });
+        namespace
+            .tools
+            .sort_by(|left, right| left.name().cmp(right.name()));
 
         if namespace.description.trim().is_empty() {
             namespace.description = default_namespace_description(&namespace.name);
@@ -985,12 +985,12 @@ fn append_extension_tool_executors(
     let mut reserved_tool_names = planned_tools
         .runtimes()
         .iter()
-        .map(|executor| executor.tool_name())
+        .map(|executor| executor.tool_name().with_default_namespace())
         .collect::<HashSet<_>>();
     let tool_mode = effective_tool_mode(turn_context);
     if matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
-        reserved_tool_names.insert(ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
-        reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
+        reserved_tool_names.insert(ToolName::function(codex_code_mode::PUBLIC_TOOL_NAME));
+        reserved_tool_names.insert(ToolName::function(codex_code_mode::WAIT_TOOL_NAME));
     }
     if search_tool_enabled(turn_context)
         && namespace_tools_enabled(turn_context)
@@ -999,7 +999,7 @@ fn append_extension_tool_executors(
             .iter()
             .any(|executor| executor.exposure() == ToolExposure::Deferred)
     {
-        reserved_tool_names.insert(ToolName::plain(TOOL_SEARCH_TOOL_NAME));
+        reserved_tool_names.insert(ToolName::function(TOOL_SEARCH_TOOL_NAME));
         reserved_tool_names.insert(tool_search_tool_name());
     }
 
@@ -1007,7 +1007,7 @@ fn append_extension_tool_executors(
     let web_search_mode_on = turn_context.config.web_search_mode.value() != WebSearchMode::Disabled;
 
     for executor in executors.iter().cloned() {
-        let tool_name = executor.tool_name();
+        let tool_name = executor.tool_name().with_default_namespace();
         if tool_name == ToolName::namespaced("web", "run")
             && (!standalone_web_search_enabled || !web_search_mode_on)
         {

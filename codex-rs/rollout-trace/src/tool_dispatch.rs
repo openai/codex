@@ -7,6 +7,7 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
+use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::SandboxPermissions;
@@ -193,7 +194,10 @@ impl ToolDispatchTraceContext {
 
 fn suppresses_tool_dispatch_trace(invocation: &ToolDispatchInvocation) -> bool {
     matches!(invocation.payload, ToolDispatchPayload::Custom { .. })
-        && invocation.tool_namespace.is_none()
+        && invocation
+            .tool_namespace
+            .as_deref()
+            .is_none_or(|namespace| namespace.is_empty() || namespace == DEFAULT_FUNCTION_NAMESPACE)
         && invocation.tool_name == codex_code_mode::PUBLIC_TOOL_NAME
 }
 
@@ -393,16 +397,18 @@ mod tests {
 
     #[test]
     fn suppresses_only_noncanonical_dispatch_boundaries() {
-        assert!(suppresses_tool_dispatch_trace(&invocation(
-            codex_code_mode::PUBLIC_TOOL_NAME,
-            /*tool_namespace*/ None,
-            ToolDispatchRequester::Model {
-                model_visible_call_id: "call-exec".to_string(),
-            },
-            ToolDispatchPayload::Custom {
-                input: "1 + 1".to_string(),
-            },
-        )));
+        for namespace in [None, Some(""), Some(DEFAULT_FUNCTION_NAMESPACE)] {
+            assert!(suppresses_tool_dispatch_trace(&invocation(
+                codex_code_mode::PUBLIC_TOOL_NAME,
+                namespace.map(str::to_string),
+                ToolDispatchRequester::Model {
+                    model_visible_call_id: "call-exec".to_string(),
+                },
+                ToolDispatchPayload::Custom {
+                    input: "1 + 1".to_string(),
+                },
+            )));
+        }
         assert!(!suppresses_tool_dispatch_trace(&invocation(
             "custom_tool",
             /*tool_namespace*/ None,

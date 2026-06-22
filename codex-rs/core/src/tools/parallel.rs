@@ -222,7 +222,7 @@ impl ToolCallRuntime {
     }
 
     fn abort_message(call: &ToolCall, secs: f32) -> String {
-        if call.tool_name.namespace.is_none()
+        if call.tool_name.is_default_namespace()
             && matches!(
                 call.tool_name.name.as_str(),
                 "shell_command" | "unified_exec"

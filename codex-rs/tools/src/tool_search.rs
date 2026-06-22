@@ -1,5 +1,7 @@
+use crate::DEFAULT_FUNCTION_NAMESPACE;
 use crate::JsonSchema;
 use crate::LoadableToolSpec;
+use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ToolSearchSourceInfo;
@@ -36,16 +38,21 @@ impl ToolSearchInfo {
             ToolSpec::Function(mut tool) => {
                 tool.defer_loading = Some(true);
                 tool.output_schema = None;
-                LoadableToolSpec::Function(tool)
+                LoadableToolSpec::Namespace(ResponsesApiNamespace {
+                    name: DEFAULT_FUNCTION_NAMESPACE.to_string(),
+                    description: default_namespace_description(DEFAULT_FUNCTION_NAMESPACE),
+                    tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+                })
             }
             ToolSpec::Namespace(mut namespace) => {
                 if namespace.description.trim().is_empty() {
                     namespace.description = default_namespace_description(&namespace.name);
                 }
                 for tool in &mut namespace.tools {
-                    let ResponsesApiNamespaceTool::Function(tool) = tool;
-                    tool.defer_loading = Some(true);
-                    tool.output_schema = None;
+                    if let ResponsesApiNamespaceTool::Function(tool) = tool {
+                        tool.defer_loading = Some(true);
+                        tool.output_schema = None;
+                    }
                 }
                 LoadableToolSpec::Namespace(namespace)
             }
@@ -74,8 +81,16 @@ fn default_tool_search_text(spec: &ToolSpec) -> String {
             push_search_part(&mut parts, namespace.name.clone());
             push_search_part(&mut parts, namespace.description.clone());
             for tool in &namespace.tools {
-                let ResponsesApiNamespaceTool::Function(tool) = tool;
-                append_function_search_text(tool, &mut parts);
+                match tool {
+                    ResponsesApiNamespaceTool::Function(tool) => {
+                        append_function_search_text(tool, &mut parts);
+                    }
+                    ResponsesApiNamespaceTool::Freeform(tool) => {
+                        push_search_part(&mut parts, tool.name.clone());
+                        push_search_part(&mut parts, tool.description.clone());
+                        push_search_part(&mut parts, tool.format.syntax.clone());
+                    }
+                }
             }
         }
         ToolSpec::ToolSearch { description, .. } => {

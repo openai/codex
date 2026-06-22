@@ -19,6 +19,7 @@ use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -160,7 +161,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "update_plan", &plan_args),
+        ev_function_call_with_namespace(call_id, "functions", "update_plan", &plan_args),
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;
@@ -350,9 +351,11 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
 *** End Patch"#
     );
 
+    let mut custom_tool_call = ev_apply_patch_custom_tool_call(call_id, &patch_content);
+    custom_tool_call["namespace"] = json!("functions");
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_apply_patch_custom_tool_call(call_id, &patch_content),
+        custom_tool_call,
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;

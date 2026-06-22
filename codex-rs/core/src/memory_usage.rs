@@ -31,16 +31,17 @@ fn shell_script_for_invocation(invocation: &ToolInvocation) -> Option<String> {
         return None;
     };
 
-    match (
-        invocation.tool_name.namespace.as_deref(),
-        invocation.tool_name.name.as_str(),
-    ) {
-        (None, "shell_command") => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
+    if !invocation.tool_name.is_default_namespace() {
+        return None;
+    }
+
+    match invocation.tool_name.name.as_str() {
+        "shell_command" => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .ok()
             .map(|params| params.command),
-        (None, "exec_command") => serde_json::from_str::<ExecCommandArgs>(arguments)
+        "exec_command" => serde_json::from_str::<ExecCommandArgs>(arguments)
             .ok()
             .map(|params| params.cmd),
-        (Some(_), _) | (None, _) => None,
+        _ => None,
     }
 }
