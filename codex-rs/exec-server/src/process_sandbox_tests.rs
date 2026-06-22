@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+#[cfg(unix)]
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -7,7 +8,9 @@ use pretty_assertions::assert_eq;
 
 use super::prepare_exec_request;
 use crate::ExecParams;
+#[cfg(unix)]
 use crate::ExecServerRuntimePaths;
+#[cfg(unix)]
 use crate::FileSystemSandboxContext;
 use crate::ProcessId;
 
