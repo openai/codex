@@ -209,12 +209,12 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
     );
     assert!(
         plugins_test_popup_row_position(&popup, "Alpha Sync")
-            < plugins_test_popup_row_position(&popup, "Bravo Search")
+            < plugins_test_popup_row_position(&popup, "Starter")
+            && plugins_test_popup_row_position(&popup, "Starter")
+                < plugins_test_popup_row_position(&popup, "Bravo Search")
             && plugins_test_popup_row_position(&popup, "Bravo Search")
-                < plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
-            && plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
-                < plugins_test_popup_row_position(&popup, "Starter"),
-        "expected /plugins rows to sort installed plugins first, then alphabetically, got:\n{popup}"
+                < plugins_test_popup_row_position(&popup, "Hidden Repo Plugin"),
+        "expected /plugins rows to sort installed and default plugins first, then alphabetically, got:\n{popup}"
     );
 }
 
@@ -1076,8 +1076,10 @@ async fn plugins_popup_admin_disabled_installed_plugin_has_no_toggle_hint() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
-        popup.contains("Disabled by admin")
+        popup.contains("[!] Admin Blocked")
+            && popup.contains("Disabled")
             && popup.contains("Press Enter to view plugin details.")
+            && !popup.contains("Disabled by admin")
             && !popup.contains("Space to disable"),
         "expected admin-disabled installed row to omit toggle hint, got:\n{popup}"
     );
@@ -1682,6 +1684,44 @@ async fn plugins_popup_search_filters_visible_rows_snapshot() {
     assert!(
         !popup.contains("Calendar") && !popup.contains("Drive"),
         "expected search to leave only matching rows visible, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_search_matches_plugin_descriptions() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "document");
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Drive") && !popup.contains("Calendar"),
+        "expected plugin search to match descriptions, got:\n{popup}"
     );
 }
 
