@@ -248,6 +248,57 @@ async fn cancel_after_remote_receives_body_reports_unknown_completion() {
 }
 
 #[tokio::test]
+async fn concurrent_starts_cannot_exceed_the_active_upload_quota() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+        .mount(&server)
+        .await;
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let source = source_dir.path().join("report.txt");
+    tokio::fs::write(&source, b"bytes")
+        .await
+        .expect("write source");
+    let handler = test_handler();
+    let first = handler
+        .prepare_upload(prepare_params(&source, /*max_bytes*/ 1024))
+        .await
+        .expect("prepare first upload");
+    let second = handler
+        .prepare_upload(prepare_params(&source, /*max_bytes*/ 1024))
+        .await
+        .expect("prepare second upload");
+    let third = handler
+        .prepare_upload(prepare_params(&source, /*max_bytes*/ 1024))
+        .await
+        .expect("prepare third upload");
+
+    let (first, second, third) = tokio::join!(
+        handler.start_upload(FileTransferStartUploadParams {
+            transfer_id: first.transfer_id,
+            descriptor: upload_descriptor(format!("{}/first", server.uri())),
+        }),
+        handler.start_upload(FileTransferStartUploadParams {
+            transfer_id: second.transfer_id,
+            descriptor: upload_descriptor(format!("{}/second", server.uri())),
+        }),
+        handler.start_upload(FileTransferStartUploadParams {
+            transfer_id: third.transfer_id,
+            descriptor: upload_descriptor(format!("{}/third", server.uri())),
+        }),
+    );
+    let results = [first, second, third];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 2);
+    let error = results
+        .iter()
+        .find_map(|result| result.as_ref().err())
+        .expect("one concurrent start should be rejected");
+    assert_eq!(error.code, -32600);
+    assert_eq!(error.message, "active file upload quota exceeded");
+    handler.shutdown().await;
+}
+
+#[tokio::test]
 async fn prepared_snapshot_expires_without_a_follow_up_rpc() {
     let source_dir = tempfile::tempdir().expect("source tempdir");
     let source = source_dir.path().join("report.txt");
