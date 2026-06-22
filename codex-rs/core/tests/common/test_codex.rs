@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::CloudConfigBundleLoader;
