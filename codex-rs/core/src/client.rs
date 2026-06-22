@@ -84,7 +84,6 @@ use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::create_tools_json_for_responses_api;
-use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -151,7 +150,6 @@ const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
-const RESPONSES_LITE_ADDITIONAL_TOOLS_MAX_TOKENS: u64 = 10_000;
 // `/responses/compact` is unary, so the timeout covers the full response rather than one idle
 // period between stream events.
 const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
@@ -787,19 +785,11 @@ impl ModelClient {
         }
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let (instructions, tools) = if model_info.use_responses_lite {
-            let additional_tools = ResponseItem::AdditionalTools {
+            let mut prefix = vec![ResponseItem::AdditionalTools {
                 id: None,
                 role: "developer".to_string(),
                 tools,
-            };
-            let additional_tools_tokens =
-                approx_tokens_from_byte_count(serde_json::to_vec(&additional_tools)?.len());
-            if additional_tools_tokens > RESPONSES_LITE_ADDITIONAL_TOOLS_MAX_TOKENS {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "Responses Lite additional tools exceed the {RESPONSES_LITE_ADDITIONAL_TOOLS_MAX_TOKENS}-token limit ({additional_tools_tokens} estimated tokens); defer tools behind tool search or reduce their schemas"
-                )));
-            }
-            let mut prefix = vec![additional_tools];
+            }];
             if !prompt.base_instructions.text.is_empty() {
                 prefix.push(ResponseItem::Message {
                     id: None,
