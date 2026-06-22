@@ -19,6 +19,7 @@ use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_models_cache;
 use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::TimeZone;
@@ -324,6 +325,7 @@ async fn status_snapshot_includes_reasoning_details() {
 #[tokio::test]
 async fn status_snapshot_shows_chatgpt_plan_without_email() {
     let temp_home = TempDir::new().expect("temp home");
+    write_models_cache(temp_home.path()).expect("write models cache");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
