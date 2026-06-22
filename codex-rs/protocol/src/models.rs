@@ -904,14 +904,15 @@ pub enum MessagePhase {
     FinalAnswer,
 }
 
+/// Internal Responses API passthrough metadata copied into underlying chat messages.
+///
+/// Responses API strongly types this payload. Do not modify it without first getting API
+/// approval and making the corresponding Responses API change.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct ResponseItemMetadata {
+pub struct InternalChatMessageMetadataPassthrough {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub source_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -931,7 +932,7 @@ pub enum ResponseItem {
         phase: Option<MessagePhase>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     AgentMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -942,7 +943,7 @@ pub enum ResponseItem {
         content: Vec<AgentMessageInputContent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     Reasoning {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -955,7 +956,7 @@ pub enum ResponseItem {
         encrypted_content: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     LocalShellCall {
         /// Legacy id field retained for compatibility with older payloads.
@@ -968,7 +969,7 @@ pub enum ResponseItem {
         action: LocalShellAction,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     FunctionCall {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -985,7 +986,7 @@ pub enum ResponseItem {
         call_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     ToolSearchCall {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1000,7 +1001,7 @@ pub enum ResponseItem {
         arguments: serde_json::Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     // NOTE: The `output` field for `function_call_output` uses a dedicated payload type with
     // custom serialization. On the wire it is either:
@@ -1017,7 +1018,7 @@ pub enum ResponseItem {
         output: FunctionCallOutputPayload,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     CustomToolCall {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1032,7 +1033,7 @@ pub enum ResponseItem {
         input: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     // `custom_tool_call_output.output` uses the same wire encoding as
     // `function_call_output.output` so freeform tools can return either plain
@@ -1050,7 +1051,7 @@ pub enum ResponseItem {
         output: FunctionCallOutputPayload,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     ToolSearchOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1063,7 +1064,7 @@ pub enum ResponseItem {
         tools: Vec<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     // Emitted by the Responses API when the agent triggers a web search.
     // Example payload (from SSE `response.output_item.done`):
@@ -1085,7 +1086,7 @@ pub enum ResponseItem {
         action: Option<WebSearchAction>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     // Emitted by the Responses API when the agent triggers image generation.
     // Example payload:
@@ -1107,7 +1108,7 @@ pub enum ResponseItem {
         result: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     #[serde(alias = "compaction_summary")]
     Compaction {
@@ -1117,14 +1118,14 @@ pub enum ResponseItem {
         encrypted_content: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     // Compaction triggers are request controls, and the Responses API does not
     // accept an `id` field for them.
     CompactionTrigger {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     ContextCompaction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1135,7 +1136,7 @@ pub enum ResponseItem {
         encrypted_content: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        metadata: Option<ResponseItemMetadata>,
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     #[serde(other)]
     Other,
@@ -1191,7 +1192,7 @@ impl ResponseItem {
 
     /// Returns the non-empty turn ID stamped onto this item, if present.
     pub fn turn_id(&self) -> Option<&str> {
-        self.metadata()
+        self.internal_chat_message_metadata_passthrough()
             .and_then(|metadata| metadata.turn_id.as_deref())
             .filter(|turn_id| !turn_id.is_empty())
     }
@@ -1201,59 +1202,154 @@ impl ResponseItem {
         if turn_id.is_empty() || self.turn_id().is_some() {
             return;
         }
-        let Some(metadata) = self.metadata_mut() else {
+        let Some(metadata) = self.internal_chat_message_metadata_passthrough_mut() else {
             return;
         };
         metadata
-            .get_or_insert_with(ResponseItemMetadata::default)
+            .get_or_insert_with(InternalChatMessageMetadataPassthrough::default)
             .turn_id = Some(turn_id.to_string());
     }
 
-    /// Removes Responses API item metadata before sending to a provider that does not accept it.
-    pub fn clear_metadata(&mut self) {
-        if let Some(metadata) = self.metadata_mut() {
+    /// Removes internal chat message metadata passthrough before sending to a provider that does
+    /// not accept it.
+    pub fn clear_internal_chat_message_metadata_passthrough(&mut self) {
+        if let Some(metadata) = self.internal_chat_message_metadata_passthrough_mut() {
             *metadata = None;
         }
     }
 
-    fn metadata(&self) -> Option<&ResponseItemMetadata> {
+    fn internal_chat_message_metadata_passthrough(
+        &self,
+    ) -> Option<&InternalChatMessageMetadataPassthrough> {
         match self {
-            Self::Message { metadata, .. }
-            | Self::AgentMessage { metadata, .. }
-            | Self::Reasoning { metadata, .. }
-            | Self::LocalShellCall { metadata, .. }
-            | Self::FunctionCall { metadata, .. }
-            | Self::ToolSearchCall { metadata, .. }
-            | Self::FunctionCallOutput { metadata, .. }
-            | Self::CustomToolCall { metadata, .. }
-            | Self::CustomToolCallOutput { metadata, .. }
-            | Self::ToolSearchOutput { metadata, .. }
-            | Self::WebSearchCall { metadata, .. }
-            | Self::ImageGenerationCall { metadata, .. }
-            | Self::Compaction { metadata, .. }
-            | Self::CompactionTrigger { metadata, .. }
-            | Self::ContextCompaction { metadata, .. } => metadata.as_ref(),
+            Self::Message {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::AgentMessage {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::Reasoning {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::LocalShellCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::FunctionCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::ToolSearchCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::FunctionCallOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::CustomToolCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::CustomToolCallOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::ToolSearchOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::WebSearchCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::ImageGenerationCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::Compaction {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::CompactionTrigger {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::ContextCompaction {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            } => metadata.as_ref(),
             Self::Other => None,
         }
     }
 
-    fn metadata_mut(&mut self) -> Option<&mut Option<ResponseItemMetadata>> {
+    fn internal_chat_message_metadata_passthrough_mut(
+        &mut self,
+    ) -> Option<&mut Option<InternalChatMessageMetadataPassthrough>> {
         match self {
-            Self::Message { metadata, .. }
-            | Self::AgentMessage { metadata, .. }
-            | Self::Reasoning { metadata, .. }
-            | Self::LocalShellCall { metadata, .. }
-            | Self::FunctionCall { metadata, .. }
-            | Self::ToolSearchCall { metadata, .. }
-            | Self::FunctionCallOutput { metadata, .. }
-            | Self::CustomToolCall { metadata, .. }
-            | Self::CustomToolCallOutput { metadata, .. }
-            | Self::ToolSearchOutput { metadata, .. }
-            | Self::WebSearchCall { metadata, .. }
-            | Self::ImageGenerationCall { metadata, .. }
-            | Self::Compaction { metadata, .. }
-            | Self::CompactionTrigger { metadata, .. }
-            | Self::ContextCompaction { metadata, .. } => Some(metadata),
+            Self::Message {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::AgentMessage {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::Reasoning {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::LocalShellCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::FunctionCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::ToolSearchCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::FunctionCallOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::CustomToolCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::CustomToolCallOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::ToolSearchOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::WebSearchCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::ImageGenerationCall {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::Compaction {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::CompactionTrigger {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::ContextCompaction {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            } => Some(metadata),
             Self::Other => None,
         }
     }
@@ -1495,13 +1591,13 @@ impl From<ResponseInputItem> for ResponseItem {
                 content,
                 id: None,
                 phase,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => Self::FunctionCallOutput {
                 id: None,
                 call_id,
                 output,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseInputItem::McpToolCallOutput { call_id, output } => {
                 let output = output.into_function_call_output_payload();
@@ -1509,7 +1605,7 @@ impl From<ResponseInputItem> for ResponseItem {
                     id: None,
                     call_id,
                     output,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 }
             }
             ResponseInputItem::CustomToolCallOutput {
@@ -1521,7 +1617,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 call_id,
                 name,
                 output,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseInputItem::ToolSearchOutput {
                 call_id,
@@ -1534,7 +1630,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 execution,
                 tools,
                 id: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         }
     }
@@ -2087,14 +2183,15 @@ mod tests {
                     text: "still working".to_string(),
                 }],
                 phase: Some(MessagePhase::Commentary),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
     }
 
     #[test]
-    fn response_item_metadata_round_trips_and_stamps_turn_ids() -> Result<()> {
-        let mut item = response_item_with_metadata(Some(response_item_metadata("turn-1")));
+    fn response_item_passthrough_metadata_round_trips_and_stamps_turn_ids() -> Result<()> {
+        let mut item =
+            response_item_with_passthrough_metadata(Some(passthrough_metadata("turn-1")));
         let round_trip: ResponseItem = serde_json::from_value(serde_json::to_value(&item)?)?;
         assert_eq!(round_trip, item);
 
@@ -2102,7 +2199,7 @@ mod tests {
             "type": "message",
             "role": "user",
             "content": [{"type": "input_text", "text": "hello"}],
-            "metadata": {
+            "internal_chat_message_metadata_passthrough": {
                 "turn_id": "turn-1",
                 "other": "ignored",
             },
@@ -2112,11 +2209,14 @@ mod tests {
         item.stamp_turn_id_if_missing("turn-2");
         assert_eq!(item.turn_id(), Some("turn-1"));
 
-        let mut empty_turn_id = response_item_with_metadata(Some(response_item_metadata("")));
+        let mut empty_turn_id =
+            response_item_with_passthrough_metadata(Some(passthrough_metadata("")));
         empty_turn_id.stamp_turn_id_if_missing("turn-1");
         assert_eq!(empty_turn_id.turn_id(), Some("turn-1"));
 
-        let mut missing_turn_id = response_item_with_metadata(/*metadata*/ None);
+        let mut missing_turn_id = response_item_with_passthrough_metadata(
+            /*internal_chat_message_metadata_passthrough*/ None,
+        );
         missing_turn_id.stamp_turn_id_if_missing("");
         missing_turn_id.stamp_turn_id_if_missing("turn-1");
         assert_eq!(missing_turn_id.turn_id(), Some("turn-1"));
@@ -2129,7 +2229,9 @@ mod tests {
 
     #[test]
     fn response_item_id_getter_and_setter() {
-        let mut item = response_item_with_metadata(/*metadata*/ None);
+        let mut item = response_item_with_passthrough_metadata(
+            /*internal_chat_message_metadata_passthrough*/ None,
+        );
         assert_eq!(item.id(), None);
 
         item.set_id(Some("msg_test".to_string()));
@@ -2141,7 +2243,9 @@ mod tests {
         assert_eq!(item.id(), None);
     }
 
-    fn response_item_with_metadata(metadata: Option<ResponseItemMetadata>) -> ResponseItem {
+    fn response_item_with_passthrough_metadata(
+        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
+    ) -> ResponseItem {
         ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -2149,14 +2253,13 @@ mod tests {
                 text: "hello".to_string(),
             }],
             phase: None,
-            metadata,
+            internal_chat_message_metadata_passthrough,
         }
     }
 
-    fn response_item_metadata(turn_id: &str) -> ResponseItemMetadata {
-        ResponseItemMetadata {
+    fn passthrough_metadata(turn_id: &str) -> InternalChatMessageMetadataPassthrough {
+        InternalChatMessageMetadataPassthrough {
             turn_id: Some(turn_id.to_string()),
-            ..Default::default()
         }
     }
 
@@ -2261,7 +2364,7 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: Some("A small blue square".to_string()),
                 result: "Zm9v".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
     }
@@ -2283,7 +2386,7 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: None,
                 result: "Zm9v".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
     }
@@ -2635,7 +2738,7 @@ mod tests {
                 namespace: Some("mcp__codex_apps__gmail".to_string()),
                 arguments: "{\"top_k\":5}".to_string(),
                 call_id: "call-1".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
     }
@@ -2983,7 +3086,7 @@ mod tests {
             ResponseItem::Compaction {
                 id: None,
                 encrypted_content: "abc".into(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
         Ok(())
@@ -3000,7 +3103,7 @@ mod tests {
             ResponseItem::ContextCompaction {
                 id: None,
                 encrypted_content: Some("abc".into()),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
         Ok(())
@@ -3008,7 +3111,9 @@ mod tests {
 
     #[test]
     fn serializes_compaction_trigger_without_payload() -> Result<()> {
-        let item = ResponseItem::CompactionTrigger { metadata: None };
+        let item = ResponseItem::CompactionTrigger {
+            internal_chat_message_metadata_passthrough: None,
+        };
 
         assert_eq!(
             serde_json::to_value(item)?,
@@ -3020,15 +3125,17 @@ mod tests {
     }
 
     #[test]
-    fn serializes_stamped_compaction_trigger_metadata() -> Result<()> {
-        let mut item = ResponseItem::CompactionTrigger { metadata: None };
+    fn serializes_stamped_compaction_trigger_passthrough_metadata() -> Result<()> {
+        let mut item = ResponseItem::CompactionTrigger {
+            internal_chat_message_metadata_passthrough: None,
+        };
         item.stamp_turn_id_if_missing("turn-1");
 
         assert_eq!(
             serde_json::to_value(item)?,
             serde_json::json!({
                 "type": "compaction_trigger",
-                "metadata": {
+                "internal_chat_message_metadata_passthrough": {
                     "turn_id": "turn-1",
                 },
             })
@@ -3042,7 +3149,12 @@ mod tests {
 
         let item: ResponseItem = serde_json::from_str(json)?;
 
-        assert_eq!(item, ResponseItem::CompactionTrigger { metadata: None });
+        assert_eq!(
+            item,
+            ResponseItem::CompactionTrigger {
+                internal_chat_message_metadata_passthrough: None,
+            }
+        );
         Ok(())
     }
 
@@ -3134,7 +3246,7 @@ mod tests {
                 id: expected_id.clone(),
                 status: expected_status.clone(),
                 action: expected_action.clone(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             };
             assert_eq!(parsed, expected);
 
@@ -3219,7 +3331,7 @@ mod tests {
                     "query": "calendar create",
                     "limit": 1,
                 }),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
 
@@ -3281,7 +3393,7 @@ mod tests {
                         "additionalProperties": false,
                     }
                 })],
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
 
@@ -3335,7 +3447,7 @@ mod tests {
                 arguments: serde_json::json!({
                     "paths": ["crm"],
                 }),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
 
@@ -3356,7 +3468,7 @@ mod tests {
                 status: "completed".to_string(),
                 execution: "server".to_string(),
                 tools: vec![],
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
 

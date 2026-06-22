@@ -39,6 +39,7 @@ fn web_search_tool_preserves_configured_options() {
         }),
         Some(ToolSpec::WebSearch {
             external_web_access: Some(true),
+            index_gated_web_access: None,
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
             }),

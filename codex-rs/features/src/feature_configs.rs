@@ -46,6 +46,7 @@ pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 3600000))]
     pub default_wait_timeout_ms: Option<i64>,
+    /// Deprecated compatibility field. Its value is ignored.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_hint_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,6 +65,32 @@ pub struct MultiAgentV2ConfigToml {
 }
 
 impl FeatureConfig for MultiAgentV2ConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TokenBudgetConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Number of tokens remaining before auto-compaction when the wrap-up reminder is emitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub reminder_threshold_tokens: Option<i64>,
+    /// Reminder template. `{n_remaining}` is replaced with the tokens remaining before
+    /// auto-compaction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 1000))]
+    pub reminder_message_template: Option<String>,
+}
+
+impl FeatureConfig for TokenBudgetConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }

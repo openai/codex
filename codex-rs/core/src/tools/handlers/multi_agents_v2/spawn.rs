@@ -8,7 +8,6 @@ use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::AgentPath;
-use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::protocol::Op;
 use codex_tools::ToolSpec;
 
@@ -52,12 +51,8 @@ async fn handle_spawn_agent(
     let fork_mode = args.fork_mode()?;
     let multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(
         turn.multi_agent_version,
-        &turn.config.multi_agent_v2,
         &turn.session_source,
         turn.multi_agent_mode,
-        turn.config
-            .features
-            .enabled(codex_features::Feature::MultiAgentMode),
     );
     let role_name = args
         .agent_type
@@ -127,12 +122,8 @@ async fn handle_spawn_agent(
                         .session_source
                         .get_agent_path()
                         .unwrap_or_else(AgentPath::root);
-                    let mut communication =
+                    let communication =
                         communication_from_tool_message(author, new_agent_path.clone(), message);
-                    communication
-                        .metadata
-                        .get_or_insert_with(ResponseItemMetadata::default)
-                        .source_call_id = Some(call_id.clone());
                     Op::InterAgentCommunication { communication }
                 }
                 initial_operation => initial_operation,

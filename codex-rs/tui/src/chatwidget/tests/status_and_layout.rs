@@ -14,6 +14,15 @@ fn enable_test_ambient_pet(chat: &mut ChatWidget) {
     chat.install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
 }
 
+fn take_workspace_headline_request_id(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> u64 {
+    match rx.try_recv() {
+        Ok(AppEvent::RefreshStatusLineWorkspaceHeadline { request_id }) => request_id,
+        event => panic!("expected workspace headline refresh, got {event:?}"),
+    }
+}
+
 /// Receiving a token usage update without usage clears the context indicator.
 #[tokio::test]
 async fn token_count_none_resets_context_indicator() {
@@ -1021,6 +1030,39 @@ async fn rate_limit_switch_prompt_shows_once_per_session() {
         chat.rate_limit_switch_prompt,
         RateLimitSwitchPromptState::Shown
     ));
+}
+
+#[tokio::test]
+async fn account_update_clears_derived_usage_limit_state_and_prompt() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    set_chatgpt_auth(&mut chat);
+    let mut limits = snapshot(/*percent*/ 95.0);
+    limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    chat.on_rate_limit_snapshot(Some(limits));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    assert!(chat.rate_limit_warnings.primary_index > 0);
+    assert!(chat.codex_rate_limit_reached_type.is_some());
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
+
+    assert_eq!(chat.rate_limit_warnings.primary_index, 0);
+    assert_eq!(chat.rate_limit_warnings.secondary_index, 0);
+    assert_eq!(chat.codex_rate_limit_reached_type, None);
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+    assert!(chat.rate_limit_snapshots_by_limit_id.is_empty());
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
 }
 
 #[tokio::test]
@@ -2138,6 +2180,192 @@ async fn status_line_legacy_context_usage_renders_context_used_percent() {
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "legacy context-usage should remain a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn status_line_workspace_headline_renders_cached_value() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Workspace maintenance starts at 5pm".to_string());
+
+    chat.refresh_status_line();
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Workspace maintenance starts at 5pm".to_string())
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace-headline should be a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn status_line_workspace_headline_omits_when_unavailable() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec![
+        "workspace-headline".to_string(),
+        "run-state".to_string(),
+    ]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Ready".to_string()));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace-headline should be omitted without warning when no headline is cached"
+    );
+}
+
+#[tokio::test]
+async fn workspace_headline_update_applies_feature_disabled_result() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Old headline".to_string());
+    let request_id = 3;
+    chat.status_line_workspace_headline_pending_request_id = Some(request_id);
+
+    assert!(chat.set_status_line_workspace_headline(
+        request_id,
+        Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled),
+    ));
+
+    assert_eq!(status_line_text(&chat), None);
+    assert!(chat.status_line_workspace_messages_disabled);
+}
+
+#[tokio::test]
+async fn workspace_headline_update_applies_available_headline() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    let request_id = 4;
+    chat.status_line_workspace_headline_pending_request_id = Some(request_id);
+
+    assert!(chat.set_status_line_workspace_headline(
+        request_id,
+        Ok(
+            crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+                "Fresh workspace headline".to_string(),
+            ))
+        ),
+    ));
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Fresh workspace headline".to_string())
+    );
+    assert!(!chat.status_line_workspace_messages_disabled);
+}
+
+#[tokio::test]
+async fn account_update_clears_workspace_headline_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Old workspace headline".to_string());
+    chat.status_line_workspace_headline_pending_request_id = Some(5);
+    chat.status_line_workspace_headline_last_requested_at = Some(Instant::now());
+    chat.status_line_workspace_messages_disabled = true;
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ false,
+    );
+
+    assert_eq!(
+        (
+            status_line_text(&chat),
+            chat.status_line_workspace_headline_pending_request_id,
+            chat.status_line_workspace_headline_last_requested_at,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (None, None, None, false)
+    );
+}
+
+#[tokio::test]
+async fn workspace_headline_fetch_allows_backend_auth_without_chatgpt_account() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
+    );
+
+    let request_id = take_workspace_headline_request_id(&mut rx);
+    assert_eq!(
+        chat.status_line_workspace_headline_pending_request_id,
+        Some(request_id)
+    );
+}
+
+#[tokio::test]
+async fn account_update_discards_stale_workspace_headline_results() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+
+    chat.update_account_state(
+        Some(StatusAccountDisplay::ChatGpt {
+            email: Some("first@example.com".to_string()),
+            plan: None,
+        }),
+        /*plan_type*/ None,
+        /*has_chatgpt_account*/ true,
+        /*has_codex_backend_auth*/ true,
+    );
+    let stale_request_id = take_workspace_headline_request_id(&mut rx);
+
+    chat.update_account_state(
+        Some(StatusAccountDisplay::ChatGpt {
+            email: Some("second@example.com".to_string()),
+            plan: None,
+        }),
+        /*plan_type*/ None,
+        /*has_chatgpt_account*/ true,
+        /*has_codex_backend_auth*/ true,
+    );
+    let current_request_id = take_workspace_headline_request_id(&mut rx);
+
+    assert_ne!(stale_request_id, current_request_id);
+    assert!(!chat.set_status_line_workspace_headline(
+        stale_request_id,
+        Ok(
+            crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+                "First account headline".to_string(),
+            ))
+        ),
+    ));
+    assert_eq!(
+        (
+            chat.status_line_workspace_headline.clone(),
+            chat.status_line_workspace_headline_pending_request_id,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (None, Some(current_request_id), false)
+    );
+
+    assert!(chat.set_status_line_workspace_headline(
+        current_request_id,
+        Ok(
+            crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+                "Second account headline".to_string(),
+            ))
+        ),
+    ));
+    assert!(!chat.set_status_line_workspace_headline(
+        stale_request_id,
+        Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled),
+    ));
+    assert_eq!(
+        (
+            status_line_text(&chat),
+            chat.status_line_workspace_headline_pending_request_id,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (Some("Second account headline".to_string()), None, false,)
     );
 }
 

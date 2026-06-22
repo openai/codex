@@ -543,7 +543,6 @@ fn glob_scan_max_depth_must_be_positive() {
 
 #[test]
 fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> {
-    let cwd = TempDir::new()?;
     let mut startup_warnings = Vec::new();
     let (file_system_policy, _) = compile_permission_profile(
         &PermissionsToml {
@@ -568,7 +567,6 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
             )]),
         },
         "workspace",
-        cwd.path(),
         &mut startup_warnings,
     )?;
 

@@ -665,40 +665,23 @@ pub(crate) fn spawn_approval_request_review(
     rx
 }
 
-/// Runs the guardian in a locked-down reusable review session.
-///
-/// The guardian itself should not mutate state or trigger further approvals, so
-/// it is pinned to a read-only sandbox with `approval_policy = never` and
-/// nonessential agent features disabled. When the cached trunk session is idle,
-/// later approvals append onto that same guardian conversation to preserve a
-/// stable prompt-cache key. If the trunk is already busy, the review runs in an
-/// ephemeral fork from the last committed trunk rollout so parallel approvals
-/// do not block each other or mutate the cached thread. The trunk is recreated
-/// when the effective review-session config changes, and any future compaction
-/// must continue to preserve the guardian policy as exact top-level developer
-/// context. It may still reuse the parent's managed-network allowlist for
-/// read-only checks, but it intentionally runs without inherited exec-policy
-/// rules.
-async fn run_guardian_review_session_before_deadline(
-    session: Arc<Session>,
-    turn: Arc<TurnContext>,
-    request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
-    schema: serde_json::Value,
-    external_cancel: Option<CancellationToken>,
-    deadline: Instant,
-) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+pub(super) struct GuardianReviewSessionConfig {
+    pub(super) spawn_config: crate::config::Config,
+    model: String,
+    reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    default_review_model_id: String,
+    catalog_contains_auto_review: bool,
+    model_overridden: bool,
+    model_override: Option<String>,
+}
+
+pub(super) async fn guardian_review_session_config(
+    session: &Session,
+    turn: &TurnContext,
+) -> anyhow::Result<GuardianReviewSessionConfig> {
     let network_proxy = session.services.network_proxy.load_full();
     let live_network_config = match network_proxy.as_ref() {
-        Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
-            Ok(config) => Some(config),
-            Err(err) => {
-                return (
-                    GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
-                    GuardianReviewAnalyticsResult::without_session(),
-                );
-            }
-        },
+        Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
         None => None,
     };
     let available_models = session
@@ -750,14 +733,50 @@ async fn run_guardian_review_session_before_deadline(
             reasoning_effort,
         )
     };
-    let guardian_config = build_guardian_review_session_config(
+
+    let spawn_config = build_guardian_review_session_config(
         turn.config.as_ref(),
-        live_network_config.clone(),
+        live_network_config,
         guardian_model.as_str(),
         guardian_reasoning_effort.clone(),
-    );
-    let guardian_config = match guardian_config {
-        Ok(config) => config,
+    )?;
+    Ok(GuardianReviewSessionConfig {
+        spawn_config,
+        model: guardian_model,
+        reasoning_effort: guardian_reasoning_effort,
+        default_review_model_id: default_review_model_id.to_string(),
+        catalog_contains_auto_review: guardian_catalog_contains_auto_review,
+        model_overridden: guardian_review_model_overridden,
+        model_override: guardian_review_model_override,
+    })
+}
+
+/// Runs the guardian in a locked-down reusable review session.
+///
+/// The guardian itself should not mutate state or trigger further approvals, so
+/// it is pinned to a read-only sandbox with `approval_policy = never` and
+/// nonessential agent features disabled. When the cached trunk session is idle,
+/// later approvals append onto that same guardian conversation to preserve a
+/// stable prompt-cache key. If the trunk is already busy, the review runs in an
+/// ephemeral fork from the last committed trunk rollout so parallel approvals
+/// do not block each other or mutate the cached thread. The trunk is recreated
+/// when the effective review-session config changes, and any future compaction
+/// must continue to preserve the guardian policy as exact top-level developer
+/// context. It may still reuse the parent's managed-network allowlist for
+/// read-only checks, but it intentionally runs without inherited exec-policy
+/// rules.
+async fn run_guardian_review_session_before_deadline(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    schema: serde_json::Value,
+    external_cancel: Option<CancellationToken>,
+    deadline: Instant,
+) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+    let session_config = match guardian_review_session_config(session.as_ref(), turn.as_ref()).await
+    {
+        Ok(session_config) => session_config,
         Err(err) => {
             return (
                 GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
@@ -765,23 +784,22 @@ async fn run_guardian_review_session_before_deadline(
             );
         }
     };
-
     let (session_outcome, session_analytics_result) = Box::pin(
         session
             .guardian_review_session
             .run_review(GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_turn: turn.clone(),
-                spawn_config: guardian_config,
+                spawn_config: session_config.spawn_config,
                 request,
                 retry_reason,
                 schema,
-                model: guardian_model,
-                reasoning_effort: guardian_reasoning_effort,
-                guardian_default_review_model_id: default_review_model_id.to_string(),
-                guardian_catalog_contains_auto_review,
-                guardian_review_model_overridden,
-                guardian_review_model_override,
+                model: session_config.model,
+                reasoning_effort: session_config.reasoning_effort,
+                guardian_default_review_model_id: session_config.default_review_model_id,
+                guardian_catalog_contains_auto_review: session_config.catalog_contains_auto_review,
+                guardian_review_model_overridden: session_config.model_overridden,
+                guardian_review_model_override: session_config.model_override,
                 reasoning_summary: turn.reasoning_summary,
                 personality: turn.personality,
                 external_cancel,
