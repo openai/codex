@@ -9,6 +9,5 @@ codex_rust_crate(
     ),
     test_sizes = {
         "app-server-protocol-schema_fixtures-test-windows-cross": "medium",
-        "app-server-protocol-unit-tests-windows-cross": "medium",
     },
 )
