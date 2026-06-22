@@ -50,6 +50,7 @@ pub(crate) fn build_sandbox_command(
         args: args.to_vec(),
         cwd,
         env: env.clone(),
+        managed_network: None,
         additional_permissions,
     })
 }

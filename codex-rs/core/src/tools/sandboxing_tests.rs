@@ -1,6 +1,7 @@
 use super::*;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::hook_names::HookToolName;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -227,18 +228,22 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
         windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: None,
     };
+    let managed_network = ManagedNetworkSandboxContext {
+        loopback_ports: vec![43123],
+        allow_local_binding: false,
+    };
     let command = SandboxCommand {
         program: "/bin/bash".into(),
         args: vec!["-lc".to_string(), "pwd".to_string()],
         cwd: cwd_uri.clone(),
         env: HashMap::new(),
+        managed_network: Some(managed_network.clone()),
         additional_permissions: None,
     };
     let options = crate::sandboxing::ExecOptions {
         expiration: crate::exec::ExecExpiration::DefaultTimeout,
         capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
     };
-
     let request = attempt
         .env_for_exec_server(command, options, /*network*/ None, Some("remote"))
         .expect("prepare remote exec request");
@@ -265,4 +270,5 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
         })
     );
     assert!(request.exec_server_enforce_managed_network);
+    assert_eq!(request.exec_server_managed_network, Some(managed_network));
 }

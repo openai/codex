@@ -440,6 +440,7 @@ mod tests {
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         }
     }
 

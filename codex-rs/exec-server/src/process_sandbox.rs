@@ -96,6 +96,7 @@ pub(crate) fn prepare_exec_request(
                     args: args.to_vec(),
                     cwd: params.cwd.clone(),
                     env,
+                    managed_network: params.managed_network.clone(),
                     additional_permissions: None,
                 },
                 permissions: &permissions,

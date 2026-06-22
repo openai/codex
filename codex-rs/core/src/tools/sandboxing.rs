@@ -466,6 +466,7 @@ impl<'a> SandboxAttempt<'a> {
         network: Option<&NetworkProxy>,
         environment_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
+        let managed_network = command.managed_network.clone();
         let exec_server_permissions = effective_permission_profile(
             self.exec_server_permissions,
             command.additional_permissions.as_ref(),
@@ -502,6 +503,7 @@ impl<'a> SandboxAttempt<'a> {
                 use_legacy_landlock: self.use_legacy_landlock,
             });
             exec_request.exec_server_enforce_managed_network = self.enforce_managed_network;
+            exec_request.exec_server_managed_network = managed_network;
         }
         Ok(exec_request)
     }
