@@ -50,22 +50,34 @@ where
     F: Future<Output = Result<(), E>> + Send + 'static,
     E: Send + 'static,
 {
+    let shutdown_signal = match shutdown_signal() {
+        Ok(signal) => Some(signal),
+        Err(error) => {
+            eprintln!("Could not listen for exec-server shutdown signal: {error}");
+            None
+        }
+    };
     let mut task = tokio::spawn(run);
-    tokio::select! {
-        result = &mut task => task_result(result),
-        signal = shutdown_signal() => {
-            match signal {
-                Ok(()) => {
-                    task.abort();
-                    let _ = task.await;
-                    Ok(())
-                }
-                Err(error) => {
-                    eprintln!("Could not listen for exec-server shutdown signal: {error}");
-                    task_result(task.await)
+
+    if let Some(shutdown_signal) = shutdown_signal {
+        tokio::select! {
+            result = &mut task => task_result(result),
+            signal = wait_for_shutdown_signal(shutdown_signal) => {
+                match signal {
+                    Ok(()) => {
+                        task.abort();
+                        let _ = task.await;
+                        Ok(())
+                    }
+                    Err(error) => {
+                        eprintln!("Could not listen for exec-server shutdown signal: {error}");
+                        task_result(task.await)
+                    }
                 }
             }
         }
+    } else {
+        task_result(task.await)
     }
 }
 
@@ -78,16 +90,35 @@ fn task_result<E>(result: Result<Result<(), E>, tokio::task::JoinError>) -> Resu
 }
 
 #[cfg(unix)]
-async fn shutdown_signal() -> std::io::Result<()> {
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+struct ShutdownSignal {
+    terminate: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+fn shutdown_signal() -> std::io::Result<ShutdownSignal> {
+    Ok(ShutdownSignal {
+        terminate: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
+    })
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal(mut shutdown_signal: ShutdownSignal) -> std::io::Result<()> {
     tokio::select! {
         result = tokio::signal::ctrl_c() => result,
-        _ = terminate.recv() => Ok(()),
+        _ = shutdown_signal.terminate.recv() => Ok(()),
     }
 }
 
 #[cfg(not(unix))]
-async fn shutdown_signal() -> std::io::Result<()> {
+struct ShutdownSignal;
+
+#[cfg(not(unix))]
+fn shutdown_signal() -> std::io::Result<ShutdownSignal> {
+    Ok(ShutdownSignal)
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal(_: ShutdownSignal) -> std::io::Result<()> {
     tokio::signal::ctrl_c().await
 }
 

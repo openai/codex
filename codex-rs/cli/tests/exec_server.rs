@@ -244,8 +244,7 @@ fn local_exec_server_exits_successfully_on_sigterm() -> Result<()> {
         .stdout(Stdio::piped())
         .spawn()?;
     let mut listen_url = String::new();
-    StdBufReader::new(child.stdout.take().expect("child stdout"))
-        .read_line(&mut listen_url)?;
+    StdBufReader::new(child.stdout.take().expect("child stdout")).read_line(&mut listen_url)?;
     assert!(listen_url.starts_with("ws://127.0.0.1:"), "{listen_url}");
 
     let listen_addr = listen_url
