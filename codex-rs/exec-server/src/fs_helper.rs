@@ -190,7 +190,11 @@ pub(crate) async fn run_direct_request(
     match request {
         FsHelperRequest::ReadFile(params) => {
             let data = file_system
-                .read_file(&params.path, /*sandbox*/ None)
+                .read_file_with_limit(
+                    &params.path,
+                    /*sandbox*/ None,
+                    params.max_bytes.unwrap_or(512 * 1024 * 1024),
+                )
                 .await
                 .map_err(map_fs_error)?;
             Ok(FsHelperPayload::ReadFile(FsReadFileResponse {

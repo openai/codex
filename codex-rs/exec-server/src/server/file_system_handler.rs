@@ -108,7 +108,11 @@ impl FileSystemHandler {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file(&params.path, params.sandbox.as_ref())
+            .read_file_with_limit(
+                &params.path,
+                params.sandbox.as_ref(),
+                params.max_bytes.unwrap_or(512 * 1024 * 1024),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -322,6 +326,7 @@ mod tests {
                 .read_file(FsReadFileParams {
                     path,
                     sandbox: Some(sandbox_context(sandbox_policy)),
+                    max_bytes: None,
                 })
                 .await
                 .expect("read file");

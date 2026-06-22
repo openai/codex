@@ -78,6 +78,16 @@ impl SandboxedFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
+        self.read_file_with_limit(path, sandbox, 512 * 1024 * 1024)
+            .await
+    }
+
+    pub(crate) async fn read_file_with_limit(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+        max_bytes: u64,
+    ) -> FileSystemResult<Vec<u8>> {
         let sandbox = require_platform_sandbox(sandbox)?;
         validate_native_path(path)?;
         let response = self
@@ -86,6 +96,7 @@ impl SandboxedFileSystem {
                 FsHelperRequest::ReadFile(FsReadFileParams {
                     path: path.clone(),
                     sandbox: None,
+                    max_bytes: Some(max_bytes),
                 }),
             )
             .await?
