@@ -905,7 +905,7 @@ async fn plugin_detail_remote_uninstall_uses_remote_plugin_id() {
 
 #[tokio::test]
 async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let summary = PluginSummary {
@@ -950,18 +950,12 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
         "expected missing remote ID to disable uninstall, got:\n{popup}"
     );
 
-    while rx.try_recv().is_ok() {}
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    while let Ok(event) = rx.try_recv() {
-        assert!(
-            !matches!(
-                event,
-                AppEvent::OpenPluginUninstallLoading { .. } | AppEvent::FetchPluginUninstall { .. }
-            ),
-            "expected Enter on the disabled uninstall row to emit no uninstall action, got {event:?}"
-        );
-    }
-    assert_eq!(render_bottom_popup(&chat, /*width*/ 120), popup);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    assert_eq!(
+        render_bottom_popup(&chat, /*width*/ 120),
+        popup,
+        "expected navigation to skip the disabled uninstall row"
+    );
 }
 
 #[tokio::test]

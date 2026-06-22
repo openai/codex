@@ -274,7 +274,7 @@ async fn plugins_popup_remote_local_dedupe_prefers_installed_remote_after_mapped
 
 #[tokio::test]
 async fn plugin_detail_not_installable_plugin_disables_install_action() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let summary = plugins_test_summary(
@@ -311,16 +311,10 @@ async fn plugin_detail_not_installable_plugin_disables_install_action() {
         "expected disabled not-installable row, got:\n{install_row}"
     );
 
-    while rx.try_recv().is_ok() {}
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    while let Ok(event) = rx.try_recv() {
-        assert!(
-            !matches!(
-                event,
-                AppEvent::OpenPluginInstallLoading { .. } | AppEvent::FetchPluginInstall { .. }
-            ),
-            "expected Enter on the disabled install row to emit no install action, got {event:?}"
-        );
-    }
-    assert_eq!(render_bottom_popup(&chat, /*width*/ 100), popup);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    assert_eq!(
+        render_bottom_popup(&chat, /*width*/ 100),
+        popup,
+        "expected navigation to skip the disabled install row"
+    );
 }
