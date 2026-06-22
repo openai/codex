@@ -143,8 +143,7 @@ pub(crate) async fn permission_preset_catalog(
 fn permission_preset_catalog_for_config(
     config: &Config,
 ) -> std::io::Result<PermissionPresetCatalog> {
-    let profile_catalog =
-        permission_profile_catalog(&config.config_layer_stack, config.cwd.as_path())?;
+    let profile_catalog = permission_profile_catalog(&config.config_layer_stack)?;
     let config_toml: ConfigToml = config
         .config_layer_stack
         .effective_config()
