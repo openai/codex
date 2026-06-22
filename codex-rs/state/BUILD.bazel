@@ -9,4 +9,7 @@ codex_rust_crate(
         "migrations/**",
     ]),
     crate_name = "codex_state",
+    test_sizes = {
+        "state-unit-tests-windows-cross": "medium",
+    },
 )
