@@ -508,7 +508,7 @@ async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
         requests[0]
             .message_input_texts("user")
             .iter()
-            .any(|text| text.contains("<shell>still loading</shell>"))
+            .any(|text| text.contains("<status>starting</status>"))
     );
     let ready_user_context = requests[1].message_input_texts("user");
     assert_eq!(
@@ -522,7 +522,7 @@ async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
     assert_eq!(
         final_user_context
             .iter()
-            .filter(|text| text.contains("<shell>still loading</shell>"))
+            .filter(|text| text.contains("<status>starting</status>"))
             .count(),
         1
     );

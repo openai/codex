@@ -76,10 +76,8 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
 
 #[test]
 fn environment_context_baseline_deduplicates_until_history_is_replaced() {
-    let context = EnvironmentContext::from_turn_context_item(
-        &reference_context_item(),
-        "still loading".to_string(),
-    );
+    let context =
+        EnvironmentContext::from_turn_context_item(&reference_context_item(), "bash".to_string());
     let mut history = ContextManager::new();
 
     assert!(history.update_environment_context_baseline(&context));
