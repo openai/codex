@@ -3291,12 +3291,11 @@ impl Session {
                 .render(),
             );
         }
-        let mut standalone_world_state_fragments = Vec::new();
         for fragment in world_state.render_full() {
             match fragment.role() {
                 "developer" => developer_sections.push(fragment.render()),
                 "user" => contextual_user_sections.push(fragment.render()),
-                _ => standalone_world_state_fragments.push(fragment),
+                _ => {}
             }
         }
 
@@ -3344,9 +3343,6 @@ impl Session {
         {
             items.push(contextual_user_message);
         }
-        items.extend(crate::context_manager::updates::merge_contextual_fragments(
-            standalone_world_state_fragments,
-        ));
         // Emit the guardian policy prompt as a separate developer item so the guardian
         // subagent sees a distinct, easy-to-audit instruction block.
         if separate_guardian_developer_message
