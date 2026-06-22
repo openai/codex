@@ -1,6 +1,10 @@
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RolloutItem;
 use pretty_assertions::assert_eq;
 
@@ -117,5 +121,30 @@ fn thread_totals_accumulate_append_batches() {
             items: 5,
             payload_bytes: 70,
         }
+    );
+}
+
+#[test]
+fn filtered_item_completion_includes_its_nested_item_type() {
+    let item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+        thread_id: ThreadId::default(),
+        turn_id: "turn".to_string(),
+        item: TurnItem::UserMessage(UserMessageItem {
+            id: "item".to_string(),
+            client_id: None,
+            content: Vec::new(),
+        }),
+        completed_at_ms: 0,
+    }));
+
+    let (_, measurement) = measure_and_filter_rollout_items(&[item]);
+
+    assert_eq!(
+        measurement.items[0].rollout_item_type,
+        "event.item_completed.user_message"
+    );
+    assert_eq!(
+        measurement.items[0].decision,
+        super::PersistenceDecision::Dropped
     );
 }

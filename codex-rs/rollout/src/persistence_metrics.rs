@@ -6,7 +6,9 @@ use std::sync::atomic::Ordering;
 
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 
 use crate::policy::is_persisted_rollout_item;
@@ -42,7 +44,7 @@ pub struct RolloutSizeTotals {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RolloutItemMeasurement {
     pub decision: PersistenceDecision,
-    pub rollout_item_type: &'static str,
+    pub rollout_item_type: String,
     pub payload_bytes: Option<u64>,
 }
 
@@ -115,33 +117,54 @@ impl Write for CountingWriter {
     }
 }
 
-fn rollout_item_type(item: &RolloutItem) -> &'static str {
+fn rollout_item_type(item: &RolloutItem) -> String {
     match item {
-        RolloutItem::SessionMeta(_) => "session_meta",
-        RolloutItem::ResponseItem(item) => response_item_type(item),
-        RolloutItem::InterAgentCommunication(_) => "inter_agent_communication",
-        RolloutItem::Compacted(_) => "compacted",
-        RolloutItem::TurnContext(_) => "turn_context",
-        RolloutItem::EventMsg(_) => "event_msg",
+        RolloutItem::SessionMeta(_) => "session_meta".to_string(),
+        RolloutItem::ResponseItem(item) => response_item_type(item).to_string(),
+        RolloutItem::InterAgentCommunication(_) => "inter_agent_communication".to_string(),
+        RolloutItem::Compacted(_) => "compacted".to_string(),
+        RolloutItem::TurnContext(_) => "turn_context".to_string(),
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
+            format!("event.item_completed.{}", turn_item_type(&event.item))
+        }
+        RolloutItem::EventMsg(event) => format!("event.{event}"),
+    }
+}
+
+fn turn_item_type(item: &TurnItem) -> &'static str {
+    match item {
+        TurnItem::UserMessage(_) => "user_message",
+        TurnItem::HookPrompt(_) => "hook_prompt",
+        TurnItem::AgentMessage(_) => "agent_message",
+        TurnItem::Plan(_) => "plan",
+        TurnItem::Reasoning(_) => "reasoning",
+        TurnItem::WebSearch(_) => "web_search",
+        TurnItem::ImageView(_) => "image_view",
+        TurnItem::Sleep(_) => "sleep",
+        TurnItem::ImageGeneration(_) => "image_generation",
+        TurnItem::FileChange(_) => "file_change",
+        TurnItem::McpToolCall(_) => "mcp_tool_call",
+        TurnItem::ContextCompaction(_) => "context_compaction",
     }
 }
 
 fn response_item_type(item: &ResponseItem) -> &'static str {
     match item {
-        ResponseItem::Message { .. } | ResponseItem::AgentMessage { .. } => "response.message",
+        ResponseItem::Message { .. } => "response.message",
+        ResponseItem::AgentMessage { .. } => "response.agent_message",
         ResponseItem::Reasoning { .. } => "response.reasoning",
-        ResponseItem::LocalShellCall { .. }
-        | ResponseItem::FunctionCall { .. }
-        | ResponseItem::ToolSearchCall { .. }
-        | ResponseItem::CustomToolCall { .. }
-        | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::ImageGenerationCall { .. } => "response.tool_call",
-        ResponseItem::FunctionCallOutput { .. }
-        | ResponseItem::ToolSearchOutput { .. }
-        | ResponseItem::CustomToolCallOutput { .. } => "response.tool_output",
-        ResponseItem::Compaction { .. }
-        | ResponseItem::CompactionTrigger { .. }
-        | ResponseItem::ContextCompaction { .. } => "response.compaction",
+        ResponseItem::LocalShellCall { .. } => "response.local_shell_call",
+        ResponseItem::FunctionCall { .. } => "response.function_call",
+        ResponseItem::ToolSearchCall { .. } => "response.tool_search_call",
+        ResponseItem::FunctionCallOutput { .. } => "response.function_call_output",
+        ResponseItem::ToolSearchOutput { .. } => "response.tool_search_output",
+        ResponseItem::CustomToolCall { .. } => "response.custom_tool_call",
+        ResponseItem::CustomToolCallOutput { .. } => "response.custom_tool_call_output",
+        ResponseItem::WebSearchCall { .. } => "response.web_search_call",
+        ResponseItem::ImageGenerationCall { .. } => "response.image_generation_call",
+        ResponseItem::Compaction { .. } => "response.compaction",
+        ResponseItem::CompactionTrigger { .. } => "response.compaction_trigger",
+        ResponseItem::ContextCompaction { .. } => "response.context_compaction",
         ResponseItem::Other => "response.other",
     }
 }
@@ -188,7 +211,7 @@ impl RolloutPersistenceTelemetry {
                     saturating_i64(payload_bytes),
                     &[
                         ("decision", item.decision.as_str()),
-                        ("rollout_item_type", item.rollout_item_type),
+                        ("rollout_item_type", item.rollout_item_type.as_str()),
                         ("encoding", "rollout_item_json_v1"),
                         ("sample_rate", SAMPLE_RATE_LABEL),
                     ],
@@ -198,7 +221,7 @@ impl RolloutPersistenceTelemetry {
                     MEASUREMENT_ERROR_METRIC,
                     /*inc*/ 1,
                     &[
-                        ("rollout_item_type", item.rollout_item_type),
+                        ("rollout_item_type", item.rollout_item_type.as_str()),
                         ("phase", "serialize"),
                     ],
                 );
