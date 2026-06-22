@@ -1655,6 +1655,7 @@ server_notification_definitions! {
     ModelVerification => "model/verification" (v2::ModelVerificationNotification),
     #[experimental("turn/moderationMetadata")]
     TurnModerationMetadata => "turn/moderationMetadata" (v2::TurnModerationMetadataNotification),
+    ModelSafetyBufferingUpdated => "model/safetyBuffering/updated" (v2::ModelSafetyBufferingUpdatedNotification),
     Warning => "warning" (v2::WarningNotification),
     GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
@@ -3340,6 +3341,33 @@ mod tests {
                     "status": {
                         "type": "idle"
                     },
+                }
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_model_safety_buffering_updated_notification() -> Result<()> {
+        let notification = ServerNotification::ModelSafetyBufferingUpdated(
+            v2::ModelSafetyBufferingUpdatedNotification {
+                thread_id: "thr_123".to_string(),
+                turn_id: "turn_123".to_string(),
+                model: "gpt-5.4".to_string(),
+                use_cases: vec!["cyber".to_string()],
+                reasons: vec!["user_risk".to_string()],
+            },
+        );
+        assert_eq!(
+            json!({
+                "method": "model/safetyBuffering/updated",
+                "params": {
+                    "threadId": "thr_123",
+                    "turnId": "turn_123",
+                    "model": "gpt-5.4",
+                    "useCases": ["cyber"],
+                    "reasons": ["user_risk"]
                 }
             }),
             serde_json::to_value(&notification)?,

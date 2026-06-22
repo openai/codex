@@ -339,6 +339,7 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
         | ResponseEvent::ServerModel(_)
         | ResponseEvent::ModelVerifications(_)
         | ResponseEvent::TurnModerationMetadata(_)
+        | ResponseEvent::SafetyBuffering(_)
         | ResponseEvent::ServerReasoningIncluded(_)
         | ResponseEvent::ToolCallInputDelta { .. }
         | ResponseEvent::Completed { .. }

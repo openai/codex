@@ -101,6 +101,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::SafetyBufferingEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -349,7 +350,10 @@ pub(crate) async fn run_turn(
                 }
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if turn_context.features.enabled(Feature::AutoCompaction)
+                if turn_context
+                    .config
+                    .features
+                    .enabled(Feature::AutoCompaction)
                     && token_limit_reached
                     && needs_follow_up
                 {
@@ -863,7 +867,11 @@ async fn run_pre_sampling_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
 ) -> CodexResult<()> {
-    if !turn_context.features.enabled(Feature::AutoCompaction) {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::AutoCompaction)
+    {
         return Ok(());
     }
 
@@ -1543,6 +1551,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
         | EventMsg::ModelReroute(_)
         | EventMsg::ModelVerification(_)
         | EventMsg::TurnModerationMetadata(_)
+        | EventMsg::SafetyBuffering(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
@@ -2214,6 +2223,17 @@ async fn try_run_sampling_request(
             ResponseEvent::TurnModerationMetadata(metadata) => {
                 sess.emit_turn_moderation_metadata(&turn_context, metadata)
                     .await;
+            }
+            ResponseEvent::SafetyBuffering(buffering) => {
+                sess.send_event(
+                    &turn_context,
+                    EventMsg::SafetyBuffering(SafetyBufferingEvent {
+                        model: turn_context.model_info.slug.clone(),
+                        use_cases: buffering.use_cases,
+                        reasons: buffering.reasons,
+                    }),
+                )
+                .await;
             }
             ResponseEvent::ServerReasoningIncluded(included) => {
                 sess.set_server_reasoning_included(included).await;
