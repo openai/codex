@@ -3266,8 +3266,16 @@ impl Session {
         } else {
             String::new()
         };
-        let world_state_fragments =
-            build_world_state_from_turn_context(turn_context, &environment_subagents).render_full();
+        let mut standalone_world_state_fragments = Vec::new();
+        for fragment in
+            build_world_state_from_turn_context(turn_context, &environment_subagents).render_full()
+        {
+            match fragment.role() {
+                "developer" => developer_sections.push(fragment.render()),
+                "user" => contextual_user_sections.push(fragment.render()),
+                _ => standalone_world_state_fragments.push(fragment),
+            }
+        }
 
         let multi_agent_v2_usage_hint_text =
             multi_agents::usage_hint_text(turn_context, &session_source);
@@ -3314,7 +3322,7 @@ impl Session {
             items.push(contextual_user_message);
         }
         items.extend(crate::context_manager::updates::merge_contextual_fragments(
-            world_state_fragments,
+            standalone_world_state_fragments,
         ));
         // Emit the guardian policy prompt as a separate developer item so the guardian
         // subagent sees a distinct, easy-to-audit instruction block.
