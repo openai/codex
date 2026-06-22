@@ -53,7 +53,7 @@ async fn request_handlers_reject_remote_image_urls() -> Result<()> {
                 detail: Some(ImageDetail::High),
             },
         ]),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })?;
     let requests = [
         (
