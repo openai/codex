@@ -1,7 +1,8 @@
 use super::*;
+use codex_utils_path_uri::LegacyAppPathString;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 #[test]
 fn deserialize_stdio_command_server_config() {
@@ -52,8 +53,12 @@ fn deserialize_stdio_command_server_config_with_args() {
 }
 
 #[test]
-fn deserialize_remote_stdio_server_accepts_absolute_cwd() {
-    let cwd = std::env::temp_dir();
+fn deserialize_remote_stdio_server_accepts_foreign_absolute_cwd() {
+    #[cfg(not(windows))]
+    let cwd = r"C:\Users\openai\share";
+    #[cfg(windows)]
+    let cwd = "/home/openai/share";
+    let expected_cwd = LegacyAppPathString::from_path(Path::new(cwd));
     let cfg: McpServerConfig = match toml::from_str(&format!(
         r#"
             command = "echo"
@@ -72,7 +77,7 @@ fn deserialize_remote_stdio_server_accepts_absolute_cwd() {
             args: vec![],
             env: None,
             env_vars: Vec::new(),
-            cwd: Some(cwd),
+            cwd: Some(expected_cwd),
         }
     );
 }
@@ -193,7 +198,7 @@ fn deserialize_stdio_command_server_config_with_cwd() {
             args: vec![],
             env: None,
             env_vars: Vec::new(),
-            cwd: Some(PathBuf::from("/tmp")),
+            cwd: Some(LegacyAppPathString::from_path(Path::new("/tmp"))),
         }
     );
 }

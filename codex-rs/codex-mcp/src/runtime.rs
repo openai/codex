@@ -99,6 +99,7 @@ mod tests {
     use codex_config::McpServerConfig;
     use codex_config::McpServerTransportConfig;
     use codex_exec_server::EnvironmentManager;
+    use codex_utils_path_uri::LegacyAppPathString;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -212,7 +213,7 @@ mod tests {
         let McpServerTransportConfig::Stdio { cwd, .. } = &mut remote_stdio.transport else {
             unreachable!("stdio helper should build stdio transport");
         };
-        *cwd = Some(std::env::temp_dir());
+        *cwd = Some(LegacyAppPathString::from_path(&std::env::temp_dir()));
         for resolved_runtime in [
             runtime_context.resolve_server_environment("stdio", &remote_stdio),
             runtime_context.resolve_server_environment("http", &http_server("remote")),

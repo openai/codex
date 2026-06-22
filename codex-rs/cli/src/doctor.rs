@@ -1520,7 +1520,8 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
                 if disabled_server {
                     continue;
                 }
-                if let Some(cwd) = cwd
+                let host_native_cwd = cwd.as_ref().map(|cwd| Path::new(cwd.as_str()));
+                if let Some(cwd) = host_native_cwd
                     && !cwd.exists()
                 {
                     missing_env.push(format!("{name}: cwd does not exist ({})", cwd.display()));
@@ -1528,7 +1529,7 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
                 if command.trim().is_empty() {
                     missing_env.push(format!("{name}: stdio command is empty"));
                 } else if let Err(err) =
-                    stdio_command_resolves(command, cwd.as_deref(), env.as_ref())
+                    stdio_command_resolves(command, host_native_cwd, env.as_ref())
                 {
                     missing_env.push(format!(
                         "{name}: stdio command {command:?} is not resolvable ({err})"

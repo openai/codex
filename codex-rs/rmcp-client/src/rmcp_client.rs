@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -16,6 +15,7 @@ use codex_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::HttpClient;
+use codex_utils_path_uri::LegacyAppPathString;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use oauth2::TokenResponse;
@@ -354,7 +354,7 @@ impl RmcpClient {
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
         env_vars: &[McpServerEnvVar],
-        cwd: Option<PathBuf>,
+        cwd: Option<LegacyAppPathString>,
         launcher: Arc<dyn StdioServerLauncher>,
     ) -> io::Result<Self> {
         let transport_recipe = TransportRecipe::Stdio {

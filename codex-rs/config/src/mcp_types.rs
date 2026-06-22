@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_utils_path_uri::LegacyAppPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -224,7 +224,7 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub env_vars: Option<Vec<McpServerEnvVar>>,
     #[serde(default)]
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<LegacyAppPathString>,
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub env_http_headers: Option<HashMap<String, String>>,
@@ -407,7 +407,7 @@ pub enum McpServerTransportConfig {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         env_vars: Vec<McpServerEnvVar>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<PathBuf>,
+        cwd: Option<LegacyAppPathString>,
     },
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
