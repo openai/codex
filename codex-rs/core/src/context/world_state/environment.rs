@@ -3,6 +3,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::environment_context::FileSystemContext;
 use crate::context::environment_context::NetworkContext;
 use crate::context::environment_context::push_xml_escaped_text;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::turn_context::TurnContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::protocol::TurnContextItem;
@@ -36,25 +37,8 @@ impl Eq for EnvironmentsState {}
 
 impl EnvironmentsState {
     pub(crate) fn from_turn_context(turn_context: &TurnContext) -> Self {
-        let mut state = Self {
-            environments: turn_context
-                .environments
-                .turn_environments
-                .iter()
-                .map(|environment| {
-                    (
-                        environment.environment_id.clone(),
-                        EnvironmentState {
-                            cwd: environment.cwd().clone(),
-                            status: Some(EnvironmentStatus::Available),
-                            shell: environment
-                                .shell
-                                .as_ref()
-                                .map(|shell| shell.name().to_string()),
-                        },
-                    )
-                })
-                .collect(),
+        Self {
+            environments: environment_states(&turn_context.environments),
             current_date: turn_context.current_date.clone(),
             timezone: turn_context.timezone.clone(),
             network: network_from_turn_context(turn_context),
@@ -63,18 +47,15 @@ impl EnvironmentsState {
                 &turn_context.config.effective_workspace_roots(),
             )),
             subagents: None,
-        };
-        for environment in &turn_context.environments.starting {
-            state
-                .environments
-                .entry(environment.selection.environment_id.clone())
-                .or_insert_with(|| EnvironmentState {
-                    cwd: environment.selection.cwd.clone(),
-                    status: Some(EnvironmentStatus::Starting),
-                    shell: None,
-                });
         }
-        state
+    }
+
+    pub(crate) fn from_environment_snapshot(snapshot: &TurnEnvironmentSnapshot) -> Option<Self> {
+        let environments = environment_states(snapshot);
+        (!environments.is_empty()).then(|| Self {
+            environments,
+            ..Default::default()
+        })
     }
 
     pub(crate) fn from_turn_context_item(turn_context_item: &TurnContextItem) -> Self {
@@ -144,7 +125,12 @@ impl WorldStateSection for EnvironmentsState {
         let mut updates = self
             .environments
             .iter()
-            .filter(|(id, environment)| previous.environments.get(*id) != Some(*environment))
+            .filter(|(id, environment)| {
+                previous
+                    .environments
+                    .get(*id)
+                    .is_none_or(|previous| !environment.has_same_diff_value(previous))
+            })
             .map(|(id, environment)| (id.clone(), EnvironmentUpdate::Current(environment.clone())))
             .collect::<BTreeMap<_, _>>();
         updates.extend(
@@ -232,9 +218,6 @@ impl ContextualUserFragment for RenderedEnvironments {
                         rendered.push_str("    <environment id=\"");
                         push_xml_escaped_text(&mut rendered, id);
                         rendered.push('"');
-                        if matches!(environment.status, Some(EnvironmentStatus::Starting)) {
-                            rendered.push_str(" status=\"starting\"");
-                        }
                         rendered.push_str(">\n");
                         push_environment_values(&mut rendered, environment, "      ");
                         rendered.push_str("    </environment>\n");
@@ -278,6 +261,10 @@ fn push_environment_values(rendered: &mut String, environment: &EnvironmentState
     rendered.push_str("<cwd>");
     push_xml_escaped_text(rendered, &environment.cwd.inferred_native_path_string());
     rendered.push_str("</cwd>\n");
+    if matches!(environment.status, Some(EnvironmentStatus::Starting)) {
+        rendered.push_str(indent);
+        rendered.push_str("<status>starting</status>\n");
+    }
     if let Some(shell) = &environment.shell {
         rendered.push_str(indent);
         rendered.push_str("<shell>");
@@ -299,25 +286,53 @@ fn push_optional_element(rendered: &mut String, name: &str, value: Option<&str>)
     rendered.push_str(">\n");
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct EnvironmentState {
     cwd: PathUri,
     status: Option<EnvironmentStatus>,
     shell: Option<String>,
 }
 
-impl PartialEq for EnvironmentState {
-    fn eq(&self, other: &Self) -> bool {
+impl EnvironmentState {
+    fn has_same_diff_value(&self, other: &Self) -> bool {
         self.cwd == other.cwd
     }
 }
 
-impl Eq for EnvironmentState {}
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EnvironmentStatus {
     Starting,
     Available,
+}
+
+fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, EnvironmentState> {
+    let mut environments = snapshot
+        .turn_environments
+        .iter()
+        .map(|environment| {
+            (
+                environment.environment_id.clone(),
+                EnvironmentState {
+                    cwd: environment.cwd().clone(),
+                    status: Some(EnvironmentStatus::Available),
+                    shell: environment
+                        .shell
+                        .as_ref()
+                        .map(|shell| shell.name().to_string()),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for environment in &snapshot.starting {
+        environments
+            .entry(environment.selection.environment_id.clone())
+            .or_insert_with(|| EnvironmentState {
+                cwd: environment.selection.cwd.clone(),
+                status: Some(EnvironmentStatus::Starting),
+                shell: None,
+            });
+    }
+    environments
 }
 
 fn is_legacy_single(environments: &BTreeMap<String, EnvironmentState>) -> bool {

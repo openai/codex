@@ -102,8 +102,9 @@ fn renders_only_changed_environments() -> Result<()> {
       <shell>zsh</shell>
     </environment>
     <environment id="old" status="unavailable" />
-    <environment id="remote" status="starting">
+    <environment id="remote">
       <cwd>/remote</cwd>
+      <status>starting</status>
     </environment>
   </environments>
 </environment_context>"#,

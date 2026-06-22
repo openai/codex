@@ -2758,23 +2758,22 @@ impl Session {
             return;
         }
 
-        let shell = self.user_shell();
-        let Some(environment_context) =
-            crate::context::EnvironmentContext::from_step_context(step_context, shell.as_ref())
-        else {
+        let Some(environments_state) = crate::context::EnvironmentsState::from_environment_snapshot(
+            &step_context.environments,
+        ) else {
             return;
         };
         let changed = {
             let mut state = self.state.lock().await;
             state
                 .history
-                .update_environment_context_baseline(&environment_context)
+                .update_environments_state_baseline(&environments_state)
         };
         if !changed {
             return;
         }
 
-        let item = ContextualUserFragment::into(environment_context);
+        let item = ContextualUserFragment::into(environments_state);
         self.record_conversation_items(turn_context, &[item]).await;
     }
 
@@ -3452,7 +3451,7 @@ impl Session {
                     .await,
             );
         }
-        let initial_environment_context = if should_inject_full_context
+        let initial_environments_state = if should_inject_full_context
             && !context_items.is_empty()
             && turn_context.config.include_environment_context
             && turn_context
@@ -3460,11 +3459,7 @@ impl Session {
                 .features
                 .enabled(Feature::DeferredExecutor)
         {
-            let shell = self.user_shell();
-            crate::context::EnvironmentContext::from_attached_environments(
-                &turn_context.environments.turn_environments,
-                shell.as_ref(),
-            )
+            crate::context::EnvironmentsState::from_environment_snapshot(&turn_context.environments)
         } else {
             None
         };
@@ -3481,10 +3476,10 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
-        if let Some(environment_context) = initial_environment_context {
+        if let Some(environments_state) = initial_environments_state {
             state
                 .history
-                .update_environment_context_baseline(&environment_context);
+                .update_environments_state_baseline(&environments_state);
         }
     }
 
