@@ -1428,14 +1428,23 @@ pub(super) fn plugins_test_response(
 
 pub(super) fn render_loaded_plugins_popup(
     chat: &mut ChatWidget,
-    response: PluginListResponse,
+    mut response: PluginListResponse,
 ) -> String {
     let cwd = chat.config.cwd.clone();
+    let remote_marketplaces = response
+        .marketplaces
+        .iter()
+        .filter(|marketplace| marketplace.path.is_none())
+        .cloned()
+        .collect();
+    response
+        .marketplaces
+        .retain(|marketplace| marketplace.path.is_some());
     let response_for_refresh = response.clone();
     chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
-    chat.plugins_fetch_state.in_flight_cwd = None;
     chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response_for_refresh));
+    chat.on_plugin_remote_sections_loaded(cwd.to_path_buf(), remote_marketplaces, Vec::new());
     render_bottom_popup(chat, /*width*/ 100)
 }
 
