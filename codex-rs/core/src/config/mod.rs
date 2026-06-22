@@ -72,6 +72,7 @@ use codex_features::TokenBudgetConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
+use codex_login::AuthRouteConfig;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpServerRegistration;
@@ -1201,6 +1202,10 @@ impl AuthManagerConfig for Config {
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
     }
+
+    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        Config::auth_route_config(self)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -1452,6 +1457,11 @@ impl Config {
             model_supports_reasoning_summaries: self.model_supports_reasoning_summaries,
             model_catalog: self.model_catalog.clone(),
         }
+    }
+
+    pub fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        self.respect_system_proxy
+            .then(AuthRouteConfig::respect_system_proxy)
     }
 
     /// Build the plugin-manager input from the effective config.
@@ -2737,6 +2747,15 @@ pub fn resolve_bootstrap_respect_system_proxy(
     Ok(features.get().enabled(Feature::RespectSystemProxy))
 }
 
+/// Resolves auth route settings for the initial cloud-config bootstrap.
+pub fn resolve_bootstrap_auth_route_config(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<Option<AuthRouteConfig>> {
+    resolve_bootstrap_respect_system_proxy(cfg, feature_requirements)
+        .map(|enabled| enabled.then(AuthRouteConfig::respect_system_proxy))
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     permission_profile: &PermissionProfile,
@@ -3207,7 +3226,6 @@ impl Config {
                     effective_permission_selection.profiles.as_ref(),
                     default_permissions,
                     builtin_workspace_write_settings,
-                    resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
             let mut configured_workspace_roots = compile_permission_profile_workspace_roots(
