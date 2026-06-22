@@ -248,6 +248,36 @@ fn invalid_config_bundle() -> CloudConfigBundle {
     }
 }
 
+fn conflicting_managed_requirements_bundle() -> CloudConfigBundle {
+    CloudConfigBundle {
+        config_toml: CloudConfigTomlBundle::default(),
+        requirements_toml: CloudRequirementsTomlBundle {
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: vec![CloudRequirementsFragment {
+                    id: "req_baseline".to_string(),
+                    name: "Baseline requirements".to_string(),
+                    contents: r#"
+[hooks]
+managed_dir = "/managed/baseline"
+windows_managed_dir = 'C:\managed\baseline'
+"#
+                    .to_string(),
+                }],
+                system_overlay: vec![CloudRequirementsFragment {
+                    id: "req_overlay".to_string(),
+                    name: "System overlay requirements".to_string(),
+                    contents: r#"
+[hooks]
+managed_dir = "/managed/overlay"
+windows_managed_dir = 'C:\managed\overlay'
+"#
+                    .to_string(),
+                }],
+            },
+        },
+    }
+}
+
 fn request_error() -> BundleRequestError {
     BundleRequestError::Retryable(RetryableFailureKind::Request { status_code: None })
 }
@@ -505,30 +535,32 @@ async fn get_bundle_skips_team_like_usage_based_plan() {
 }
 
 #[tokio::test]
-async fn get_bundle_rejects_invalid_remote_bundle_before_cache_write() {
-    let codex_home = tempdir().expect("tempdir");
-    let fetcher = Arc::new(StaticBundleClient::new(invalid_config_bundle()));
-    let service = CloudConfigBundleService::new(
-        auth_manager_with_plan("business").await,
-        fetcher.clone(),
-        codex_home.path().to_path_buf(),
-        CLOUD_CONFIG_BUNDLE_TIMEOUT,
-    );
+async fn get_bundle_rejects_invalid_remote_buckets_before_cache_write() {
+    for bundle in [invalid_config_bundle(), conflicting_managed_requirements_bundle()] {
+        let codex_home = tempdir().expect("tempdir");
+        let fetcher = Arc::new(StaticBundleClient::new(bundle));
+        let service = CloudConfigBundleService::new(
+            auth_manager_with_plan("business").await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_CONFIG_BUNDLE_TIMEOUT,
+        );
 
-    let err = service
-        .load_startup_bundle()
-        .await
-        .expect_err("invalid remote bundle should fail closed");
+        let err = service
+            .load_startup_bundle()
+            .await
+            .expect_err("invalid remote bundle should fail closed");
 
-    assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
-    assert!(err.to_string().contains("invalid cloud config bundle"));
-    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    assert!(
-        !codex_home
-            .path()
-            .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
-            .exists()
-    );
+        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
+        assert!(err.to_string().contains("invalid cloud config bundle"));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+        assert!(
+            !codex_home
+                .path()
+                .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
+                .exists()
+        );
+    }
 }
 
 #[tokio::test]
