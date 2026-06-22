@@ -9,7 +9,9 @@ use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::thread_manager::StartThreadOptions;
 use assert_matches::assert_matches;
+use codex_extension_api::ExtensionDataInit;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
@@ -21,6 +23,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -2193,6 +2196,107 @@ async fn spawn_thread_subagent_gets_random_nickname_in_session_source() {
     assert_eq!(depth, 1);
     assert!(agent_nickname.is_some());
     assert_eq!(agent_role, Some("explorer".to_string()));
+}
+
+#[tokio::test]
+async fn spawn_thread_subagent_inherits_parent_originator_without_fork() {
+    let harness = AgentControlHarness::new().await;
+    let parent = harness
+        .manager
+        .start_thread_with_options(StartThreadOptions {
+            config: harness.config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: Some("CODEX_WORK_LOCAL".to_string()),
+            multi_agent_mode: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init: ExtensionDataInit::default(),
+            supports_openai_form_elicitation: false,
+        })
+        .await
+        .expect("parent thread should start");
+    let parent_snapshot = parent.thread.config_snapshot().await;
+    assert!(!parent_snapshot.originator.is_empty());
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: parent.thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let child_snapshot = child_thread.config_snapshot().await;
+    assert_eq!(child_snapshot.originator, parent_snapshot.originator);
+}
+
+#[tokio::test]
+async fn spawn_thread_subagent_fork_last_n_turns_inherits_parent_originator_without_session_meta() {
+    let harness = AgentControlHarness::new().await;
+    let parent = harness
+        .manager
+        .start_thread_with_options(StartThreadOptions {
+            config: harness.config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: Some("CODEX_WORK_LOCAL".to_string()),
+            multi_agent_mode: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init: ExtensionDataInit::default(),
+            supports_openai_form_elicitation: false,
+        })
+        .await
+        .expect("parent thread should start");
+    let parent_snapshot = parent.thread.config_snapshot().await;
+    assert!(!parent_snapshot.originator.is_empty());
+
+    let child = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("hello forked child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: parent.thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some("spawn-call-last-n".to_string()),
+                fork_mode: Some(SpawnAgentForkMode::LastNTurns(1)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("forked child spawn should succeed");
+
+    let child_thread = harness
+        .manager
+        .get_thread(child.thread_id)
+        .await
+        .expect("child thread should be registered");
+    let child_snapshot = child_thread.config_snapshot().await;
+    assert_eq!(child_snapshot.originator, parent_snapshot.originator);
 }
 
 #[tokio::test]

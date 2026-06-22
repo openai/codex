@@ -7,6 +7,7 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::add_originator_header;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
@@ -72,6 +73,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         thread_id,
         provider,
         session_source,
+        "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
@@ -79,6 +81,28 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
     )
+}
+
+#[test]
+fn add_originator_header_omits_default_originator() {
+    let mut headers = http::HeaderMap::new();
+    let default_originator = codex_login::default_client::originator();
+
+    add_originator_header(&mut headers, default_originator.value.as_str());
+
+    assert_eq!(headers.get("originator"), None);
+}
+
+#[test]
+fn add_originator_header_includes_non_default_originator() {
+    let mut headers = http::HeaderMap::new();
+
+    add_originator_header(&mut headers, "codex_work_desktop_local");
+
+    assert_eq!(
+        headers.get("originator"),
+        Some(&http::HeaderValue::from_static("codex_work_desktop_local"))
+    );
 }
 
 fn test_responses_metadata_for_client(
@@ -563,6 +587,7 @@ fn model_client_with_counting_attestation(
         ThreadId::new(),
         provider,
         SessionSource::Exec,
+        "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,

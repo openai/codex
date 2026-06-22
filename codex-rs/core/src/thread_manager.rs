@@ -29,6 +29,8 @@ use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+use codex_login::default_client::originator;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
@@ -190,6 +192,17 @@ pub struct StartThreadOptions {
     pub environments: Vec<TurnEnvironmentSelection>,
     pub thread_extension_init: ExtensionDataInit,
     pub supports_openai_form_elicitation: bool,
+}
+
+fn originator_from_service_name(service_name: Option<&str>) -> Option<String> {
+    let service_name = service_name?.trim();
+    if service_name.eq_ignore_ascii_case("CODEX_WORK_LOCAL") {
+        return Some("codex_work_desktop_local".to_string());
+    }
+    if service_name.eq_ignore_ascii_case("CODEX_WORK_CLOUD") {
+        return Some("codex_work_desktop_cloud".to_string());
+    }
+    None
 }
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
@@ -1220,6 +1233,61 @@ impl ThreadManagerState {
         }
     }
 
+    async fn inherited_originator_for_parent_thread(
+        &self,
+        session_source: &SessionSource,
+        parent_thread_id: Option<ThreadId>,
+        forked_from_thread_id: Option<ThreadId>,
+    ) -> Option<String> {
+        let inherited_thread_id = match session_source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) => Some(*parent_thread_id),
+            _ => parent_thread_id.or(forked_from_thread_id),
+        };
+        let thread = self.get_thread(inherited_thread_id?).await.ok()?;
+        let originator = thread.config_snapshot().await.originator;
+        (!originator.is_empty()).then_some(originator)
+    }
+
+    async fn effective_originator(
+        &self,
+        initial_history: &InitialHistory,
+        metrics_service_name: Option<&str>,
+        session_source: &SessionSource,
+        parent_thread_id: Option<ThreadId>,
+        forked_from_thread_id: Option<ThreadId>,
+    ) -> String {
+        let persisted_originator = initial_history.get_session_originator();
+        let inherited_originator = match initial_history {
+            InitialHistory::New | InitialHistory::Cleared => {
+                self.inherited_originator_for_parent_thread(
+                    session_source,
+                    parent_thread_id,
+                    forked_from_thread_id,
+                )
+                .await
+            }
+            InitialHistory::Forked(_) if persisted_originator.is_none() => {
+                self.inherited_originator_for_parent_thread(
+                    session_source,
+                    parent_thread_id,
+                    forked_from_thread_id,
+                )
+                .await
+            }
+            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => None,
+        };
+
+        std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
+            .is_ok()
+            .then(|| originator().value)
+            .or_else(|| originator_from_service_name(metrics_service_name))
+            .or(persisted_originator)
+            .or(inherited_originator)
+            .unwrap_or_else(|| originator().value)
+    }
+
     /// Spawn a new thread with no history using a provided config.
     pub(crate) async fn spawn_new_thread(
         &self,
@@ -1466,6 +1534,15 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
+        let originator = self
+            .effective_originator(
+                &initial_history,
+                metrics_service_name.as_deref(),
+                &session_source,
+                parent_thread_id,
+                forked_from_thread_id,
+            )
+            .await;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
@@ -1484,6 +1561,7 @@ impl ThreadManagerState {
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
+            originator,
             agent_control,
             dynamic_tools,
             metrics_service_name,
