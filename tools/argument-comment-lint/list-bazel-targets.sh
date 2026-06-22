@@ -18,9 +18,11 @@ if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
   manual_rust_test_targets="$(printf '%s\n' "${manual_rust_test_targets}" | grep -v -- '-windows-cross-bin$' || true)"
 fi
 
-# Wine-exec wrappers have no Rust sources of their own and require the transitioned Windows
-# toolchain, which the lint configuration does not register. Their native Rust test binaries are
-# already covered through the corresponding native test targets.
+# Generated `*-wine-exec-test` targets are Linux launchers around the host-native test binary and
+# a separately transitioned Windows exec-server binary. The corresponding native test target is
+# linted on Linux and macOS, while the exec-server binary is linted under `cfg(windows)` by the
+# Windows lint job. Exclude only the launchers here because this lint configuration cannot analyze
+# their transitioned data dependency.
 wine_exec_test_targets="$(
   ./.github/scripts/run-bazel-query-ci.sh \
     --output=label \

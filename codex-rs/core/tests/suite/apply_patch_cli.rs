@@ -648,6 +648,8 @@ async fn apply_patch_cli_delete_directory_reports_verification_error() -> Result
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_rejects_path_traversal_outside_workspace() -> Result<()> {
+    // TODO(anp): Assert the target-native Windows traversal error as well as the POSIX error.
+    skip_if_wine_exec!(Ok(()), "asserts a POSIX-specific traversal error message");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -1320,6 +1322,11 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nested() -> Result<()> {
+    // TODO(anp): Normalize remote Windows cwd prefixes when producing repo-relative patch paths.
+    skip_if_wine_exec!(
+        Ok(()),
+        "remote Windows diff paths retain their drive prefix"
+    );
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|builder| {

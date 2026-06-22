@@ -522,6 +522,11 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_respects_workdir_override() -> Result<()> {
+    // TODO(anp): Construct unified-exec workdir overrides with target-native Windows path types.
+    skip_if_wine_exec!(
+        Ok(()),
+        "duplicates the Windows drive prefix in the workdir URI"
+    );
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_windows!(Ok(()));
@@ -1285,6 +1290,8 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
+    // TODO(anp): Use target-native commands and Windows process-session semantics in this fixture.
+    skip_if_wine_exec!(Ok(()), "uses bash and POSIX sleep/session behavior");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_windows!(Ok(()));

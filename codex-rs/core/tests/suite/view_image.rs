@@ -280,6 +280,9 @@ async fn user_turn_local_image_applies_patch_budget() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
+    // TODO(anp): Load image fixtures through the selected environment's filesystem so target-native
+    // Windows paths work as well as host-local paths.
+    skip_if_wine_exec!(Ok(()), "view_image cannot read the remote Windows cwd yet");
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -674,6 +677,9 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5_3_codex()
 -> anyhow::Result<()> {
+    // TODO(anp): Load image fixtures through the selected environment's filesystem so target-native
+    // Windows paths work as well as host-local paths.
+    skip_if_wine_exec!(Ok(()), "view_image cannot read the remote Windows cwd yet");
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -843,6 +849,9 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
+    // TODO(anp): Load image fixtures through the selected environment's filesystem so target-native
+    // Windows paths work as well as host-local paths.
+    skip_if_wine_exec!(Ok(()), "view_image cannot read the remote Windows cwd yet");
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -933,6 +942,9 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> anyhow::Result<()> {
+    // TODO(anp): Load image fixtures through the selected environment's filesystem so target-native
+    // Windows paths work as well as host-local paths.
+    skip_if_wine_exec!(Ok(()), "view_image cannot read the remote Windows cwd yet");
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1027,6 +1039,9 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_does_not_force_original_resolution_with_capability_only()
 -> anyhow::Result<()> {
+    // TODO(anp): Load image fixtures through the selected environment's filesystem so target-native
+    // Windows paths work as well as host-local paths.
+    skip_if_wine_exec!(Ok(()), "view_image cannot read the remote Windows cwd yet");
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1117,6 +1132,12 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
+    // TODO(anp): Resolve view_image paths through the selected environment before asserting
+    // target-native directory errors.
+    skip_if_wine_exec!(
+        Ok(()),
+        "view_image cannot inspect the remote Windows cwd yet"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1187,6 +1208,9 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Result<()> {
+    // TODO(anp): Load image fixtures through the selected environment's filesystem so target-native
+    // Windows paths work as well as host-local paths.
+    skip_if_wine_exec!(Ok(()), "view_image cannot read the remote Windows cwd yet");
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1251,6 +1275,12 @@ async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Resul
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
+    // TODO(anp): Resolve view_image paths through the selected environment before asserting
+    // target-native missing-file errors.
+    skip_if_wine_exec!(
+        Ok(()),
+        "view_image cannot inspect the remote Windows cwd yet"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

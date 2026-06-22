@@ -25,6 +25,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -171,6 +172,10 @@ async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<Respo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() -> Result<()> {
+    // TODO(anp): Read app-upload file arguments through the selected environment so remote Windows
+    // paths can be uploaded before the MCP call.
+    skip_if_wine_exec!(Ok(()), "app file uploads only read host-local paths");
+
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     mount_file_upload_mocks(&server, STREAMED_FILE_SIZE as u64).await;
