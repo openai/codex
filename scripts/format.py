@@ -72,6 +72,7 @@ def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
             or name.endswith((".BUILD.bazel", ".MODULE.bazel", ".bzl", ".sky"))
             or ".bzl." in name
             or ".sky." in name
+            or (path.parent == Path(".codex/rules") and path.suffix == ".rules")
         ):
             buildifier_files.append(path.as_posix())
     buildifier_files.sort()
