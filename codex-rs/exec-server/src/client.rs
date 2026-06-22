@@ -50,6 +50,7 @@ use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FILE_TRANSFER_CANCEL_METHOD;
 use crate::protocol::FILE_TRANSFER_PREPARE_UPLOAD_METHOD;
+use crate::protocol::FILE_TRANSFER_START_UPLOAD_METHOD;
 use crate::protocol::FILE_TRANSFER_STATUS_METHOD;
 use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_CLOSE_METHOD;
@@ -66,6 +67,8 @@ use crate::protocol::FileTransferCancelParams;
 use crate::protocol::FileTransferCancelResponse;
 use crate::protocol::FileTransferPrepareUploadParams;
 use crate::protocol::FileTransferPrepareUploadResponse;
+use crate::protocol::FileTransferStartUploadParams;
+use crate::protocol::FileTransferStartUploadResponse;
 use crate::protocol::FileTransferStatusParams;
 use crate::protocol::FileTransferStatusResponse;
 use crate::protocol::FsCanonicalizeParams;
@@ -423,6 +426,13 @@ impl LazyRemoteExecServerClient {
         self.get().await?.file_transfer_prepare_upload(params).await
     }
 
+    pub(crate) async fn file_transfer_start_upload(
+        &self,
+        params: FileTransferStartUploadParams,
+    ) -> Result<FileTransferStartUploadResponse, ExecServerError> {
+        self.get().await?.file_transfer_start_upload(params).await
+    }
+
     pub(crate) async fn file_transfer_status(
         &self,
         transfer_id: String,
@@ -545,6 +555,13 @@ impl ExecServerClient {
     ) -> Result<FileTransferPrepareUploadResponse, ExecServerError> {
         self.call(FILE_TRANSFER_PREPARE_UPLOAD_METHOD, &params)
             .await
+    }
+
+    pub async fn file_transfer_start_upload(
+        &self,
+        params: FileTransferStartUploadParams,
+    ) -> Result<FileTransferStartUploadResponse, ExecServerError> {
+        self.call(FILE_TRANSFER_START_UPLOAD_METHOD, &params).await
     }
 
     pub async fn file_transfer_status(

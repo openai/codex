@@ -27,7 +27,10 @@ use crate::protocol::EnvironmentInfo;
 use crate::protocol::FileTransferCancelResponse;
 use crate::protocol::FileTransferPrepareUploadParams;
 use crate::protocol::FileTransferPrepareUploadResponse;
+use crate::protocol::FileTransferStartUploadParams;
+use crate::protocol::FileTransferStartUploadResponse;
 use crate::protocol::FileTransferStatusResponse;
+use crate::protocol::PreparedFileUploadCapability;
 use crate::protocol::ShellInfo;
 use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
@@ -578,6 +581,18 @@ impl Environment {
         client.file_transfer_prepare_upload(params).await
     }
 
+    pub async fn file_transfer_start_upload(
+        &self,
+        params: FileTransferStartUploadParams,
+    ) -> Result<FileTransferStartUploadResponse, ExecServerError> {
+        let client = self.remote_client.as_ref().ok_or_else(|| {
+            ExecServerError::Protocol(
+                "executor-owned file transfer requires a remote environment".to_string(),
+            )
+        })?;
+        client.file_transfer_start_upload(params).await
+    }
+
     pub async fn file_transfer_status(
         &self,
         transfer_id: String,
@@ -650,6 +665,15 @@ impl EnvironmentInfo {
         Self {
             shell: codex_shell_command::shell_detect::default_user_shell().into(),
             capabilities: EnvironmentCapabilities::default(),
+        }
+    }
+
+    pub(crate) fn executor(prepared_file_upload: Option<PreparedFileUploadCapability>) -> Self {
+        Self {
+            shell: codex_shell_command::shell_detect::default_user_shell().into(),
+            capabilities: EnvironmentCapabilities {
+                prepared_file_upload,
+            },
         }
     }
 }

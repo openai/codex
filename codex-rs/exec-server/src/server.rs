@@ -1,5 +1,6 @@
 mod file_system_handler;
 mod file_transfer_handler;
+mod file_transfer_http;
 mod handler;
 mod process_handler;
 mod processor;
