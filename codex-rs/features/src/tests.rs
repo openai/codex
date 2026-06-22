@@ -477,6 +477,23 @@ fn from_sources_ignores_removed_image_detail_original_feature_key() {
 }
 
 #[test]
+fn from_sources_ignores_removed_resize_all_images_feature_key() {
+    let features_toml =
+        FeaturesToml::from(BTreeMap::from([("resize_all_images".to_string(), false)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
 fn from_sources_ignores_removed_undo_feature_key() {
     let features_toml = FeaturesToml::from(BTreeMap::from([("undo".to_string(), true)]));
 
