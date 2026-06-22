@@ -541,6 +541,25 @@ fn mcp_call_metric_outcome(
                     .and_then(|structured_content| structured_content.get("error_code"))
                     .and_then(JsonValue::as_str)
                     .filter(|error_code| !error_code.is_empty())
+                    .or_else(|| {
+                        result
+                            .meta
+                            .as_ref()
+                            .and_then(JsonValue::as_object)
+                            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+                            .and_then(JsonValue::as_object)
+                            .and_then(|codex_apps| codex_apps.get("connector_auth_failure"))
+                            .and_then(JsonValue::as_object)
+                            .filter(|auth_failure| {
+                                auth_failure
+                                    .get("is_auth_failure")
+                                    .and_then(JsonValue::as_bool)
+                                    == Some(true)
+                            })
+                            .and_then(|auth_failure| auth_failure.get("error_code"))
+                            .and_then(JsonValue::as_str)
+                            .filter(|error_code| !error_code.is_empty())
+                    })
             } else {
                 None
             };

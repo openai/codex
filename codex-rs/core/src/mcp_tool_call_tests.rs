@@ -481,6 +481,21 @@ fn mcp_call_metric_outcome_ignores_untrusted_tool_error_codes() {
     );
 }
 
+#[test]
+fn mcp_call_metric_outcome_reads_hosted_auth_error_code_from_meta() {
+    assert_eq!(
+        mcp_call_metric_outcome(
+            &Ok(codex_apps_auth_failure_result()),
+            McpErrorCodeSource::HostedPluginService,
+        ),
+        McpCallMetricOutcome {
+            status: "error",
+            error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
+            error_code: Some("UNAUTHORIZED".to_string()),
+        }
+    );
+}
+
 #[tokio::test]
 async fn mcp_tool_call_span_records_expected_fields() {
     let buffer: &'static std::sync::Mutex<Vec<u8>> =
