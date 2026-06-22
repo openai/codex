@@ -668,7 +668,6 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
-                trace!("websocket event: {text}");
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())

@@ -707,7 +707,6 @@ impl SessionTelemetry {
         duration: Duration,
     ) {
         let mut kind = None;
-        let mut error_message = None;
         let mut success = true;
 
         match result {
@@ -724,49 +723,26 @@ impl SessionTelemetry {
                             }
                             if kind.as_deref() == Some("response.failed") {
                                 success = false;
-                                error_message = value
-                                    .get("response")
-                                    .and_then(|value| value.get("error"))
-                                    .map(serde_json::Value::to_string)
-                                    .or_else(|| Some("response.failed event received".to_string()));
                             }
                         }
-                        Err(err) => {
+                        Err(_) => {
                             kind = Some("parse_error".to_string());
-                            error_message = Some(err.to_string());
                             success = false;
                         }
                     }
-                }
-                tokio_tungstenite::tungstenite::Message::Binary(_) => {
-                    success = false;
-                    error_message = Some("unexpected binary websocket event".to_string());
                 }
                 tokio_tungstenite::tungstenite::Message::Ping(_)
                 | tokio_tungstenite::tungstenite::Message::Pong(_) => {
                     return;
                 }
-                tokio_tungstenite::tungstenite::Message::Close(_) => {
+                tokio_tungstenite::tungstenite::Message::Binary(_)
+                | tokio_tungstenite::tungstenite::Message::Close(_)
+                | tokio_tungstenite::tungstenite::Message::Frame(_) => {
                     success = false;
-                    error_message =
-                        Some("websocket closed by server before response.completed".to_string());
-                }
-                tokio_tungstenite::tungstenite::Message::Frame(_) => {
-                    success = false;
-                    error_message = Some("unexpected websocket frame".to_string());
                 }
             },
-            Ok(Some(Err(err))) => {
+            Ok(Some(Err(_))) | Ok(None) | Err(_) => {
                 success = false;
-                error_message = Some(err.to_string());
-            }
-            Ok(None) => {
-                success = false;
-                error_message = Some("stream closed before response.completed".to_string());
-            }
-            Err(err) => {
-                success = false;
-                error_message = Some(err.to_string());
             }
         }
 
@@ -775,18 +751,6 @@ impl SessionTelemetry {
         let tags = [("kind", kind_str), ("success", success_str)];
         self.counter(WEBSOCKET_EVENT_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
-        log_and_trace_event!(
-            self,
-            common: {
-                event.name = "codex.websocket_event",
-                event.kind = %kind_str,
-                duration_ms = %duration.as_millis(),
-                success = success_str,
-                error.message = error_message.as_deref(),
-            },
-            log: {},
-            trace: {},
-        );
     }
 
     pub fn log_sse_event<E>(
