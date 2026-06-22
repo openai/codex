@@ -32,7 +32,7 @@ const TOKEN_ACTIVITY_FETCH_TIMEOUT: std::time::Duration =
 const RATE_LIMIT_RESET_REQUEST_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
 const WORKSPACE_HEADLINE_FETCH_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_millis(/*millis*/ 1000);
+    std::time::Duration::from_millis(/*millis*/ 2000);
 
 impl App {
     pub(super) fn fetch_mcp_inventory(
