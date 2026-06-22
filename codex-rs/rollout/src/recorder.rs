@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use chrono::SecondsFormat;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
@@ -81,10 +82,11 @@ pub struct RolloutRecorder {
 #[derive(Clone)]
 pub enum RolloutRecorderParams {
     Create {
+        session_id: SessionId,
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         parent_thread_id: Option<ThreadId>,
-        source: SessionSource,
+        source: Box<SessionSource>,
         thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
@@ -167,15 +169,23 @@ impl RolloutRecorderParams {
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> Self {
         Self::Create {
+            session_id: conversation_id.into(),
             conversation_id,
             forked_from_id,
             parent_thread_id,
-            source,
+            source: Box::new(source),
             thread_source,
             base_instructions,
             dynamic_tools,
             multi_agent_version: None,
         }
+    }
+
+    pub fn with_session_id(mut self, session_id: SessionId) -> Self {
+        if let Self::Create { session_id: id, .. } = &mut self {
+            *id = session_id;
+        }
+        self
     }
 
     pub fn with_multi_agent_version(
@@ -696,6 +706,7 @@ impl RolloutRecorder {
     ) -> std::io::Result<Self> {
         let (file, deferred_log_file_info, rollout_path, meta) = match params {
             RolloutRecorderParams::Create {
+                session_id,
                 conversation_id,
                 forked_from_id,
                 parent_thread_id,
@@ -707,7 +718,7 @@ impl RolloutRecorder {
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
-                let session_id = log_file_info.conversation_id;
+                let thread_id = log_file_info.conversation_id;
                 let started_at = log_file_info.timestamp;
 
                 let timestamp_format: &[FormatItem] = format_description!(
@@ -719,7 +730,8 @@ impl RolloutRecorder {
                     .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
                 let session_meta = SessionMeta {
-                    id: session_id,
+                    session_id,
+                    id: thread_id,
                     forked_from_id,
                     parent_thread_id,
                     timestamp,
@@ -729,7 +741,7 @@ impl RolloutRecorder {
                     agent_nickname: source.get_nickname(),
                     agent_role: source.get_agent_role(),
                     agent_path: source.get_agent_path().map(Into::into),
-                    source,
+                    source: *source,
                     thread_source,
                     model_provider: Some(config.model_provider_id().to_string()),
                     base_instructions: Some(base_instructions),

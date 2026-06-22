@@ -1252,6 +1252,7 @@ async fn thread_list_filters_by_subagent_variant() -> Result<()> {
         Some("mock_provider"),
         /*git_info*/ None,
         CoreSessionSource::SubAgent(SubAgentSource::Review),
+        parent_thread_id.into(),
         parent_thread_id,
     )?;
     let compact_id = create_fake_rollout_with_source(

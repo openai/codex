@@ -2041,6 +2041,7 @@ mod tests {
         std::fs::create_dir_all(parent)?;
 
         let session_meta = codex_protocol::protocol::SessionMeta {
+            session_id: thread_id.into(),
             id: thread_id,
             timestamp: meta_rfc3339.to_string(),
             cwd: cwd.to_path_buf(),

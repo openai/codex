@@ -821,6 +821,7 @@ mod tests {
             "timestamp": "2025-01-03T12:00:00Z",
             "type": "session_meta",
             "payload": {
+                "session_id": uuid,
                 "id": uuid,
                 "timestamp": "2025-01-03T12:00:00Z",
                 "cwd": rollout_cwd,
@@ -926,6 +927,7 @@ mod tests {
             "timestamp": "2025-01-03T12-00-00",
             "type": "session_meta",
             "payload": {
+                "session_id": uuid,
                 "id": uuid,
                 "timestamp": "2025-01-03T12-00-00",
                 "cwd": home.path(),
@@ -1091,6 +1093,7 @@ mod tests {
             "timestamp": "2025-01-03T12:00:00Z",
             "type": "session_meta",
             "payload": {
+                "session_id": uuid,
                 "id": uuid,
                 "timestamp": "2025-01-03T12:00:00Z",
                 "cwd": home.path(),

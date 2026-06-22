@@ -77,6 +77,7 @@ pub(super) fn write_session_file_with_fork(
         "timestamp": ts,
         "type": "session_meta",
         "payload": {
+            "session_id": uuid,
             "id": uuid,
             "forked_from_id": forked_from_id,
             "timestamp": ts,
