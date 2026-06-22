@@ -1,0 +1,19 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: strip_osc8_for_snapshot(&popup)
+---
+  Plugins
+  Linear · Can be installed · Shared with me
+  Data shared with this app is subject to the app's terms of service and privacy policy. Learn more.
+  Install shared Linear plugin.
+
+› 1. Back to plugins  Return to the plugin list.
+  2. Install plugin   Install this plugin now.
+     Source           Remote · Shared with me
+     Auth             Auth on install
+     Version          remote 5
+     Sharing          Private · creator Test User · https://chatgpt.com/codex/plugins/share/linear
+     Skills           No plugin skills.
+     Hooks            No plugin hooks.
+
+  Press esc to close.

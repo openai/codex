@@ -966,59 +966,9 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
 }
 
 #[tokio::test]
-async fn plugin_detail_popup_shows_local_share_context_snapshot() {
+async fn plugin_detail_popup_shows_local_share_context_as_read_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-
-    let summary = PluginSummary {
-        share_context: Some(PluginShareContext {
-            remote_plugin_id: "plugins~Plugin_docs".to_string(),
-            remote_version: Some("7".to_string()),
-            discoverability: Some(PluginShareDiscoverability::Private),
-            share_url: Some("https://chatgpt.com/codex/plugins/share/docs".to_string()),
-            creator_account_user_id: None,
-            creator_name: Some("Test User".to_string()),
-            share_principals: None,
-        }),
-        ..plugins_test_summary(
-            "plugin-docs",
-            "docs",
-            Some("Docs"),
-            Some("Workspace docs."),
-            /*installed*/ false,
-            /*enabled*/ true,
-            PluginInstallPolicy::Available,
-        )
-    };
-    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
-        summary.clone(),
-    ])]);
-    let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
-    chat.add_plugins_output();
-    chat.on_plugin_detail_loaded(
-        cwd.to_path_buf(),
-        Ok(PluginReadResponse {
-            plugin: plugins_test_detail(summary, Some("Workspace docs."), &[], &[], &[], &[]),
-        }),
-    );
-
-    let popup = render_bottom_popup(&chat, /*width*/ 120);
-    let sharing_row = popup
-        .lines()
-        .find(|line| line.contains("Sharing"))
-        .expect("expected sharing metadata row");
-    insta::assert_snapshot!(
-        sharing_row,
-        @"     Sharing          Private · creator Test User · https://chatgpt.com/codex/plugins/share/docs"
-    );
-}
-
-#[tokio::test]
-async fn plugin_detail_local_plugins_do_not_offer_tui_share_actions() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-    chat.set_feature_enabled(Feature::PluginSharing, /*enabled*/ true);
 
     let summary = PluginSummary {
         share_context: Some(PluginShareContext {
@@ -1051,11 +1001,9 @@ async fn plugin_detail_local_plugins_do_not_offer_tui_share_actions() {
     chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin: detail }));
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
-    assert!(
-        !popup.contains("Share plugin")
-            && !popup.contains("Update shared release")
-            && !popup.contains("Check out locally"),
-        "expected TUI sharing actions to be hidden, got:\n{popup}"
+    assert_chatwidget_snapshot!(
+        "plugin_detail_popup_local_share_read_only",
+        strip_osc8_for_snapshot(&popup)
     );
 }
 
@@ -2308,17 +2256,28 @@ async fn plugins_popup_remote_local_dedupe_prefers_installed_remote_after_mapped
 }
 
 #[tokio::test]
-async fn plugin_detail_remote_install_renders_source_and_uses_remote_location() {
+async fn plugin_detail_remote_shared_plugin_uses_install_flow() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
-    let summary = plugins_test_remote_summary(
-        "plugins~Plugin_linear",
-        "linear",
-        Some("Linear"),
-        Some("Issue tracking."),
-        /*installed*/ false,
-    );
+    let summary = PluginSummary {
+        share_context: Some(PluginShareContext {
+            remote_plugin_id: "plugins~Plugin_linear".to_string(),
+            remote_version: Some("5".to_string()),
+            discoverability: Some(PluginShareDiscoverability::Private),
+            share_url: Some("https://chatgpt.com/codex/plugins/share/linear".to_string()),
+            creator_account_user_id: None,
+            creator_name: Some("Test User".to_string()),
+            share_principals: None,
+        }),
+        ..plugins_test_remote_summary(
+            "plugins~Plugin_linear",
+            "linear",
+            Some("Linear"),
+            Some("Issue tracking."),
+            /*installed*/ false,
+        )
+    };
     let response = plugins_test_response(vec![plugins_test_remote_marketplace(
         "workspace-shared-with-me-private",
         "Shared with me",
@@ -2337,25 +2296,11 @@ async fn plugin_detail_remote_install_renders_source_and_uses_remote_location() 
             ),
         }),
     );
-    let popup = render_bottom_popup(&chat, /*width*/ 100);
-    assert!(
-        popup.contains("Linear · Can be installed · Shared with me")
-            && !popup.contains("Linear · Can be installed · workspace-shared-with-me-private"),
-        "expected remote detail header to use product label, got:\n{popup}"
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert_chatwidget_snapshot!(
+        "plugin_detail_popup_remote_shared_installable",
+        strip_osc8_for_snapshot(&popup)
     );
-    let source_row = popup
-        .lines()
-        .find(|line| line.contains("Source"))
-        .expect("expected remote source row");
-    insta::assert_snapshot!(
-        source_row,
-        @"     Source           Remote · Shared with me"
-    );
-    let install_row = popup
-        .lines()
-        .find(|line| line.contains("Install plugin"))
-        .expect("expected remote install row");
-    insta::assert_snapshot!(install_row, @"  2. Install plugin   Install this plugin now.");
 
     while rx.try_recv().is_ok() {}
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
@@ -2382,61 +2327,6 @@ async fn plugin_detail_remote_install_renders_source_and_uses_remote_location() 
         }
         other => panic!("expected remote FetchPluginInstall event, got {other:?}"),
     }
-}
-
-#[tokio::test]
-async fn plugin_detail_remote_shared_plugin_does_not_offer_checkout() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-    chat.set_feature_enabled(Feature::PluginSharing, /*enabled*/ true);
-
-    let summary = PluginSummary {
-        share_context: Some(PluginShareContext {
-            remote_plugin_id: "plugins~Plugin_linear".to_string(),
-            remote_version: Some("5".to_string()),
-            discoverability: Some(PluginShareDiscoverability::Private),
-            share_url: Some("https://chatgpt.com/codex/plugins/share/linear".to_string()),
-            creator_account_user_id: None,
-            creator_name: Some("Test User".to_string()),
-            share_principals: None,
-        }),
-        ..plugins_test_remote_summary(
-            "plugins~Plugin_linear",
-            "linear",
-            Some("Linear"),
-            Some("Issue tracking."),
-            /*installed*/ false,
-        )
-    };
-    let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(
-        cwd.to_path_buf(),
-        Ok(plugins_test_response(vec![
-            plugins_test_remote_marketplace(
-                "workspace-shared-with-me-private",
-                "Shared with me",
-                vec![summary.clone()],
-            ),
-        ])),
-    );
-    chat.add_plugins_output();
-    chat.on_plugin_detail_loaded(
-        cwd.to_path_buf(),
-        Ok(PluginReadResponse {
-            plugin: plugins_test_remote_detail(
-                "workspace-shared-with-me-private",
-                summary,
-                Some("Shared Linear plugin."),
-            ),
-        }),
-    );
-
-    let popup = render_bottom_popup(&chat, /*width*/ 120);
-    assert!(
-        !popup.contains("Check out locally")
-            && !popup.contains("Create a local editable copy in your personal marketplace."),
-        "expected shared remote detail to hide checkout, got:\n{popup}"
-    );
 }
 
 #[tokio::test]
