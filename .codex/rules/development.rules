@@ -1,6 +1,9 @@
 # Shared rules only allow commands that are generally safe for every project
 # developer. Prompt and denial policies belong in user config so the repository
 # does not impose those flows globally.
+# Cargo commands and argument-forwarding recipes may use `--manifest-path` to
+# target manifests outside this checkout. That flexibility is an accepted
+# tradeoff for development.
 
 prefix_rule(
     pattern = [
@@ -25,12 +28,10 @@ prefix_rule(
     decision = "allow",
     justification = """
 Needed: host caches or nested sandbox capabilities.
-Safe: fixed non-publishing recipes only operate on the trusted checkout.
+Safe: these non-publishing recipes are standard development operations.
 """,
 )
 
-# Cargo accepts `--manifest-path`, so these rules may target manifests outside
-# this checkout. That flexibility is an accepted tradeoff for development.
 prefix_rule(
     pattern = ["cargo", ["build", "check", "clippy", "test"]],
     decision = "allow",
