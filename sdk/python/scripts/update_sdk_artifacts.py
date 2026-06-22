@@ -608,7 +608,32 @@ def generate_v2_all(schema_dir: Path) -> None:
             ],
             cwd=sdk_root(),
         )
+    _require_nullable_chatgpt_account_email(out_path)
     _normalize_generated_timestamps(out_path)
+
+
+def _require_nullable_chatgpt_account_email(out_path: Path) -> None:
+    """Preserve required-but-nullable email semantics in the generated SDK model."""
+    source = out_path.read_text()
+    class_start = source.find("class ChatgptAccount(BaseModel):")
+    if class_start == -1:
+        raise RuntimeError("Generated SDK is missing ChatgptAccount")
+    class_end = source.find("\n\nclass ", class_start)
+    if class_end == -1:
+        class_end = len(source)
+
+    class_source = source[class_start:class_end]
+    nullable_with_default = "    email: str | None = None"
+    if class_source.count(nullable_with_default) != 1:
+        raise RuntimeError(
+            "Generated ChatgptAccount email did not have the expected nullable shape"
+        )
+    class_source = class_source.replace(
+        nullable_with_default,
+        "    email: str | None",
+        1,
+    )
+    out_path.write_text(source[:class_start] + class_source + source[class_end:])
 
 
 def _notification_specs(schema_dir: Path) -> list[tuple[str, str]]:
