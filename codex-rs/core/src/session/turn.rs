@@ -333,7 +333,10 @@ pub(crate) async fn run_turn(
                 }
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
+                if turn_context.features.enabled(Feature::AutoCompaction)
+                    && token_limit_reached
+                    && needs_follow_up
+                {
                     if let Err(err) = run_auto_compact(
                         &sess,
                         &turn_context,
@@ -844,6 +847,10 @@ async fn run_pre_sampling_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
 ) -> CodexResult<()> {
+    if !turn_context.features.enabled(Feature::AutoCompaction) {
+        return Ok(());
+    }
+
     maybe_run_previous_model_inline_compact(sess, turn_context, client_session).await?;
     let token_status = auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
     // Compact if the configured auto-compaction budget or usable context window is exhausted.

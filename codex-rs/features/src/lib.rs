@@ -231,6 +231,8 @@ pub enum Feature {
     RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
+    /// Enable automatic context compaction before or during a turn.
+    AutoCompaction,
     /// Enable remote compaction v2 over the normal Responses API.
     RemoteCompactionV2,
     /// Use Agent Identity for ChatGPT-authenticated sessions.
@@ -1334,6 +1336,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "responses_websockets_v2",
         stage: Stage::Removed,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AutoCompaction,
+        key: "auto_compaction",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RemoteCompactionV2,
