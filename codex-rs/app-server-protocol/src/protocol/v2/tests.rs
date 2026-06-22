@@ -923,6 +923,7 @@ fn fs_copy_params_round_trip_with_recursive_directory_copy() {
         source_path: absolute_path("tmp/source"),
         destination_path: absolute_path("tmp/destination"),
         recursive: true,
+        exclusive: true,
     };
 
     let value = serde_json::to_value(&params).expect("serialize fs/copy params");
@@ -931,6 +932,7 @@ fn fs_copy_params_round_trip_with_recursive_directory_copy() {
         json!({
             "sourcePath": absolute_path_string("tmp/source"),
             "destinationPath": absolute_path_string("tmp/destination"),
+            "exclusive": true,
             "recursive": true,
         })
     );

@@ -676,7 +676,17 @@ impl DirectFileSystem {
             }
 
             if file_type.is_file() {
-                std::fs::copy(source_path.as_path(), destination_path.as_path())?;
+                if options.exclusive {
+                    let mut source = std::fs::File::open(source_path.as_path())?;
+                    let mut destination = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(destination_path.as_path())?;
+                    std::io::copy(&mut source, &mut destination)?;
+                    std::fs::set_permissions(destination_path.as_path(), metadata.permissions())?;
+                } else {
+                    std::fs::copy(source_path.as_path(), destination_path.as_path())?;
+                }
                 return Ok(());
             }
 

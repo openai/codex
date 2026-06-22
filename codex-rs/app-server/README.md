@@ -195,7 +195,7 @@ Example with notification opt-out:
 - `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `isSymlink`, `createdAtMs`, and `modifiedAtMs`.
 - `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path.
 - `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`.
-- `fs/copy` — copy between absolute paths; directory copies require `recursive: true`.
+- `fs/copy` — copy between absolute paths; directory copies require `recursive: true`, and file copies can set `exclusive: true` to reject an existing destination.
 - `fs/watch` — subscribe this connection to filesystem change notifications for an absolute file or directory path and caller-provided `watchId`; returns the canonicalized `path`.
 - `fs/unwatch` — stop sending notifications for a prior `fs/watch`; returns `{}`.
 - `fs/changed` — notification emitted when watched paths change, including the `watchId` and `changedPaths`.
@@ -1268,7 +1268,7 @@ All filesystem paths in this section must be absolute.
 - `fs/createDirectory` defaults `recursive` to `true` when omitted.
 - `fs/remove` defaults both `recursive` and `force` to `true` when omitted.
 - `fs/readFile` always returns base64 bytes via `dataBase64`, and `fs/writeFile` always expects base64 bytes in `dataBase64`.
-- `fs/copy` handles both file copies and directory-tree copies; it requires `recursive: true` when `sourcePath` is a directory. Recursive copies traverse regular files, directories, and symlinks; other entry types are skipped.
+- `fs/copy` handles both file copies and directory-tree copies; it requires `recursive: true` when `sourcePath` is a directory. `exclusive: true` atomically rejects an existing destination for file copies. Recursive copies traverse regular files, directories, and symlinks; other entry types are skipped.
 
 ### Example: Filesystem watch
 

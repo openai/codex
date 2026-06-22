@@ -284,6 +284,7 @@ pub(crate) async fn run_direct_request(
                     &params.destination_path,
                     CopyOptions {
                         recursive: params.recursive,
+                        exclusive: params.exclusive,
                     },
                     /*sandbox*/ None,
                 )

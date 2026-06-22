@@ -149,6 +149,9 @@ pub struct FsCopyParams {
     /// Required for directory copies; ignored for file copies.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recursive: bool,
+    /// Fail if the destination already exists.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclusive: bool,
 }
 
 /// Successful response for `fs/copy`.

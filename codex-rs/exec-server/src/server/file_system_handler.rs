@@ -35,6 +35,7 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::rpc::already_exists;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
@@ -225,6 +226,7 @@ impl FileSystemHandler {
                 &params.destination_path,
                 CopyOptions {
                     recursive: params.recursive,
+                    exclusive: params.exclusive,
                 },
                 params.sandbox.as_ref(),
             )
@@ -246,6 +248,7 @@ fn validate_file_read_handle_id(handle_id: &str) -> Result<(), JSONRPCErrorError
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
     match err.kind() {
         io::ErrorKind::NotFound => not_found(err.to_string()),
+        io::ErrorKind::AlreadyExists => already_exists(err.to_string()),
         io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {
             invalid_request(err.to_string())
         }

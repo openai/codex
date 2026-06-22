@@ -357,6 +357,7 @@ pub struct FsCopyParams {
     pub source_path: PathUri,
     pub destination_path: PathUri,
     pub recursive: bool,
+    pub exclusive: bool,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
 

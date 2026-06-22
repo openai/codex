@@ -239,6 +239,7 @@ impl SandboxedFileSystem {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
+                exclusive: options.exclusive,
                 sandbox: None,
             }),
         )

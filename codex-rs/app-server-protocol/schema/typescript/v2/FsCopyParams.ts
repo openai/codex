@@ -18,4 +18,8 @@ destinationPath: AbsolutePathBuf,
 /**
  * Required for directory copies; ignored for file copies.
  */
-recursive?: boolean, };
+recursive?: boolean,
+/**
+ * Fail if the destination already exists.
+ */
+exclusive?: boolean, };

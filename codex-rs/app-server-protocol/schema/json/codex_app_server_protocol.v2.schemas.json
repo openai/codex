@@ -6094,6 +6094,10 @@
           ],
           "description": "Absolute destination path."
         },
+        "exclusive": {
+          "description": "Fail if the destination already exists.",
+          "type": "boolean"
+        },
         "recursive": {
           "description": "Required for directory copies; ignored for file copies.",
           "type": "boolean"

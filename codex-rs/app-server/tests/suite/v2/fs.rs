@@ -171,6 +171,35 @@ async fn fs_get_metadata_reports_symlink() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_copy_exclusive_preserves_existing_destination() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source_path = codex_home.path().join("source.txt");
+    let destination_path = codex_home.path().join("destination.txt");
+    std::fs::write(&source_path, "source")?;
+    std::fs::write(&destination_path, "destination")?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let request_id = mcp
+        .send_fs_copy_request(FsCopyParams {
+            source_path: absolute_path(source_path),
+            destination_path: absolute_path(destination_path.clone()),
+            recursive: false,
+            exclusive: true,
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.data, Some(json!({ "code": "EEXIST" })));
+    assert_eq!(std::fs::read_to_string(destination_path)?, "destination");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     let codex_home = TempDir::new()?;
     let source_dir = codex_home.path().join("source");
@@ -242,6 +271,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             source_path: absolute_path(nested_file.clone()),
             destination_path: absolute_path(copy_file_path.clone()),
             recursive: false,
+            exclusive: false,
         })
         .await?;
     timeout(
@@ -259,6 +289,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            exclusive: false,
         })
         .await?;
     timeout(
@@ -528,6 +559,7 @@ async fn fs_copy_rejects_directory_without_recursive() -> Result<()> {
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(codex_home.path().join("dest")),
             recursive: false,
+            exclusive: false,
         })
         .await?;
     let error = timeout(
@@ -555,6 +587,7 @@ async fn fs_copy_rejects_copying_directory_into_descendant() -> Result<()> {
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(source_dir.join("nested").join("copy")),
             recursive: true,
+            exclusive: false,
         })
         .await?;
     let error = timeout(
@@ -586,6 +619,7 @@ async fn fs_copy_preserves_symlinks_in_recursive_copy() -> Result<()> {
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            exclusive: false,
         })
         .await?;
     timeout(
@@ -626,6 +660,7 @@ async fn fs_copy_ignores_unknown_special_files_in_recursive_copy() -> Result<()>
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            exclusive: false,
         })
         .await?;
     timeout(
@@ -663,6 +698,7 @@ async fn fs_copy_rejects_standalone_fifo_source() -> Result<()> {
             source_path: absolute_path(fifo_path),
             destination_path: absolute_path(codex_home.path().join("copied")),
             recursive: false,
+            exclusive: false,
         })
         .await?;
     expect_error_message(

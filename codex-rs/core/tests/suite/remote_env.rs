@@ -1632,7 +1632,10 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
         .copy(
             &PathUri::from_path(&source_symlink)?,
             &PathUri::from_path(&copied_symlink)?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             Some(&sandbox),
         )
         .await?;

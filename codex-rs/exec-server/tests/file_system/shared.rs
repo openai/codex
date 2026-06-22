@@ -273,12 +273,47 @@ async fn file_system_copy_copies_file(implementation: FileSystemImplementation) 
         .copy(
             &PathUri::from_path(&source_file)?,
             &PathUri::from_path(&copied_file)?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(std::fs::read_to_string(copied_file)?, "hello from trait");
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_copy_exclusive_preserves_existing_destination(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let source_file = tmp.path().join("source.txt");
+    let destination_file = tmp.path().join("destination.txt");
+    std::fs::write(&source_file, "source")?;
+    std::fs::write(&destination_file, "destination")?;
+
+    let error = file_system
+        .copy(
+            &PathUri::from_path(&source_file)?,
+            &PathUri::from_path(&destination_file)?,
+            CopyOptions {
+                recursive: false,
+                exclusive: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .expect_err("exclusive copy should reject an existing destination");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read_to_string(destination_file)?, "destination");
 
     Ok(())
 }
@@ -304,7 +339,10 @@ async fn file_system_copy_copies_directory_recursively(
         .copy(
             &PathUri::from_path(&source_dir)?,
             &PathUri::from_path(&copied_dir)?,
-            CopyOptions { recursive: true },
+            CopyOptions {
+                recursive: true,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await
@@ -434,7 +472,10 @@ async fn file_system_copy_rejects_directory_without_recursive(
         .copy(
             &PathUri::from_path(&source_dir)?,
             &PathUri::from_path(tmp.path().join("dest"))?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await;
@@ -619,7 +660,10 @@ async fn file_system_copy_rejects_copying_directory_into_descendant(
         .copy(
             &PathUri::from_path(&source_dir)?,
             &PathUri::from_path(source_dir.join("nested").join("copy"))?,
-            CopyOptions { recursive: true },
+            CopyOptions {
+                recursive: true,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await;

@@ -564,7 +564,10 @@ async fn file_system_copy_rejects_symlink_escape_destination(
         .copy(
             &PathUri::from_path(allowed_dir.join("source.txt"))?,
             &PathUri::from_path(&requested_destination)?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             Some(&sandbox),
         )
         .await
@@ -642,7 +645,10 @@ async fn file_system_copy_preserves_symlink_source(
         .copy(
             &PathUri::from_path(&source_symlink)?,
             &PathUri::from_path(&copied_symlink)?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             Some(&sandbox),
         )
         .await
@@ -720,7 +726,10 @@ async fn file_system_copy_rejects_symlink_escape_source(
         .copy(
             &PathUri::from_path(&requested_source)?,
             &PathUri::from_path(&requested_destination)?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             Some(&sandbox),
         )
         .await
@@ -754,7 +763,10 @@ async fn file_system_copy_preserves_symlinks_in_recursive_copy(
         .copy(
             &PathUri::from_path(&source_dir)?,
             &PathUri::from_path(&copied_dir)?,
-            CopyOptions { recursive: true },
+            CopyOptions {
+                recursive: true,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await
@@ -800,7 +812,10 @@ async fn file_system_copy_ignores_unknown_special_files_in_recursive_copy(
         .copy(
             &PathUri::from_path(&source_dir)?,
             &PathUri::from_path(&copied_dir)?,
-            CopyOptions { recursive: true },
+            CopyOptions {
+                recursive: true,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await
@@ -839,7 +854,10 @@ async fn file_system_copy_rejects_standalone_fifo_source(
         .copy(
             &PathUri::from_path(&fifo_path)?,
             &PathUri::from_path(tmp.path().join("copied"))?,
-            CopyOptions { recursive: false },
+            CopyOptions {
+                recursive: false,
+                exclusive: false,
+            },
             /*sandbox*/ None,
         )
         .await;

@@ -36,6 +36,7 @@ pub struct RemoveOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CopyOptions {
     pub recursive: bool,
+    pub exclusive: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
