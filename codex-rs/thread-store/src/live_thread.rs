@@ -143,12 +143,11 @@ impl LiveThread {
         if items.is_empty() {
             return Ok(());
         }
-        let canonical_items = if self.persistence_telemetry.is_enabled() {
+        let (canonical_items, measurement) = if self.persistence_telemetry.is_enabled() {
             let (canonical_items, measurement) = measure_and_filter_rollout_items(items);
-            self.persistence_telemetry.record_batch(&measurement);
-            canonical_items
+            (canonical_items, Some(measurement))
         } else {
-            persisted_rollout_items(items)
+            (persisted_rollout_items(items), None)
         };
         self.thread_store
             .append_items(AppendThreadItemsParams {
@@ -156,6 +155,9 @@ impl LiveThread {
                 items: items.to_vec(),
             })
             .await?;
+        if let Some(measurement) = measurement.as_ref() {
+            self.persistence_telemetry.record_batch(measurement);
+        }
         if canonical_items.is_empty() {
             return Ok(());
         }
@@ -195,7 +197,26 @@ impl LiveThread {
         self.flush_pending_metadata_update_for_existing_history()
             .await?;
         self.thread_store.shutdown_thread(self.thread_id).await?;
-        self.persistence_telemetry.record_shutdown();
+        if self.persistence_telemetry.is_enabled() {
+            match self
+                .thread_store
+                .load_history(LoadThreadHistoryParams {
+                    thread_id: self.thread_id,
+                    include_archived: true,
+                })
+                .await
+            {
+                Ok(history) => self
+                    .persistence_telemetry
+                    .record_shutdown_with_persisted_items(&history.items),
+                Err(err) => {
+                    warn!(
+                        "failed to load persisted history for rollout persistence telemetry: {err}"
+                    );
+                    self.persistence_telemetry.record_shutdown();
+                }
+            }
+        }
         Ok(())
     }
 

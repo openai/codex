@@ -88,6 +88,14 @@ pub fn measure_and_filter_rollout_items(
     (persisted, measurement)
 }
 
+fn measure_rollout_items(items: &[RolloutItem]) -> RolloutSizeTotals {
+    let mut totals = RolloutSizeTotals::default();
+    for item in items {
+        add_to_totals(&mut totals, serialized_len(item).ok());
+    }
+    totals
+}
+
 fn add_to_totals(totals: &mut RolloutSizeTotals, payload_bytes: Option<u64>) {
     totals.items = totals.items.saturating_add(1);
     if let Some(payload_bytes) = payload_bytes {
@@ -236,16 +244,36 @@ impl RolloutPersistenceTelemetry {
     }
 
     pub fn record_shutdown(&self) {
-        let Some(metrics) = self.enabled_metrics() else {
+        let Some(metrics) = self.begin_shutdown() else {
             return;
         };
-        if self.finalized.swap(true, Ordering::Relaxed) {
-            return;
-        }
         let totals = *self
             .totals
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::record_shutdown_totals(metrics, totals);
+    }
+
+    /// Records final thread totals from the persisted history plus dropped items observed live.
+    pub fn record_shutdown_with_persisted_items(&self, items: &[RolloutItem]) {
+        let Some(metrics) = self.begin_shutdown() else {
+            return;
+        };
+        let persisted = measure_rollout_items(items);
+        let accumulated = *self
+            .totals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let totals = thread_totals_with_persisted_history(accumulated, persisted);
+        Self::record_shutdown_totals(metrics, totals);
+    }
+
+    fn begin_shutdown(&self) -> Option<&MetricsClient> {
+        let metrics = self.enabled_metrics()?;
+        (!self.finalized.swap(true, Ordering::Relaxed)).then_some(metrics)
+    }
+
+    fn record_shutdown_totals(metrics: &MetricsClient, totals: ThreadTotals) {
         for (stage, values) in [
             ("pre_filter", totals.pre_filter),
             ("post_filter", totals.post_filter),
@@ -275,6 +303,28 @@ impl RolloutPersistenceTelemetry {
 
     fn enabled_metrics(&self) -> Option<&MetricsClient> {
         self.sampled.then_some(self.metrics.as_ref()).flatten()
+    }
+}
+
+fn thread_totals_with_persisted_history(
+    accumulated: ThreadTotals,
+    persisted: RolloutSizeTotals,
+) -> ThreadTotals {
+    let dropped = RolloutSizeTotals {
+        items: accumulated
+            .pre_filter
+            .items
+            .saturating_sub(accumulated.post_filter.items),
+        payload_bytes: accumulated
+            .pre_filter
+            .payload_bytes
+            .saturating_sub(accumulated.post_filter.payload_bytes),
+    };
+    let mut pre_filter = persisted;
+    add_totals(&mut pre_filter, dropped);
+    ThreadTotals {
+        pre_filter,
+        post_filter: persisted,
     }
 }
 
