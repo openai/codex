@@ -12,8 +12,10 @@ use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_plugin::AppConnectorId;
 use codex_plugin::AppDeclaration;
+use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::app_connector_ids_from_declarations;
+use codex_plugin::prompt_safe_plugin_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::RequestBuilder;
 use serde::Deserialize;
@@ -124,6 +126,7 @@ pub struct RemotePluginServiceConfig {
 pub struct RemotePluginUninstallTarget {
     pub plugin_id: PluginId,
     pub remote_plugin_id: String,
+    pub fallback_capability_summary: PluginCapabilitySummary,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1323,15 +1326,38 @@ pub async fn resolve_remote_plugin_uninstall_target(
     )
     .await?;
     let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
-    let remote_plugin_id = plugin.id;
-    let plugin_id = PluginId::new(plugin.name, marketplace_name).map_err(|err| {
+    let plugin_id = PluginId::new(plugin.name.clone(), marketplace_name).map_err(|err| {
         RemotePluginCatalogError::UnexpectedResponse(format!(
-            "invalid local plugin id for remote plugin `{remote_plugin_id}`: {err}"
+            "invalid local plugin id for remote plugin `{}`: {err}",
+            plugin.id
         ))
     })?;
+    let app_declarations = plugin
+        .release
+        .app_manifest
+        .as_ref()
+        .map(plugin_app_declarations_from_value)
+        .unwrap_or_else(|| app_declarations_from_remote_app_ids(&plugin.release.app_ids));
+    let mut mcp_server_names = plugin
+        .release
+        .mcp_servers
+        .iter()
+        .map(|server| server.key.clone())
+        .collect::<Vec<_>>();
+    mcp_server_names.sort_unstable();
+    mcp_server_names.dedup();
+    let fallback_capability_summary = PluginCapabilitySummary {
+        config_name: plugin_id.as_key(),
+        display_name: plugin.release.display_name,
+        description: prompt_safe_plugin_description(Some(&plugin.release.description)),
+        has_skills: !plugin.release.skills.is_empty(),
+        mcp_server_names,
+        app_connector_ids: app_connector_ids_from_declarations(&app_declarations),
+    };
     Ok(RemotePluginUninstallTarget {
         plugin_id,
-        remote_plugin_id,
+        remote_plugin_id: plugin.id,
+        fallback_capability_summary,
     })
 }
 
@@ -1345,6 +1371,7 @@ pub async fn uninstall_remote_plugin(
     let RemotePluginUninstallTarget {
         plugin_id,
         remote_plugin_id,
+        fallback_capability_summary: _,
     } = target;
     let marketplace_name = plugin_id.marketplace_name.clone();
     let plugin_name = plugin_id.plugin_name.clone();

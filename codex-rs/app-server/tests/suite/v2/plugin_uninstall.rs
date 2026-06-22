@@ -245,6 +245,10 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
+    // Simulate a background remote-cache refresh removing the local bundle
+    // before the uninstall request captures its telemetry metadata.
+    std::fs::remove_dir_all(remote_plugin_cache_root.join("1.0.0"))?;
+
     let request_id = mcp
         .send_plugin_uninstall_request(PluginUninstallParams {
             plugin_id: REMOTE_PLUGIN_ID.to_string(),
@@ -670,7 +674,11 @@ async fn mount_remote_plugin_detail_with_name(
     "interface": {{
       "short_description": "Plan and track work"
     }},
-    "skills": []
+    "skills": [{{
+      "name": "plan-work",
+      "description": "Plan work",
+      "interface": null
+    }}]
   }}
 }}"#
     );

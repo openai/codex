@@ -1988,12 +1988,16 @@ impl PluginRequestProcessor {
             remote_plugin_catalog_error_to_jsonrpc(err, "resolve remote plugin before uninstall")
         })?;
         let plugins_manager = self.thread_manager.plugins_manager();
-        let plugin_telemetry = plugins_manager
+        let mut plugin_telemetry = plugins_manager
             .telemetry_metadata_for_installed_plugin_with_remote_id(
                 &uninstall_target.plugin_id,
                 &uninstall_target.remote_plugin_id,
             )
             .await;
+        if plugin_telemetry.capability_summary.is_none() {
+            plugin_telemetry.capability_summary =
+                Some(uninstall_target.fallback_capability_summary.clone());
+        }
         let uninstall_result = codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
