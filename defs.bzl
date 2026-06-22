@@ -571,7 +571,7 @@ def codex_rust_crate(
                 test_bin = "//codex-rs/exec-server/testing:wine-exec-test-runner",
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINE_TEST_TARGET_COMPATIBLE_WITH,
-                tags = test_tags + ["manual"],
+                tags = test_tags,
                 **wine_test_kwargs
             )
 
