@@ -32,7 +32,6 @@ mod token_budget_context;
 mod turn_aborted;
 mod user_instructions;
 mod user_shell_command;
-#[allow(dead_code)]
 pub(crate) mod world_state;
 
 pub(crate) use approved_command_prefix_saved::ApprovedCommandPrefixSaved;
@@ -78,4 +77,3 @@ pub(crate) use token_budget_context::TokenBudgetReminder;
 pub(crate) use turn_aborted::TurnAborted;
 pub(crate) use user_instructions::UserInstructions;
 pub(crate) use user_shell_command::UserShellCommand;
-pub(crate) use world_state::EnvironmentsState;

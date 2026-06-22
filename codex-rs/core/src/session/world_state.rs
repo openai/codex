@@ -1,9 +1,10 @@
 use super::turn_context::TurnContext;
-use crate::context::EnvironmentsState;
+use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::WorldState;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_protocol::protocol::TurnContextItem;
 
-pub(crate) fn build_world_state_from_turn_context(
+pub(super) fn build_world_state_from_turn_context(
     turn_context: &TurnContext,
     environment_subagents: &str,
 ) -> WorldState {
@@ -17,7 +18,21 @@ pub(crate) fn build_world_state_from_turn_context(
     world_state
 }
 
-pub(crate) fn build_world_state_from_turn_context_item(
+pub(super) fn build_world_state_from_environment_snapshot(
+    turn_context: &TurnContext,
+    environments: &TurnEnvironmentSnapshot,
+) -> WorldState {
+    let mut world_state = WorldState::default();
+    if turn_context.config.include_environment_context {
+        world_state.add_section(EnvironmentsState::from_turn_context_with_environments(
+            turn_context,
+            environments,
+        ));
+    }
+    world_state
+}
+
+pub(super) fn build_world_state_from_turn_context_item(
     turn_context_item: &TurnContextItem,
 ) -> WorldState {
     let mut world_state = WorldState::default();

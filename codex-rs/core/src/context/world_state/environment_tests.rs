@@ -21,17 +21,7 @@ fn renders_full_environment_state() -> Result<()> {
         ]
         .into_iter()
         .collect(),
-        current_date: Some("2026-06-20".to_string()),
-        timezone: Some("America/Los_Angeles".to_string()),
-        network: Some(NetworkContext::new(
-            vec!["api.example.com".to_string()],
-            vec!["blocked.example.com".to_string()],
-        )),
-        filesystem: Some(FileSystemContext::from_permission_profile(
-            &PermissionProfile::Disabled,
-            &[],
-        )),
-        subagents: Some("task_1: running\ntask_2: completed".to_string()),
+        ..Default::default()
     };
 
     let mut world_state = WorldState::default();
@@ -50,14 +40,6 @@ fn renders_full_environment_state() -> Result<()> {
       <shell>zsh</shell>
     </environment>
   </environments>
-  <current_date>2026-06-20</current_date>
-  <timezone>America/Los_Angeles</timezone>
-  <network enabled="true"><allowed>api.example.com</allowed><denied>blocked.example.com</denied></network>
-  <filesystem><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
-  <subagents>
-    task_1: running
-    task_2: completed
-  </subagents>
 </environment_context>"#,
         )],
         render_fragments(world_state.render_full()),
@@ -81,7 +63,7 @@ fn renders_only_changed_environments() -> Result<()> {
     let mut current = WorldState::default();
     current.add_section(EnvironmentsState {
         environments: [
-            ("laptop".to_string(), available("file:///new-repo", "zsh")?),
+            ("laptop".to_string(), available("file:///repo", "zsh")?),
             (
                 "devbox".to_string(),
                 available("file:///workspace", "powershell")?,
@@ -97,8 +79,12 @@ fn renders_only_changed_environments() -> Result<()> {
         vec![user_message(
             r#"<environment_context>
   <environments>
+    <environment id="devbox">
+      <cwd>/workspace</cwd>
+      <shell>powershell</shell>
+    </environment>
     <environment id="laptop">
-      <cwd>/new-repo</cwd>
+      <cwd>/repo</cwd>
       <shell>zsh</shell>
     </environment>
     <environment id="old" status="unavailable" />
@@ -171,11 +157,15 @@ fn persisted_turn_context_values_render_a_diff() -> Result<()> {
 }
 
 #[test]
-fn single_environment_diff_ignores_shell() -> Result<()> {
+fn single_environment_diff_ignores_unknown_shell() -> Result<()> {
     let previous = EnvironmentsState {
         environments: [(
             LOCAL_ENVIRONMENT_ID.to_string(),
-            available("file:///repo", "bash")?,
+            EnvironmentState {
+                cwd: PathUri::parse("file:///repo")?,
+                status: EnvironmentStatus::Available,
+                shell: None,
+            },
         )]
         .into_iter()
         .collect(),
@@ -191,7 +181,10 @@ fn single_environment_diff_ignores_shell() -> Result<()> {
         ..Default::default()
     };
 
-    assert_eq!(None, render_fragment(current.render_diff(Some(&previous))));
+    assert_eq!(
+        None,
+        render_fragment(WorldStateSection::render_diff(&current, Some(&previous)))
+    );
     Ok(())
 }
 
@@ -215,7 +208,10 @@ fn removed_legacy_environment_renders_unavailable() -> Result<()> {
   </environments>
 </environment_context>"#,
         )),
-        render_fragment(EnvironmentsState::default().render_diff(Some(&previous))),
+        render_fragment(WorldStateSection::render_diff(
+            &EnvironmentsState::default(),
+            Some(&previous),
+        )),
     );
     Ok(())
 }
@@ -223,7 +219,7 @@ fn removed_legacy_environment_renders_unavailable() -> Result<()> {
 fn available(cwd: &str, shell: &str) -> Result<EnvironmentState> {
     Ok(EnvironmentState {
         cwd: PathUri::parse(cwd)?,
-        status: Some(EnvironmentStatus::Available),
+        status: EnvironmentStatus::Available,
         shell: Some(shell.to_string()),
     })
 }
@@ -231,7 +227,7 @@ fn available(cwd: &str, shell: &str) -> Result<EnvironmentState> {
 fn starting(cwd: &str) -> Result<EnvironmentState> {
     Ok(EnvironmentState {
         cwd: PathUri::parse(cwd)?,
-        status: Some(EnvironmentStatus::Starting),
+        status: EnvironmentStatus::Starting,
         shell: None,
     })
 }

@@ -23,22 +23,17 @@ pub(crate) struct EnvironmentsState {
     subagents: Option<String>,
 }
 
-impl PartialEq for EnvironmentsState {
-    fn eq(&self, other: &Self) -> bool {
-        self.environments == other.environments
-            && self.current_date == other.current_date
-            && self.timezone == other.timezone
-            && self.network == other.network
-            && self.filesystem == other.filesystem
-    }
-}
-
-impl Eq for EnvironmentsState {}
-
 impl EnvironmentsState {
     pub(crate) fn from_turn_context(turn_context: &TurnContext) -> Self {
+        Self::from_turn_context_with_environments(turn_context, &turn_context.environments)
+    }
+
+    pub(crate) fn from_turn_context_with_environments(
+        turn_context: &TurnContext,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> Self {
         Self {
-            environments: environment_states(&turn_context.environments),
+            environments: environment_states(environments),
             current_date: turn_context.current_date.clone(),
             timezone: turn_context.timezone.clone(),
             network: network_from_turn_context(turn_context),
@@ -50,21 +45,13 @@ impl EnvironmentsState {
         }
     }
 
-    pub(crate) fn from_environment_snapshot(snapshot: &TurnEnvironmentSnapshot) -> Option<Self> {
-        let environments = environment_states(snapshot);
-        (!environments.is_empty()).then(|| Self {
-            environments,
-            ..Default::default()
-        })
-    }
-
     pub(crate) fn from_turn_context_item(turn_context_item: &TurnContextItem) -> Self {
         Self {
             environments: [(
                 LOCAL_ENVIRONMENT_ID.to_string(),
                 EnvironmentState {
                     cwd: PathUri::from_abs_path(&turn_context_item.cwd),
-                    status: Some(EnvironmentStatus::Available),
+                    status: EnvironmentStatus::Available,
                     shell: None,
                 },
             )]
@@ -86,13 +73,6 @@ impl EnvironmentsState {
             self.subagents = Some(subagents);
         }
         self
-    }
-
-    pub(crate) fn render_diff(
-        &self,
-        previous: Option<&Self>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
-        WorldStateSection::render_diff(self, previous)
     }
 
     fn rendered_full(&self) -> RenderedEnvironments {
@@ -261,7 +241,7 @@ fn push_environment_values(rendered: &mut String, environment: &EnvironmentState
     rendered.push_str("<cwd>");
     push_xml_escaped_text(rendered, &environment.cwd.inferred_native_path_string());
     rendered.push_str("</cwd>\n");
-    if matches!(environment.status, Some(EnvironmentStatus::Starting)) {
+    if environment.status == EnvironmentStatus::Starting {
         rendered.push_str(indent);
         rendered.push_str("<status>starting</status>\n");
     }
@@ -289,13 +269,19 @@ fn push_optional_element(rendered: &mut String, name: &str, value: Option<&str>)
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EnvironmentState {
     cwd: PathUri,
-    status: Option<EnvironmentStatus>,
+    status: EnvironmentStatus,
     shell: Option<String>,
 }
 
 impl EnvironmentState {
     fn has_same_diff_value(&self, other: &Self) -> bool {
         self.cwd == other.cwd
+            && self.status == other.status
+            && self
+                .shell
+                .as_ref()
+                .zip(other.shell.as_ref())
+                .is_none_or(|(current, previous)| current == previous)
     }
 }
 
@@ -314,7 +300,7 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
                 environment.environment_id.clone(),
                 EnvironmentState {
                     cwd: environment.cwd().clone(),
-                    status: Some(EnvironmentStatus::Available),
+                    status: EnvironmentStatus::Available,
                     shell: environment
                         .shell
                         .as_ref()
@@ -328,7 +314,7 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
             .entry(environment.selection.environment_id.clone())
             .or_insert_with(|| EnvironmentState {
                 cwd: environment.selection.cwd.clone(),
-                status: Some(EnvironmentStatus::Starting),
+                status: EnvironmentStatus::Starting,
                 shell: None,
             });
     }
@@ -337,13 +323,9 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
 
 fn is_legacy_single(environments: &BTreeMap<String, EnvironmentState>) -> bool {
     environments.len() == 1
-        && matches!(
-            environments
-                .values()
-                .next()
-                .and_then(|environment| environment.status),
-            Some(EnvironmentStatus::Available)
-        )
+        && environments
+            .values()
+            .all(|environment| environment.status == EnvironmentStatus::Available)
 }
 
 fn environment_context_markers() -> (&'static str, &'static str) {

@@ -8,8 +8,6 @@ use crate::context::RealtimeEndInstructions;
 use crate::context::RealtimeStartInstructions;
 use crate::context::RealtimeStartWithInstructions;
 use crate::session::PreviousTurnSettings;
-use crate::session::build_world_state_from_turn_context;
-use crate::session::build_world_state_from_turn_context_item;
 use crate::session::turn_context::TurnContext;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
@@ -249,13 +247,6 @@ pub(crate) fn build_settings_update_items(
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
-    let world_state_updates = previous
-        .map(|previous| {
-            let previous = build_world_state_from_turn_context_item(previous);
-            let fragments = build_world_state_from_turn_context(next, "").render_diff(&previous);
-            merge_contextual_fragments(fragments)
-        })
-        .unwrap_or_default();
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
@@ -270,10 +261,7 @@ pub(crate) fn build_settings_update_items(
     .flatten()
     .collect();
 
-    let mut items = Vec::with_capacity(1 + world_state_updates.len());
-    if let Some(developer_message) = build_developer_update_item(developer_update_sections) {
-        items.push(developer_message);
-    }
-    items.extend(world_state_updates);
-    items
+    build_developer_update_item(developer_update_sections)
+        .into_iter()
+        .collect()
 }

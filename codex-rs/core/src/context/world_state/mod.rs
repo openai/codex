@@ -4,6 +4,7 @@ use crate::context::ContextualUserFragment;
 use indexmap::IndexMap;
 use std::any::Any;
 use std::any::TypeId;
+use std::fmt;
 
 pub(crate) use environment::EnvironmentsState;
 
@@ -45,6 +46,14 @@ pub(crate) trait WorldStateSection: Any + Send + Sync {
 #[derive(Default)]
 pub(crate) struct WorldState {
     sections: IndexMap<TypeId, Box<dyn ErasedWorldStateSection>>,
+}
+
+impl fmt::Debug for WorldState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorldState")
+            .field("section_count", &self.sections.len())
+            .finish()
+    }
 }
 
 impl WorldState {
