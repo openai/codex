@@ -8,12 +8,17 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::cell_actor::CompletionCommit;
 
 struct RecordingDelegate;
+
+struct ImmediateToolDelegate {
+    invocations_tx: mpsc::UnboundedSender<String>,
+}
 
 impl SessionRuntimeDelegate for RecordingDelegate {
     async fn invoke_tool(
@@ -35,6 +40,85 @@ impl SessionRuntimeDelegate for RecordingDelegate {
     }
 
     fn cell_closed(&self, _cell_id: &CellId) {}
+}
+
+impl SessionRuntimeDelegate for ImmediateToolDelegate {
+    async fn invoke_tool(
+        &self,
+        invocation: NestedToolCall,
+        _cancellation_token: CancellationToken,
+    ) -> Result<JsonValue, String> {
+        let _ = self.invocations_tx.send(invocation.tool_name.name);
+        Ok(JsonValue::Null)
+    }
+
+    async fn notify(
+        &self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
+}
+
+fn tool_definition(name: &str) -> ToolDefinition {
+    ToolDefinition {
+        name: name.to_string(),
+        tool_name: ToolName {
+            name: name.to_string(),
+            namespace: None,
+        },
+        description: String::new(),
+        kind: ToolKind::Function,
+    }
+}
+
+#[tokio::test]
+async fn continuing_cell_resolves_tools_before_the_first_observation() {
+    let (invocations_tx, mut invocations_rx) = mpsc::unbounded_channel();
+    let runtime = SessionRuntime::new(Arc::new(ImmediateToolDelegate { invocations_tx }));
+    let cell_id = runtime
+        .create_cell(CreateCellRequest {
+            tool_call_id: "call-1".to_string(),
+            enabled_tools: vec![tool_definition("first"), tool_definition("second")],
+            source: r#"
+await tools.first({});
+await tools.second({});
+text("done");
+"#
+            .to_string(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), invocations_rx.recv())
+            .await
+            .expect("first tool invocation timed out"),
+        Some("first".to_string())
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), invocations_rx.recv())
+            .await
+            .expect("second tool invocation timed out"),
+        Some("second".to_string())
+    );
+    assert_eq!(
+        runtime
+            .observe(&cell_id, ObserveMode::YieldAfter(Duration::from_secs(1)))
+            .await,
+        Ok(CellEvent::Completed {
+            content_items: vec![OutputItem::Text {
+                text: "done".to_string(),
+            }],
+            error_text: None,
+        })
+    );
+    runtime.shutdown().await.unwrap();
 }
 
 #[tokio::test]

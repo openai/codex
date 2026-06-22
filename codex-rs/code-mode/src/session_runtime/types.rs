@@ -32,6 +32,24 @@ pub(crate) enum ObserveMode {
     PendingFrontier,
 }
 
+/// Controls how a cell advances when its runtime is waiting for external input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CellExecutionPolicy {
+    /// Process tool and timer results even when no observation is attached.
+    ContinueWhenUnblocked,
+    /// Remain paused at a pending frontier until pending execution is advanced.
+    PauseAtPendingFrontier,
+}
+
+impl From<ObserveMode> for CellExecutionPolicy {
+    fn from(mode: ObserveMode) -> Self {
+        match mode {
+            ObserveMode::YieldAfter(_) => Self::ContinueWhenUnblocked,
+            ObserveMode::PendingFrontier => Self::PauseAtPendingFrontier,
+        }
+    }
+}
+
 /// An observable cell lifecycle event.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CellEvent {

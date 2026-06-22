@@ -91,7 +91,10 @@ impl CodeModeService {
         let yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
         let runtime_cell_id = self
             .runtime
-            .create_cell(runtime_request(request))
+            .create_cell_with_execution_policy(
+                runtime_request(request),
+                runtime::CellExecutionPolicy::PauseAtPendingFrontier,
+            )
             .await
             .map_err(|error| error.to_string())?;
         let pending_event = self

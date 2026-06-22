@@ -36,6 +36,7 @@ use crate::runtime::RuntimeControlCommand;
 use crate::runtime::RuntimeEvent;
 use crate::runtime::spawn_runtime;
 use crate::session_runtime::CellEvent;
+use crate::session_runtime::CellExecutionPolicy;
 use crate::session_runtime::CreateCellRequest as CellRequest;
 use crate::session_runtime::ObserveMode;
 use crate::session_runtime::OutputItem;
@@ -49,6 +50,7 @@ impl CellActor {
         stored_values: HashMap<String, JsonValue>,
         host: Arc<H>,
         cell_state: Arc<CellState>,
+        execution_policy: CellExecutionPolicy,
     ) -> Result<(CellHandle, impl Future<Output = ()> + Send + 'static), String> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
@@ -69,6 +71,7 @@ impl CellActor {
             },
             event_rx,
             command_rx,
+            execution_policy,
         );
         Ok((handle, task))
     }
@@ -91,6 +94,7 @@ async fn run_cell<H: CellHost>(
     context: CellContext,
     mut event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
     command_rx: mpsc::UnboundedReceiver<CellCommand>,
+    execution_policy: CellExecutionPolicy,
 ) {
     let CellContext {
         runtime_tx,
@@ -339,7 +343,12 @@ async fn run_cell<H: CellHost>(
                                 &mut content_items,
                                 &mut pending_tool_call_ids,
                             );
-                        } else if observer.is_some() || has_been_observed {
+                        } else if observer.is_some()
+                            || matches!(
+                                execution_policy,
+                                CellExecutionPolicy::ContinueWhenUnblocked
+                            )
+                        {
                             pending_frontier_ready = false;
                             pending_tool_call_ids.clear();
                             let _ = runtime_control_tx.send(RuntimeControlCommand::Continue);

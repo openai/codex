@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 pub(crate) use self::types::CellEvent;
+pub(crate) use self::types::CellExecutionPolicy;
 pub(crate) use self::types::CellId;
 pub(crate) use self::types::CreateCellRequest;
 pub(crate) use self::types::Error;
@@ -68,11 +69,21 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     }
 
     pub(crate) async fn create_cell(&self, request: CreateCellRequest) -> Result<CellId, Error> {
+        self.create_cell_with_execution_policy(request, CellExecutionPolicy::ContinueWhenUnblocked)
+            .await
+    }
+
+    pub(crate) async fn create_cell_with_execution_policy(
+        &self,
+        request: CreateCellRequest,
+        execution_policy: CellExecutionPolicy,
+    ) -> Result<CellId, Error> {
         if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
         let cell_id = self.allocate_cell_id();
-        self.start_cell(cell_id.clone(), request).await?;
+        self.start_cell(cell_id.clone(), request, execution_policy)
+            .await?;
         Ok(cell_id)
     }
 
@@ -137,7 +148,12 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         )
     }
 
-    async fn start_cell(&self, cell_id: CellId, request: CreateCellRequest) -> Result<(), Error> {
+    async fn start_cell(
+        &self,
+        cell_id: CellId,
+        request: CreateCellRequest,
+        execution_policy: CellExecutionPolicy,
+    ) -> Result<(), Error> {
         let stored_values = self.inner.stored_values.lock().await.clone();
         let host = Arc::new(RuntimeCellHost {
             cell_id: cell_id.clone(),
@@ -152,7 +168,8 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         }
         let cell_state = Arc::new(CellState::new(self.inner.shutdown_token.child_token()));
         let (handle, task) =
-            CellActor::prepare(request, stored_values, host, cell_state).map_err(Error::Runtime)?;
+            CellActor::prepare(request, stored_values, host, cell_state, execution_policy)
+                .map_err(Error::Runtime)?;
         cells.insert(cell_id.clone(), handle);
         self.inner.cell_tasks.spawn(task);
         drop(cells);

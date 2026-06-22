@@ -104,6 +104,17 @@ fn spawn_cell_actor_harness() -> CellActorHarness {
 }
 
 fn spawn_cell_actor_harness_with_host<H: CellHost>(host: Arc<H>) -> CellActorHarness {
+    spawn_cell_actor_harness_with_policy(host, CellExecutionPolicy::ContinueWhenUnblocked)
+}
+
+fn spawn_pausable_cell_actor_harness_with_host<H: CellHost>(host: Arc<H>) -> CellActorHarness {
+    spawn_cell_actor_harness_with_policy(host, CellExecutionPolicy::PauseAtPendingFrontier)
+}
+
+fn spawn_cell_actor_harness_with_policy<H: CellHost>(
+    host: Arc<H>,
+    execution_policy: CellExecutionPolicy,
+) -> CellActorHarness {
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (runtime_event_tx, runtime_event_rx) = mpsc::unbounded_channel();
@@ -133,6 +144,7 @@ fn spawn_cell_actor_harness_with_host<H: CellHost>(host: Arc<H>) -> CellActorHar
         },
         event_rx,
         command_rx,
+        execution_policy,
     ));
 
     CellActorHarness {
@@ -195,9 +207,44 @@ async fn completion_and_output_are_buffered_until_the_first_observation() {
 }
 
 #[tokio::test]
-async fn pending_frontier_is_buffered_while_runtime_commands_are_queued() {
+async fn continuing_harness_advances_an_unobserved_pending_frontier() {
     let host = Arc::new(RecordingHost::default());
     let harness = spawn_cell_actor_harness_with_host(Arc::clone(&host));
+    harness.event_tx.send(RuntimeEvent::Pending).unwrap();
+    harness
+        .event_tx
+        .send(RuntimeEvent::Notify {
+            call_id: "continuing-barrier".to_string(),
+            text: "barrier".to_string(),
+        })
+        .unwrap();
+    wait_for_notification(&host).await;
+
+    loop {
+        match harness.runtime_control_rx.try_recv() {
+            Ok(RuntimeControlCommand::Continue) => break,
+            Ok(command) => panic!("expected continue, got {command:?}"),
+            Err(std_mpsc::TryRecvError::Empty) => tokio::task::yield_now().await,
+            Err(std_mpsc::TryRecvError::Disconnected) => {
+                panic!("runtime control channel disconnected")
+            }
+        }
+    }
+    let termination = harness.handle.terminate();
+    drop(harness.event_tx);
+    assert_eq!(
+        termination.await,
+        Ok(CellEvent::Terminated {
+            content_items: Vec::new(),
+        })
+    );
+    harness.task.await.unwrap();
+}
+
+#[tokio::test]
+async fn pending_frontier_is_buffered_while_runtime_commands_are_queued() {
+    let host = Arc::new(RecordingHost::default());
+    let harness = spawn_pausable_cell_actor_harness_with_host(Arc::clone(&host));
     harness.event_tx.send(RuntimeEvent::Pending).unwrap();
     harness
         .event_tx
@@ -247,7 +294,7 @@ async fn pending_frontier_is_buffered_while_runtime_commands_are_queued() {
 #[tokio::test]
 async fn buffered_yield_observation_resumes_an_unobserved_pending_frontier() {
     let host = Arc::new(RecordingHost::default());
-    let harness = spawn_cell_actor_harness_with_host(Arc::clone(&host));
+    let harness = spawn_pausable_cell_actor_harness_with_host(Arc::clone(&host));
     harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
     harness.event_tx.send(RuntimeEvent::Pending).unwrap();
     harness
@@ -295,7 +342,7 @@ async fn buffered_yield_observation_resumes_an_unobserved_pending_frontier() {
     }
     assert!(matches!(
         harness.runtime_control_rx.try_recv(),
-        Ok(RuntimeControlCommand::Continue)
+        Err(std_mpsc::TryRecvError::Empty)
     ));
 
     let termination = harness.handle.terminate();
@@ -380,7 +427,7 @@ async fn first_observation_preserves_a_yield_that_raced_with_creation() {
 #[tokio::test]
 async fn dropped_pending_observer_preserves_pre_observation_yield() {
     let host = Arc::new(RecordingHost::default());
-    let harness = spawn_cell_actor_harness_with_host(Arc::clone(&host));
+    let harness = spawn_pausable_cell_actor_harness_with_host(Arc::clone(&host));
     harness
         .event_tx
         .send(RuntimeEvent::ContentItem(
@@ -456,7 +503,7 @@ async fn dropped_pending_observer_preserves_pre_observation_yield() {
 #[tokio::test]
 async fn dropped_pending_observer_preserves_pre_observation_yield_at_completion() {
     let host = Arc::new(RecordingHost::default());
-    let harness = spawn_cell_actor_harness_with_host(Arc::clone(&host));
+    let harness = spawn_pausable_cell_actor_harness_with_host(Arc::clone(&host));
     harness
         .event_tx
         .send(RuntimeEvent::ContentItem(
@@ -785,7 +832,7 @@ async fn dropped_yield_observer_preserves_output_for_the_next_observation() {
 #[tokio::test]
 async fn dropped_pending_observer_preserves_the_frontier_for_the_next_observation() {
     let host = Arc::new(RecordingHost::default());
-    let harness = spawn_cell_actor_harness_with_host(Arc::clone(&host));
+    let harness = spawn_pausable_cell_actor_harness_with_host(Arc::clone(&host));
     assert_eq!(
         harness
             .handle
