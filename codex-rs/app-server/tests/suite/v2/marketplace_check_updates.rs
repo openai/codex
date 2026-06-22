@@ -175,7 +175,7 @@ async fn marketplace_check_updates_reports_each_status_without_mutating_state() 
     install_marketplace(&mut mcp, "current").await?;
     let config_before = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
 
-    let response = send_marketplace_check_updates(&mut mcp, None).await?;
+    let response = send_marketplace_check_updates(&mut mcp, /*marketplace_name*/ None).await?;
 
     let [broken, changed, current] = response.results.as_slice() else {
         anyhow::bail!("expected three marketplace update results");
@@ -238,7 +238,7 @@ async fn marketplace_check_updates_reports_missing_or_damaged_snapshots() -> Res
     )?;
 
     assert_eq!(
-        send_marketplace_check_updates(&mut mcp, None).await?,
+        send_marketplace_check_updates(&mut mcp, /*marketplace_name*/ None).await?,
         MarketplaceCheckUpdatesResponse {
             results: vec![
                 MarketplaceUpdateCheckResult::UpdateAvailable {
