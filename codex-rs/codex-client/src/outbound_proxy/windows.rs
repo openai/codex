@@ -114,7 +114,7 @@ fn resolve_with_auto_detect(request_url: &str, origin: &RequestOrigin) -> System
         lpszAutoConfigUrl: ptr::null(),
         lpvReserved: ptr::null_mut(),
         dwReserved: 0,
-        fAutoLogonIfChallenged: TRUE,
+        fAutoLogonIfChallenged: FALSE,
     };
     resolve_with_winhttp_options(request_url, origin, options)
 }

@@ -155,6 +155,10 @@ fn parses_static_winhttp_proxy_entries_for_target_scheme() {
         ParsedProxyListDecision::Proxy("http://secure-proxy:8443".to_string())
     );
     assert_eq!(
+        parse_proxy_list("http=web-proxy:8080", "https"),
+        ParsedProxyListDecision::Unavailable
+    );
+    assert_eq!(
         parse_proxy_list("proxy.internal:8080", "https"),
         ParsedProxyListDecision::Proxy("http://proxy.internal:8080".to_string())
     );
@@ -184,6 +188,7 @@ fn no_proxy_matches_exact_suffix_wildcard_and_port() {
         port: 443,
     };
     assert!(no_proxy_matches_origin("auth.openai.com", &origin));
+    assert!(!no_proxy_matches_origin("openai.com", &origin));
     assert!(no_proxy_matches_origin(".openai.com", &origin));
     assert!(no_proxy_matches_origin("*.openai.com", &origin));
     assert!(no_proxy_matches_origin("auth.openai.com:443", &origin));

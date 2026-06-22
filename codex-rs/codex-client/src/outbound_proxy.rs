@@ -377,7 +377,7 @@ fn no_proxy_entry_matches_origin(entry: &str, origin: &RequestOrigin) -> bool {
         return wildcard_host_match(&entry, &origin.host);
     }
 
-    origin.host == entry || origin.host.ends_with(&format!(".{entry}"))
+    origin.host == entry
 }
 
 #[cfg(any(test, target_os = "windows"))]
@@ -416,18 +416,11 @@ enum ParsedProxyListDecision {
 #[cfg(any(test, target_os = "windows"))]
 fn parse_proxy_list(input: &str, target_scheme: &str) -> ParsedProxyListDecision {
     let mut saw_unsupported = false;
-    let mut http_fallback = None;
 
     {
         let mut process_token = |token: &str| {
-            if target_scheme == "https"
-                && http_fallback.is_none()
-                && let Some(ParsedProxyListDecision::Proxy(url)) =
-                    parse_proxy_key_token(token, "http")
-            {
-                http_fallback = Some(url);
-            }
-            match parse_proxy_token(token, target_scheme) {
+            let decision = parse_proxy_token(token, target_scheme);
+            match decision {
                 ParsedProxyListDecision::Direct => Some(ParsedProxyListDecision::Direct),
                 ParsedProxyListDecision::Proxy(url) => Some(ParsedProxyListDecision::Proxy(url)),
                 ParsedProxyListDecision::UnsupportedScheme => {
@@ -467,9 +460,7 @@ fn parse_proxy_list(input: &str, target_scheme: &str) -> ParsedProxyListDecision
         }
     }
 
-    if let Some(url) = http_fallback {
-        ParsedProxyListDecision::Proxy(url)
-    } else if saw_unsupported {
+    if saw_unsupported {
         ParsedProxyListDecision::UnsupportedScheme
     } else {
         ParsedProxyListDecision::Unavailable
