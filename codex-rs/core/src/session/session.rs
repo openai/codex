@@ -37,6 +37,7 @@ pub(crate) struct Session {
     /// session.
     pub(super) features: ManagedFeatures,
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
+    pub(super) warned_unsupported_code_mode_models: Mutex<HashSet<String>>,
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
@@ -1089,6 +1090,7 @@ impl Session {
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
                 multi_agent_version,
+                warned_unsupported_code_mode_models: Mutex::new(HashSet::new()),
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),

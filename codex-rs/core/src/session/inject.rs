@@ -94,7 +94,7 @@ impl Session {
                 input,
             ));
         }
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+        self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
             .await;
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             self.clear_reserved_idle_turn(&turn_state).await;
