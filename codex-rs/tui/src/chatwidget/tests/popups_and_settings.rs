@@ -5,9 +5,13 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::HookErrorInfo;
 use codex_app_server_protocol::HooksListEntry;
 use codex_app_server_protocol::HooksListResponse;
+use codex_app_server_protocol::MarketplaceLoadErrorInfo;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginShareContext;
+use codex_app_server_protocol::PluginShareDiscoverability;
+use codex_app_server_protocol::PluginSource;
+use codex_app_server_protocol::PluginUninstallResponse;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
@@ -197,7 +201,8 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
             PluginInstallPolicy::Available,
         )]),
     ]);
-    let popup = render_loaded_plugins_popup(&mut chat, response);
+    render_loaded_plugins_popup(&mut chat, response);
+    let popup = render_bottom_popup(&chat, /*width*/ 320);
     assert_chatwidget_snapshot!("plugins_popup_curated_marketplace", popup);
     assert!(
         popup.contains("Hidden Repo Plugin"),
@@ -211,6 +216,27 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
             && plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
                 < plugins_test_popup_row_position(&popup, "Starter"),
         "expected /plugins rows to sort installed plugins first, then alphabetically, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_keeps_loaded_marketplace_state_with_load_errors() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let mut response = plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]);
+    response
+        .marketplace_load_errors
+        .push(MarketplaceLoadErrorInfo {
+            marketplace_path: plugins_test_absolute_path("marketplaces/broken"),
+            message: "failed to load marketplace manifest".to_string(),
+        });
+
+    let popup = render_loaded_plugins_popup(&mut chat, response);
+    assert!(
+        popup.contains("No marketplace plugins available")
+            && !popup.contains("Marketplace unavailable"),
+        "expected /plugins to keep the loaded marketplace state, got:\n{popup}"
     );
 }
 
@@ -279,7 +305,7 @@ async fn plugins_popup_add_marketplace_tab_opens_prompt_and_submits_source() {
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert!(
         popup.contains("Add a marketplace from a Git repo or local root."),
-        "expected Add Marketplace tab, got:\n{popup}"
+        "expected Add marketplace tab, got:\n{popup}"
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -955,7 +981,101 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
 }
 
 #[tokio::test]
-async fn plugin_detail_admin_disabled_plugin_blocks_install() {
+async fn plugin_detail_popup_shows_local_share_context_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        share_context: Some(PluginShareContext {
+            remote_plugin_id: "plugins~Plugin_docs".to_string(),
+            remote_version: Some("7".to_string()),
+            discoverability: Some(PluginShareDiscoverability::Private),
+            share_url: Some("https://chatgpt.com/codex/plugins/share/docs".to_string()),
+            creator_account_user_id: None,
+            creator_name: Some("Test User".to_string()),
+            share_principals: None,
+        }),
+        ..plugins_test_summary(
+            "plugin-docs",
+            "docs",
+            Some("Docs"),
+            Some("Workspace docs."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_detail(summary, Some("Workspace docs."), &[], &[], &[], &[]),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    let sharing_row = popup
+        .lines()
+        .find(|line| line.contains("Sharing"))
+        .expect("expected sharing metadata row");
+    insta::assert_snapshot!(
+        sharing_row,
+        @"     Sharing          Private · creator Test User · https://chatgpt.com/codex/plugins/share/docs"
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_local_plugins_do_not_offer_tui_share_actions() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::PluginSharing, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        share_context: Some(PluginShareContext {
+            remote_plugin_id: "plugins~Plugin_docs".to_string(),
+            remote_version: Some("7".to_string()),
+            discoverability: Some(PluginShareDiscoverability::Private),
+            share_url: Some("https://chatgpt.com/codex/plugins/share/docs".to_string()),
+            creator_account_user_id: None,
+            creator_name: Some("Test User".to_string()),
+            share_principals: None,
+        }),
+        ..plugins_test_summary(
+            "plugin-docs",
+            "docs",
+            Some("Docs"),
+            Some("Workspace docs."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    let mut detail = plugins_test_detail(summary, Some("Workspace docs."), &[], &[], &[], &[]);
+    detail.marketplace_path = Some(plugins_test_personal_marketplace_path());
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin: detail }));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        !popup.contains("Share plugin")
+            && !popup.contains("Update shared release")
+            && !popup.contains("Check out locally"),
+        "expected TUI sharing actions to be hidden, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_shows_admin_disabled_status_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
@@ -984,10 +1104,17 @@ async fn plugin_detail_admin_disabled_plugin_blocks_install() {
         }),
     );
 
-    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    let status_row = popup
+        .lines()
+        .find(|line| line.contains("Disabled by admin"))
+        .expect("expected admin-disabled status row");
+    insta::assert_snapshot!(
+        status_row,
+        @"  Admin Blocked · Disabled by admin · ChatGPT Marketplace"
+    );
     assert!(
-        popup.contains("Admin Blocked · Disabled by admin")
-            && popup.contains("This plugin is disabled by your workspace admin.")
+        popup.contains("This plugin is disabled by your workspace admin.")
             && !popup.contains("Install this plugin now."),
         "expected admin-disabled detail to block install, got:\n{popup}"
     );
@@ -1021,18 +1148,18 @@ async fn plugins_popup_admin_disabled_installed_plugin_has_no_toggle_hint() {
         plugins_test_response(vec![plugins_test_curated_marketplace(vec![summary])]),
     );
 
-    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
         popup.contains("Disabled by admin")
             && popup.contains("Press Enter to view plugin details.")
             && !popup.contains("Space to disable"),
-        "expected admin-disabled installed plugin to omit toggle hint, got:\n{popup}"
+        "expected admin-disabled installed row to omit toggle hint, got:\n{popup}"
     );
 
     while rx.try_recv().is_ok() {}
-    let before = render_bottom_popup(&chat, /*width*/ 100);
+    let before = render_bottom_popup(&chat, /*width*/ 120);
     chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-    let after = render_bottom_popup(&chat, /*width*/ 100);
+    let after = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
         rx.try_recv().is_err(),
         "space should not toggle admin-disabled installed plugins"
@@ -1719,6 +1846,840 @@ async fn plugins_popup_openai_curated_tab_omits_marketplace_in_rows() {
 }
 
 #[tokio::test]
+async fn plugins_popup_workspace_remote_row_opens_remote_detail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let popup = render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_remote_marketplace(
+            "workspace-directory",
+            "Workspace",
+            vec![plugins_test_remote_summary(
+                "plugins~Plugin_calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Workspace schedules."),
+                /*installed*/ false,
+            )],
+        )]),
+    );
+    let remote_row = popup
+        .lines()
+        .find(|line| line.contains("Calendar"))
+        .expect("expected remote plugin row");
+    insta::assert_snapshot!(
+        remote_row,
+        @"› [-] Calendar   Available   Press Enter to install or view plugin details."
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPluginDetailLoading {
+            plugin_display_name,
+        }) => {
+            assert_eq!(plugin_display_name, "Calendar");
+        }
+        other => panic!("expected OpenPluginDetailLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginDetail { cwd: _, params }) => {
+            assert_eq!(params.marketplace_path, None);
+            assert_eq!(
+                params.remote_marketplace_name,
+                Some("workspace-directory".to_string())
+            );
+            assert_eq!(params.plugin_name, "plugins~Plugin_calendar");
+        }
+        other => panic!("expected FetchPluginDetail event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugins_popup_workspace_and_shared_with_me_tabs_use_product_labels() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![
+        plugins_test_remote_marketplace(
+            "workspace-directory",
+            "Raw Workspace Directory",
+            vec![plugins_test_remote_summary(
+                "plugins~Plugin_buildkite",
+                "buildkite",
+                Some("Buildkite"),
+                Some("Workspace CI."),
+                /*installed*/ false,
+            )],
+        ),
+        plugins_test_remote_marketplace(
+            "workspace-shared-with-me-private",
+            "Raw Shared Private",
+            vec![plugins_test_remote_summary(
+                "plugins~Plugin_docs",
+                "docs",
+                Some("Docs"),
+                Some("Shared docs."),
+                /*installed*/ false,
+            )],
+        ),
+        plugins_test_remote_marketplace(
+            "workspace-shared-with-me-unlisted",
+            "Raw Shared Link",
+            vec![plugins_test_remote_summary(
+                "plugins~Plugin_link",
+                "link",
+                Some("Link Share"),
+                Some("Shared by link."),
+                /*installed*/ false,
+            )],
+        ),
+    ]);
+    render_loaded_plugins_popup(&mut chat, response);
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+    let workspace_popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        workspace_popup.contains("Workspace.")
+            && workspace_popup.contains("Buildkite")
+            && !workspace_popup.contains("Raw Workspace Directory."),
+        "expected workspace tab to use product label, got:\n{workspace_popup}"
+    );
+    let workspace_row = workspace_popup
+        .lines()
+        .find(|line| line.contains("Buildkite"))
+        .expect("expected workspace plugin row");
+    let workspace_row = workspace_row
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    insta::assert_snapshot!(
+        workspace_row,
+        @"› [-] Buildkite Available Press Enter to install or view plugin details."
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    let shared_popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        shared_popup.contains("Shared with me.")
+            && shared_popup.contains("Docs")
+            && !shared_popup.contains("Raw Shared Private."),
+        "expected shared-with-me tab to use product label, got:\n{shared_popup}"
+    );
+    let shared_row = shared_popup
+        .lines()
+        .find(|line| line.contains("Docs"))
+        .expect("expected shared-with-me plugin row");
+    let shared_row = shared_row.split_whitespace().collect::<Vec<_>>().join(" ");
+    insta::assert_snapshot!(
+        shared_row,
+        @"› [-] Docs Available Press Enter to install or view plugin details."
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    let shared_link_popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        shared_link_popup.contains("Shared with me (link).")
+            && shared_link_popup.contains("Link Share")
+            && !shared_link_popup.contains("Raw Shared Link."),
+        "expected shared-with-me link tab to use product label, got:\n{shared_link_popup}"
+    );
+    let shared_link_row = shared_link_popup
+        .lines()
+        .find(|line| line.contains("Link Share"))
+        .expect("expected shared-with-me link plugin row");
+    let shared_link_row = shared_link_row
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    insta::assert_snapshot!(
+        shared_link_row,
+        @"› [-] Link Share Available Press Enter to install or view plugin details."
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_personal_marketplace_uses_local_product_label() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![PluginMarketplaceEntry {
+        name: "codex-curated".to_string(),
+        path: Some(plugins_test_personal_marketplace_path()),
+        interface: Some(MarketplaceInterface {
+            display_name: Some("Personal".to_string()),
+        }),
+        plugins: vec![plugins_test_summary(
+            "plugin-local-docs",
+            "local-docs",
+            Some("Local Docs"),
+            Some("Local editable docs."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )],
+    }]);
+    render_loaded_plugins_popup(&mut chat, response);
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("Local.") && popup.contains("Local Docs") && !popup.contains("Personal."),
+        "expected personal marketplace to use Local product label, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_shared_with_me_disabled_by_feature_flag_shows_section_error() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::PluginSharing, /*enabled*/ false);
+
+    chat.add_plugins_output();
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+        ])),
+    );
+    chat.on_plugin_remote_sections_loaded(
+        cwd.to_path_buf(),
+        Vec::new(),
+        vec![crate::app_event::PluginRemoteSectionError {
+            section_id: "shared-with-me".to_string(),
+            label: "Shared with me".to_string(),
+            message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
+        }],
+    );
+
+    for _ in 0..4 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("Shared with me unavailable")
+            && popup.contains("Plugin sharing is disabled for this Codex session."),
+        "expected disabled sharing section error, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_preserves_remote_section_tab_after_loading_finishes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    chat.add_plugins_output();
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+        ])),
+    );
+    let loading_popup =
+        select_plugins_tab_containing(&mut chat, /*width*/ 100, "Loading Workspace plugins.");
+    assert!(
+        loading_popup.contains("Loading Workspace plugins."),
+        "expected Workspace loading tab before remote sections resolve, got:\n{loading_popup}"
+    );
+
+    chat.on_plugin_remote_sections_loaded(
+        cwd.to_path_buf(),
+        vec![plugins_test_remote_marketplace(
+            "workspace-directory",
+            "Raw Workspace Directory",
+            vec![plugins_test_remote_summary(
+                "plugins~Plugin_buildkite",
+                "buildkite",
+                Some("Buildkite"),
+                Some("Buildkite pipelines."),
+                /*installed*/ false,
+            )],
+        )],
+        Vec::new(),
+    );
+
+    let workspace_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        workspace_popup.contains("Workspace.")
+            && workspace_popup.contains("Buildkite")
+            && !workspace_popup.contains("Loading Workspace plugins."),
+        "expected remote section refresh to keep the Workspace tab active, got:\n{workspace_popup}"
+    );
+}
+
+#[tokio::test]
+async fn open_plugins_list_preserves_saved_workspace_tab() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![
+        plugins_test_curated_marketplace(Vec::new()),
+        plugins_test_remote_marketplace(
+            "workspace-directory",
+            "Raw Workspace Directory",
+            vec![plugins_test_remote_summary(
+                "plugins~Plugin_buildkite",
+                "buildkite",
+                Some("Buildkite"),
+                Some("Buildkite pipelines."),
+                /*installed*/ false,
+            )],
+        ),
+    ]);
+    render_loaded_plugins_popup(&mut chat, response.clone());
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+    chat.open_plugin_detail_loading_popup("Buildkite");
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.open_plugins_list(cwd, response);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Workspace.") && popup.contains("Buildkite"),
+        "expected Back to plugins to preserve the Workspace tab, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_installed_remote_row_keeps_remote_detail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let remote_plugin_id = "plugins~Plugin_docs";
+    let local_summary = PluginSummary {
+        share_context: Some(PluginShareContext {
+            remote_plugin_id: remote_plugin_id.to_string(),
+            remote_version: Some("3".to_string()),
+            discoverability: Some(PluginShareDiscoverability::Private),
+            share_url: Some("https://chatgpt.com/codex/plugins/share/docs".to_string()),
+            creator_account_user_id: None,
+            creator_name: Some("Test User".to_string()),
+            share_principals: None,
+        }),
+        ..plugins_test_summary(
+            "plugin-docs",
+            "docs",
+            Some("Docs"),
+            Some("Local editable docs plugin."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let popup = render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(vec![local_summary]),
+            plugins_test_remote_marketplace(
+                "workspace-shared-with-me-private",
+                "Shared with me",
+                vec![plugins_test_remote_summary(
+                    remote_plugin_id,
+                    "docs",
+                    Some("Docs"),
+                    Some("Shared docs plugin."),
+                    /*installed*/ true,
+                )],
+            ),
+        ]),
+    );
+    let all_plugins_row = popup
+        .lines()
+        .find(|line| line.contains("Docs"))
+        .expect("expected all-plugins row");
+    assert!(
+        popup.contains("Installed 1 of 1 available plugins."),
+        "expected header count to reflect deduped plugin rows, got:\n{popup}"
+    );
+    assert!(
+        all_plugins_row.contains("Installed") && !all_plugins_row.contains("Available"),
+        "expected installed remote duplicate to win over local mapped share, got:\n{all_plugins_row}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    let installed_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        installed_popup.contains("Showing 1 installed plugins.")
+            && installed_popup.contains("Docs"),
+        "expected installed remote duplicate in the Installed tab, got:\n{installed_popup}"
+    );
+
+    while rx.try_recv().is_ok() {}
+    for _ in 0..2 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPluginDetailLoading {
+            plugin_display_name,
+        }) => {
+            assert_eq!(plugin_display_name, "Docs");
+        }
+        other => panic!("expected OpenPluginDetailLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginDetail { params, .. }) => {
+            assert_eq!(params.marketplace_path, None);
+            assert_eq!(
+                params.remote_marketplace_name,
+                Some("workspace-shared-with-me-private".to_string())
+            );
+            assert_eq!(params.plugin_name, remote_plugin_id);
+        }
+        other => panic!("expected FetchPluginDetail event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugins_popup_remote_local_dedupe_prefers_installed_remote_after_mapped_shares() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let remote_plugin_id = "plugins~Plugin_docs";
+    let local_summary = PluginSummary {
+        remote_plugin_id: Some(remote_plugin_id.to_string()),
+        ..plugins_test_summary(
+            "plugin-docs",
+            "docs",
+            Some("Docs"),
+            Some("Local curated docs plugin."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let cwd = chat.config.cwd.clone();
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![local_summary])]),
+    );
+    chat.on_plugin_remote_sections_loaded(
+        cwd.to_path_buf(),
+        vec![plugins_test_remote_marketplace(
+            "openai-curated-remote",
+            "Remote curated",
+            vec![plugins_test_remote_summary(
+                remote_plugin_id,
+                "docs",
+                Some("Docs"),
+                Some("Remote installed docs plugin."),
+                /*installed*/ true,
+            )],
+        )],
+        Vec::new(),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let PluginsCacheState::Ready(response) = &chat.plugins_cache else {
+        panic!("expected cached plugins after remote section refresh");
+    };
+    assert_eq!(
+        response
+            .marketplaces
+            .iter()
+            .map(|marketplace| marketplace.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["openai-curated-remote"]
+    );
+    let all_plugins_row = popup
+        .lines()
+        .find(|line| line.contains("Docs"))
+        .expect("expected all-plugins row");
+    assert!(
+        popup.contains("Installed 1 of 1 available plugins."),
+        "expected header count to reflect deduped plugin rows, got:\n{popup}"
+    );
+    assert!(
+        all_plugins_row.contains("Installed")
+            && !all_plugins_row.contains("Local curated docs plugin."),
+        "expected installed remote duplicate to win when local row is not a mapped share, got:\n{all_plugins_row}"
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPluginDetailLoading {
+            plugin_display_name,
+        }) => {
+            assert_eq!(plugin_display_name, "Docs");
+        }
+        other => panic!("expected OpenPluginDetailLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginDetail { params, .. }) => {
+            assert_eq!(params.marketplace_path, None);
+            assert_eq!(
+                params.remote_marketplace_name,
+                Some("openai-curated-remote".to_string())
+            );
+            assert_eq!(params.plugin_name, "plugins~Plugin_docs");
+        }
+        other => panic!("expected FetchPluginDetail event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugin_detail_remote_install_renders_source_and_uses_remote_location() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = plugins_test_remote_summary(
+        "plugins~Plugin_linear",
+        "linear",
+        Some("Linear"),
+        Some("Issue tracking."),
+        /*installed*/ false,
+    );
+    let response = plugins_test_response(vec![plugins_test_remote_marketplace(
+        "workspace-shared-with-me-private",
+        "Shared with me",
+        vec![summary.clone()],
+    )]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_remote_detail(
+                "workspace-shared-with-me-private",
+                summary,
+                Some("Install shared Linear plugin."),
+            ),
+        }),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Linear · Can be installed · Shared with me")
+            && !popup.contains("Linear · Can be installed · workspace-shared-with-me-private"),
+        "expected remote detail header to use product label, got:\n{popup}"
+    );
+    let source_row = popup
+        .lines()
+        .find(|line| line.contains("Source"))
+        .expect("expected remote source row");
+    insta::assert_snapshot!(
+        source_row,
+        @"     Source           Remote · Shared with me"
+    );
+    let install_row = popup
+        .lines()
+        .find(|line| line.contains("Install plugin"))
+        .expect("expected remote install row");
+    insta::assert_snapshot!(install_row, @"  2. Install plugin   Install this plugin now.");
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPluginInstallLoading {
+            plugin_display_name,
+        }) => {
+            assert_eq!(plugin_display_name, "Linear");
+        }
+        other => panic!("expected OpenPluginInstallLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginInstall {
+            cwd: _,
+            location: crate::app_event::PluginLocation::Remote { marketplace_name },
+            plugin_name,
+            plugin_display_name,
+        }) => {
+            assert_eq!(marketplace_name, "workspace-shared-with-me-private");
+            assert_eq!(plugin_name, "plugins~Plugin_linear");
+            assert_eq!(plugin_display_name, "Linear");
+        }
+        other => panic!("expected remote FetchPluginInstall event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugin_detail_remote_shared_plugin_does_not_offer_checkout() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::PluginSharing, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        share_context: Some(PluginShareContext {
+            remote_plugin_id: "plugins~Plugin_linear".to_string(),
+            remote_version: Some("5".to_string()),
+            discoverability: Some(PluginShareDiscoverability::Private),
+            share_url: Some("https://chatgpt.com/codex/plugins/share/linear".to_string()),
+            creator_account_user_id: None,
+            creator_name: Some("Test User".to_string()),
+            share_principals: None,
+        }),
+        ..plugins_test_remote_summary(
+            "plugins~Plugin_linear",
+            "linear",
+            Some("Linear"),
+            Some("Issue tracking."),
+            /*installed*/ false,
+        )
+    };
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_remote_marketplace(
+                "workspace-shared-with-me-private",
+                "Shared with me",
+                vec![summary.clone()],
+            ),
+        ])),
+    );
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_remote_detail(
+                "workspace-shared-with-me-private",
+                summary,
+                Some("Shared Linear plugin."),
+            ),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        !popup.contains("Check out locally")
+            && !popup.contains("Create a local editable copy in your personal marketplace."),
+        "expected shared remote detail to hide checkout, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_shared_remote_uninstall_uses_remote_plugin_id() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = plugins_test_remote_summary(
+        "plugins~Plugin_linear",
+        "linear",
+        Some("Linear"),
+        Some("Issue tracking."),
+        /*installed*/ true,
+    );
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_remote_marketplace(
+                "workspace-shared-with-me-private",
+                "Shared with me",
+                vec![summary.clone()],
+            ),
+        ])),
+    );
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_remote_detail(
+                "workspace-shared-with-me-private",
+                summary,
+                Some("Installed shared Linear plugin."),
+            ),
+        }),
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPluginUninstallLoading {
+            plugin_display_name,
+        }) => {
+            assert_eq!(plugin_display_name, "Linear");
+        }
+        other => panic!("expected OpenPluginUninstallLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginUninstall {
+            plugin_id,
+            plugin_display_name,
+            ..
+        }) => {
+            assert_eq!(plugin_id, "plugins~Plugin_linear");
+            assert_eq!(plugin_display_name, "Linear");
+        }
+        other => panic!("expected remote FetchPluginUninstall event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugin_detail_shared_remote_without_remote_id_disables_uninstall_action() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        source: PluginSource::Remote,
+        ..plugins_test_summary(
+            "linear@workspace-shared-with-me-private",
+            "linear",
+            Some("Linear"),
+            Some("Issue tracking."),
+            /*installed*/ true,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_remote_marketplace(
+                "workspace-shared-with-me-private",
+                "Shared with me",
+                vec![summary.clone()],
+            ),
+        ])),
+    );
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_remote_detail(
+                "workspace-shared-with-me-private",
+                summary,
+                Some("Installed shared Linear plugin."),
+            ),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("This remote plugin did not provide an uninstall identity.")
+            && !popup.contains("Remove this plugin now."),
+        "expected missing remote ID to disable uninstall, got:\n{popup}"
+    );
+
+    while rx.try_recv().is_ok() {}
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no action after rendering disabled uninstall state"
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_not_installable_plugin_disables_install_action() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = plugins_test_summary(
+        "plugin-internal",
+        "internal",
+        Some("Internal"),
+        Some("Internal only."),
+        /*installed*/ false,
+        /*enabled*/ true,
+        PluginInstallPolicy::NotAvailable,
+    );
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(vec![summary.clone()]),
+        ])),
+    );
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_detail(summary, Some("Internal only."), &[], &[], &[], &[]),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let install_row = popup
+        .lines()
+        .find(|line| line.contains("Install plugin"))
+        .expect("expected install row");
+    assert!(
+        install_row.contains("This plugin is not installable from this marketplace."),
+        "expected disabled not-installable row, got:\n{install_row}"
+    );
+}
+
+#[tokio::test]
+async fn plugin_uninstall_success_refresh_updates_cached_plugin_list() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(vec![plugins_test_summary(
+                "plugin-docs",
+                "docs",
+                Some("Docs"),
+                Some("Workspace docs."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ])),
+    );
+    chat.add_plugins_output();
+
+    chat.open_plugin_uninstall_loading_popup("Docs");
+    chat.on_plugin_uninstall_loaded(
+        cwd.to_path_buf(),
+        "Docs".to_string(),
+        Ok(PluginUninstallResponse {}),
+    );
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(vec![plugins_test_summary(
+                "plugin-docs",
+                "docs",
+                Some("Docs"),
+                Some("Workspace docs."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ])),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    let plugin_row = popup
+        .lines()
+        .find(|line| line.contains("Docs"))
+        .expect("expected Docs plugin row");
+    assert!(
+        popup.contains("Installed 0 of 1 available plugins.")
+            && plugin_row.contains("Available")
+            && !plugin_row.contains("Installed"),
+        "expected uninstall success to update the cached plugin list, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    let installed_popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        installed_popup.contains("Showing 0 installed plugins.")
+            && installed_popup.contains("No installed plugins")
+            && !installed_popup.contains("Docs"),
+        "expected uninstalled plugin to be absent from the Installed tab, got:\n{installed_popup}"
+    );
+}
+
+#[tokio::test]
 async fn plugins_popup_refresh_preserves_duplicate_marketplace_tab_by_path() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
@@ -1765,7 +2726,14 @@ async fn plugins_popup_refresh_preserves_duplicate_marketplace_tab_by_path() {
     chat.on_plugins_loaded(cwd.clone(), Ok(response.clone()));
     chat.add_plugins_output();
 
-    for _ in 0..4 {
+    for _ in 0..10 {
+        let popup = render_bottom_popup(&chat, /*width*/ 100);
+        if popup.contains("Duplicate Marketplace (2/2).")
+            && popup.contains("Repo Plugin")
+            && !popup.contains("Home Plugin")
+        {
+            break;
+        }
         chat.handle_key_event(KeyEvent::from(KeyCode::Right));
     }
 
@@ -1836,6 +2804,19 @@ async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
         !restored.contains("no matches"),
         "did not expect the no-matches state after clearing the query, got:\n{restored}"
     );
+}
+
+fn select_plugins_tab_containing(chat: &mut ChatWidget, width: u16, visible_text: &str) -> String {
+    for _ in 0..8 {
+        let popup = render_bottom_popup(chat, width);
+        if popup.contains(visible_text) {
+            return popup;
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    let popup = render_bottom_popup(chat, width);
+    panic!("expected plugins tab containing {visible_text:?}, got:\n{popup}");
 }
 
 #[tokio::test]
