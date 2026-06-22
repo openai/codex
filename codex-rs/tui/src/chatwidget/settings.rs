@@ -225,7 +225,7 @@ impl ChatWidget {
             self.clear_pending_rate_limit_reset_requests();
         }
         self.status_line_workspace_headline = None;
-        self.status_line_workspace_headline_pending = false;
+        self.status_line_workspace_headline_pending_request_id = None;
         self.status_line_workspace_headline_last_requested_at = None;
         self.status_line_workspace_messages_disabled = false;
         self.status_account_display = status_account_display;

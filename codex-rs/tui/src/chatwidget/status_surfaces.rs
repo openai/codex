@@ -165,7 +165,7 @@ impl ChatWidget {
 
         if !selections.uses_workspace_headline() {
             self.status_line_workspace_headline = None;
-            self.status_line_workspace_headline_pending = false;
+            self.status_line_workspace_headline_pending_request_id = None;
             self.status_line_workspace_headline_last_requested_at = None;
             self.status_line_workspace_messages_disabled = false;
         } else {
@@ -571,14 +571,20 @@ impl ChatWidget {
         if !self.status_line_workspace_headline_should_fetch(now) {
             return;
         }
-        self.status_line_workspace_headline_pending = true;
+        let request_id = self.next_status_line_workspace_headline_request_id;
+        self.next_status_line_workspace_headline_request_id = self
+            .next_status_line_workspace_headline_request_id
+            .wrapping_add(/*rhs*/ 1);
+        self.status_line_workspace_headline_pending_request_id = Some(request_id);
         self.status_line_workspace_headline_last_requested_at = Some(now);
         self.app_event_tx
-            .send(AppEvent::RefreshStatusLineWorkspaceHeadline);
+            .send(AppEvent::RefreshStatusLineWorkspaceHeadline { request_id });
     }
 
     fn status_line_workspace_headline_should_fetch(&self, now: Instant) -> bool {
-        if self.status_line_workspace_headline_pending
+        if self
+            .status_line_workspace_headline_pending_request_id
+            .is_some()
             || self.status_line_workspace_messages_disabled
             || !self.has_codex_backend_auth
         {
@@ -606,9 +612,13 @@ impl ChatWidget {
 
     pub(crate) fn set_status_line_workspace_headline(
         &mut self,
+        request_id: u64,
         result: Result<crate::workspace_messages::WorkspaceHeadlineFetchResult, String>,
-    ) {
-        self.status_line_workspace_headline_pending = false;
+    ) -> bool {
+        if self.status_line_workspace_headline_pending_request_id != Some(request_id) {
+            return false;
+        }
+        self.status_line_workspace_headline_pending_request_id = None;
         match result {
             Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(headline)) => {
                 self.status_line_workspace_messages_disabled = false;
@@ -633,6 +643,7 @@ impl ChatWidget {
                 .schedule_frame_in(crate::workspace_messages::WORKSPACE_HEADLINE_REFRESH_INTERVAL);
         }
         self.refresh_status_line();
+        true
     }
 
     /// Resolves a display string for one configured status-line item.

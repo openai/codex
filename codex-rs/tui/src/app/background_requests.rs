@@ -160,7 +160,11 @@ impl App {
         });
     }
 
-    pub(super) fn refresh_status_line_workspace_headline(&mut self, app_server: &AppServerSession) {
+    pub(super) fn refresh_status_line_workspace_headline(
+        &mut self,
+        app_server: &AppServerSession,
+        request_id: u64,
+    ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
@@ -175,7 +179,7 @@ impl App {
                     .map(crate::workspace_messages::workspace_headline_from_response)
                     .map_err(|err| err.to_string())
             });
-            app_event_tx.send(AppEvent::StatusLineWorkspaceHeadlineUpdated { result });
+            app_event_tx.send(AppEvent::StatusLineWorkspaceHeadlineUpdated { request_id, result });
         });
     }
 
