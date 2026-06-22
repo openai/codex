@@ -7,6 +7,9 @@ codex_rust_crate(
         "apply-patch-all-test-windows-cross": "medium",
     },
     test_tags_by_target = {
-        "apply-patch-all-test-windows-cross": ["exclusive-if-local"],
+        "apply-patch-all-test-windows-cross": [
+            "exclusive-if-local",
+            "no-remote-cache",
+        ],
     },
 )

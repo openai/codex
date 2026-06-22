@@ -10,6 +10,9 @@ codex_rust_crate(
         "windows-sandbox-rs-unit-tests-windows-cross": "medium",
     },
     test_tags_by_target = {
-        "windows-sandbox-rs-unit-tests-windows-cross": ["exclusive-if-local"],
+        "windows-sandbox-rs-unit-tests-windows-cross": [
+            "exclusive-if-local",
+            "no-remote-cache",
+        ],
     },
 )
