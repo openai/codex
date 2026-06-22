@@ -761,6 +761,12 @@ fn error_event_bedrock_expired_signature_snapshot() {
         body: "Signature expired: 20260609T133205Z is now earlier than 20260614T062525Z \
 (20260614T063025Z - 5 min.)"
             .to_string(),
+        user_message: Some(
+            "Amazon Bedrock rejected the request because its AWS signature has expired. \
+Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or \
+unset it, then restart Codex"
+                .to_string(),
+        ),
         url: Some("https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses".to_string()),
         cf_ray: None,
         request_id: None,

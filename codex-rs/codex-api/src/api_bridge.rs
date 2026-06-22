@@ -26,6 +26,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::Api { status, message } => CodexErr::UnexpectedStatus(UnexpectedResponseError {
             status,
             body: message,
+            user_message: None,
             url: None,
             cf_ray: None,
             request_id: None,
@@ -112,6 +113,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                     CodexErr::UnexpectedStatus(UnexpectedResponseError {
                         status,
                         body: body_text,
+                        user_message: None,
                         url,
                         cf_ray: extract_header(headers.as_ref(), CF_RAY_HEADER),
                         request_id: extract_request_id(headers.as_ref()),

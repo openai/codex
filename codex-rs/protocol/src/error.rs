@@ -305,6 +305,7 @@ impl std::fmt::Display for ResponseStreamFailed {
 pub struct UnexpectedResponseError {
     pub status: StatusCode,
     pub body: String,
+    pub user_message: Option<String>,
     pub url: Option<String>,
     pub cf_ray: Option<String>,
     pub request_id: Option<String>,
@@ -314,9 +315,6 @@ pub struct UnexpectedResponseError {
 
 const CLOUDFLARE_BLOCKED_MESSAGE: &str =
     "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
-const BEDROCK_EXPIRED_SIGNATURE_MESSAGE: &str = "Amazon Bedrock rejected the request because its \
-AWS signature has expired. Refresh your AWS credentials and retry. If \
-`AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex";
 const UNEXPECTED_RESPONSE_BODY_MAX_BYTES: usize = 1000;
 
 impl UnexpectedResponseError {
@@ -348,8 +346,8 @@ impl UnexpectedResponseError {
     }
 
     fn friendly_message(&self) -> Option<String> {
-        let mut message = if self.is_bedrock_expired_signature() {
-            BEDROCK_EXPIRED_SIGNATURE_MESSAGE.to_string()
+        let mut message = if let Some(user_message) = &self.user_message {
+            user_message.clone()
         } else {
             if self.status != StatusCode::FORBIDDEN {
                 return None;
@@ -379,25 +377,6 @@ impl UnexpectedResponseError {
         }
 
         Some(message)
-    }
-
-    fn is_bedrock_expired_signature(&self) -> bool {
-        if self.status != StatusCode::UNAUTHORIZED || !self.body.contains("Signature expired:") {
-            return false;
-        }
-
-        let Some(url) = self
-            .url
-            .as_deref()
-            .and_then(|url| reqwest::Url::parse(url).ok())
-        else {
-            return false;
-        };
-        let Some(host) = url.host_str() else {
-            return false;
-        };
-
-        host.starts_with("bedrock-mantle.") && host.ends_with(".api.aws")
     }
 }
 

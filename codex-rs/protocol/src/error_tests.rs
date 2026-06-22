@@ -406,6 +406,7 @@ fn unexpected_status_cloudflare_html_is_simplified() {
         status: StatusCode::FORBIDDEN,
         body: "<html><body>Cloudflare error: Sorry, you have been blocked</body></html>"
             .to_string(),
+        user_message: None,
         url: Some("http://example.com/blocked".to_string()),
         cf_ray: Some("ray-id".to_string()),
         request_id: None,
@@ -425,6 +426,7 @@ fn unexpected_status_non_html_is_unchanged() {
     let err = UnexpectedResponseError {
         status: StatusCode::FORBIDDEN,
         body: "plain text error".to_string(),
+        user_message: None,
         url: Some("http://example.com/plain".to_string()),
         cf_ray: None,
         request_id: None,
@@ -440,60 +442,21 @@ fn unexpected_status_non_html_is_unchanged() {
 }
 
 #[test]
-fn unexpected_status_bedrock_expired_signature_has_actionable_guidance() {
+fn unexpected_status_uses_user_message_and_preserves_response_context() {
     let err = UnexpectedResponseError {
         status: StatusCode::UNAUTHORIZED,
-        body: "Signature expired: 20260609T133205Z is now earlier than 20260614T062525Z \
-(20260614T063025Z - 5 min.)"
-            .to_string(),
-        url: Some("https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses".to_string()),
+        body: "provider-specific response".to_string(),
+        user_message: Some("Provider-specific guidance".to_string()),
+        url: Some("https://example.com/v1/responses".to_string()),
         cf_ray: None,
-        request_id: Some("req-bedrock".to_string()),
+        request_id: Some("req-provider".to_string()),
         identity_authorization_error: None,
         identity_error_code: None,
     };
 
     assert_eq!(
         err.to_string(),
-        format!(
-            "{BEDROCK_EXPIRED_SIGNATURE_MESSAGE}, url: https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses, request id: req-bedrock"
-        )
-    );
-}
-
-#[test]
-fn unexpected_status_bedrock_other_unauthorized_error_is_unchanged() {
-    let err = UnexpectedResponseError {
-        status: StatusCode::UNAUTHORIZED,
-        body: "The security token included in the request is invalid".to_string(),
-        url: Some("https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses".to_string()),
-        cf_ray: None,
-        request_id: None,
-        identity_authorization_error: None,
-        identity_error_code: None,
-    };
-
-    assert_eq!(
-        err.to_string(),
-        "unexpected status 401 Unauthorized: The security token included in the request is invalid, url: https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
-    );
-}
-
-#[test]
-fn unexpected_status_non_bedrock_expired_signature_is_unchanged() {
-    let err = UnexpectedResponseError {
-        status: StatusCode::UNAUTHORIZED,
-        body: "Signature expired: old is now earlier than new".to_string(),
-        url: Some("https://example.com/openai/v1/responses".to_string()),
-        cf_ray: None,
-        request_id: None,
-        identity_authorization_error: None,
-        identity_error_code: None,
-    };
-
-    assert_eq!(
-        err.to_string(),
-        "unexpected status 401 Unauthorized: Signature expired: old is now earlier than new, url: https://example.com/openai/v1/responses"
+        "Provider-specific guidance, url: https://example.com/v1/responses, request id: req-provider"
     );
 }
 
@@ -503,6 +466,7 @@ fn unexpected_status_prefers_error_message_when_present() {
         status: StatusCode::UNAUTHORIZED,
         body: r#"{"error":{"message":"Workspace is not authorized in this region."},"status":401}"#
             .to_string(),
+        user_message: None,
         url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
         cf_ray: None,
         request_id: Some("req-123".to_string()),
@@ -524,6 +488,7 @@ fn unexpected_status_truncates_long_body_with_ellipsis() {
     let err = UnexpectedResponseError {
         status: StatusCode::BAD_GATEWAY,
         body: long_body,
+        user_message: None,
         url: Some("http://example.com/long".to_string()),
         cf_ray: None,
         request_id: Some("req-long".to_string()),
@@ -545,6 +510,7 @@ fn unexpected_status_includes_cf_ray_and_request_id() {
     let err = UnexpectedResponseError {
         status: StatusCode::UNAUTHORIZED,
         body: "plain text error".to_string(),
+        user_message: None,
         url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
         cf_ray: Some("9c81f9f18f2fa49d-LHR".to_string()),
         request_id: Some("req-xyz".to_string()),
@@ -565,6 +531,7 @@ fn unexpected_status_includes_identity_auth_details() {
     let err = UnexpectedResponseError {
         status: StatusCode::UNAUTHORIZED,
         body: "plain text error".to_string(),
+        user_message: None,
         url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
         cf_ray: Some("cf-ray-auth-401-test".to_string()),
         request_id: Some("req-auth".to_string()),
