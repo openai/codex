@@ -11,6 +11,9 @@ use crate::ExecServerRuntimePaths;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::invalid_request;
 use crate::rpc::session_already_attached;
+use crate::server::file_transfer_handler::FILE_TRANSFER_ENABLED_ENV_VAR;
+use crate::server::file_transfer_handler::FileTransferHandler;
+use crate::server::file_transfer_handler::PreparedFileUploadAvailability;
 use crate::server::process_handler::ProcessHandler;
 
 #[cfg(test)]
@@ -20,11 +23,13 @@ const DETACHED_SESSION_TTL: Duration = Duration::from_secs(30);
 
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,
+    file_transfer_availability: PreparedFileUploadAvailability,
 }
 
 struct SessionEntry {
     session_id: String,
     process: ProcessHandler,
+    file_transfer: FileTransferHandler,
     attachment: StdMutex<AttachmentState>,
 }
 
@@ -54,6 +59,7 @@ impl SessionRegistry {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
+            file_transfer_availability: file_transfer_availability_from_environment(),
         })
     }
 
@@ -97,7 +103,8 @@ impl SessionRegistry {
                 let session_id = Uuid::new_v4().to_string();
                 let entry = Arc::new(SessionEntry::new(
                     session_id.clone(),
-                    ProcessHandler::new(notifications, runtime_paths),
+                    ProcessHandler::new(notifications, runtime_paths.clone()),
+                    FileTransferHandler::new(runtime_paths, self.file_transfer_availability),
                     connection_id,
                 ));
                 sessions.insert(session_id, Arc::clone(&entry));
@@ -107,7 +114,7 @@ impl SessionRegistry {
         let entry = match outcome? {
             AttachOutcome::Attached(entry) => entry,
             AttachOutcome::Expired { session_id, entry } => {
-                entry.process.shutdown().await;
+                entry.shutdown().await;
                 return Err(invalid_request(format!("unknown session id {session_id}")));
             }
         };
@@ -134,7 +141,7 @@ impl SessionRegistry {
         };
 
         if let Some(entry) = removed {
-            entry.process.shutdown().await;
+            entry.shutdown().await;
         }
     }
 }
@@ -143,21 +150,47 @@ impl Default for SessionRegistry {
     fn default() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            file_transfer_availability: PreparedFileUploadAvailability::Disabled,
         }
     }
 }
 
+fn file_transfer_availability_from_environment() -> PreparedFileUploadAvailability {
+    if !cfg!(debug_assertions) {
+        return PreparedFileUploadAvailability::Disabled;
+    }
+    if std::env::var(FILE_TRANSFER_ENABLED_ENV_VAR)
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
+    {
+        PreparedFileUploadAvailability::EnabledForDevelopment
+    } else {
+        PreparedFileUploadAvailability::Disabled
+    }
+}
+
 impl SessionEntry {
-    fn new(session_id: String, process: ProcessHandler, connection_id: ConnectionId) -> Self {
+    fn new(
+        session_id: String,
+        process: ProcessHandler,
+        file_transfer: FileTransferHandler,
+        connection_id: ConnectionId,
+    ) -> Self {
         Self {
             session_id,
             process,
+            file_transfer,
             attachment: StdMutex::new(AttachmentState {
                 current_connection_id: Some(connection_id),
                 detached_connection_id: None,
                 detached_expires_at: None,
             }),
         }
+    }
+
+    async fn shutdown(&self) {
+        self.file_transfer.shutdown().await;
+        self.process.shutdown().await;
     }
 
     fn attach(&self, connection_id: ConnectionId) {
@@ -242,6 +275,10 @@ impl SessionHandle {
 
     pub(crate) fn process(&self) -> &ProcessHandler {
         &self.entry.process
+    }
+
+    pub(crate) fn file_transfer(&self) -> &FileTransferHandler {
+        &self.entry.file_transfer
     }
 
     pub(crate) async fn detach(&self) {

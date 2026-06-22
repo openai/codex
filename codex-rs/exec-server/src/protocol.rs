@@ -35,6 +35,9 @@ pub const FS_COPY_METHOD: &str = "fs/copy";
 pub const HTTP_REQUEST_METHOD: &str = "http/request";
 /// JSON-RPC notification method for streamed executor HTTP response bodies.
 pub const HTTP_REQUEST_BODY_DELTA_METHOD: &str = "http/request/bodyDelta";
+pub const FILE_TRANSFER_PREPARE_UPLOAD_METHOD: &str = "fileTransfer/prepareUpload";
+pub const FILE_TRANSFER_STATUS_METHOD: &str = "fileTransfer/status";
+pub const FILE_TRANSFER_CANCEL_METHOD: &str = "fileTransfer/cancel";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]

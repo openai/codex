@@ -17,6 +17,12 @@ use crate::client::http_client::ReqwestHttpRequestRunner;
 use crate::protocol::EnvironmentInfo;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FileTransferCancelParams;
+use crate::protocol::FileTransferCancelResponse;
+use crate::protocol::FileTransferPrepareUploadParams;
+use crate::protocol::FileTransferPrepareUploadResponse;
+use crate::protocol::FileTransferStatusParams;
+use crate::protocol::FileTransferStatusResponse;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCloseParams;
@@ -162,6 +168,30 @@ impl ExecServerHandler {
     pub(crate) fn environment_info(&self) -> Result<EnvironmentInfo, JSONRPCErrorError> {
         self.require_initialized_for("environment info")?;
         Ok(EnvironmentInfo::local())
+    }
+
+    pub(crate) async fn file_transfer_prepare_upload(
+        &self,
+        params: FileTransferPrepareUploadParams,
+    ) -> Result<FileTransferPrepareUploadResponse, JSONRPCErrorError> {
+        let session = self.require_initialized_for("file transfer")?;
+        session.file_transfer().prepare_upload(params).await
+    }
+
+    pub(crate) async fn file_transfer_status(
+        &self,
+        params: FileTransferStatusParams,
+    ) -> Result<FileTransferStatusResponse, JSONRPCErrorError> {
+        let session = self.require_initialized_for("file transfer")?;
+        session.file_transfer().status(params).await
+    }
+
+    pub(crate) async fn file_transfer_cancel(
+        &self,
+        params: FileTransferCancelParams,
+    ) -> Result<FileTransferCancelResponse, JSONRPCErrorError> {
+        let session = self.require_initialized_for("file transfer")?;
+        session.file_transfer().cancel(params).await
     }
 
     pub(crate) async fn exec_read(
