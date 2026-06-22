@@ -562,6 +562,25 @@ fn from_sources_ignores_removed_plugin_hooks_feature_key() {
 }
 
 #[test]
+fn from_sources_ignores_removed_tool_search_always_defer_mcp_tools_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([(
+        "tool_search_always_defer_mcp_tools".to_string(),
+        false,
+    )]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
 fn multi_agent_v2_feature_config_deserializes_boolean_toggle() {
     let features: FeaturesToml = toml::from_str(
         r#"
