@@ -342,6 +342,18 @@ impl PathUri {
     /// URIs created by [`Self::from_abs_path`]. Foreign conventions are rejected rather than being
     /// projected onto a syntactically valid but unrelated host path.
     pub fn to_abs_path(&self) -> io::Result<AbsolutePathBuf> {
+        #[cfg(windows)]
+        if let Some(path) = wsl_mount_uri_to_windows_path(&self.0) {
+            return AbsolutePathBuf::from_absolute_path_checked(path).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    PathUriParseError::InvalidFileUriPath {
+                        path: self.to_string(),
+                    },
+                )
+            });
+        }
+
         if self.infer_path_convention() != Some(PathConvention::native()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -406,6 +418,29 @@ impl PathUri {
     pub fn to_url(&self) -> Url {
         self.0.clone()
     }
+}
+
+#[cfg(windows)]
+fn wsl_mount_uri_to_windows_path(url: &Url) -> Option<PathBuf> {
+    if url.host_str().is_some() {
+        return None;
+    }
+
+    let mut segments = url.path_segments()?;
+    if segments.next()? != "mnt" {
+        return None;
+    }
+
+    let drive = segments.next()?;
+    if drive.len() != 1 || !drive.as_bytes()[0].is_ascii_alphabetic() {
+        return None;
+    }
+
+    let mut path = PathBuf::from(format!("{}:\\", drive.to_ascii_uppercase()));
+    for segment in segments {
+        path.push(decode_uri_path(segment));
+    }
+    Some(path)
 }
 
 impl TryFrom<Url> for PathUri {

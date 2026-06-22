@@ -206,6 +206,19 @@ fn file_uri_fallback_round_trips_non_unicode_windows_paths() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn wsl_mount_file_uri_maps_to_windows_path() {
+    let uri =
+        PathUri::parse("file:///mnt/c/Users/Alice%20Smith/src/main.rs").expect("valid WSL URI");
+
+    assert_eq!(
+        uri.to_abs_path().expect("WSL mount URI should convert"),
+        AbsolutePathBuf::from_absolute_path_checked(r"C:\Users\Alice Smith\src\main.rs")
+            .expect("absolute Windows path")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn file_uri_falls_back_for_posix_paths_with_null_bytes() {
