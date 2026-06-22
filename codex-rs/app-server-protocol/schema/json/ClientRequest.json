@@ -6469,6 +6469,29 @@
         },
         "method": {
           "enum": [
+            "account/workspaceMessages/read"
+          ],
+          "title": "Account/workspaceMessages/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/workspaceMessages/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "account/sendAddCreditsNudgeEmail"
           ],
           "title": "Account/sendAddCreditsNudgeEmailRequestMethod",

@@ -1427,6 +1427,9 @@ impl MessageProcessor {
             ClientRequest::GetAccountTokenUsage { .. } => {
                 self.account_processor.get_account_token_usage().await
             }
+            ClientRequest::GetWorkspaceMessages { .. } => {
+                self.account_processor.get_workspace_messages().await
+            }
             ClientRequest::SendAddCreditsNudgeEmail { params, .. } => {
                 self.account_processor
                     .send_add_credits_nudge_email(params)

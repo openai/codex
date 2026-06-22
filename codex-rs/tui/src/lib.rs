@@ -200,6 +200,7 @@ mod width;
 #[cfg(any(target_os = "windows", test))]
 mod windows_sandbox;
 mod workspace_command;
+mod workspace_messages;
 
 mod wrapping;
 

@@ -1920,6 +1920,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/rateLimits/read` — fetch ChatGPT rate limits, an optional effective monthly credit limit, and the number of earned rate-limit resets currently available. Rate-limit updates arrive via `account/rateLimits/updated` (notify); the reset count is snapshot-only.
 - `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided idempotency key.
 - `account/usage/read` — fetch ChatGPT account token-activity summary and daily buckets.
+- `account/workspaceMessages/read` — fetch active workspace messages, including workspace notification headlines when available.
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change. This is a sparse rolling update; merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot.
 - `account/sendAddCreditsNudgeEmail` — ask ChatGPT to email the workspace owner about depleted credits or a reached usage limit.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
@@ -2046,7 +2047,18 @@ Field notes:
 - `noCredit` means the account has no earned reset credits available.
 - Refetch `account/rateLimits/read` after consuming a reset instead of inferring updated windows from this response.
 
-### 9) Notify a workspace owner about a limit
+### 9) Workspace messages (ChatGPT)
+
+```json
+{ "method": "account/workspaceMessages/read", "id": 9 }
+{ "id": 9, "result": { "featureEnabled": true, "messages": [
+    { "messageId": "msg_123", "messageType": "headline", "messageBody": "Workspace maintenance starts at 5pm.", "createdAt": 1781395200, "archivedAt": null }
+] } }
+```
+
+When the upstream workspace-message feature is disabled, `featureEnabled` is `false` and `messages` is empty.
+
+### 10) Notify a workspace owner about a limit
 
 ```json
 { "method": "account/sendAddCreditsNudgeEmail", "id": 9, "params": { "creditType": "credits" } }

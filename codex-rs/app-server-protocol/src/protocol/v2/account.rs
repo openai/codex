@@ -317,6 +317,41 @@ pub struct GetAccountTokenUsageResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct GetWorkspaceMessagesResponse {
+    /// Whether the workspace-message backend route is available for this client.
+    pub feature_enabled: bool,
+    /// Active workspace messages returned by the backend.
+    pub messages: Vec<WorkspaceMessage>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkspaceMessage {
+    pub message_id: String,
+    pub message_type: WorkspaceMessageType,
+    pub message_body: String,
+    /// Unix timestamp (in seconds) when the message was created.
+    #[ts(type = "number | null")]
+    pub created_at: Option<i64>,
+    /// Unix timestamp (in seconds) when the message was archived.
+    #[ts(type = "number | null")]
+    pub archived_at: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum WorkspaceMessageType {
+    Headline,
+    Announcement,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AccountTokenUsageSummary {
     pub lifetime_tokens: Option<i64>,
     pub peak_daily_tokens: Option<i64>,
