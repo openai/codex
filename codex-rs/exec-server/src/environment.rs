@@ -22,6 +22,7 @@ use crate::environment_toml::environment_provider_from_codex_home;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
+use crate::protocol::EnvironmentCapabilities;
 use crate::protocol::EnvironmentInfo;
 use crate::protocol::ShellInfo;
 use crate::remote::NoiseRendezvousEnvironmentConfig;
@@ -608,6 +609,7 @@ impl EnvironmentInfo {
     pub(crate) fn local() -> Self {
         Self {
             shell: codex_shell_command::shell_detect::default_user_shell().into(),
+            capabilities: EnvironmentCapabilities::default(),
         }
     }
 }
