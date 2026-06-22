@@ -42,6 +42,7 @@ fn write_minimal_rollout_with_id_at_path(file: &Path, id: Uuid) {
             "timestamp": "2024-01-01T00:00:00.000Z",
             "type": "session_meta",
             "payload": {
+                "session_id": id,
                 "id": id,
                 "timestamp": "2024-01-01T00:00:00Z",
                 "cwd": ".",

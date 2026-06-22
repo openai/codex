@@ -1694,12 +1694,11 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 }
 
 #[tokio::test]
-async fn resize_all_images_prepares_failures_before_history_insertion() {
+async fn prepares_image_failures_before_history_insertion() {
     let (session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
-            let _ = config.features.enable(Feature::ResizeAllImages);
             let _ = config.features.enable(Feature::ItemIds);
         },
     )
@@ -1764,15 +1763,8 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
 }
 
 #[tokio::test]
-async fn resize_all_images_prepares_resumed_history_before_installing_it() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
-        CodexAuth::from_api_key("Test API Key"),
-        Vec::new(),
-        |config| {
-            let _ = config.features.enable(Feature::ResizeAllImages);
-        },
-    )
-    .await;
+async fn prepares_resumed_history_before_installing_it() {
+    let (session, _turn_context) = make_session_and_context().await;
     let resumed_item = ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -1900,6 +1892,7 @@ fn session_meta_item(
 ) -> RolloutItem {
     RolloutItem::SessionMeta(SessionMetaLine {
         meta: SessionMeta {
+            session_id: thread_id.into(),
             id: thread_id,
             multi_agent_version,
             ..SessionMeta::default()
@@ -3750,6 +3743,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
     let live_thread = LiveThread::create(
         Arc::clone(&session.services.thread_store),
         CreateThreadParams {
+            session_id: session.session_id(),
             thread_id: session.thread_id,
             extra_config: None,
             forked_from_id: None,
@@ -5453,7 +5447,7 @@ async fn resumed_root_session_uses_thread_id_as_session_id() {
 }
 
 #[tokio::test]
-async fn resumed_subagent_session_keeps_inherited_session_id() {
+async fn resumed_subagent_session_restores_persisted_session_id() {
     let parent_thread_id = ThreadId::new();
     let parent_session_id = SessionId::from(parent_thread_id);
     let thread_id = ThreadId::new();
@@ -5467,11 +5461,19 @@ async fn resumed_subagent_session_keeps_inherited_session_id() {
     let (session, rx_event) = make_session_with_history_source_and_agent_control_and_rx(
         InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
-            history: Vec::new(),
+            history: vec![RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    session_id: parent_session_id,
+                    id: thread_id,
+                    source: session_source.clone(),
+                    ..SessionMeta::default()
+                },
+                git: None,
+            })],
             rollout_path: None,
         }),
         session_source,
-        AgentControl::default().with_session_id(parent_session_id, /*max_threads*/ usize::MAX),
+        AgentControl::default(),
     )
     .await
     .expect("resume should succeed");
@@ -6590,6 +6592,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
     let live_thread = LiveThread::create(
         Arc::clone(&thread_store),
         CreateThreadParams {
+            session_id: session.session_id(),
             thread_id: session.thread_id,
             extra_config: None,
             forked_from_id: None,
@@ -7884,15 +7887,14 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_dis
 }
 
 #[tokio::test]
-async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_hint_disabled() {
+async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_hint_is_empty() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
             let _ = config.features.enable(Feature::MultiAgentV2);
-            config.multi_agent_v2.usage_hint_enabled = false;
-            config.multi_agent_v2.root_agent_usage_hint_text = Some("Root guidance.".to_string());
-            config.multi_agent_v2.subagent_usage_hint_text = Some("Subagent guidance.".to_string());
+            config.multi_agent_v2.root_agent_usage_hint_text = None;
+            config.multi_agent_v2.subagent_usage_hint_text = None;
         },
     )
     .await;

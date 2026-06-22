@@ -1768,10 +1768,7 @@ async fn turn_start_accepts_multi_agent_mode_v2() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::from([
-            (Feature::MultiAgentV2, true),
-            (Feature::MultiAgentMode, true),
-        ]),
+        &BTreeMap::from([(Feature::MultiAgentV2, true)]),
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -1845,10 +1842,7 @@ async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::from([
-            (Feature::MultiAgentV2, true),
-            (Feature::MultiAgentMode, true),
-        ]),
+        &BTreeMap::from([(Feature::MultiAgentV2, true)]),
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -1871,7 +1865,7 @@ async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
         multi_agent_mode,
         ..
     } = to_response::<ThreadStartResponse>(thread_resp)?;
-    assert_eq!(multi_agent_mode, Some(MultiAgentMode::Proactive));
+    assert_eq!(multi_agent_mode, MultiAgentMode::Proactive);
 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -1911,27 +1905,29 @@ async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_reports_selected_multi_agent_mode() -> Result<()> {
+async fn thread_start_reports_multi_agent_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let cases = [
         (
             BTreeMap::from([(Feature::MultiAgentV2, true)]),
             Some(MultiAgentMode::Proactive),
-            Some(MultiAgentMode::Proactive),
+            MultiAgentMode::Proactive,
+        ),
+        (
+            BTreeMap::from([(Feature::MultiAgentV2, true)]),
+            Some(MultiAgentMode::None),
+            MultiAgentMode::None,
         ),
         (
             BTreeMap::new(),
             Some(MultiAgentMode::Proactive),
-            Some(MultiAgentMode::Proactive),
+            MultiAgentMode::Proactive,
         ),
         (
-            BTreeMap::from([
-                (Feature::MultiAgentV2, true),
-                (Feature::MultiAgentMode, true),
-            ]),
+            BTreeMap::from([(Feature::MultiAgentV2, true)]),
             None,
-            None,
+            MultiAgentMode::ExplicitRequestOnly,
         ),
     ];
 

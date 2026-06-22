@@ -1022,6 +1022,12 @@ client_request_definitions! {
         response: v2::GetAccountTokenUsageResponse,
     },
 
+    GetWorkspaceMessages => "account/workspaceMessages/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
+        response: v2::GetWorkspaceMessagesResponse,
+    },
+
     SendAddCreditsNudgeEmail => "account/sendAddCreditsNudgeEmail" {
         params: v2::SendAddCreditsNudgeEmailParams,
         serialization: global("account-auth"),
@@ -1701,6 +1707,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::account::AmazonBedrockCredentialSource;
     use codex_protocol::account::PlanType;
+    use codex_protocol::config_types::MultiAgentMode;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::RealtimeConversationVersion;
@@ -2541,6 +2548,24 @@ mod tests {
     }
 
     #[test]
+    fn serialize_get_workspace_messages() -> Result<()> {
+        let request = ClientRequest::GetWorkspaceMessages {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        assert_eq!(request.id(), &RequestId::Integer(1));
+        assert_eq!(request.method(), "account/workspaceMessages/read");
+        assert_eq!(
+            json!({
+                "method": "account/workspaceMessages/read",
+                "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_client_response() -> Result<()> {
         let cwd = absolute_path("/tmp");
         let response = ClientResponse::ThreadStart {
@@ -2584,7 +2609,7 @@ mod tests {
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
                 active_permission_profile: None,
                 reasoning_effort: None,
-                multi_agent_mode: None,
+                multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
             },
         };
 
@@ -2633,7 +2658,7 @@ mod tests {
                     },
                     "activePermissionProfile": null,
                     "reasoningEffort": null,
-                    "multiAgentMode": null
+                    "multiAgentMode": "explicitRequestOnly"
                 }
             }),
             serde_json::to_value(&response)?,

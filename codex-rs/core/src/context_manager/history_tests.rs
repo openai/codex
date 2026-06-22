@@ -1,4 +1,5 @@
 use super::*;
+use crate::context::EnvironmentContext;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::AgentPath;
@@ -71,6 +72,20 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     // behavior, not on a specific model's token limit.
     h.record_items(items.iter(), TruncationPolicy::Tokens(10_000));
     h
+}
+
+#[test]
+fn environment_context_baseline_deduplicates_until_history_is_replaced() {
+    let context =
+        EnvironmentContext::from_turn_context_item(&reference_context_item(), "bash".to_string());
+    let mut history = ContextManager::new();
+
+    assert!(history.update_environment_context_baseline(&context));
+    assert!(!history.update_environment_context_baseline(&context));
+
+    history.replace(Vec::new());
+
+    assert!(history.update_environment_context_baseline(&context));
 }
 
 fn user_msg(text: &str) -> ResponseItem {

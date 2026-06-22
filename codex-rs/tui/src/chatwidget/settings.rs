@@ -224,6 +224,10 @@ impl ChatWidget {
             self.clear_pending_token_activity_refreshes();
             self.clear_pending_rate_limit_reset_requests();
         }
+        self.status_line_workspace_headline = None;
+        self.status_line_workspace_headline_pending_request_id = None;
+        self.status_line_workspace_headline_last_requested_at = None;
+        self.status_line_workspace_messages_disabled = false;
         self.status_account_display = status_account_display;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
@@ -232,6 +236,7 @@ impl ChatWidget {
             .set_connectors_enabled(self.connectors_enabled());
         self.bottom_pane
             .set_token_activity_command_enabled(has_codex_backend_auth);
+        self.refresh_status_line();
     }
 
     /// Set the syntax theme override in the widget's config copy.

@@ -1725,6 +1725,7 @@
           "type": "string"
         },
         "usage_hint_enabled": {
+          "description": "Deprecated compatibility field. Its value is ignored.",
           "type": "boolean"
         },
         "usage_hint_text": {

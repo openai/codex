@@ -1957,6 +1957,7 @@ mod tests {
         );
         let items = vec![RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 forked_from_id: None,
                 parent_thread_id: None,
@@ -2018,6 +2019,7 @@ mod tests {
         );
         let items = vec![RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 forked_from_id: None,
                 parent_thread_id: None,

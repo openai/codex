@@ -719,6 +719,9 @@ impl App {
             AppEvent::RefreshTokenActivity { request_id } => {
                 self.refresh_token_activity(app_server, request_id);
             }
+            AppEvent::RefreshStatusLineWorkspaceHeadline { request_id } => {
+                self.refresh_status_line_workspace_headline(app_server, request_id);
+            }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
             }
@@ -2022,6 +2025,14 @@ impl App {
             AppEvent::StatusLineGitSummaryUpdated { cwd, summary } => {
                 self.chat_widget.set_status_line_git_summary(cwd, summary);
                 self.refresh_status_line();
+            }
+            AppEvent::StatusLineWorkspaceHeadlineUpdated { request_id, result } => {
+                if self
+                    .chat_widget
+                    .set_status_line_workspace_headline(request_id, result)
+                {
+                    tui.frame_requester().schedule_frame();
+                }
             }
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();

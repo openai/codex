@@ -488,7 +488,9 @@ impl Environment {
             exec_server_url: None,
             remote_client: None,
             startup_task: Arc::new(Mutex::new(None)),
-            exec_backend: Arc::new(LocalProcess::default()),
+            exec_backend: Arc::new(LocalProcess::with_local_runtime_paths(
+                local_runtime_paths.clone(),
+            )),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
             )),
@@ -1163,6 +1165,50 @@ mod tests {
             .expect("start process");
 
         assert_eq!(response.process.process_id().as_str(), "default-env-proc");
+    }
+
+    #[tokio::test]
+    async fn local_environment_passes_runtime_paths_to_exec_backend() {
+        let environment = Environment::local(test_runtime_paths());
+        #[cfg(unix)]
+        let uri = "file://server/share/checkout";
+        #[cfg(windows)]
+        let uri = "file:///usr/local/checkout";
+        let sandbox_cwd = PathUri::parse(uri).expect("non-native sandbox cwd URI");
+        let source = sandbox_cwd
+            .to_abs_path()
+            .expect_err("sandbox cwd should not be native to this host");
+        let sandbox = crate::FileSystemSandboxContext::from_permission_profile_with_cwd(
+            codex_protocol::models::PermissionProfile::workspace_write(),
+            sandbox_cwd.clone(),
+        );
+
+        let result = environment
+            .get_exec_backend()
+            .start(crate::ExecParams {
+                process_id: ProcessId::from("local-sandbox-proc"),
+                argv: vec!["true".to_string()],
+                cwd: PathUri::from_path(std::env::current_dir().expect("read current dir"))
+                    .expect("cwd URI"),
+                env_policy: None,
+                env: Default::default(),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                sandbox: Some(sandbox),
+                enforce_managed_network: false,
+            })
+            .await;
+        let Err(err) = result else {
+            panic!("sandbox cwd should be rejected after resolving runtime paths");
+        };
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "exec-server rejected request (-32602): sandbox cwd URI `{sandbox_cwd}` is not valid on this exec-server host: {source}"
+            )
+        );
     }
 
     #[tokio::test]

@@ -42,6 +42,7 @@ use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
@@ -241,6 +242,21 @@ pub(crate) async fn run_turn(
             )
             .await?;
 
+            if turn_context
+                .config
+                .features
+                .enabled(Feature::DeferredExecutor)
+            {
+                let step_context = StepContext {
+                    environments: sess.services.turn_environments.snapshot().await,
+                };
+                sess.record_step_environment_context_if_changed(
+                    turn_context.as_ref(),
+                    &step_context,
+                )
+                .await;
+            }
+
             // Construct the input that we will send to the model.
             let sampling_request_input: Vec<ResponseItem> = async {
                 sess.clone_history()
@@ -334,7 +350,10 @@ pub(crate) async fn run_turn(
                 }
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if turn_context.features.enabled(Feature::AutoCompaction)
+                if turn_context
+                    .config
+                    .features
+                    .enabled(Feature::AutoCompaction)
                     && token_limit_reached
                     && needs_follow_up
                 {
@@ -848,7 +867,11 @@ async fn run_pre_sampling_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
 ) -> CodexResult<()> {
-    if !turn_context.features.enabled(Feature::AutoCompaction) {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::AutoCompaction)
+    {
         return Ok(());
     }
 

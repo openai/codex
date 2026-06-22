@@ -297,6 +297,7 @@ fn write_session_file_with_provider(
     let mut file = File::create(file_path)?;
 
     let mut payload = serde_json::json!({
+        "session_id": uuid,
         "id": uuid,
         "timestamp": ts_str,
         "cwd": ".",
@@ -370,6 +371,7 @@ fn write_goal_started_session_file(
         "timestamp": ts_str,
         "type": "session_meta",
         "payload": {
+            "session_id": uuid,
             "id": uuid,
             "timestamp": ts_str,
             "cwd": ".",
@@ -451,6 +453,7 @@ fn write_session_file_with_delayed_user_event(
             Uuid::from_u128(100 + i as u128)
         };
         let payload = serde_json::json!({
+            "session_id": uuid,
             "id": id,
             "timestamp": ts_str,
             "cwd": ".",
@@ -483,8 +486,9 @@ fn write_session_file_with_meta_payload(
     root: &Path,
     ts_str: &str,
     uuid: Uuid,
-    payload: serde_json::Value,
+    mut payload: serde_json::Value,
 ) -> std::io::Result<()> {
+    payload["session_id"] = serde_json::json!(uuid);
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let dt = PrimitiveDateTime::parse(ts_str, format)
@@ -1088,6 +1092,7 @@ async fn test_get_thread_contents() {
         "timestamp": ts,
         "type": "session_meta",
         "payload": {
+            "session_id": uuid,
             "id": uuid,
             "timestamp": ts,
             "cwd": ".",
@@ -1267,6 +1272,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         timestamp: ts.to_string(),
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
+                session_id: conversation_id.into(),
                 id: conversation_id,
                 forked_from_id: None,
                 parent_thread_id: None,
