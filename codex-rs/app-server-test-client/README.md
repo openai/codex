@@ -18,6 +18,10 @@ cargo run -p codex-app-server-test-client -- \
 cargo run -p codex-app-server-test-client -- model-list
 ```
 
+`send-message` and `send-message-v2` handle `request_user_input` server requests interactively.
+When Codex asks a question, choose a numbered option (or `o` for a free-form answer when offered)
+and the client will send the response and continue streaming the same turn.
+
 ## Testing Plugin Analytics
 
 The `plugin-analytics-smoke` command exercises `plugin/installed`, plugin
