@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Result;
 use predicates::prelude::PredicateBooleanExt;
@@ -81,7 +82,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
         .assert()
         .success();
 
-    let requests = collector.finish()?;
+    let requests = collector.finish_after_path("/v1/metrics", Duration::from_secs(5))?;
     let metrics = requests
         .iter()
         .filter(|request| request.path == "/v1/metrics")
@@ -108,7 +109,7 @@ struct CapturedRequest {
 
 struct TestCollector {
     base_url: String,
-    requests: mpsc::Receiver<Vec<CapturedRequest>>,
+    requests: mpsc::Receiver<CapturedRequest>,
     stop: mpsc::Sender<()>,
     server: thread::JoinHandle<()>,
 }
@@ -121,12 +122,13 @@ impl TestCollector {
         let (tx, requests) = mpsc::channel();
         let (stop, stop_rx) = mpsc::channel();
         let server = thread::spawn(move || {
-            let mut captured = Vec::new();
             loop {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        if let Ok(request) = read_http_request(&mut stream) {
-                            captured.push(request);
+                        if let Ok(request) = read_http_request(&mut stream)
+                            && tx.send(request).is_err()
+                        {
+                            break;
                         }
                         let _ = stream.write_all(
                             b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -141,7 +143,6 @@ impl TestCollector {
                     Err(_) => break,
                 }
             }
-            let _ = tx.send(captured);
         });
         Ok(Self {
             base_url: format!("http://{addr}"),
@@ -151,12 +152,30 @@ impl TestCollector {
         })
     }
 
-    fn finish(self) -> Result<Vec<CapturedRequest>> {
+    fn finish_after_path(self, path: &str, timeout: Duration) -> Result<Vec<CapturedRequest>> {
+        let deadline = Instant::now() + timeout;
+        let mut requests = Vec::new();
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            match self.requests.recv_timeout(remaining) {
+                Ok(request) => {
+                    let found = request.path == path;
+                    requests.push(request);
+                    if found {
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
         let _ = self.stop.send(());
         self.server
             .join()
             .map_err(|_| anyhow::anyhow!("collector thread panicked"))?;
-        Ok(self.requests.recv_timeout(Duration::from_secs(1))?)
+        while let Ok(request) = self.requests.try_recv() {
+            requests.push(request);
+        }
+        Ok(requests)
     }
 }
 
