@@ -96,8 +96,8 @@ fn native_request_preserves_native_launch_fields() {
         enforce_managed_network: false,
     };
 
-    let prepared =
-        prepare_exec_request(&params, env.clone(), None).expect("prepare native request");
+    let prepared = prepare_exec_request(&params, env.clone(), /*runtime_paths*/ None)
+        .expect("prepare native request");
 
     assert_eq!(prepared.command, params.argv);
     assert_eq!(prepared.cwd, cwd);

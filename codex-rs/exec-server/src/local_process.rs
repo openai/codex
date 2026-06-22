@@ -150,7 +150,10 @@ impl Default for LocalProcess {
         let (outgoing_tx, mut outgoing_rx) =
             mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
         tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::with_runtime_paths(RpcNotificationSender::new(outgoing_tx), None)
+        Self::with_runtime_paths(
+            RpcNotificationSender::new(outgoing_tx),
+            /*runtime_paths*/ None,
+        )
     }
 }
 
