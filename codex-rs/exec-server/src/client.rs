@@ -99,6 +99,7 @@ use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
+use codex_sandboxing::SandboxType;
 
 pub(crate) mod http_client;
 #[path = "client_recovery.rs"]
@@ -634,7 +635,7 @@ impl ExecServerClient {
     pub(crate) async fn start_process(
         &self,
         params: ExecParams,
-    ) -> Result<Session, ExecServerError> {
+    ) -> Result<(Session, SandboxType), ExecServerError> {
         loop {
             let rpc_client = self.inner.rpc_client().await?;
             if !self.inner.begin_process_start(&rpc_client) {
@@ -658,14 +659,15 @@ impl ExecServerClient {
                     .call_rpc::<_, ExecResponse>(&rpc_client, EXEC_METHOD, &params)
                     .await
                 {
-                    Ok(_) => {
+                    Ok(response) => {
                         state.recoverable.store(true, Ordering::Release);
                         let session = Session {
                             client: client.clone(),
                             process_id: process_id.clone(),
                             state: Arc::clone(&state),
                         };
-                        if result_tx.send(Ok(session)).is_err() {
+                        let sandbox = response.sandbox.unwrap_or(SandboxType::None);
+                        if result_tx.send(Ok((session, sandbox))).is_err() {
                             state.recoverable.store(false, Ordering::Release);
                             tokio::spawn(async move {
                                 cleanup_process_start(&client, &process_id, &state).await;

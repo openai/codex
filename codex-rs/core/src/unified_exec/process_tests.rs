@@ -1,10 +1,13 @@
 use super::process::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecError;
+use codex_exec_server::ByteChunk;
+use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecProcessFuture;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ProcessId;
+use codex_exec_server::ProcessOutputChunk;
 use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
@@ -101,9 +104,10 @@ async fn remote_process(
             terminate_error,
             wake_tx,
         }),
+        sandbox: SandboxType::None,
     };
 
-    UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
+    UnifiedExecProcess::from_exec_server_started(started)
         .await
         .expect("remote process should start")
 }
@@ -194,6 +198,7 @@ async fn remote_process_waits_for_early_exit_event() {
             terminate_error: None,
             wake_tx: wake_tx.clone(),
         }),
+        sandbox: SandboxType::None,
     };
 
     tokio::spawn(async move {
@@ -201,10 +206,45 @@ async fn remote_process_waits_for_early_exit_event() {
         let _ = wake_tx.send(1);
     });
 
-    let process = UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
+    let process = UnifiedExecProcess::from_exec_server_started(started)
         .await
         .expect("remote process should observe early exit");
 
     assert!(process.has_exited());
     assert_eq!(process.exit_code(), Some(17));
+}
+
+#[tokio::test]
+async fn remote_process_uses_executor_sandbox_for_denial_detection() {
+    let (wake_tx, _wake_rx) = watch::channel(0);
+    let started = StartedExecProcess {
+        process: Arc::new(MockExecProcess {
+            process_id: "test-process".to_string().into(),
+            write_response: WriteResponse {
+                status: WriteStatus::Accepted,
+            },
+            read_responses: Mutex::new(VecDeque::from([ReadResponse {
+                chunks: vec![ProcessOutputChunk {
+                    seq: 1,
+                    stream: ExecOutputStream::Stderr,
+                    chunk: ByteChunk::from(b"Permission denied".to_vec()),
+                }],
+                next_seq: 2,
+                exited: true,
+                exit_code: Some(1),
+                closed: true,
+                failure: None,
+            }])),
+            terminate_error: None,
+            wake_tx,
+        }),
+        sandbox: SandboxType::LinuxSeccomp,
+    };
+
+    let result = UnifiedExecProcess::from_exec_server_started(started).await;
+
+    assert!(matches!(
+        result,
+        Err(UnifiedExecError::SandboxDenied { .. })
+    ));
 }

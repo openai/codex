@@ -36,10 +36,11 @@ impl RemoteProcess {
         params: ExecParams,
     ) -> Result<StartedExecProcess, crate::ExecServerError> {
         let client = self.client.get().await?;
-        let session = client.start_process(params).await?;
+        let (session, sandbox) = client.start_process(params).await?;
 
         Ok(StartedExecProcess {
             process: Arc::new(RemoteExecProcess { session }),
+            sandbox,
         })
     }
 }
