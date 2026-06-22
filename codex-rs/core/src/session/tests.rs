@@ -210,7 +210,7 @@ fn assign_missing_response_item_ids_skips_agent_messages() {
             content: vec![AgentMessageInputContent::InputText {
                 text: "done".to_string(),
             }],
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         user_message("hello"),
     ]);
