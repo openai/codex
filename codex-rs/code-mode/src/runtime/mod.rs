@@ -25,7 +25,6 @@ pub(crate) enum RuntimeCommand {
     ToolResponse { id: String, result: JsonValue },
     ToolError { id: String, error_text: String },
     TimeoutFired { id: u64 },
-    ObservePendingFrontier,
     Terminate,
 }
 
@@ -39,14 +38,15 @@ pub(crate) enum PendingRuntimeMode {
 #[derive(Debug)]
 pub(crate) enum RuntimeControlCommand {
     Continue,
-    Resume,
     Terminate,
 }
 
 #[derive(Debug)]
 pub(crate) enum RuntimeEvent {
     Started,
-    Pending,
+    Pending {
+        pending_tool_call_ids: Vec<String>,
+    },
     ContentItem(FunctionCallOutputContentItem),
     YieldRequested,
     ToolCall {
@@ -221,9 +221,21 @@ fn run_runtime(
     }
 
     let mut pending_promise = pending_promise;
-    while let Some(command) =
-        next_runtime_command(&event_tx, &command_rx, &control_rx, pending_mode)
-    {
+    loop {
+        let mut pending_tool_call_ids = scope
+            .get_slot::<RuntimeState>()
+            .map(|state| state.pending_tool_calls.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        pending_tool_call_ids.sort();
+        let Some(command) = next_runtime_command(
+            &event_tx,
+            &command_rx,
+            &control_rx,
+            pending_mode,
+            pending_tool_call_ids,
+        ) else {
+            break;
+        };
         match command {
             RuntimeCommand::Terminate => break,
             RuntimeCommand::ToolResponse { id, result } => {
@@ -248,7 +260,6 @@ fn run_runtime(
                     return;
                 }
             }
-            RuntimeCommand::ObservePendingFrontier => {}
         }
 
         scope.perform_microtask_checkpoint();
@@ -277,24 +288,24 @@ fn next_runtime_command(
     command_rx: &std_mpsc::Receiver<RuntimeCommand>,
     control_rx: &std_mpsc::Receiver<RuntimeControlCommand>,
     pending_mode: PendingRuntimeMode,
+    pending_tool_call_ids: Vec<String>,
 ) -> Option<RuntimeCommand> {
-    loop {
-        match command_rx.try_recv() {
-            Ok(command) => return Some(command),
-            Err(std_mpsc::TryRecvError::Disconnected) => return None,
-            Err(std_mpsc::TryRecvError::Empty) => {}
-        }
+    match command_rx.try_recv() {
+        Ok(command) => return Some(command),
+        Err(std_mpsc::TryRecvError::Disconnected) => return None,
+        Err(std_mpsc::TryRecvError::Empty) => {}
+    }
 
-        let _ = event_tx.send(RuntimeEvent::Pending);
-        match pending_mode {
-            #[cfg(test)]
-            PendingRuntimeMode::Continue => return command_rx.recv().ok(),
-            PendingRuntimeMode::PauseUntilResumed => match control_rx.recv().ok()? {
-                RuntimeControlCommand::Continue => return command_rx.recv().ok(),
-                RuntimeControlCommand::Resume => continue,
-                RuntimeControlCommand::Terminate => return Some(RuntimeCommand::Terminate),
-            },
-        }
+    let _ = event_tx.send(RuntimeEvent::Pending {
+        pending_tool_call_ids,
+    });
+    match pending_mode {
+        #[cfg(test)]
+        PendingRuntimeMode::Continue => command_rx.recv().ok(),
+        PendingRuntimeMode::PauseUntilResumed => match control_rx.recv().ok()? {
+            RuntimeControlCommand::Continue => command_rx.recv().ok(),
+            RuntimeControlCommand::Terminate => Some(RuntimeCommand::Terminate),
+        },
     }
 }
 
@@ -385,7 +396,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_mode_freezes_runtime_commands_until_resume() {
+    async fn pending_mode_freezes_runtime_commands_until_continue() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let (runtime_tx, runtime_control_tx, _runtime_terminate_handle) = spawn_runtime(
             HashMap::new(),
@@ -413,7 +424,7 @@ await new Promise(() => {});
                 .await
                 .unwrap()
                 .unwrap(),
-            RuntimeEvent::Pending
+            RuntimeEvent::Pending { .. }
         ));
 
         runtime_tx
@@ -426,7 +437,7 @@ await new Promise(() => {});
         );
 
         runtime_control_tx
-            .send(RuntimeControlCommand::Resume)
+            .send(RuntimeControlCommand::Continue)
             .unwrap();
 
         let content_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
@@ -444,7 +455,7 @@ await new Promise(() => {});
                 .await
                 .unwrap()
                 .unwrap(),
-            RuntimeEvent::Pending
+            RuntimeEvent::Pending { .. }
         ));
 
         runtime_control_tx

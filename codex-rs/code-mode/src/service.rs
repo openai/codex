@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::WaitToPendingOutcome;
 use codex_code_mode_protocol::WaitToPendingRequest;
 use serde_json::Value as JsonValue;
+use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -74,6 +76,7 @@ impl CodeModeSessionProvider for InProcessCodeModeSessionProvider {
 
 pub struct CodeModeService {
     runtime: SessionRuntime<ProtocolDelegate>,
+    pending_generations: Mutex<HashMap<runtime::CellId, runtime::PendingGeneration>>,
 }
 
 impl CodeModeService {
@@ -84,6 +87,7 @@ impl CodeModeService {
     pub fn with_delegate(delegate: Arc<dyn CodeModeSessionDelegate>) -> Self {
         Self {
             runtime: SessionRuntime::new(Arc::new(ProtocolDelegate { delegate })),
+            pending_generations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -91,10 +95,7 @@ impl CodeModeService {
         let yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
         let runtime_cell_id = self
             .runtime
-            .create_cell_with_execution_policy(
-                runtime_request(request),
-                runtime::CellExecutionPolicy::PauseAtPendingFrontier,
-            )
+            .create_cell(runtime_request(request))
             .await
             .map_err(|error| error.to_string())?;
         let pending_event = self
@@ -125,15 +126,17 @@ impl CodeModeService {
     ) -> Result<ExecuteToPendingOutcome, String> {
         let runtime_cell_id = self
             .runtime
-            .create_cell(runtime_request(request))
+            .create_pausable_cell(runtime_request(request))
             .await
             .map_err(|error| error.to_string())?;
         let cell_id = protocol_cell_id(&runtime_cell_id);
         let event = self
             .runtime
-            .observe(&runtime_cell_id, runtime::ObserveMode::PendingFrontier)
+            .wait_to_pending(&runtime_cell_id)
             .await
             .map_err(|error| error.to_string())?;
+        self.record_pending_generation(&runtime_cell_id, &event)
+            .await;
         pending_outcome(&cell_id, event)
     }
 
@@ -175,13 +178,19 @@ impl CodeModeService {
     }
 
     pub async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {
-        match self.runtime.terminate(&runtime_cell_id(&cell_id)).await {
+        let runtime_cell_id = runtime_cell_id(&cell_id);
+        let outcome = match self.runtime.terminate(&runtime_cell_id).await {
             Ok(event) => Ok(WaitOutcome::LiveCell(runtime_response(&cell_id, event)?)),
             Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => {
                 Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)))
             }
             Err(error) => Err(error.to_string()),
-        }
+        };
+        self.pending_generations
+            .lock()
+            .await
+            .remove(&runtime_cell_id);
+        outcome
     }
 
     pub async fn wait_to_pending(
@@ -189,17 +198,28 @@ impl CodeModeService {
         request: WaitToPendingRequest,
     ) -> Result<WaitToPendingOutcome, String> {
         let cell_id = request.cell_id;
-        match self
-            .runtime
-            .observe(
-                &runtime_cell_id(&cell_id),
-                runtime::ObserveMode::PendingFrontier,
-            )
-            .await
-        {
-            Ok(event) => Ok(WaitToPendingOutcome::LiveCell(pending_outcome(
-                &cell_id, event,
-            )?)),
+        let runtime_cell_id = runtime_cell_id(&cell_id);
+        let generation = {
+            self.pending_generations
+                .lock()
+                .await
+                .get(&runtime_cell_id)
+                .copied()
+        };
+        if let Some(generation) = generation {
+            self.runtime
+                .resume(&runtime_cell_id, generation)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        match self.runtime.wait_to_pending(&runtime_cell_id).await {
+            Ok(event) => {
+                self.record_pending_generation(&runtime_cell_id, &event)
+                    .await;
+                Ok(WaitToPendingOutcome::LiveCell(pending_outcome(
+                    &cell_id, event,
+                )?))
+            }
             Err(runtime::Error::MissingCell(_) | runtime::Error::ClosedCell(_)) => Ok(
                 WaitToPendingOutcome::MissingCell(missing_cell_response(cell_id)),
             ),
@@ -207,11 +227,31 @@ impl CodeModeService {
         }
     }
 
+    async fn record_pending_generation(
+        &self,
+        cell_id: &runtime::CellId,
+        event: &runtime::CellEvent,
+    ) {
+        let mut generations = self.pending_generations.lock().await;
+        match event {
+            runtime::CellEvent::Pending(frontier) => {
+                generations.insert(cell_id.clone(), frontier.generation);
+            }
+            runtime::CellEvent::Yielded { .. } => {}
+            runtime::CellEvent::Completed { .. } | runtime::CellEvent::Terminated { .. } => {
+                generations.remove(cell_id);
+            }
+        }
+    }
+
     pub async fn shutdown(&self) -> Result<(), String> {
-        self.runtime
+        let result = self
+            .runtime
             .shutdown()
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string());
+        self.pending_generations.lock().await.clear();
+        result
     }
 }
 
@@ -334,10 +374,11 @@ fn pending_outcome(
     event: runtime::CellEvent,
 ) -> Result<ExecuteToPendingOutcome, String> {
     match event {
-        runtime::CellEvent::Pending {
+        runtime::CellEvent::Pending(runtime::PendingFrontier {
             content_items,
             pending_tool_call_ids,
-        } => Ok(ExecuteToPendingOutcome::Pending {
+            ..
+        }) => Ok(ExecuteToPendingOutcome::Pending {
             cell_id: cell_id.clone(),
             content_items: content_items.into_iter().map(output_item).collect(),
             pending_tool_call_ids,
@@ -369,7 +410,7 @@ fn runtime_response(
             cell_id: cell_id.clone(),
             content_items: content_items.into_iter().map(output_item).collect(),
         }),
-        runtime::CellEvent::Pending { .. } => {
+        runtime::CellEvent::Pending(_) => {
             Err("cell returned a pending frontier unexpectedly".to_string())
         }
     }

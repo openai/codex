@@ -21,6 +21,9 @@ pub(crate) use self::types::ImageDetail;
 pub(crate) use self::types::NestedToolCall;
 pub(crate) use self::types::ObserveMode;
 pub(crate) use self::types::OutputItem;
+pub(crate) use self::types::PendingFrontier;
+pub(crate) use self::types::PendingGeneration;
+pub(crate) use self::types::ResumeOutcome;
 pub(crate) use self::types::SessionRuntimeDelegate;
 pub(crate) use self::types::ToolDefinition;
 pub(crate) use self::types::ToolKind;
@@ -73,7 +76,15 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             .await
     }
 
-    pub(crate) async fn create_cell_with_execution_policy(
+    pub(crate) async fn create_pausable_cell(
+        &self,
+        request: CreateCellRequest,
+    ) -> Result<CellId, Error> {
+        self.create_cell_with_execution_policy(request, CellExecutionPolicy::PauseAtPendingFrontier)
+            .await
+    }
+
+    async fn create_cell_with_execution_policy(
         &self,
         request: CreateCellRequest,
         execution_policy: CellExecutionPolicy,
@@ -111,6 +122,29 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         Ok(PendingEvent {
             event: map_actor_event(cell_id.clone(), handle.observe(mode)),
         })
+    }
+
+    pub(crate) async fn wait_to_pending(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
+        self.observe(cell_id, ObserveMode::PendingFrontier).await
+    }
+
+    pub(crate) async fn resume(
+        &self,
+        cell_id: &CellId,
+        generation: PendingGeneration,
+    ) -> Result<ResumeOutcome, Error> {
+        let handle = self
+            .inner
+            .cells
+            .lock()
+            .await
+            .get(cell_id)
+            .cloned()
+            .ok_or_else(|| Error::MissingCell(cell_id.clone()))?;
+        handle
+            .resume(generation)
+            .await
+            .map_err(|error| actor_error(cell_id, error))
     }
 
     pub(crate) async fn terminate(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
@@ -170,7 +204,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         let (handle, task) =
             CellActor::prepare(request, stored_values, host, cell_state, execution_policy)
                 .map_err(Error::Runtime)?;
-        cells.insert(cell_id.clone(), handle);
+        cells.insert(cell_id, handle);
         self.inner.cell_tasks.spawn(task);
         drop(cells);
         Ok(())
@@ -272,6 +306,11 @@ fn actor_error(cell_id: &CellId, error: CellError) -> Error {
         CellError::Busy => Error::BusyObserver(cell_id.clone()),
         CellError::AlreadyTerminating => Error::AlreadyTerminating(cell_id.clone()),
         CellError::Closed => Error::ClosedCell(cell_id.clone()),
+        CellError::InvalidGeneration { requested, latest } => Error::InvalidGeneration {
+            cell_id: cell_id.clone(),
+            requested,
+            latest,
+        },
     }
 }
 

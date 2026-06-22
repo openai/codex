@@ -329,7 +329,7 @@ await Promise.all([
 }
 
 #[tokio::test]
-async fn execute_to_pending_excludes_delayed_timeout_tool_calls_until_wait() {
+async fn wait_to_pending_retains_outstanding_calls_when_a_delayed_call_is_added() {
     let service = CodeModeService::new();
 
     let initial_response = service
@@ -391,7 +391,11 @@ await Promise.all([
         WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
-            pending_tool_call_ids: vec!["tool-3".to_string()],
+            pending_tool_call_ids: vec![
+                "tool-1".to_string(),
+                "tool-2".to_string(),
+                "tool-3".to_string(),
+            ],
         })
     );
 

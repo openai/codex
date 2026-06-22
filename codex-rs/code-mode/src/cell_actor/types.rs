@@ -12,17 +12,26 @@ use tokio_util::sync::CancellationToken;
 use crate::session_runtime::CellEvent;
 use crate::session_runtime::ObserveMode;
 use crate::session_runtime::OutputItem;
+use crate::session_runtime::PendingGeneration;
+use crate::session_runtime::ResumeOutcome;
 use crate::session_runtime::ToolKind;
 use crate::session_runtime::ToolName;
 
 pub(crate) type CellEventFuture =
     Pin<Box<dyn Future<Output = Result<CellEvent, CellError>> + Send + 'static>>;
 
+pub(crate) type ResumeFuture =
+    Pin<Box<dyn Future<Output = Result<ResumeOutcome, CellError>> + Send + 'static>>;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CellError {
     Busy,
     AlreadyTerminating,
     Closed,
+    InvalidGeneration {
+        requested: PendingGeneration,
+        latest: Option<PendingGeneration>,
+    },
 }
 
 pub(crate) struct CellToolCall {
@@ -89,6 +98,24 @@ impl CellHandle {
             return closed_event();
         }
         response_event(response_rx)
+    }
+
+    pub(crate) fn resume(&self, generation: PendingGeneration) -> ResumeFuture {
+        if !self.state.accepting_observations() {
+            return closed_resume();
+        }
+        let (response_tx, response_rx) = oneshot::channel();
+        if self
+            .command_tx
+            .send(CellCommand::Resume {
+                generation,
+                response_tx,
+            })
+            .is_err()
+        {
+            return closed_resume();
+        }
+        Box::pin(async move { response_rx.await.unwrap_or(Err(CellError::Closed)) })
     }
 
     pub(crate) fn terminate(&self) -> CellEventFuture {
@@ -426,15 +453,10 @@ fn prepend_initial_yield(
                 content_items: pending_initial_yield_items,
             }
         }
-        CellEvent::Pending {
-            mut content_items,
-            pending_tool_call_ids,
-        } => {
-            pending_initial_yield_items.append(&mut content_items);
-            CellEvent::Pending {
-                content_items: pending_initial_yield_items,
-                pending_tool_call_ids,
-            }
+        CellEvent::Pending(mut frontier) => {
+            pending_initial_yield_items.append(&mut frontier.content_items);
+            frontier.content_items = pending_initial_yield_items;
+            CellEvent::Pending(frontier)
         }
         CellEvent::Completed {
             mut content_items,
@@ -460,6 +482,10 @@ pub(super) enum CellCommand {
         mode: ObserveMode,
         response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
     },
+    Resume {
+        generation: PendingGeneration,
+        response_tx: oneshot::Sender<Result<ResumeOutcome, CellError>>,
+    },
 }
 
 fn response_event(response_rx: oneshot::Receiver<Result<CellEvent, CellError>>) -> CellEventFuture {
@@ -471,5 +497,9 @@ fn ready_event(event: CellEvent) -> CellEventFuture {
 }
 
 fn closed_event() -> CellEventFuture {
+    Box::pin(async { Err(CellError::Closed) })
+}
+
+fn closed_resume() -> ResumeFuture {
     Box::pin(async { Err(CellError::Closed) })
 }

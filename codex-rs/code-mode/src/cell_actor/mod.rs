@@ -40,6 +40,9 @@ use crate::session_runtime::CellExecutionPolicy;
 use crate::session_runtime::CreateCellRequest as CellRequest;
 use crate::session_runtime::ObserveMode;
 use crate::session_runtime::OutputItem;
+use crate::session_runtime::PendingFrontier;
+use crate::session_runtime::PendingGeneration;
+use crate::session_runtime::ResumeOutcome;
 use crate::session_runtime::ToolName as CellToolName;
 
 pub(crate) struct CellActor;
@@ -105,9 +108,11 @@ async fn run_cell<H: CellHost>(
     let cancellation_token = cell_state.cancellation_token();
     let callback_cancellation_token = cancellation_token.child_token();
     let mut content_items = Vec::new();
-    let mut pending_tool_call_ids = Vec::new();
     let mut pending_initial_yield_items: Option<Vec<OutputItem>> = None;
-    let mut pending_frontier_ready = false;
+    let mut pending_frontier: Option<PendingFrontier> = None;
+    let mut pending_frontier_observed = false;
+    let mut next_pending_generation = 1;
+    let mut last_resumed_generation = None;
     let mut observer: Option<Observer> = None;
     let mut has_been_observed = false;
     let mut termination = false;
@@ -126,10 +131,6 @@ async fn run_cell<H: CellHost>(
             _ = cancellation_token.cancelled(), if !termination => {
                 termination = true;
                 yield_timer = None;
-                if let Some(mut yielded_items) = pending_initial_yield_items.take() {
-                    yielded_items.append(&mut content_items);
-                    content_items = yielded_items;
-                }
                 drop(command_rx.take());
                 begin_termination(
                     &runtime_tx,
@@ -148,7 +149,12 @@ async fn run_cell<H: CellHost>(
                         &cell_state,
                         observer.take().map(|observer| observer.response_tx),
                         CellEvent::Terminated {
-                            content_items: std::mem::take(&mut content_items),
+                            content_items: take_termination_content(
+                                &mut pending_frontier,
+                                pending_frontier_observed,
+                                &mut pending_initial_yield_items,
+                                &mut content_items,
+                            ),
                         },
                     );
                     break;
@@ -160,9 +166,49 @@ async fn run_cell<H: CellHost>(
                     None => std::future::pending::<Option<CellCommand>>().await,
                 }
             } => {
-                let Some(CellCommand::Observe { mode, response_tx }) = maybe_command else {
+                let Some(command) = maybe_command else {
                     cancellation_token.cancel();
                     continue;
+                };
+                let (mode, response_tx) = match command {
+                    CellCommand::Observe { mode, response_tx } => (mode, response_tx),
+                    CellCommand::Resume { generation, response_tx } => {
+                        let result = if termination {
+                            Err(CellError::Closed)
+                        } else if let Some(frontier) = pending_frontier.as_ref() {
+                            let current = frontier.generation;
+                            match generation.cmp(&current) {
+                                std::cmp::Ordering::Less => Ok(ResumeOutcome::AlreadyRunning),
+                                std::cmp::Ordering::Greater => {
+                                    Err(CellError::InvalidGeneration {
+                                        requested: generation,
+                                        latest: Some(current),
+                                    })
+                                }
+                                std::cmp::Ordering::Equal => {
+                                    pending_frontier = None;
+                                    pending_frontier_observed = false;
+                                    last_resumed_generation = Some(generation);
+                                    runtime_paused = false;
+                                    let _ = runtime_control_tx
+                                        .send(RuntimeControlCommand::Continue);
+                                    Ok(ResumeOutcome::Resumed)
+                                }
+                            }
+                        } else {
+                            let latest = last_resumed_generation;
+                            if latest.is_some_and(|latest| generation <= latest) {
+                                Ok(ResumeOutcome::AlreadyRunning)
+                            } else {
+                                Err(CellError::InvalidGeneration {
+                                    requested: generation,
+                                    latest,
+                                })
+                            }
+                        };
+                        let _ = response_tx.send(result);
+                        continue;
+                    }
                 };
                 if response_tx.is_closed() {
                     continue;
@@ -204,38 +250,29 @@ async fn run_cell<H: CellHost>(
                         }
                     };
                     if delivered && runtime_paused {
-                        pending_frontier_ready = false;
-                        pending_tool_call_ids.clear();
-                        resume_for_observation(
-                            mode,
-                            &mut runtime_paused,
-                            &runtime_tx,
-                            &runtime_control_tx,
-                        );
+                        pending_frontier = None;
+                        pending_frontier_observed = false;
+                        let _ = runtime_control_tx.send(RuntimeControlCommand::Continue);
+                        runtime_paused = false;
                     }
                     continue;
                 }
-                if matches!(mode, ObserveMode::PendingFrontier) && pending_frontier_ready {
-                    pending_frontier_ready = !send_pending_event(
-                        response_tx,
-                        &mut pending_initial_yield_items,
-                        &mut content_items,
-                        &mut pending_tool_call_ids,
-                    );
+                if matches!(mode, ObserveMode::PendingFrontier)
+                    && let Some(frontier) = pending_frontier.as_ref()
+                {
+                    if send_cell_event(response_tx, CellEvent::Pending(frontier.clone())).is_ok() {
+                        pending_frontier_observed = true;
+                    }
                     continue;
                 }
                 observer = Some(Observer { mode, response_tx });
                 yield_timer = observer.as_ref().and_then(observer_timer);
                 if runtime_paused && matches!(mode, ObserveMode::YieldAfter(_)) {
-                    pending_frontier_ready = false;
-                    pending_tool_call_ids.clear();
+                    pending_frontier = None;
+                    pending_frontier_observed = false;
+                    let _ = runtime_control_tx.send(RuntimeControlCommand::Continue);
+                    runtime_paused = false;
                 }
-                resume_for_observation(
-                    mode,
-                    &mut runtime_paused,
-                    &runtime_tx,
-                    &runtime_control_tx,
-                );
             }
             _ = async {
                 if let Some(yield_timer) = yield_timer.as_mut() {
@@ -265,7 +302,9 @@ async fn run_cell<H: CellHost>(
                 let Some(event) = maybe_event else {
                     runtime_closed = true;
                     if termination || cancellation_token.is_cancelled() {
-                        let termination_content_items = take_all_content(
+                        let termination_content_items = take_termination_content(
+                            &mut pending_frontier,
+                            pending_frontier_observed,
                             &mut pending_initial_yield_items,
                             &mut content_items,
                         );
@@ -292,14 +331,19 @@ async fn run_cell<H: CellHost>(
                     )
                     .await;
                     let event = CellEvent::Completed {
-                        content_items: std::mem::take(&mut content_items),
+                        content_items: take_termination_content(
+                            &mut pending_frontier,
+                            pending_frontier_observed,
+                            &mut pending_initial_yield_items,
+                            &mut content_items,
+                        ),
                         error_text: Some("exec runtime ended unexpectedly".to_string()),
                     };
                     let rejected_event = match host
                         .commit_completion(
                             HashMap::new(),
                             event,
-                            pending_initial_yield_items.take(),
+                            /*pending_initial_yield_items*/ None,
                             Arc::clone(&cell_state),
                         )
                         .await
@@ -331,30 +375,46 @@ async fn run_cell<H: CellHost>(
                     RuntimeEvent::Started => {
                         yield_timer = observer.as_ref().and_then(observer_timer);
                     }
-                    RuntimeEvent::Pending => {
+                    RuntimeEvent::Pending {
+                        pending_tool_call_ids,
+                    } => {
                         runtime_paused = true;
-                        if let Some(observer) = observer.take_if(|observer| {
-                            observer.mode == ObserveMode::PendingFrontier
-                        }) {
-                            yield_timer = None;
-                            pending_frontier_ready = !send_pending_event(
-                                observer.response_tx,
-                                &mut pending_initial_yield_items,
-                                &mut content_items,
-                                &mut pending_tool_call_ids,
-                            );
-                        } else if observer.is_some()
-                            || matches!(
-                                execution_policy,
-                                CellExecutionPolicy::ContinueWhenUnblocked
-                            )
-                        {
-                            pending_frontier_ready = false;
-                            pending_tool_call_ids.clear();
+                        if matches!(
+                            execution_policy,
+                            CellExecutionPolicy::ContinueWhenUnblocked
+                        ) {
+                            pending_frontier = None;
                             let _ = runtime_control_tx.send(RuntimeControlCommand::Continue);
                             runtime_paused = false;
                         } else {
-                            pending_frontier_ready = true;
+                            if pending_frontier.is_none() {
+                                pending_frontier_observed = false;
+                            }
+                            let frontier = pending_frontier.get_or_insert_with(|| {
+                                let generation = PendingGeneration::new(next_pending_generation);
+                                next_pending_generation += 1;
+                                PendingFrontier {
+                                    generation,
+                                    content_items: take_all_content(
+                                        &mut pending_initial_yield_items,
+                                        &mut content_items,
+                                    ),
+                                    pending_tool_call_ids,
+                                }
+                            });
+                            if let Some(observer) = observer.take_if(|observer| {
+                                observer.mode == ObserveMode::PendingFrontier
+                            }) {
+                                yield_timer = None;
+                                if send_cell_event(
+                                    observer.response_tx,
+                                    CellEvent::Pending(frontier.clone()),
+                                )
+                                .is_ok()
+                                {
+                                    pending_frontier_observed = true;
+                                }
+                            }
                         }
                     }
                     RuntimeEvent::ContentItem(item) => content_items.push(output_item(item)),
@@ -396,7 +456,6 @@ async fn run_cell<H: CellHost>(
                         );
                     }
                     RuntimeEvent::ToolCall { id, name, kind, input } => {
-                        pending_tool_call_ids.push(id.clone());
                         spawn_tool(
                             &mut tool_tasks,
                             Arc::clone(&host),
@@ -417,7 +476,9 @@ async fn run_cell<H: CellHost>(
                         runtime_closed = true;
                         yield_timer = None;
                         if termination || cancellation_token.is_cancelled() {
-                            let termination_content_items = take_all_content(
+                            let termination_content_items = take_termination_content(
+                                &mut pending_frontier,
+                                pending_frontier_observed,
                                 &mut pending_initial_yield_items,
                                 &mut content_items,
                             );
@@ -525,40 +586,6 @@ fn send_cell_event(
     }
 }
 
-fn send_pending_event(
-    response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
-    pending_initial_yield_items: &mut Option<Vec<OutputItem>>,
-    content_items: &mut Vec<OutputItem>,
-    pending_tool_call_ids: &mut Vec<String>,
-) -> bool {
-    let had_initial_yield = pending_initial_yield_items.is_some();
-    let mut delivered_items = pending_initial_yield_items.take().unwrap_or_default();
-    let initial_yield_len = delivered_items.len();
-    delivered_items.append(content_items);
-    match send_cell_event(
-        response_tx,
-        CellEvent::Pending {
-            content_items: delivered_items,
-            pending_tool_call_ids: std::mem::take(pending_tool_call_ids),
-        },
-    ) {
-        Ok(()) => true,
-        Err(CellEvent::Pending {
-            content_items: mut undelivered_items,
-            pending_tool_call_ids: undelivered_tool_call_ids,
-        }) => {
-            let following_items = undelivered_items.split_off(initial_yield_len);
-            if had_initial_yield {
-                *pending_initial_yield_items = Some(undelivered_items);
-            }
-            *content_items = following_items;
-            *pending_tool_call_ids = undelivered_tool_call_ids;
-            false
-        }
-        Err(event) => panic!("pending delivery returned an unexpected event: {event:?}"),
-    }
-}
-
 fn restore_undelivered_yield(delivery: Result<(), CellEvent>, content_items: &mut Vec<OutputItem>) {
     match delivery {
         Ok(()) => {}
@@ -591,6 +618,24 @@ fn take_all_content(
     yielded_items
 }
 
+fn take_termination_content(
+    pending_frontier: &mut Option<PendingFrontier>,
+    pending_frontier_observed: bool,
+    pending_initial_yield_items: &mut Option<Vec<OutputItem>>,
+    content_items: &mut Vec<OutputItem>,
+) -> Vec<OutputItem> {
+    let mut termination_content = match pending_frontier.take() {
+        Some(_) if pending_frontier_observed => Vec::new(),
+        Some(frontier) => frontier.content_items,
+        None => Vec::new(),
+    };
+    termination_content.append(&mut take_all_content(
+        pending_initial_yield_items,
+        content_items,
+    ));
+    termination_content
+}
+
 fn finish_termination(
     cell_state: &CellState,
     observer_tx: Option<oneshot::Sender<Result<CellEvent, CellError>>>,
@@ -607,24 +652,6 @@ fn observer_timer(observer: &Observer) -> Option<std::pin::Pin<Box<tokio::time::
     match observer.mode {
         ObserveMode::YieldAfter(duration) => Some(Box::pin(tokio::time::sleep(duration))),
         ObserveMode::PendingFrontier => None,
-    }
-}
-
-fn resume_for_observation(
-    mode: ObserveMode,
-    runtime_paused: &mut bool,
-    runtime_tx: &std::sync::mpsc::Sender<RuntimeCommand>,
-    runtime_control_tx: &std::sync::mpsc::Sender<RuntimeControlCommand>,
-) {
-    if *runtime_paused {
-        let control = match mode {
-            ObserveMode::YieldAfter(_) => RuntimeControlCommand::Continue,
-            ObserveMode::PendingFrontier => RuntimeControlCommand::Resume,
-        };
-        let _ = runtime_control_tx.send(control);
-        *runtime_paused = false;
-    } else if matches!(mode, ObserveMode::PendingFrontier) {
-        let _ = runtime_tx.send(RuntimeCommand::ObservePendingFrontier);
     }
 }
 

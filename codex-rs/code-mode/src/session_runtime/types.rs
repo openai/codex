@@ -25,6 +25,15 @@ impl fmt::Display for CellId {
     }
 }
 
+/// Controls how a cell advances when its runtime is waiting for external input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CellExecutionPolicy {
+    /// Process tool and timer results even when no observation is attached.
+    ContinueWhenUnblocked,
+    /// Remain paused at a pending frontier until an explicit resume advances it.
+    PauseAtPendingFrontier,
+}
+
 /// Selects the next observable frontier for a running cell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ObserveMode {
@@ -32,22 +41,26 @@ pub(crate) enum ObserveMode {
     PendingFrontier,
 }
 
-/// Controls how a cell advances when its runtime is waiting for external input.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CellExecutionPolicy {
-    /// Process tool and timer results even when no observation is attached.
-    ContinueWhenUnblocked,
-    /// Remain paused at a pending frontier until pending execution is advanced.
-    PauseAtPendingFrontier,
+/// Identifies one durable pending frontier of a pausable cell.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct PendingGeneration(u64);
+
+impl PendingGeneration {
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn get(self) -> u64 {
+        self.0
+    }
 }
 
-impl From<ObserveMode> for CellExecutionPolicy {
-    fn from(mode: ObserveMode) -> Self {
-        match mode {
-            ObserveMode::YieldAfter(_) => Self::ContinueWhenUnblocked,
-            ObserveMode::PendingFrontier => Self::PauseAtPendingFrontier,
-        }
-    }
+/// A repeatable snapshot of one paused runtime frontier.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PendingFrontier {
+    pub(crate) generation: PendingGeneration,
+    pub(crate) content_items: Vec<OutputItem>,
+    pub(crate) pending_tool_call_ids: Vec<String>,
 }
 
 /// An observable cell lifecycle event.
@@ -56,10 +69,7 @@ pub(crate) enum CellEvent {
     Yielded {
         content_items: Vec<OutputItem>,
     },
-    Pending {
-        content_items: Vec<OutputItem>,
-        pending_tool_call_ids: Vec<String>,
-    },
+    Pending(PendingFrontier),
     Completed {
         content_items: Vec<OutputItem>,
         error_text: Option<String>,
@@ -67,6 +77,12 @@ pub(crate) enum CellEvent {
     Terminated {
         content_items: Vec<OutputItem>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResumeOutcome {
+    Resumed,
+    AlreadyRunning,
 }
 
 /// Output emitted by a cell since its preceding observation.
@@ -161,6 +177,11 @@ pub(crate) enum Error {
     BusyObserver(CellId),
     AlreadyTerminating(CellId),
     ClosedCell(CellId),
+    InvalidGeneration {
+        cell_id: CellId,
+        requested: PendingGeneration,
+        latest: Option<PendingGeneration>,
+    },
     Runtime(String),
 }
 
@@ -182,6 +203,19 @@ impl fmt::Display for Error {
             Self::ClosedCell(cell_id) => {
                 write!(formatter, "exec cell {cell_id} closed unexpectedly")
             }
+            Self::InvalidGeneration {
+                cell_id,
+                requested,
+                latest,
+            } => write!(
+                formatter,
+                "exec cell {cell_id} cannot resume generation {}; latest generation is {}",
+                requested.get(),
+                latest.map_or_else(
+                    || "none".to_string(),
+                    |generation| generation.get().to_string()
+                )
+            ),
             Self::Runtime(error_text) => formatter.write_str(error_text),
         }
     }
