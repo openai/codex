@@ -2,9 +2,19 @@
 use std::io::BufRead as _;
 #[cfg(unix)]
 use std::io::BufReader as StdBufReader;
+#[cfg(unix)]
+use std::io::Read as _;
+#[cfg(unix)]
+use std::io::Write as _;
+#[cfg(unix)]
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::Stdio;
+#[cfg(unix)]
+use std::thread;
 use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use anyhow::Result;
 use predicates::prelude::PredicateBooleanExt;
@@ -237,6 +247,33 @@ fn local_exec_server_exits_successfully_on_sigterm() -> Result<()> {
     StdBufReader::new(child.stdout.take().expect("child stdout"))
         .read_line(&mut listen_url)?;
     assert!(listen_url.starts_with("ws://127.0.0.1:"), "{listen_url}");
+
+    let listen_addr = listen_url
+        .trim()
+        .strip_prefix("ws://")
+        .expect("listen URL should use ws://")
+        .parse()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut ready = false;
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        if let Ok(mut stream) =
+            TcpStream::connect_timeout(&listen_addr, remaining.min(Duration::from_millis(100)))
+        {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+            let request =
+                format!("GET /readyz HTTP/1.1\r\nHost: {listen_addr}\r\nConnection: close\r\n\r\n");
+            let mut response = String::new();
+            if stream.write_all(request.as_bytes()).is_ok()
+                && stream.read_to_string(&mut response).is_ok()
+                && response.starts_with("HTTP/1.1 200")
+            {
+                ready = true;
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(ready, "exec-server did not become ready at {listen_url}");
 
     // SAFETY: `child.id()` is the live process spawned above.
     let result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
