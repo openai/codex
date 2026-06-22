@@ -47,15 +47,6 @@ impl CloudConfigBundle {
             && requirements_enterprise_managed.is_empty()
             && requirements_managed_layers.is_absent()
     }
-
-    /// Returns true when any managed bucket was present in the backend payload.
-    ///
-    /// An explicitly empty bucket still counts as present because it can suppress
-    /// compatibility fallback behavior when the bundle is materialized.
-    pub fn has_managed_layer_buckets(&self) -> bool {
-        !self.config_toml.managed_layers.is_absent()
-            || !self.requirements_toml.managed_layers.is_absent()
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

@@ -37,7 +37,6 @@ fn bundle_with_explicitly_empty_overlay_is_not_empty() {
     };
 
     assert!(!bundle.is_empty());
-    assert!(bundle.has_managed_layer_buckets());
 }
 
 #[test]

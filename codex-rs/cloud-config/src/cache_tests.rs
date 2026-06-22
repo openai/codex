@@ -35,24 +35,8 @@ fn signed_cache_file(
     signed_payload: CloudConfigBundleCacheSignedPayload,
 ) -> CloudConfigBundleCacheFile {
     let payload_bytes = cache_payload_bytes(&signed_payload).expect("payload bytes");
-    let legacy_payload_bytes =
-        legacy_cache_payload_bytes(&signed_payload).expect("legacy payload bytes");
-    CloudConfigBundleCacheFile {
-        signature: sign_cache_payload(&legacy_payload_bytes).expect("signature"),
-        managed_layers_signature: Some(
-            sign_managed_layers_cache_payload(&payload_bytes).expect("managed signature"),
-        ),
-        signed_payload,
-    }
-}
-
-fn legacy_signed_cache_file(
-    signed_payload: CloudConfigBundleCacheSignedPayload,
-) -> CloudConfigBundleCacheFile {
-    let payload_bytes = legacy_cache_payload_bytes(&signed_payload).expect("legacy payload bytes");
     CloudConfigBundleCacheFile {
         signature: sign_cache_payload(&payload_bytes).expect("signature"),
-        managed_layers_signature: None,
         signed_payload,
     }
 }
@@ -102,37 +86,6 @@ fn create_test_cache(codex_home: &Path) -> CloudConfigBundleCache {
     CloudConfigBundleCache::new(AbsolutePathBuf::resolve_path_against_base(codex_home, "/"))
 }
 
-#[test]
-fn legacy_signature_covers_only_the_legacy_projection() {
-    let payload = valid_managed_signed_payload();
-    let cache_file = signed_cache_file(payload.clone());
-    let legacy_payload_bytes = legacy_cache_payload_bytes(&payload).expect("legacy payload bytes");
-    let payload_bytes = cache_payload_bytes(&payload).expect("payload bytes");
-    let legacy_payload: serde_json::Value =
-        serde_json::from_slice(&legacy_payload_bytes).expect("legacy payload");
-    let full_payload: serde_json::Value =
-        serde_json::from_slice(&payload_bytes).expect("full payload");
-
-    assert!(
-        legacy_payload
-            .pointer("/bundle/config_toml/managed_layers")
-            .is_none()
-    );
-    assert!(
-        full_payload
-            .pointer("/bundle/config_toml/managed_layers")
-            .is_some()
-    );
-    assert!(verify_cache_signature(
-        &legacy_payload_bytes,
-        &cache_file.signature
-    ));
-    assert!(!verify_cache_signature(
-        &payload_bytes,
-        &cache_file.signature
-    ));
-}
-
 #[tokio::test]
 async fn save_writes_signed_payload_and_loads_for_matching_identity() {
     let codex_home = tempdir().expect("tempdir");
@@ -175,33 +128,22 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
 }
 
 #[tokio::test]
-async fn load_accepts_legacy_cache_without_managed_data() {
+async fn load_rejects_v1_cache() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
-    let cache_file = legacy_signed_cache_file(valid_signed_payload());
+    let mut signed_payload = valid_signed_payload();
+    signed_payload.version = 1;
+    let cache_file = signed_cache_file(signed_payload);
     write_cache_file(&cache, &cache_file);
 
     assert_eq!(
         cache.load(Some("user-12345"), Some("account-12345")).await,
-        Ok(cache_file.signed_payload)
+        Err(CacheLoadStatus::CacheVersionUnsupported(1))
     );
 }
 
 #[tokio::test]
-async fn load_requires_full_signature_for_managed_data() {
-    let codex_home = tempdir().expect("tempdir");
-    let cache = create_test_cache(codex_home.path());
-    let cache_file = legacy_signed_cache_file(valid_managed_signed_payload());
-    write_cache_file(&cache, &cache_file);
-
-    assert_eq!(
-        cache.load(Some("user-12345"), Some("account-12345")).await,
-        Err(CacheLoadStatus::CacheManagedLayersSignatureInvalid)
-    );
-}
-
-#[tokio::test]
-async fn load_accepts_managed_data_with_both_signatures() {
+async fn load_accepts_managed_data_with_full_payload_signature() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     let cache_file = signed_cache_file(valid_managed_signed_payload());
@@ -286,21 +228,21 @@ async fn load_rejects_tampered_managed_data() {
 
     assert_eq!(
         cache.load(Some("user-12345"), Some("account-12345")).await,
-        Err(CacheLoadStatus::CacheManagedLayersSignatureInvalid)
+        Err(CacheLoadStatus::CacheSignatureInvalid)
     );
 }
 
 #[tokio::test]
-async fn load_rejects_tampered_managed_layers_signature() {
+async fn load_rejects_tampered_signature() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     let mut cache_file = signed_cache_file(valid_managed_signed_payload());
-    cache_file.managed_layers_signature = Some("tampered".to_string());
+    cache_file.signature = "tampered".to_string();
     write_cache_file(&cache, &cache_file);
 
     assert_eq!(
         cache.load(Some("user-12345"), Some("account-12345")).await,
-        Err(CacheLoadStatus::CacheManagedLayersSignatureInvalid)
+        Err(CacheLoadStatus::CacheSignatureInvalid)
     );
 }
 
@@ -345,11 +287,13 @@ async fn load_rejects_unsupported_cache_version() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     let mut signed_payload = valid_signed_payload();
-    signed_payload.version = 2;
+    signed_payload.version = CLOUD_CONFIG_BUNDLE_CACHE_VERSION + 1;
     write_cache_file(&cache, &signed_cache_file(signed_payload));
 
     assert_eq!(
         cache.load(Some("user-12345"), Some("account-12345")).await,
-        Err(CacheLoadStatus::CacheVersionUnsupported(2))
+        Err(CacheLoadStatus::CacheVersionUnsupported(
+            CLOUD_CONFIG_BUNDLE_CACHE_VERSION + 1
+        ))
     );
 }
