@@ -260,7 +260,13 @@ async fn run_command_under_sandbox(
     );
     let mut permission_profile = match sandbox_state.as_ref() {
         Some(state) => match &state.permission_profile {
-            PermissionProfile::External { .. } => PermissionProfile::read_only(),
+            PermissionProfile::External { .. } => {
+                // `External` only says that the producer relies on an outer sandbox; it does not
+                // include filesystem permissions we can recreate here. The consumer may not share
+                // that sandbox, so use a locally enforceable read-only profile instead of spawning
+                // without a sandbox.
+                PermissionProfile::read_only()
+            }
             permission_profile => permission_profile.clone(),
         },
         None => config.permissions.effective_permission_profile(),
