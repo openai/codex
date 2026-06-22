@@ -29,12 +29,14 @@ Safe: fixed non-publishing recipes only operate on the trusted checkout.
 """,
 )
 
+# Cargo accepts `--manifest-path`, so these rules may target manifests outside
+# this checkout. That flexibility is an accepted tradeoff for development.
 prefix_rule(
     pattern = ["cargo", ["build", "check", "clippy", "test"]],
     decision = "allow",
     justification = """
 Needed: Cargo uses host registry, Git, and cache state.
-Safe: these commands only build, check, lint, or test the trusted workspace.
+Safe: these non-installing subcommands are standard development operations.
 """,
 )
 
@@ -43,7 +45,7 @@ prefix_rule(
     decision = "allow",
     justification = """
 Needed: Nextest needs host runtime and nested sandboxes.
-Safe: it only runs tests built from the trusted workspace.
+Safe: it only runs tests and does not install or publish artifacts.
 """,
 )
 

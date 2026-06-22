@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 
-FORMAT_SCRIPT_PATH = Path(__file__).with_name("format.py")
+FORMAT_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "format.py"
 FORMAT_SCRIPT_SPEC = importlib.util.spec_from_file_location(
     "codex_format_script",
     FORMAT_SCRIPT_PATH,
