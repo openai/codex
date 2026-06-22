@@ -71,6 +71,166 @@ pub struct InitializeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentInfo {
     pub shell: ShellInfo,
+    #[serde(default)]
+    pub capabilities: EnvironmentCapabilities,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentCapabilities {
+    /// Executor-owned upload support. This primitive is intended for trusted
+    /// orchestration code that performs approval before preparing a source and
+    /// again after presenting the exact name, size, and digest to the user.
+    #[serde(default)]
+    pub prepared_file_upload: Option<PreparedFileUploadCapability>,
+}
+
+pub const PREPARED_FILE_UPLOAD_PROTOCOL_VERSION: u32 = 1;
+pub const MAX_PREPARED_FILE_UPLOAD_BYTES: u64 = 8 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedFileUploadCapability {
+    pub protocol_version: u32,
+    pub max_upload_bytes: u64,
+    pub descriptor_kinds: Vec<FileTransferUploadDescriptorKind>,
+    pub supports_status_reconciliation: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileTransferUploadDescriptorKind {
+    HttpsPut,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FileTransferDigestAlgorithm {
+    Sha256,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferDigest {
+    pub algorithm: FileTransferDigestAlgorithm,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferPrepareUploadParams {
+    pub path: PathUri,
+    /// Authoritative permission context selected by the trusted caller. This
+    /// may intentionally be full access after the caller's read approval.
+    pub sandbox: FileSystemSandboxContext,
+    pub max_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferPrepareUploadResponse {
+    /// Opaque, session-bound identifier used for the entire lifecycle.
+    pub transfer_id: String,
+    pub name: String,
+    pub size: u64,
+    pub digest: FileTransferDigest,
+    /// The snapshot's upper-bound wall-clock expiry. The session may expire
+    /// sooner when its transport remains detached.
+    pub expires_at_unix_seconds: i64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferHeader {
+    pub name: String,
+    pub value: String,
+}
+
+impl std::fmt::Debug for FileTransferHeader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FileTransferHeader")
+            .field("name", &self.name)
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FileTransferUploadDescriptor {
+    HttpsPut {
+        url: String,
+        #[serde(default)]
+        headers: Vec<FileTransferHeader>,
+        expires_at_unix_seconds: i64,
+    },
+}
+
+impl std::fmt::Debug for FileTransferUploadDescriptor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HttpsPut { headers, .. } => formatter
+                .debug_struct("HttpsPut")
+                .field("url", &"[REDACTED]")
+                .field("header_count", &headers.len())
+                .field("expires_at_unix_seconds", &"[REDACTED]")
+                .finish(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferStartUploadParams {
+    pub transfer_id: String,
+    pub descriptor: FileTransferUploadDescriptor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferStartUploadResponse {
+    pub transfer_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileTransferOperationState {
+    Prepared,
+    Uploading,
+    CancelRequested,
+    Succeeded,
+    Failed,
+    Canceled,
+    CompletionUnknown,
+    Expired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferStatusParams {
+    pub transfer_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferStatusResponse {
+    pub transfer_id: String,
+    pub state: FileTransferOperationState,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferCancelParams {
+    pub transfer_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferCancelResponse {
+    pub state: FileTransferOperationState,
 }
 
 /// Shell detected for an execution/filesystem environment.
@@ -503,12 +663,43 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
+    use super::EnvironmentCapabilities;
+    use super::EnvironmentInfo;
+    use super::FileTransferHeader;
+    use super::FileTransferUploadDescriptor;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
     use codex_file_system::FileSystemSandboxContext;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn environment_info_accepts_legacy_payload_without_capabilities() {
+        let info: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "shell": {"name": "sh", "path": "/bin/sh"},
+        }))
+        .expect("legacy environment info should deserialize");
+
+        assert_eq!(info.capabilities, EnvironmentCapabilities::default());
+    }
+
+    #[test]
+    fn upload_descriptor_debug_redacts_secrets() {
+        let descriptor = FileTransferUploadDescriptor::HttpsPut {
+            url: "https://account.blob.core.windows.net/object?sig=secret".to_string(),
+            headers: vec![FileTransferHeader {
+                name: "x-ms-meta-token".to_string(),
+                value: "secret-header".to_string(),
+            }],
+            expires_at_unix_seconds: 123,
+        };
+
+        let debug = format!("{descriptor:?}");
+        assert!(!debug.contains("sig=secret"));
+        assert!(!debug.contains("secret-header"));
+        assert!(debug.contains("header_count"));
+    }
 
     #[test]
     fn filesystem_protocol_accepts_legacy_absolute_paths_and_serializes_path_uris() {
