@@ -1,6 +1,5 @@
 use std::fmt;
 use std::future::Future;
-use std::time::Duration;
 
 use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
@@ -26,19 +25,60 @@ impl fmt::Display for CellId {
 }
 
 /// Controls how a cell advances when its runtime is waiting for external input.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum CellExecutionPolicy {
     /// Process tool and timer results even when no observation is attached.
+    #[default]
     ContinueWhenUnblocked,
     /// Remain paused at a pending frontier until an explicit resume advances it.
     PauseAtPendingFrontier,
 }
 
-/// Selects the next observable frontier for a running cell.
+/// A cell that continues whenever external input unblocks its runtime.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct Cell {
+    id: CellId,
+}
+
+impl Cell {
+    pub(super) fn new(id: CellId) -> Self {
+        Self { id }
+    }
+
+    pub(crate) fn id(&self) -> &CellId {
+        &self.id
+    }
+}
+
+/// A cell that remains paused at each pending frontier until explicitly resumed.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PausableCell {
+    id: CellId,
+}
+
+impl PausableCell {
+    pub(super) fn new(id: CellId) -> Self {
+        Self { id }
+    }
+
+    pub(crate) fn id(&self) -> &CellId {
+        &self.id
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ObserveMode {
-    YieldAfter(Duration),
-    PendingFrontier,
+pub(crate) enum CellKind {
+    Continuing,
+    Pausable,
+}
+
+impl fmt::Display for CellKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Continuing => formatter.write_str("continuing"),
+            Self::Pausable => formatter.write_str("pausable"),
+        }
+    }
 }
 
 /// Identifies one durable pending frontier of a pausable cell.
@@ -69,6 +109,18 @@ pub(crate) enum CellEvent {
     Yielded {
         content_items: Vec<OutputItem>,
     },
+    Completed {
+        content_items: Vec<OutputItem>,
+        error_text: Option<String>,
+    },
+    Terminated {
+        content_items: Vec<OutputItem>,
+    },
+}
+
+/// An observable lifecycle event for a pausable cell.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PausableCellEvent {
     Pending(PendingFrontier),
     Completed {
         content_items: Vec<OutputItem>,
@@ -177,6 +229,11 @@ pub(crate) enum Error {
     BusyObserver(CellId),
     AlreadyTerminating(CellId),
     ClosedCell(CellId),
+    WrongCellKind {
+        cell_id: CellId,
+        expected: CellKind,
+        actual: CellKind,
+    },
     InvalidGeneration {
         cell_id: CellId,
         requested: PendingGeneration,
@@ -203,6 +260,14 @@ impl fmt::Display for Error {
             Self::ClosedCell(cell_id) => {
                 write!(formatter, "exec cell {cell_id} closed unexpectedly")
             }
+            Self::WrongCellKind {
+                cell_id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "exec cell {cell_id} is {actual}, expected {expected}"
+            ),
             Self::InvalidGeneration {
                 cell_id,
                 requested,

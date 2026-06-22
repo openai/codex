@@ -3,15 +3,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use crate::session_runtime::CellEvent;
-use crate::session_runtime::ObserveMode;
 use crate::session_runtime::OutputItem;
+use crate::session_runtime::PendingFrontier;
 use crate::session_runtime::PendingGeneration;
 use crate::session_runtime::ResumeOutcome;
 use crate::session_runtime::ToolKind;
@@ -22,6 +22,27 @@ pub(crate) type CellEventFuture =
 
 pub(crate) type ResumeFuture =
     Pin<Box<dyn Future<Output = Result<ResumeOutcome, CellError>> + Send + 'static>>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ObserveMode {
+    YieldAfter(Duration),
+    PendingFrontier,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CellEvent {
+    Yielded {
+        content_items: Vec<OutputItem>,
+    },
+    Pending(PendingFrontier),
+    Completed {
+        content_items: Vec<OutputItem>,
+        error_text: Option<String>,
+    },
+    Terminated {
+        content_items: Vec<OutputItem>,
+    },
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CellError {

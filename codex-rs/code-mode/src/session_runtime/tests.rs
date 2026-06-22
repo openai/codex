@@ -142,9 +142,7 @@ text("done");
         Some("second".to_string())
     );
     assert_eq!(
-        runtime
-            .observe(&cell, ObserveMode::YieldAfter(Duration::from_secs(1)))
-            .await,
+        runtime.wait(&cell, Duration::from_secs(1)).await,
         Ok(CellEvent::Completed {
             content_items: vec![OutputItem::Text {
                 text: "done".to_string(),
@@ -184,7 +182,7 @@ text("done");
         Some("first".to_string())
     );
     let first = runtime.wait_to_pending(&cell).await.unwrap();
-    let CellEvent::Pending(first_frontier) = &first else {
+    let PausableCellEvent::Pending(first_frontier) = &first else {
         panic!("expected the first pending frontier, got {first:?}");
     };
     assert_eq!(
@@ -221,7 +219,7 @@ text("done");
     );
 
     let second = runtime.wait_to_pending(&cell).await.unwrap();
-    let CellEvent::Pending(second_frontier) = &second else {
+    let PausableCellEvent::Pending(second_frontier) = &second else {
         panic!("expected the second pending frontier, got {second:?}");
     };
     assert_eq!(
@@ -237,7 +235,7 @@ text("done");
             .resume(&cell, PendingGeneration::new(/*value*/ 3))
             .await,
         Err(Error::InvalidGeneration {
-            cell_id: cell.clone(),
+            cell_id: cell.id().clone(),
             requested: PendingGeneration::new(/*value*/ 3),
             latest: Some(PendingGeneration::new(/*value*/ 2)),
         })
@@ -249,7 +247,7 @@ text("done");
     release.add_permits(1);
     assert_eq!(
         runtime.wait_to_pending(&cell).await,
-        Ok(CellEvent::Completed {
+        Ok(PausableCellEvent::Completed {
             content_items: vec![OutputItem::Text {
                 text: "done".to_string(),
             }],
@@ -293,7 +291,8 @@ text("done");
     invocations.sort();
     assert_eq!(invocations, vec!["first".to_string(), "second".to_string()]);
 
-    let CellEvent::Pending(first_frontier) = runtime.wait_to_pending(&cell).await.unwrap() else {
+    let PausableCellEvent::Pending(first_frontier) = runtime.wait_to_pending(&cell).await.unwrap()
+    else {
         panic!("expected first pending frontier");
     };
     assert_eq!(
@@ -307,7 +306,8 @@ text("done");
     );
     release.add_permits(1);
 
-    let CellEvent::Pending(second_frontier) = runtime.wait_to_pending(&cell).await.unwrap() else {
+    let PausableCellEvent::Pending(second_frontier) = runtime.wait_to_pending(&cell).await.unwrap()
+    else {
         panic!("expected second pending frontier");
     };
     assert_eq!(second_frontier.pending_tool_call_ids.len(), 1);
@@ -324,11 +324,132 @@ text("done");
     release.add_permits(1);
     assert_eq!(
         runtime.wait_to_pending(&cell).await,
-        Ok(CellEvent::Completed {
+        Ok(PausableCellEvent::Completed {
             content_items: vec![OutputItem::Text {
                 text: "done".to_string(),
             }],
             error_text: None,
+        })
+    );
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pausable_cell_drains_a_parallel_host_frontier_without_duplicate_output() {
+    let (invocations_tx, mut invocations_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Semaphore::new(0));
+    let runtime = SessionRuntime::new(Arc::new(BlockingToolDelegate {
+        invocations_tx,
+        release: Arc::clone(&release),
+    }));
+    let cell = runtime
+        .create_pausable_cell(CreateCellRequest {
+            tool_call_id: "call-1".to_string(),
+            enabled_tools: vec![tool_definition("first"), tool_definition("second")],
+            source: r#"
+await Promise.all([tools.first({}), tools.second({})]);
+text("done");
+"#
+            .to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut invocations = Vec::new();
+    for _ in 0..2 {
+        invocations.push(
+            tokio::time::timeout(Duration::from_secs(1), invocations_rx.recv())
+                .await
+                .expect("parallel tool invocation timed out")
+                .expect("parallel invocation channel closed"),
+        );
+    }
+    invocations.sort();
+    assert_eq!(invocations, vec!["first".to_string(), "second".to_string()]);
+
+    let first_event = runtime.wait_to_pending(&cell).await.unwrap();
+    let PausableCellEvent::Pending(first_frontier) = first_event else {
+        panic!("expected the parallel pending frontier");
+    };
+    assert_eq!(
+        first_frontier.generation,
+        PendingGeneration::new(/*value*/ 1)
+    );
+    assert_eq!(first_frontier.pending_tool_call_ids.len(), 2);
+    assert_eq!(
+        runtime.wait_to_pending(&cell).await,
+        Ok(PausableCellEvent::Pending(first_frontier.clone()))
+    );
+
+    release.add_permits(2);
+    let mut generation = first_frontier.generation;
+    let mut accumulated_content = first_frontier.content_items;
+    let mut completed = false;
+    for _ in 0..3 {
+        assert_eq!(
+            runtime.resume(&cell, generation).await,
+            Ok(ResumeOutcome::Resumed)
+        );
+        match tokio::time::timeout(Duration::from_secs(1), runtime.wait_to_pending(&cell))
+            .await
+            .expect("synchronous driver timed out")
+            .unwrap()
+        {
+            PausableCellEvent::Pending(frontier) => {
+                assert!(frontier.generation > generation);
+                generation = frontier.generation;
+                accumulated_content.extend(frontier.content_items);
+            }
+            PausableCellEvent::Completed {
+                content_items,
+                error_text,
+            } => {
+                assert_eq!(error_text, None);
+                accumulated_content.extend(content_items);
+                completed = true;
+                break;
+            }
+            PausableCellEvent::Terminated { content_items } => {
+                panic!("synchronous driver terminated with output: {content_items:?}");
+            }
+        }
+    }
+    assert!(completed, "synchronous driver did not reach completion");
+    assert_eq!(
+        accumulated_content,
+        vec![OutputItem::Text {
+            text: "done".to_string(),
+        }]
+    );
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cell_capabilities_reject_ids_of_the_other_kind() {
+    let runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
+    let cell = runtime
+        .create_cell(execute_request("await new Promise(() => {});"))
+        .await
+        .unwrap();
+    let pausable = runtime
+        .create_pausable_cell(execute_request("await new Promise(() => {});"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        runtime.pausable_cell(cell.id()).await,
+        Err(Error::WrongCellKind {
+            cell_id: cell.id().clone(),
+            expected: CellKind::Pausable,
+            actual: CellKind::Continuing,
+        })
+    );
+    assert_eq!(
+        runtime.cell(pausable.id()).await,
+        Err(Error::WrongCellKind {
+            cell_id: pausable.id().clone(),
+            expected: CellKind::Continuing,
+            actual: CellKind::Pausable,
         })
     );
     runtime.shutdown().await.unwrap();
@@ -360,7 +481,7 @@ text("done");
             .expect("tool invocation timed out"),
         Some("blocked".to_string())
     );
-    let CellEvent::Pending(frontier) = runtime.wait_to_pending(&cell).await.unwrap() else {
+    let PausableCellEvent::Pending(frontier) = runtime.wait_to_pending(&cell).await.unwrap() else {
         panic!("expected a pending frontier");
     };
 
@@ -378,7 +499,7 @@ text("done");
     release.add_permits(1);
     assert_eq!(
         next_event.await,
-        Ok(CellEvent::Completed {
+        Ok(PausableCellEvent::Completed {
             content_items: vec![OutputItem::Text {
                 text: "done".to_string(),
             }],
@@ -396,7 +517,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
         cell_id: CellId::new("terminating-writer"),
         inner: Arc::clone(&runtime.inner),
     };
-    let completion = CellEvent::Completed {
+    let completion = ActorEvent::Completed {
         content_items: vec![OutputItem::Text {
             text: "uncommitted output".to_string(),
         }],
@@ -421,7 +542,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
     let termination = cell_state.request_termination();
     drop(stored_values);
     assert_eq!(commit.await, CompletionCommit::Rejected(completion));
-    let terminated = CellEvent::Terminated {
+    let terminated = ActorEvent::Terminated {
         content_items: Vec::new(),
     };
     assert_eq!(
@@ -447,9 +568,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
         .await
         .unwrap();
     assert_eq!(
-        runtime
-            .observe(&reader, ObserveMode::YieldAfter(Duration::from_secs(1)))
-            .await,
+        runtime.wait(&reader, Duration::from_secs(1)).await,
         Ok(CellEvent::Completed {
             content_items: vec![OutputItem::Text {
                 text: "undefined".to_string(),
@@ -512,13 +631,10 @@ async fn drop_terminates_cells_when_the_registry_is_locked() {
         .create_cell(execute_request("while (true) {}"))
         .await
         .unwrap();
-    assert_eq!(cell, CellId::new("1"));
+    assert_eq!(cell.id(), &CellId::new("1"));
     assert_eq!(
         runtime
-            .observe(
-                &cell,
-                ObserveMode::YieldAfter(Duration::from_millis(/*millis*/ 1)),
-            )
+            .wait(&cell, Duration::from_millis(/*millis*/ 1))
             .await,
         Ok(CellEvent::Yielded {
             content_items: Vec::new(),

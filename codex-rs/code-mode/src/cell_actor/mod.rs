@@ -22,6 +22,9 @@ use self::conversions::output_item;
 use self::conversions::runtime_request;
 use self::types::CellCommand;
 pub(crate) use self::types::CellError;
+#[cfg(test)]
+pub(crate) use self::types::CellEvent;
+pub(crate) use self::types::CellEvent as ActorEvent;
 pub(crate) use self::types::CellEventFuture;
 pub(crate) use self::types::CellHandle;
 pub(crate) use self::types::CellHost;
@@ -30,15 +33,14 @@ pub(crate) use self::types::CellToolCall;
 pub(crate) use self::types::CompletionCommit;
 use self::types::CompletionDelivery;
 use self::types::ObservationDelivery;
+pub(crate) use self::types::ObserveMode;
 use crate::runtime::PendingRuntimeMode;
 use crate::runtime::RuntimeCommand;
 use crate::runtime::RuntimeControlCommand;
 use crate::runtime::RuntimeEvent;
 use crate::runtime::spawn_runtime;
-use crate::session_runtime::CellEvent;
 use crate::session_runtime::CellExecutionPolicy;
 use crate::session_runtime::CreateCellRequest as CellRequest;
-use crate::session_runtime::ObserveMode;
 use crate::session_runtime::OutputItem;
 use crate::session_runtime::PendingFrontier;
 use crate::session_runtime::PendingGeneration;
@@ -89,7 +91,7 @@ struct CellContext {
 
 struct Observer {
     mode: ObserveMode,
-    response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
+    response_tx: oneshot::Sender<Result<ActorEvent, CellError>>,
 }
 
 async fn run_cell<H: CellHost>(
@@ -148,7 +150,7 @@ async fn run_cell<H: CellHost>(
                     finish_termination(
                         &cell_state,
                         observer.take().map(|observer| observer.response_tx),
-                        CellEvent::Terminated {
+                        ActorEvent::Terminated {
                             content_items: take_termination_content(
                                 &mut pending_frontier,
                                 pending_frontier_observed,
@@ -235,12 +237,12 @@ async fn run_cell<H: CellHost>(
                 {
                     let delivered = match send_cell_event(
                         response_tx,
-                        CellEvent::Yielded {
+                        ActorEvent::Yielded {
                             content_items: yielded_items,
                         },
                     ) {
                         Ok(()) => true,
-                        Err(CellEvent::Yielded { content_items }) => {
+                        Err(ActorEvent::Yielded { content_items }) => {
                             pending_initial_yield_items = Some(content_items);
                             has_been_observed = false;
                             false
@@ -260,7 +262,7 @@ async fn run_cell<H: CellHost>(
                 if matches!(mode, ObserveMode::PendingFrontier)
                     && let Some(frontier) = pending_frontier.as_ref()
                 {
-                    if send_cell_event(response_tx, CellEvent::Pending(frontier.clone())).is_ok() {
+                    if send_cell_event(response_tx, ActorEvent::Pending(frontier.clone())).is_ok() {
                         pending_frontier_observed = true;
                     }
                     continue;
@@ -285,7 +287,7 @@ async fn run_cell<H: CellHost>(
                 restore_undelivered_yield(
                     send_observer_event(
                         observer.take(),
-                        CellEvent::Yielded {
+                        ActorEvent::Yielded {
                             content_items: std::mem::take(&mut content_items),
                         },
                     ),
@@ -317,7 +319,7 @@ async fn run_cell<H: CellHost>(
                         finish_termination(
                             &cell_state,
                             observer.take().map(|observer| observer.response_tx),
-                            CellEvent::Terminated {
+                            ActorEvent::Terminated {
                                 content_items: termination_content_items,
                             },
                         );
@@ -330,7 +332,7 @@ async fn run_cell<H: CellHost>(
                         CallbackCompletion::DrainNotifications,
                     )
                     .await;
-                    let event = CellEvent::Completed {
+                    let event = ActorEvent::Completed {
                         content_items: take_termination_content(
                             &mut pending_frontier,
                             pending_frontier_observed,
@@ -362,7 +364,7 @@ async fn run_cell<H: CellHost>(
                             finish_termination(
                                 &cell_state,
                                 response_tx,
-                                CellEvent::Terminated {
+                                ActorEvent::Terminated {
                                     content_items: rejected_completion_content(rejected_event),
                                 },
                             );
@@ -408,7 +410,7 @@ async fn run_cell<H: CellHost>(
                                 yield_timer = None;
                                 if send_cell_event(
                                     observer.response_tx,
-                                    CellEvent::Pending(frontier.clone()),
+                                    ActorEvent::Pending(frontier.clone()),
                                 )
                                 .is_ok()
                                 {
@@ -433,7 +435,7 @@ async fn run_cell<H: CellHost>(
                             restore_undelivered_yield(
                                 send_observer_event(
                                     observer.take(),
-                                    CellEvent::Yielded {
+                                    ActorEvent::Yielded {
                                         content_items: std::mem::take(&mut content_items),
                                     },
                                 ),
@@ -491,7 +493,7 @@ async fn run_cell<H: CellHost>(
                             finish_termination(
                                 &cell_state,
                                 observer.take().map(|observer| observer.response_tx),
-                                CellEvent::Terminated {
+                                ActorEvent::Terminated {
                                     content_items: termination_content_items,
                                 },
                             );
@@ -504,7 +506,7 @@ async fn run_cell<H: CellHost>(
                             CallbackCompletion::DrainNotifications,
                         )
                         .await;
-                        let event = CellEvent::Completed {
+                        let event = ActorEvent::Completed {
                             content_items: std::mem::take(&mut content_items),
                             error_text,
                         };
@@ -531,7 +533,7 @@ async fn run_cell<H: CellHost>(
                                 finish_termination(
                                     &cell_state,
                                     response_tx,
-                                    CellEvent::Terminated {
+                                    ActorEvent::Terminated {
                                         content_items: rejected_completion_content(rejected_event),
                                     },
                                 );
@@ -568,7 +570,7 @@ async fn run_cell<H: CellHost>(
     host.closed().await;
 }
 
-fn send_observer_event(observer: Option<Observer>, event: CellEvent) -> Result<(), CellEvent> {
+fn send_observer_event(observer: Option<Observer>, event: ActorEvent) -> Result<(), ActorEvent> {
     let Some(observer) = observer else {
         return Err(event);
     };
@@ -576,9 +578,9 @@ fn send_observer_event(observer: Option<Observer>, event: CellEvent) -> Result<(
 }
 
 fn send_cell_event(
-    response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
-    event: CellEvent,
-) -> Result<(), CellEvent> {
+    response_tx: oneshot::Sender<Result<ActorEvent, CellError>>,
+    event: ActorEvent,
+) -> Result<(), ActorEvent> {
     match response_tx.send(Ok(event)) {
         Ok(()) => Ok(()),
         Err(Ok(event)) => Err(event),
@@ -586,10 +588,13 @@ fn send_cell_event(
     }
 }
 
-fn restore_undelivered_yield(delivery: Result<(), CellEvent>, content_items: &mut Vec<OutputItem>) {
+fn restore_undelivered_yield(
+    delivery: Result<(), ActorEvent>,
+    content_items: &mut Vec<OutputItem>,
+) {
     match delivery {
         Ok(()) => {}
-        Err(CellEvent::Yielded {
+        Err(ActorEvent::Yielded {
             content_items: mut undelivered_items,
         }) => {
             undelivered_items.append(content_items);
@@ -599,9 +604,9 @@ fn restore_undelivered_yield(delivery: Result<(), CellEvent>, content_items: &mu
     }
 }
 
-fn rejected_completion_content(event: Option<CellEvent>) -> Vec<OutputItem> {
+fn rejected_completion_content(event: Option<ActorEvent>) -> Vec<OutputItem> {
     match event {
-        Some(CellEvent::Completed { content_items, .. }) => content_items,
+        Some(ActorEvent::Completed { content_items, .. }) => content_items,
         None => Vec::new(),
         Some(event) => panic!("completion commit rejected an unexpected event: {event:?}"),
     }
@@ -638,8 +643,8 @@ fn take_termination_content(
 
 fn finish_termination(
     cell_state: &CellState,
-    observer_tx: Option<oneshot::Sender<Result<CellEvent, CellError>>>,
-    event: CellEvent,
+    observer_tx: Option<oneshot::Sender<Result<ActorEvent, CellError>>>,
+    event: ActorEvent,
 ) {
     if let Some(event) = cell_state.finish_termination(event)
         && let Some(observer_tx) = observer_tx

@@ -6,21 +6,25 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+pub(crate) use self::types::Cell;
 pub(crate) use self::types::CellEvent;
 pub(crate) use self::types::CellExecutionPolicy;
 pub(crate) use self::types::CellId;
+pub(crate) use self::types::CellKind;
 pub(crate) use self::types::CreateCellRequest;
 pub(crate) use self::types::Error;
 pub(crate) use self::types::ImageDetail;
 pub(crate) use self::types::NestedToolCall;
-pub(crate) use self::types::ObserveMode;
 pub(crate) use self::types::OutputItem;
+pub(crate) use self::types::PausableCell;
+pub(crate) use self::types::PausableCellEvent;
 pub(crate) use self::types::PendingFrontier;
 pub(crate) use self::types::PendingGeneration;
 pub(crate) use self::types::ResumeOutcome;
@@ -28,6 +32,7 @@ pub(crate) use self::types::SessionRuntimeDelegate;
 pub(crate) use self::types::ToolDefinition;
 pub(crate) use self::types::ToolKind;
 pub(crate) use self::types::ToolName;
+use crate::cell_actor::ActorEvent;
 use crate::cell_actor::CellActor;
 use crate::cell_actor::CellError;
 use crate::cell_actor::CellEventFuture;
@@ -36,8 +41,11 @@ use crate::cell_actor::CellHost;
 use crate::cell_actor::CellState;
 use crate::cell_actor::CellToolCall;
 use crate::cell_actor::CompletionCommit;
+use crate::cell_actor::ObserveMode;
 
 type RuntimeEventFuture = Pin<Box<dyn Future<Output = Result<CellEvent, Error>> + Send + 'static>>;
+type PausableRuntimeEventFuture =
+    Pin<Box<dyn Future<Output = Result<PausableCellEvent, Error>> + Send + 'static>>;
 
 /// Owns all cells and shared state for one transport-neutral code-mode session.
 pub(crate) struct SessionRuntime<D: SessionRuntimeDelegate> {
@@ -46,11 +54,32 @@ pub(crate) struct SessionRuntime<D: SessionRuntimeDelegate> {
 
 struct Inner<D: SessionRuntimeDelegate> {
     stored_values: Mutex<HashMap<String, JsonValue>>,
-    cells: Mutex<HashMap<CellId, CellHandle>>,
+    cells: Mutex<HashMap<CellId, RegisteredCell>>,
     cell_tasks: TaskTracker,
     shutdown_token: CancellationToken,
     delegate: Arc<D>,
     next_cell_id: AtomicU64,
+}
+
+#[derive(Clone)]
+enum RegisteredCell {
+    Continuing(CellHandle),
+    Pausable(CellHandle),
+}
+
+impl RegisteredCell {
+    fn kind(&self) -> CellKind {
+        match self {
+            Self::Continuing(_) => CellKind::Continuing,
+            Self::Pausable(_) => CellKind::Pausable,
+        }
+    }
+
+    fn handle(&self) -> &CellHandle {
+        match self {
+            Self::Continuing(handle) | Self::Pausable(handle) => handle,
+        }
+    }
 }
 
 impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
@@ -71,84 +100,90 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         !self.inner.shutdown_token.is_cancelled()
     }
 
-    pub(crate) async fn create_cell(&self, request: CreateCellRequest) -> Result<CellId, Error> {
-        self.create_cell_with_execution_policy(request, CellExecutionPolicy::ContinueWhenUnblocked)
-            .await
+    pub(crate) async fn create_cell(&self, request: CreateCellRequest) -> Result<Cell, Error> {
+        let id = self
+            .start_cell(
+                request,
+                CellExecutionPolicy::ContinueWhenUnblocked,
+                CellKind::Continuing,
+            )
+            .await?;
+        Ok(Cell::new(id))
     }
 
     pub(crate) async fn create_pausable_cell(
         &self,
         request: CreateCellRequest,
-    ) -> Result<CellId, Error> {
-        self.create_cell_with_execution_policy(request, CellExecutionPolicy::PauseAtPendingFrontier)
-            .await
-    }
-
-    async fn create_cell_with_execution_policy(
-        &self,
-        request: CreateCellRequest,
-        execution_policy: CellExecutionPolicy,
-    ) -> Result<CellId, Error> {
-        if self.inner.shutdown_token.is_cancelled() {
-            return Err(Error::ShuttingDown);
-        }
-        let cell_id = self.allocate_cell_id();
-        self.start_cell(cell_id.clone(), request, execution_policy)
+    ) -> Result<PausableCell, Error> {
+        let id = self
+            .start_cell(
+                request,
+                CellExecutionPolicy::PauseAtPendingFrontier,
+                CellKind::Pausable,
+            )
             .await?;
-        Ok(cell_id)
+        Ok(PausableCell::new(id))
     }
 
-    pub(crate) async fn observe(
+    #[cfg(test)]
+    pub(crate) async fn wait(
         &self,
-        cell_id: &CellId,
-        mode: ObserveMode,
+        cell: &Cell,
+        yield_after: Duration,
     ) -> Result<CellEvent, Error> {
-        self.begin_observe(cell_id, mode).await?.event().await
+        self.begin_wait(cell, yield_after).await?.event().await
     }
 
-    pub(crate) async fn begin_observe(
+    pub(crate) async fn begin_wait(
         &self,
-        cell_id: &CellId,
-        mode: ObserveMode,
+        cell: &Cell,
+        yield_after: Duration,
     ) -> Result<PendingEvent, Error> {
-        let handle = self
-            .inner
-            .cells
-            .lock()
-            .await
-            .get(cell_id)
-            .cloned()
-            .ok_or_else(|| Error::MissingCell(cell_id.clone()))?;
+        let handle = self.continuing_handle(cell.id()).await?;
         Ok(PendingEvent {
-            event: map_actor_event(cell_id.clone(), handle.observe(mode)),
+            event: map_cell_event(
+                cell.id().clone(),
+                handle.observe(ObserveMode::YieldAfter(yield_after)),
+            ),
         })
     }
 
-    pub(crate) async fn wait_to_pending(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
-        self.observe(cell_id, ObserveMode::PendingFrontier).await
+    pub(crate) async fn wait_to_pending(
+        &self,
+        cell: &PausableCell,
+    ) -> Result<PausableCellEvent, Error> {
+        let handle = self.pausable_handle(cell.id()).await?;
+        map_pausable_event(
+            cell.id().clone(),
+            handle.observe(ObserveMode::PendingFrontier),
+        )
+        .await
     }
 
     pub(crate) async fn resume(
         &self,
-        cell_id: &CellId,
+        cell: &PausableCell,
         generation: PendingGeneration,
     ) -> Result<ResumeOutcome, Error> {
-        let handle = self
-            .inner
-            .cells
-            .lock()
-            .await
-            .get(cell_id)
-            .cloned()
-            .ok_or_else(|| Error::MissingCell(cell_id.clone()))?;
+        let handle = self.pausable_handle(cell.id()).await?;
         handle
             .resume(generation)
             .await
-            .map_err(|error| actor_error(cell_id, error))
+            .map_err(|error| actor_error(cell.id(), error))
+    }
+
+    pub(crate) async fn cell(&self, cell_id: &CellId) -> Result<Cell, Error> {
+        self.continuing_handle(cell_id).await?;
+        Ok(Cell::new(cell_id.clone()))
+    }
+
+    pub(crate) async fn pausable_cell(&self, cell_id: &CellId) -> Result<PausableCell, Error> {
+        self.pausable_handle(cell_id).await?;
+        Ok(PausableCell::new(cell_id.clone()))
     }
 
     pub(crate) async fn terminate(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
-        let handle = self
+        let cell = self
             .inner
             .cells
             .lock()
@@ -156,9 +191,10 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             .get(cell_id)
             .cloned()
             .ok_or_else(|| Error::MissingCell(cell_id.clone()))?;
-        handle
+        cell.handle()
             .terminate()
             .await
+            .map(map_terminal_event)
             .map_err(|error| actor_error(cell_id, error))
     }
 
@@ -184,10 +220,14 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
 
     async fn start_cell(
         &self,
-        cell_id: CellId,
         request: CreateCellRequest,
         execution_policy: CellExecutionPolicy,
-    ) -> Result<(), Error> {
+        kind: CellKind,
+    ) -> Result<CellId, Error> {
+        if self.inner.shutdown_token.is_cancelled() {
+            return Err(Error::ShuttingDown);
+        }
+        let cell_id = self.allocate_cell_id();
         let stored_values = self.inner.stored_values.lock().await.clone();
         let host = Arc::new(RuntimeCellHost {
             cell_id: cell_id.clone(),
@@ -204,10 +244,42 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         let (handle, task) =
             CellActor::prepare(request, stored_values, host, cell_state, execution_policy)
                 .map_err(Error::Runtime)?;
-        cells.insert(cell_id, handle);
+        let registered = match kind {
+            CellKind::Continuing => RegisteredCell::Continuing(handle),
+            CellKind::Pausable => RegisteredCell::Pausable(handle),
+        };
+        cells.insert(cell_id.clone(), registered);
         self.inner.cell_tasks.spawn(task);
         drop(cells);
-        Ok(())
+        Ok(cell_id)
+    }
+
+    async fn continuing_handle(&self, cell_id: &CellId) -> Result<CellHandle, Error> {
+        self.handle_for_kind(cell_id, CellKind::Continuing).await
+    }
+
+    async fn pausable_handle(&self, cell_id: &CellId) -> Result<CellHandle, Error> {
+        self.handle_for_kind(cell_id, CellKind::Pausable).await
+    }
+
+    async fn handle_for_kind(
+        &self,
+        cell_id: &CellId,
+        expected: CellKind,
+    ) -> Result<CellHandle, Error> {
+        let cells = self.inner.cells.lock().await;
+        let cell = cells
+            .get(cell_id)
+            .ok_or_else(|| Error::MissingCell(cell_id.clone()))?;
+        let actual = cell.kind();
+        if actual != expected {
+            return Err(Error::WrongCellKind {
+                cell_id: cell_id.clone(),
+                expected,
+                actual,
+            });
+        }
+        Ok(cell.handle().clone())
     }
 
     fn begin_shutdown(&self) {
@@ -274,7 +346,7 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
     async fn commit_completion(
         &self,
         stored_value_writes: HashMap<String, JsonValue>,
-        event: CellEvent,
+        event: ActorEvent,
         pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,
     ) -> CompletionCommit {
@@ -297,8 +369,60 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
     }
 }
 
-fn map_actor_event(cell_id: CellId, event: CellEventFuture) -> RuntimeEventFuture {
-    Box::pin(async move { event.await.map_err(|error| actor_error(&cell_id, error)) })
+fn map_cell_event(cell_id: CellId, event: CellEventFuture) -> RuntimeEventFuture {
+    Box::pin(async move {
+        match event.await.map_err(|error| actor_error(&cell_id, error))? {
+            ActorEvent::Yielded { content_items } => Ok(CellEvent::Yielded { content_items }),
+            ActorEvent::Completed {
+                content_items,
+                error_text,
+            } => Ok(CellEvent::Completed {
+                content_items,
+                error_text,
+            }),
+            ActorEvent::Terminated { content_items } => Ok(CellEvent::Terminated { content_items }),
+            ActorEvent::Pending(_) => Err(Error::Runtime(format!(
+                "continuing cell {cell_id} unexpectedly reached a visible pending frontier"
+            ))),
+        }
+    })
+}
+
+fn map_pausable_event(cell_id: CellId, event: CellEventFuture) -> PausableRuntimeEventFuture {
+    Box::pin(async move {
+        match event.await.map_err(|error| actor_error(&cell_id, error))? {
+            ActorEvent::Pending(frontier) => Ok(PausableCellEvent::Pending(frontier)),
+            ActorEvent::Completed {
+                content_items,
+                error_text,
+            } => Ok(PausableCellEvent::Completed {
+                content_items,
+                error_text,
+            }),
+            ActorEvent::Terminated { content_items } => {
+                Ok(PausableCellEvent::Terminated { content_items })
+            }
+            ActorEvent::Yielded { .. } => Err(Error::Runtime(format!(
+                "pausable cell {cell_id} unexpectedly yielded"
+            ))),
+        }
+    })
+}
+
+fn map_terminal_event(event: ActorEvent) -> CellEvent {
+    match event {
+        ActorEvent::Completed {
+            content_items,
+            error_text,
+        } => CellEvent::Completed {
+            content_items,
+            error_text,
+        },
+        ActorEvent::Terminated { content_items } => CellEvent::Terminated { content_items },
+        ActorEvent::Yielded { .. } | ActorEvent::Pending(_) => {
+            panic!("termination returned a non-terminal cell event")
+        }
+    }
 }
 
 fn actor_error(cell_id: &CellId, error: CellError) -> Error {
