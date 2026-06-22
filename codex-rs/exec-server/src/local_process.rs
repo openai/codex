@@ -147,17 +147,22 @@ struct LocalExecProcess {
 
 impl Default for LocalProcess {
     fn default() -> Self {
-        let (outgoing_tx, mut outgoing_rx) =
-            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
-        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::with_runtime_paths(
-            RpcNotificationSender::new(outgoing_tx),
-            /*runtime_paths*/ None,
-        )
+        Self::with_discarded_notifications(/*runtime_paths*/ None)
     }
 }
 
 impl LocalProcess {
+    pub(crate) fn with_local_runtime_paths(runtime_paths: ExecServerRuntimePaths) -> Self {
+        Self::with_discarded_notifications(Some(runtime_paths))
+    }
+
+    fn with_discarded_notifications(runtime_paths: Option<ExecServerRuntimePaths>) -> Self {
+        let (outgoing_tx, mut outgoing_rx) =
+            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
+        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
+        Self::with_runtime_paths(RpcNotificationSender::new(outgoing_tx), runtime_paths)
+    }
+
     pub(crate) fn new(
         notifications: RpcNotificationSender,
         runtime_paths: ExecServerRuntimePaths,
