@@ -715,7 +715,10 @@ async fn maybe_auto_review_mcp_request_user_input(
     .await;
     let approvals_reviewer =
         mcp_approvals_reviewer(parent_ctx, &invocation.server, metadata.as_ref());
-    if !routes_approval_to_guardian_with_reviewer(parent_ctx, approvals_reviewer) {
+    if !routes_approval_to_guardian_with_reviewer(
+        parent_ctx.approval_policy.value(),
+        approvals_reviewer,
+    ) {
         return None;
     }
     let review_cancel = cancel_token.child_token();

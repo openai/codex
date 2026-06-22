@@ -593,7 +593,7 @@ impl Session {
     }
 
     pub(crate) async fn new_turn_with_sub_id(
-        &self,
+        self: &Arc<Self>,
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
@@ -607,6 +607,16 @@ impl Session {
                     let next_permission_profile = next.permission_profile();
                     let permission_profile_changed =
                         previous_permission_profile != next_permission_profile;
+                    let guardian_routing_was_enabled = routes_approval_to_guardian_with_reviewer(
+                        state.session_configuration.approval_policy.value(),
+                        state.session_configuration.approvals_reviewer,
+                    );
+                    let guardian_routing_is_enabled = routes_approval_to_guardian_with_reviewer(
+                        next.approval_policy.value(),
+                        next.approvals_reviewer,
+                    );
+                    let guardian_routing_became_enabled =
+                        !guardian_routing_was_enabled && guardian_routing_is_enabled;
                     let previous_config = notify_config_contributors.then(|| {
                         Self::build_effective_session_config(&state.session_configuration)
                     });
@@ -621,6 +631,7 @@ impl Session {
                     Ok((
                         next,
                         permission_profile_changed,
+                        guardian_routing_became_enabled,
                         previous_config,
                         new_config,
                     ))
@@ -629,22 +640,27 @@ impl Session {
             }
         };
 
-        let (session_configuration, permission_profile_changed, previous_config, new_config) =
-            match update_result {
-                Ok(update) => update,
-                Err(err) => {
-                    let message = err.to_string();
-                    self.send_event_raw(Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: message.clone(),
-                            codex_error_info: Some(CodexErrorInfo::BadRequest),
-                        }),
-                    })
-                    .await;
-                    return Err(CodexErr::InvalidRequest(message));
-                }
-            };
+        let (
+            session_configuration,
+            permission_profile_changed,
+            guardian_routing_became_enabled,
+            previous_config,
+            new_config,
+        ) = match update_result {
+            Ok(update) => update,
+            Err(err) => {
+                let message = err.to_string();
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: message.clone(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(CodexErr::InvalidRequest(message));
+            }
+        };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
 
         if permission_profile_changed {
@@ -652,13 +668,17 @@ impl Session {
                 .await;
         }
 
-        Ok(self
+        let turn_context = self
             .new_turn_from_configuration(
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
             )
-            .await)
+            .await;
+        if guardian_routing_became_enabled {
+            self.schedule_guardian_review_session_prewarm(Arc::clone(&turn_context));
+        }
+        Ok(turn_context)
     }
 
     async fn new_turn_from_configuration(

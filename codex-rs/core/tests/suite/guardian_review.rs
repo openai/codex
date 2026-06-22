@@ -20,6 +20,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -104,6 +105,58 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         Some(guardian_thread_id)
     );
     assert_eq!(guardian_review.get("generate"), None);
+
+    test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_session_prewarms_when_enabled_mid_thread() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![vec![ev_response_created("warm-1"), ev_completed("warm-1")]],
+        vec![vec![ev_response_created("warm-2"), ev_completed("warm-2")]],
+    ])
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+        config.approvals_reviewer = ApprovalsReviewer::User;
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+    let initial_prewarm = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await?
+    .body_json();
+    assert_eq!(
+        initial_prewarm["client_metadata"]["x-openai-subagent"].as_str(),
+        None
+    );
+
+    submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            approval_policy: Some(AskForApproval::OnRequest),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let guardian_prewarm = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
+    )
+    .await?
+    .body_json();
+    assert_eq!(
+        guardian_prewarm["client_metadata"]["x-openai-subagent"].as_str(),
+        Some("guardian")
+    );
+    assert_eq!(guardian_prewarm["generate"].as_bool(), Some(false));
 
     test.codex.shutdown_and_wait().await?;
     server.shutdown().await;
