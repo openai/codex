@@ -286,7 +286,7 @@ if [[ "${RUNNER_OS:-}" == "Windows" && -n "${BUILDBUDDY_API_KEY:-}" && ( $window
   fi
 fi
 
-if [[ "${RUNNER_OS:-}" == "Windows" && ! ( -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || "$ci_config" == "ci-windows-argument-lint" ) ) ]]; then
+if [[ "${RUNNER_OS:-}" == "Windows" && ! ( -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || $windows_hybrid_execution -eq 1 ) ) ]]; then
   post_config_bazel_args+=("--shell_executable=${BAZEL_SH}")
 fi
 

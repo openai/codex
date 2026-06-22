@@ -239,7 +239,10 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 "//codex-rs/arg0:arg0",
             )
             self.assertIn("--config=ci-windows-hybrid", command)
-            self.assertIn("--shell_executable=/bin/bash", command)
+            self.assertEqual(
+                [arg for arg in command if arg.startswith("--shell_executable=")],
+                ["--shell_executable=/bin/bash"],
+            )
             self.assertIn("--action_env=PATH=/usr/bin:/bin", command)
             self.assertIn("--host_action_env=PATH=/usr/bin:/bin", command)
             self.assertIn(r"--test_env=PATH=C:\runtime\bin", command)
