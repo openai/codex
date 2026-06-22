@@ -7,6 +7,7 @@ print_failed_bazel_action_summary=0
 remote_download_toplevel=0
 windows_msvc_host_platform=0
 windows_cross_compile=0
+windows_hybrid_execution=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -30,6 +31,10 @@ while [[ $# -gt 0 ]]; do
       windows_cross_compile=1
       shift
       ;;
+    --windows-hybrid-execution)
+      windows_hybrid_execution=1
+      shift
+      ;;
     --)
       shift
       break
@@ -42,7 +47,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--print-failed-action-summary] [--remote-download-toplevel] [--windows-msvc-host-platform] [--windows-cross-compile] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--print-failed-test-logs] [--print-failed-action-summary] [--remote-download-toplevel] [--windows-msvc-host-platform] [--windows-cross-compile] [--windows-hybrid-execution] -- <bazel args> -- <targets>" >&2
+  exit 1
+fi
+
+if [[ $windows_cross_compile -eq 1 && $windows_hybrid_execution -eq 1 ]]; then
+  echo "--windows-cross-compile and --windows-hybrid-execution are mutually exclusive" >&2
   exit 1
 fi
 
@@ -77,6 +87,8 @@ case "${RUNNER_OS:-}" in
   Windows)
     if [[ $windows_cross_compile -eq 1 ]]; then
       ci_config=ci-windows-cross
+    elif [[ $windows_hybrid_execution -eq 1 ]]; then
+      ci_config=ci-windows-hybrid
     else
       ci_config=ci-windows
     fi
@@ -255,15 +267,6 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
-if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-  for arg in "${bazel_args[@]}"; do
-    if [[ "$arg" == "--config=argument-comment-lint" ]]; then
-      ci_config=ci-windows-argument-lint
-      break
-    fi
-  done
-fi
-
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
   # Windows cross-compilation depends on authenticated RBE. Preserve the local
   # Windows build shape when credentials are unavailable.
@@ -296,7 +299,7 @@ if [[ $remote_download_toplevel -eq 1 ]]; then
   post_config_bazel_args+=(--remote_download_toplevel)
 fi
 
-if [[ "${RUNNER_OS:-}" == "Windows" && -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || "$ci_config" == "ci-windows-argument-lint" ) ]]; then
+if [[ "${RUNNER_OS:-}" == "Windows" && -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || $windows_hybrid_execution -eq 1 ) ]]; then
   # Bazel derives the default genrule shell from the client host. Remote Linux
   # actions must not be asked to run Git Bash from the Windows runner.
   post_config_bazel_args+=(--shell_executable=/bin/bash)
@@ -305,7 +308,7 @@ if [[ "${RUNNER_OS:-}" == "Windows" && -n "${BUILDBUDDY_API_KEY:-}" && ( $window
     # `--enable_platform_specific_config` expands `common:windows` on Windows
     # hosts after ordinary rc configs, which can override `ci-windows-cross`'s
     # RBE host platform. Repeat it on the command line for cross builds. The
-    # argument-lint lane keeps its gnullvm host platform for local Rust actions.
+    # Hybrid execution keeps its gnullvm host platform for local Rust actions.
     post_config_bazel_args+=(--host_platform=//:rbe)
   fi
 fi
@@ -336,7 +339,7 @@ fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   pass_windows_build_env=1
-  if [[ -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || "$ci_config" == "ci-windows-argument-lint" ) ]]; then
+  if [[ -n "${BUILDBUDDY_API_KEY:-}" && ( $windows_cross_compile -eq 1 || $windows_hybrid_execution -eq 1 ) ]]; then
     # Generic build actions execute on Linux RBE workers. Passing the Windows
     # runner's compiler environment there leaks VS/SDK paths and makes genrules
     # try to execute tools that do not exist on the worker.

@@ -168,12 +168,12 @@ common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
 # Prefer RBE for Linux execution platforms, but require every Windows action to
 # run locally. V8Mksnapshot is currently mis-platformed as Linux even though it
 # invokes a Windows binary, so keep that narrow mnemonic exception local too.
-common:ci-windows-argument-lint --config=ci-windows
-common:ci-windows-argument-lint --extra_execution_platforms=//:rbe
-common:ci-windows-argument-lint --strategy=remote,local
-common:ci-windows-argument-lint --allowed_strategies_by_exec_platform=//:local_windows=local
-common:ci-windows-argument-lint --allowed_strategies_by_exec_platform=//:windows_x86_64_gnullvm=local
-common:ci-windows-argument-lint --strategy=V8Mksnapshot=local
+common:ci-windows-hybrid --config=ci-windows
+common:ci-windows-hybrid --extra_execution_platforms=//:rbe
+common:ci-windows-hybrid --strategy=remote,local
+common:ci-windows-hybrid --allowed_strategies_by_exec_platform=//:local_windows=local
+common:ci-windows-hybrid --allowed_strategies_by_exec_platform=//:windows_x86_64_gnullvm=local
+common:ci-windows-hybrid --strategy=V8Mksnapshot=local
 
 # We prefer to run the build actions entirely remotely so we can dial up the concurrency.
 # We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.

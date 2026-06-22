@@ -98,14 +98,14 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             ],
         )
 
-    def test_windows_argument_lint_configuration_uses_remote_execution(self) -> None:
+    def test_windows_hybrid_configuration_uses_remote_execution(self) -> None:
         env = {"BUILDBUDDY_API_KEY": "fork-token"}
 
         self.assertEqual(
             run_bazel_with_buildbuddy.bazel_args_with_remote_config(
                 [
                     "build",
-                    "--config=ci-windows-argument-lint",
+                    "--config=ci-windows-hybrid",
                     "//codex-rs/cli:codex",
                 ],
                 env,
@@ -114,12 +114,12 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 "build",
                 "--config=buildbuddy-generic-rbe",
                 "--remote_header=x-buildbuddy-api-key=fork-token",
-                "--config=ci-windows-argument-lint",
+                "--config=ci-windows-hybrid",
                 "//codex-rs/cli:codex",
             ],
         )
 
-    def test_windows_argument_lint_separates_remote_build_and_test_environments(
+    def test_windows_hybrid_execution_separates_build_and_test_environments(
         self,
     ) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -168,6 +168,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 [
                     bash,
                     str(Path(__file__).with_name("run-bazel-ci.sh")),
+                    "--windows-hybrid-execution",
                     "--",
                     "build",
                     "--config=argument-comment-lint",
@@ -186,7 +187,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 for line in result.stdout.splitlines()
                 if line.startswith("[")
             )
-            self.assertIn("--config=ci-windows-argument-lint", command)
+            self.assertIn("--config=ci-windows-hybrid", command)
             self.assertIn("--shell_executable=/bin/bash", command)
             self.assertIn("--action_env=PATH=/usr/bin:/bin", command)
             self.assertIn("--host_action_env=PATH=/usr/bin:/bin", command)

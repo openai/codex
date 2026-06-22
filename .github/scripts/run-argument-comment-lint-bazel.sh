@@ -25,7 +25,10 @@ read_query_labels() {
 }
 
 final_build_targets=(//codex-rs/...)
+bazel_ci_args=()
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+  bazel_ci_args+=(--windows-hybrid-execution)
+
   # Bazel's local Windows platform currently lacks a default test toolchain for
   # `rust_test`, so target the concrete Rust crate rules directly. The lint
   # aspect still walks their crate graph, which preserves incremental reuse for
@@ -44,6 +47,7 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
 fi
 
 ./.github/scripts/run-bazel-ci.sh \
+  "${bazel_ci_args[@]}" \
   -- \
   build \
   "${bazel_lint_args[@]}" \
