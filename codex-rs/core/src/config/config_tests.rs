@@ -3192,9 +3192,10 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
 
     assert_eq!(
         config.custom_permission_profiles,
-        vec![CustomPermissionProfileSummary {
+        vec![PermissionProfileCatalogEntry {
             id: "dev".to_string(),
             description: Some("Workspace access.".to_string()),
+            allowed: true,
         }]
     );
     assert!(

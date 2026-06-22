@@ -60,22 +60,27 @@ description = "Inspect without writes."
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
                     description: None,
+                    allowed: true,
                 },
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
                     description: None,
+                    allowed: true,
                 },
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
                     description: None,
+                    allowed: true,
                 },
                 PermissionProfileSummary {
                     id: "audit".to_string(),
                     description: Some("Inspect without writes.".to_string()),
+                    allowed: true,
                 },
                 PermissionProfileSummary {
                     id: "dev".to_string(),
                     description: Some("Day-to-day coding work.".to_string()),
+                    allowed: true,
                 },
             ],
             next_cursor: None,
@@ -126,14 +131,17 @@ description = "Project-scoped profile."
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
                     description: None,
+                    allowed: true,
                 },
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
                     description: None,
+                    allowed: true,
                 },
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
                     description: None,
+                    allowed: true,
                 },
             ],
             next_cursor: Some("3".to_string()),
@@ -155,6 +163,7 @@ description = "Project-scoped profile."
             data: vec![PermissionProfileSummary {
                 id: "project".to_string(),
                 description: Some("Project-scoped profile.".to_string()),
+                allowed: true,
             }],
             next_cursor: None,
         }
@@ -200,18 +209,22 @@ description = "Project-scoped profile."
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
                     description: None,
+                    allowed: true,
                 },
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
                     description: None,
+                    allowed: true,
                 },
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
                     description: None,
+                    allowed: true,
                 },
                 PermissionProfileSummary {
                     id: "project".to_string(),
                     description: Some("Project-scoped profile.".to_string()),
+                    allowed: true,
                 },
             ],
             next_cursor: None,

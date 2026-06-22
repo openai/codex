@@ -1,5 +1,5 @@
 use super::*;
-use codex_config::config_toml::ConfigToml;
+use codex_core::config::permission_profile_catalog;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -434,35 +434,15 @@ impl CatalogRequestProcessor {
                 .await
                 .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
         };
-        let effective_config: ConfigToml = config_layer_stack
-            .effective_config()
-            .try_into()
-            .map_err(|err| internal_error(format!("failed to read effective config: {err}")))?;
-        let mut profiles = vec![
-            PermissionProfileSummary {
-                id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
-                description: None,
-            },
-            PermissionProfileSummary {
-                id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
-                description: None,
-            },
-            PermissionProfileSummary {
-                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
-                description: None,
-            },
-        ];
-        let mut configured_profiles = effective_config
-            .permissions
+        let profiles = permission_profile_catalog(&config_layer_stack)
+            .map_err(|err| internal_error(format!("failed to resolve permission profiles: {err}")))?
             .into_iter()
-            .flat_map(|permissions| permissions.entries)
-            .map(|(id, profile)| PermissionProfileSummary {
-                id,
+            .map(|profile| PermissionProfileSummary {
+                id: profile.id,
                 description: profile.description,
+                allowed: profile.allowed,
             })
             .collect::<Vec<_>>();
-        configured_profiles.sort_by(|left, right| left.id.cmp(&right.id));
-        profiles.extend(configured_profiles);
         let total = profiles.len();
         let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
         let effective_limit = effective_limit.min(total);
