@@ -2136,6 +2136,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-utils-cli",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "tokio",
@@ -3531,6 +3532,8 @@ dependencies = [
  "rama-tls-rustls",
  "rama-unix",
  "rustls-native-certs",
+ "schannel",
+ "security-framework 3.5.1",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4018,6 +4021,7 @@ name = "codex-tui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "app_test_support",
  "arboard",
  "assert_matches",
  "base64 0.22.1",

@@ -60,10 +60,7 @@ impl fmt::Display for ProviderAccountError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingChatgptAccountDetails => {
-                write!(
-                    f,
-                    "email and plan type are required for chatgpt authentication"
-                )
+                write!(f, "plan type is required for chatgpt authentication")
             }
             Self::UnsupportedBedrockApiKeyAuth => {
                 write!(
@@ -261,12 +258,9 @@ impl ModelProvider for ConfiguredModelProvider {
                         let email = auth.get_account_email();
                         let plan_type = auth.account_plan_type();
 
-                        match (email, plan_type) {
-                            (Some(email), Some(plan_type)) => {
-                                Ok(ProviderAccount::Chatgpt { email, plan_type })
-                            }
-                            _ => Err(ProviderAccountError::MissingChatgptAccountDetails),
-                        }
+                        plan_type
+                            .map(|plan_type| ProviderAccount::Chatgpt { email, plan_type })
+                            .ok_or(ProviderAccountError::MissingChatgptAccountDetails)
                     }
                 })
                 .transpose()?
@@ -313,6 +307,7 @@ mod tests {
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
     use codex_models_manager::manager::RefreshStrategy;
+    use codex_protocol::account::PlanType;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelInfo;
     use codex_protocol::openai_models::ModelsResponse;
@@ -518,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_provider_rejects_chatgpt_account_state_without_email() {
+    fn openai_provider_returns_chatgpt_account_state_without_email() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             Some(AuthManager::from_auth_for_testing(
@@ -528,7 +523,13 @@ mod tests {
 
         assert_eq!(
             provider.account_state(),
-            Err(ProviderAccountError::MissingChatgptAccountDetails)
+            Ok(ProviderAccountState {
+                account: Some(ProviderAccount::Chatgpt {
+                    email: None,
+                    plan_type: PlanType::Unknown,
+                }),
+                requires_openai_auth: true,
+            })
         );
     }
 

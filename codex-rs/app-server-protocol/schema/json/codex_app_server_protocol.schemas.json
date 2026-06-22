@@ -5900,7 +5900,10 @@
           {
             "properties": {
               "email": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "planType": {
                 "$ref": "#/definitions/v2/PlanType"
@@ -13042,6 +13045,10 @@
       },
       "PermissionProfileSummary": {
         "properties": {
+          "allowed": {
+            "description": "Whether the effective requirements allow selecting this profile.",
+            "type": "boolean"
+          },
           "description": {
             "description": "Optional user-facing description for display in clients.",
             "type": [
@@ -13055,6 +13062,7 @@
           }
         },
         "required": [
+          "allowed",
           "id"
         ],
         "type": "object"
