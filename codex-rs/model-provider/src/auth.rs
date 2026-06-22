@@ -49,6 +49,23 @@ impl AuthProvider for AgentIdentityAuthProvider {
     }
 }
 
+struct AuthManagerAuthProvider {
+    auth_manager: Arc<AuthManager>,
+}
+
+impl AuthProvider for AuthManagerAuthProvider {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        let Some(auth) = self
+            .auth_manager
+            .auth_cached()
+            .filter(CodexAuth::uses_codex_backend)
+        else {
+            return;
+        };
+        auth_provider_from_auth(&auth).add_auth_headers(headers);
+    }
+}
+
 // Some providers are meant to send no auth headers. Examples include local OSS
 // providers and custom test providers with `requires_openai_auth = false`.
 #[derive(Clone, Debug)]
@@ -127,11 +144,22 @@ pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
     }
 }
 
+/// Builds request-header auth that reads the current managed auth snapshot on every request.
+pub fn auth_provider_from_auth_manager(auth_manager: Arc<AuthManager>) -> SharedAuthProvider {
+    Arc::new(AuthManagerAuthProvider { auth_manager })
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use codex_login::AuthCredentialsStoreMode;
+    use codex_login::AuthKeyringBackendKind;
     use codex_login::auth::BedrockApiKeyAuth;
+    use codex_login::auth::login_with_chatgpt_auth_tokens;
     use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
+    use http::header::AUTHORIZATION;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -160,5 +188,51 @@ mod tests {
             Err(err) => panic!("unexpected auth error: {err:?}"),
             Ok(_) => panic!("Bedrock API key auth should be rejected"),
         }
+    }
+
+    #[tokio::test]
+    async fn auth_manager_provider_uses_reloaded_token() {
+        let codex_home =
+            PathBuf::from(format!("auth-manager-provider-test-{}", std::process::id()));
+        let store_mode = AuthCredentialsStoreMode::Ephemeral;
+        let keyring_backend_kind = AuthKeyringBackendKind::default();
+        login_with_chatgpt_auth_tokens(
+            &codex_home,
+            "header.e30.first",
+            "test-account",
+            /*chatgpt_plan_type*/ None,
+        )
+        .expect("save initial auth");
+        let auth_manager = Arc::new(
+            AuthManager::new(
+                codex_home.clone(),
+                /*enable_codex_api_key_env*/ false,
+                store_mode,
+                /*forced_chatgpt_workspace_id*/ None,
+                /*chatgpt_base_url*/ None,
+                keyring_backend_kind,
+            )
+            .await,
+        );
+        let provider = auth_provider_from_auth_manager(Arc::clone(&auth_manager));
+
+        assert_eq!(
+            provider.to_auth_headers().get(AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer header.e30.first"))
+        );
+
+        login_with_chatgpt_auth_tokens(
+            &codex_home,
+            "header.e30.reloaded",
+            "test-account",
+            /*chatgpt_plan_type*/ None,
+        )
+        .expect("save reloaded auth");
+        auth_manager.reload().await;
+
+        assert_eq!(
+            provider.to_auth_headers().get(AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer header.e30.reloaded"))
+        );
     }
 }

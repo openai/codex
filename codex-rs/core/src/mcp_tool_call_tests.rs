@@ -1359,7 +1359,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         rmcp::model::ElicitationCapability::default(),
         /*supports_openai_form_elicitation*/ false,
         codex_mcp::ToolPluginProvenance::default(),
-        auth.as_ref(),
+        /*codex_apps_auth_provider*/ None,
         /*elicitation_reviewer*/ None,
     )
     .await;
