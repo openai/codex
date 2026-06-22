@@ -2,7 +2,7 @@ use codex_app_server_protocol::GetWorkspaceMessagesResponse;
 use codex_app_server_protocol::WorkspaceMessageType;
 use std::time::Duration;
 
-pub(crate) const WORKSPACE_HEADLINE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+pub(crate) const WORKSPACE_HEADLINE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceHeadlineFetchResult {
