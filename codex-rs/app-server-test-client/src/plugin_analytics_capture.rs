@@ -43,7 +43,8 @@ pub(super) fn read_events_for_remote_plugin(
 }
 
 pub(super) struct PluginEventIdentity<'a> {
-    pub(super) plugin_id: &'a str,
+    pub(super) local_plugin_id: &'a str,
+    pub(super) remote_plugin_id: &'a str,
     pub(super) plugin_name: &'a str,
     pub(super) marketplace_name: &'a str,
 }
@@ -52,25 +53,30 @@ pub(super) fn validate_mutation_events(
     events: Vec<Value>,
     expected: PluginEventIdentity<'_>,
 ) -> Result<Vec<Value>> {
-    let event_type = "codex_plugin_installed";
-    let matching = events
-        .iter()
-        .filter(|event| event["event_type"] == event_type)
-        .collect::<Vec<_>>();
-    let [event] = matching.as_slice() else {
-        bail!(
-            "expected exactly one `{event_type}` event for `{}`, found {}",
-            expected.plugin_id,
-            matching.len()
-        );
-    };
-    validate_event(event, &expected)?;
-    Ok(vec![(*event).clone()])
+    let mut validated = Vec::new();
+    for event_type in ["codex_plugin_installed", "codex_plugin_uninstalled"] {
+        let matching = events
+            .iter()
+            .filter(|event| event["event_type"] == event_type)
+            .collect::<Vec<_>>();
+        let [event] = matching.as_slice() else {
+            bail!(
+                "expected exactly one `{event_type}` event for `{}`, found {}",
+                expected.remote_plugin_id,
+                matching.len()
+            );
+        };
+        validate_event(event, &expected)?;
+        validated.push((*event).clone());
+    }
+    Ok(validated)
 }
 
 fn validate_event(event: &Value, expected: &PluginEventIdentity<'_>) -> Result<()> {
     let params = &event["event_params"];
-    require_string(params, "plugin_id", expected.plugin_id)?;
+    require_string(params, "plugin_id", expected.remote_plugin_id)?;
+    require_string(params, "local_plugin_id", expected.local_plugin_id)?;
+    require_string(params, "remote_plugin_id", expected.remote_plugin_id)?;
     require_string(params, "plugin_name", expected.plugin_name)?;
     require_string(params, "marketplace_name", expected.marketplace_name)?;
     for field in [

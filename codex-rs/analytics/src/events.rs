@@ -26,6 +26,7 @@ use crate::now_unix_millis;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_login::default_client::originator;
+use codex_plugin::PluginTelemetryLegacyIdSource;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -933,6 +934,8 @@ pub(crate) struct CodexTurnSteerEventRequest {
 #[derive(Serialize)]
 pub(crate) struct CodexPluginMetadata {
     pub(crate) plugin_id: Option<String>,
+    pub(crate) local_plugin_id: Option<String>,
+    pub(crate) remote_plugin_id: Option<String>,
     pub(crate) plugin_name: Option<String>,
     pub(crate) marketplace_name: Option<String>,
     pub(crate) has_skills: Option<bool>,
@@ -1038,11 +1041,20 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
     let PluginTelemetryMetadata {
         plugin_id,
         remote_plugin_id,
+        legacy_plugin_id_source,
         capability_summary,
     } = plugin;
-    let event_plugin_id = remote_plugin_id.unwrap_or_else(|| plugin_id.as_key());
+    let local_plugin_id = plugin_id.as_key();
+    let legacy_plugin_id = match legacy_plugin_id_source {
+        PluginTelemetryLegacyIdSource::Local => local_plugin_id.clone(),
+        PluginTelemetryLegacyIdSource::Remote => remote_plugin_id
+            .clone()
+            .unwrap_or_else(|| local_plugin_id.clone()),
+    };
     CodexPluginMetadata {
-        plugin_id: Some(event_plugin_id),
+        plugin_id: Some(legacy_plugin_id),
+        local_plugin_id: Some(local_plugin_id),
+        remote_plugin_id,
         plugin_name: Some(plugin_id.plugin_name),
         marketplace_name: Some(plugin_id.marketplace_name),
         has_skills: capability_summary

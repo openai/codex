@@ -1978,11 +1978,27 @@ impl PluginRequestProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
+        let uninstall_target = codex_core_plugins::remote::resolve_remote_plugin_uninstall_target(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &plugin_id,
+        )
+        .await
+        .map_err(|err| {
+            remote_plugin_catalog_error_to_jsonrpc(err, "resolve remote plugin before uninstall")
+        })?;
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let plugin_telemetry = plugins_manager
+            .telemetry_metadata_for_installed_plugin_with_remote_id(
+                &uninstall_target.plugin_id,
+                &uninstall_target.remote_plugin_id,
+            )
+            .await;
         let uninstall_result = codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
             config.codex_home.to_path_buf(),
-            &plugin_id,
+            uninstall_target,
         )
         .await;
 
@@ -1990,7 +2006,8 @@ impl PluginRequestProcessor {
             &uninstall_result,
             Ok(()) | Err(RemotePluginCatalogError::CacheRemove(_))
         ) {
-            let plugins_manager = self.thread_manager.plugins_manager();
+            self.analytics_events_client
+                .track_plugin_uninstalled(plugin_telemetry);
             if plugins_manager.clear_remote_installed_plugins_cache() {
                 self.on_effective_plugins_changed();
             }

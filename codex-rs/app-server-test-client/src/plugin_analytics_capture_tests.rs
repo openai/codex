@@ -14,6 +14,7 @@ const REMOTE_PLUGIN_ID: &str = "plugins~Plugin_test";
 fn reads_and_validates_remote_plugin_mutation_events() {
     let path = unique_capture_path("valid");
     let installed = mutation_event("codex_plugin_installed");
+    let uninstalled = mutation_event("codex_plugin_uninstalled");
     let unrelated = json!({
         "event_type": "codex_plugin_installed",
         "event_params": {
@@ -22,7 +23,7 @@ fn reads_and_validates_remote_plugin_mutation_events() {
     });
     let contents = [
         json!({"events": [unrelated]}),
-        json!({"events": [installed]}),
+        json!({"events": [installed, uninstalled]}),
     ]
     .into_iter()
     .map(|payload| serde_json::to_string(&payload).expect("serialize capture payload"))
@@ -35,7 +36,7 @@ fn reads_and_validates_remote_plugin_mutation_events() {
     let validated =
         validate_mutation_events(events, expected_identity()).expect("validate mutation events");
 
-    assert_eq!(validated, vec![installed]);
+    assert_eq!(validated, vec![installed, uninstalled]);
     fs::remove_file(path).expect("remove capture file");
 }
 
@@ -63,6 +64,8 @@ fn mutation_event(event_type: &str) -> Value {
         "event_type": event_type,
         "event_params": {
             "plugin_id": REMOTE_PLUGIN_ID,
+            "local_plugin_id": "sample@openai-curated-remote",
+            "remote_plugin_id": REMOTE_PLUGIN_ID,
             "plugin_name": "sample",
             "marketplace_name": "openai-curated-remote",
             "has_skills": true,
@@ -75,7 +78,8 @@ fn mutation_event(event_type: &str) -> Value {
 
 fn expected_identity() -> PluginEventIdentity<'static> {
     PluginEventIdentity {
-        plugin_id: REMOTE_PLUGIN_ID,
+        local_plugin_id: "sample@openai-curated-remote",
+        remote_plugin_id: REMOTE_PLUGIN_ID,
         plugin_name: "sample",
         marketplace_name: "openai-curated-remote",
     }

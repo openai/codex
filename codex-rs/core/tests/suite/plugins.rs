@@ -552,6 +552,11 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
 
     let event = plugin_event;
     assert_eq!(event["event_params"]["plugin_id"], "sample@test");
+    assert_eq!(event["event_params"]["local_plugin_id"], "sample@test");
+    assert_eq!(
+        event["event_params"]["remote_plugin_id"],
+        serde_json::Value::Null
+    );
     assert_eq!(event["event_params"]["plugin_name"], "sample");
     assert_eq!(event["event_params"]["marketplace_name"], "test");
     assert_eq!(event["event_params"]["has_skills"], true);
