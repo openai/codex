@@ -265,6 +265,11 @@ async fn run_command_under_sandbox(
         },
         None => config.permissions.effective_permission_profile(),
     };
+    if matches!(permission_profile, PermissionProfile::Disabled) && sandbox_state_disable_network {
+        anyhow::bail!(
+            "--sandbox-state-disable-network cannot be applied to a disabled permission profile"
+        );
+    }
     if !matches!(permission_profile, PermissionProfile::Disabled)
         && (!sandbox_state_readable_root.is_empty() || sandbox_state_disable_network)
     {
