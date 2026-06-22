@@ -260,6 +260,7 @@ fn add_prefix_rule_extends_policy() -> Result<()> {
             },
             decision: Decision::Prompt,
             justification: None,
+            permissions: None,
         })],
         rules
     );
@@ -293,6 +294,88 @@ fn add_prefix_rule_rejects_empty_prefix() -> Result<()> {
 }
 
 #[test]
+fn prefix_rule_can_be_scoped_to_permissions() -> Result<()> {
+    let policy_src = r#"
+prefix_rule(pattern = ["git", "status"], decision = "prompt", permissions = "strict")
+"#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+    let command = tokens(&["git", "status"]);
+
+    let matching_eval = policy.check_with_options(
+        &command,
+        &allow_all,
+        &MatchOptions {
+            active_permission_profile: Some("strict".to_string()),
+            ..MatchOptions::default()
+        },
+    );
+    assert_eq!(
+        matching_eval,
+        Evaluation {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: command.clone(),
+                decision: Decision::Prompt,
+                resolved_program: None,
+                justification: None,
+            }],
+        }
+    );
+
+    let non_matching_eval = policy.check_with_options(
+        &command,
+        &allow_all,
+        &MatchOptions {
+            active_permission_profile: Some("relaxed".to_string()),
+            ..MatchOptions::default()
+        },
+    );
+    assert_eq!(
+        non_matching_eval,
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                command,
+                decision: Decision::Allow,
+            }],
+        }
+    );
+
+    Ok(())
+}
+
+#[test]
+fn permission_scoped_allow_rules_are_not_reported_as_global_prefixes() -> Result<()> {
+    let policy_src = r#"
+prefix_rule(pattern = ["sl", "status"], decision = "allow")
+prefix_rule(pattern = ["cargo", "test"], decision = "allow", permissions = "workspace")
+"#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+
+    assert_eq!(
+        policy.get_allowed_prefixes(),
+        vec![tokens(&["sl", "status"])]
+    );
+    Ok(())
+}
+
+#[test]
+fn prefix_rule_rejects_empty_permissions() {
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse(
+            "test.rules",
+            r#"prefix_rule(pattern=["git"], permissions="")"#,
+        )
+        .expect_err("expected empty permissions to fail");
+    assert!(err.to_string().contains("permissions cannot be empty"));
+}
+
+#[test]
 fn parses_multiple_policy_files() -> Result<()> {
     let first_policy = r#"
 prefix_rule(
@@ -321,6 +404,7 @@ prefix_rule(
                 },
                 decision: Decision::Prompt,
                 justification: None,
+                permissions: None,
             }),
             RuleSnapshot::Prefix(PrefixRule {
                 pattern: PrefixPattern {
@@ -329,6 +413,7 @@ prefix_rule(
                 },
                 decision: Decision::Forbidden,
                 justification: None,
+                permissions: None,
             }),
         ],
         git_rules
@@ -398,6 +483,7 @@ prefix_rule(
             },
             decision: Decision::Allow,
             justification: None,
+            permissions: None,
         })],
         bash_rules
     );
@@ -409,6 +495,7 @@ prefix_rule(
             },
             decision: Decision::Allow,
             justification: None,
+            permissions: None,
         })],
         sh_rules
     );
@@ -470,6 +557,7 @@ prefix_rule(
             },
             decision: Decision::Allow,
             justification: None,
+            permissions: None,
         })],
         rules
     );
@@ -786,6 +874,7 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
         &allow_all,
         &MatchOptions {
             resolve_host_executables: true,
+            ..MatchOptions::default()
         },
     );
     assert_eq!(
@@ -843,6 +932,7 @@ host_executable(name = "git", paths = [])
         &allow_all,
         &MatchOptions {
             resolve_host_executables: true,
+            ..MatchOptions::default()
         },
     );
     assert_eq!(
@@ -878,6 +968,7 @@ host_executable(name = "git", paths = ["{allowed_git_literal}"])
         &allow_all,
         &MatchOptions {
             resolve_host_executables: true,
+            ..MatchOptions::default()
         },
     );
     assert_eq!(
@@ -908,6 +999,7 @@ prefix_rule(pattern = ["git"], decision = "prompt")
         &allow_all,
         &MatchOptions {
             resolve_host_executables: true,
+            ..MatchOptions::default()
         },
     );
     assert_eq!(
@@ -945,6 +1037,7 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
         &allow_all,
         &MatchOptions {
             resolve_host_executables: true,
+            ..MatchOptions::default()
         },
     );
     assert_eq!(

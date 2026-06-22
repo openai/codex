@@ -2661,6 +2661,68 @@
         }
       ]
     },
+    "RequirementsExecPolicyDecisionToml": {
+      "enum": [
+        "allow",
+        "prompt",
+        "forbidden"
+      ],
+      "type": "string"
+    },
+    "RequirementsExecPolicyPatternTokenToml": {
+      "description": "TOML-friendly representation of a pattern token.\n\nStarlark supports either a string token or a list of alternative tokens at each position, but TOML arrays cannot mix strings and arrays. Using an array of tables sidesteps that restriction.",
+      "properties": {
+        "any_of": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RequirementsExecPolicyPrefixRuleToml": {
+      "description": "A TOML representation of the `prefix_rule(...)` Starlark builtin.\n\nThis mirrors the builtin defined in `execpolicy/src/parser.rs`.",
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/RequirementsExecPolicyDecisionToml"
+        },
+        "justification": {
+          "type": "string"
+        },
+        "pattern": {
+          "items": {
+            "$ref": "#/definitions/RequirementsExecPolicyPatternTokenToml"
+          },
+          "type": "array"
+        },
+        "permissions": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "RequirementsExecPolicyToml": {
+      "description": "TOML representation of `[rules]` within `requirements.toml`.",
+      "properties": {
+        "prefix_rules": {
+          "items": {
+            "$ref": "#/definitions/RequirementsExecPolicyPrefixRuleToml"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "prefix_rules"
+      ],
+      "type": "object"
+    },
     "RolloutBudgetConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -5363,6 +5425,15 @@
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"
+    },
+    "rules": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RequirementsExecPolicyToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional command execution policy rules for this config layer."
     },
     "sandbox_mode": {
       "allOf": [

@@ -240,6 +240,12 @@ pub(super) async fn try_run_zsh_fork(
         tool_name: GuardianCommandSource::Shell,
         approval_policy: ctx.turn.approval_policy.value(),
         permission_profile: command_executor.permission_profile.clone(),
+        active_permission_profile: ctx
+            .turn
+            .config
+            .permissions
+            .active_permission_profile()
+            .map(|profile| profile.id),
         file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
@@ -324,6 +330,12 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         tool_name: GuardianCommandSource::UnifiedExec,
         approval_policy: ctx.turn.approval_policy.value(),
         permission_profile: exec_request.permission_profile.clone(),
+        active_permission_profile: ctx
+            .turn
+            .config
+            .permissions
+            .active_permission_profile()
+            .map(|profile| profile.id),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions: approval_sandbox_permissions(
@@ -359,6 +371,7 @@ struct CoreShellActionProvider {
     tool_name: GuardianCommandSource,
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
+    active_permission_profile: Option<String>,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     sandbox_permissions: SandboxPermissions,
     approval_sandbox_permissions: SandboxPermissions,
@@ -650,6 +663,7 @@ impl CoreShellActionProvider {
                 InterceptedExecPolicyContext {
                     approval_policy: self.approval_policy,
                     permission_profile: self.permission_profile.clone(),
+                    active_permission_profile: self.active_permission_profile.clone(),
                     windows_sandbox_level: self.turn.windows_sandbox_level,
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
@@ -719,6 +733,7 @@ fn evaluate_intercepted_exec_policy(
     let InterceptedExecPolicyContext {
         approval_policy,
         permission_profile,
+        active_permission_profile,
         windows_sandbox_level,
         sandbox_permissions,
         enable_shell_wrapper_parsing,
@@ -759,6 +774,7 @@ fn evaluate_intercepted_exec_policy(
         &fallback,
         &MatchOptions {
             resolve_host_executables: true,
+            active_permission_profile,
         },
     )
 }
@@ -767,6 +783,7 @@ fn evaluate_intercepted_exec_policy(
 struct InterceptedExecPolicyContext {
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
+    active_permission_profile: Option<String>,
     windows_sandbox_level: WindowsSandboxLevel,
     sandbox_permissions: SandboxPermissions,
     enable_shell_wrapper_parsing: bool,
