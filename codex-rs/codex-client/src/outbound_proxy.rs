@@ -24,10 +24,13 @@ const SYSTEM_PROXY_SUCCESS_CACHE_TTL: Duration = Duration::from_secs(60);
 const SYSTEM_PROXY_UNAVAILABLE_CACHE_TTL: Duration = Duration::from_secs(5);
 const SYSTEM_PROXY_CACHE_MAX_ENTRIES: usize = 256;
 
+mod async_resolver;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
+
+pub use async_resolver::resolve_system_proxy_for_url_async;
 
 /// Coarse semantic bucket for the HTTP or WebSocket client being constructed.
 ///

@@ -33,6 +33,7 @@ pub use crate::outbound_proxy::RouteFailureClass;
 pub use crate::outbound_proxy::SystemProxyRouteDecision;
 pub use crate::outbound_proxy::build_reqwest_client_for_route;
 pub use crate::outbound_proxy::resolve_system_proxy_for_url;
+pub use crate::outbound_proxy::resolve_system_proxy_for_url_async;
 pub use crate::request::EncodedJsonBody;
 pub use crate::request::PreparedRequestBody;
 pub use crate::request::Request;

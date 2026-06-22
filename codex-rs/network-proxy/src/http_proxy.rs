@@ -401,7 +401,7 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
         };
         let target_host = target.host.to_string();
         let target_url = https_url_for_host_port(&target_host, target.port);
-        proxy_for_connect(&target_url, respect_system_proxy)
+        proxy_for_connect(&target_url, respect_system_proxy).await
     } else {
         None
     };

@@ -2,7 +2,7 @@ use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::state::NetworkProxyState;
 use codex_client::RouteFailureClass;
 use codex_client::SystemProxyRouteDecision;
-use codex_client::resolve_system_proxy_for_url;
+use codex_client::resolve_system_proxy_for_url_async;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rama_core::Layer;
 use rama_core::Service;
@@ -102,9 +102,9 @@ impl ProxyConfig {
         }
     }
 
-    fn proxy_for_url(&self, request_url: &str, is_secure: bool) -> Option<ProxyAddress> {
+    async fn proxy_for_url(&self, request_url: &str, is_secure: bool) -> Option<ProxyAddress> {
         if self.respect_system_proxy {
-            match system_proxy_for_url(request_url) {
+            match system_proxy_for_url(request_url).await {
                 Ok(proxy) => return proxy,
                 Err(err) => {
                     warn!("system proxy unavailable; falling back to env proxy ({err})");
@@ -115,8 +115,10 @@ impl ProxyConfig {
     }
 }
 
-fn system_proxy_for_url(request_url: &str) -> Result<Option<ProxyAddress>, UpstreamProxyError> {
-    match resolve_system_proxy_for_url(request_url) {
+async fn system_proxy_for_url(
+    request_url: &str,
+) -> Result<Option<ProxyAddress>, UpstreamProxyError> {
+    match resolve_system_proxy_for_url_async(request_url).await {
         SystemProxyRouteDecision::Direct => Ok(None),
         SystemProxyRouteDecision::Proxy { url } => proxy_address_from_system_url(&url).map(Some),
         SystemProxyRouteDecision::Unavailable { failure } => {
@@ -173,7 +175,7 @@ fn read_proxy_env(keys: &[&str]) -> Option<ProxyAddress> {
     None
 }
 
-pub(crate) fn proxy_for_connect(
+pub(crate) async fn proxy_for_connect(
     request_url: &str,
     respect_system_proxy: bool,
 ) -> Option<ProxyAddress> {
@@ -182,7 +184,7 @@ pub(crate) fn proxy_for_connect(
     } else {
         ProxyConfig::from_env()
     };
-    config.proxy_for_url(request_url, /*is_secure*/ true)
+    config.proxy_for_url(request_url, /*is_secure*/ true).await
 }
 
 #[derive(Clone)]
@@ -285,11 +287,14 @@ impl Service<Request<Body>> for UpstreamClient {
             .as_ref()
             .map(|ctx| ctx.host_with_port().to_string())
             .unwrap_or_else(|| "<unknown>".to_string());
-        let proxy = request_context.as_ref().and_then(|request_context| {
+        let proxy = if let Some(request_context) = request_context.as_ref() {
             let request_url = request_target_url(&req, request_context);
             self.proxy_config
                 .proxy_for_url(&request_url, request_context.protocol.is_secure())
-        });
+                .await
+        } else {
+            None
+        };
         match proxy.as_ref() {
             Some(proxy) => info!(
                 "HTTP upstream route selected (target={authority}, route=upstream_proxy, proxy={})",
