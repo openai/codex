@@ -1,0 +1,30 @@
+---
+source: tui/src/chatwidget/tests/usage.rs
+expression: "states.join(\"\\n---\\n\")"
+---
+Free:
+  Usage limit resets
+  You have 1 usage limit reset available.
+
+  1. Use a reset  Reset your current monthly usage limit.
+› 2. Cancel
+
+  Press enter to confirm or esc to go back
+---
+Go:
+  Usage limit resets
+  You have 1 usage limit reset available.
+
+  1. Use a reset  Reset your current monthly usage limit.
+› 2. Cancel
+
+  Press enter to confirm or esc to go back
+---
+Business with monthly window:
+  Usage limit resets
+  You have 1 usage limit reset available.
+
+  1. Use a reset  Reset your current monthly usage limit.
+› 2. Cancel
+
+  Press enter to confirm or esc to go back

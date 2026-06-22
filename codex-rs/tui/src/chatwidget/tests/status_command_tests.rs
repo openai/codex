@@ -46,8 +46,7 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
         other => panic!("expected rate-limit refresh request, got {other:?}"),
     };
 
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
-    chat.finish_status_rate_limit_refresh(first_request_id);
+    chat.finish_status_rate_limit_refresh(first_request_id, vec![snapshot(/*percent*/ 92.0)]);
     drain_insert_history(&mut rx);
 
     chat.dispatch_command(SlashCommand::Status);
@@ -170,10 +169,31 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
         "expected /status to avoid transient refresh text in terminal history, got: {second_rendered}"
     );
 
-    chat.finish_status_rate_limit_refresh(first_request_id);
+    chat.finish_status_rate_limit_refresh(first_request_id, Vec::new());
     pretty_assertions::assert_eq!(chat.refreshing_status_outputs.len(), 1);
 
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
-    chat.finish_status_rate_limit_refresh(second_request_id);
+    chat.finish_status_rate_limit_refresh(second_request_id, vec![snapshot(/*percent*/ 92.0)]);
     assert!(chat.refreshing_status_outputs.is_empty());
+}
+
+#[tokio::test]
+async fn account_update_rejects_stale_status_rate_limit_snapshots() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.dispatch_command(SlashCommand::Status);
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshRateLimits {
+            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+        }) => request_id,
+        other => panic!("expected status refresh request, got {other:?}"),
+    };
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
+    chat.finish_status_rate_limit_refresh(request_id, vec![snapshot(/*percent*/ 92.0)]);
+
+    assert!(chat.rate_limit_snapshots_by_limit_id.is_empty());
 }

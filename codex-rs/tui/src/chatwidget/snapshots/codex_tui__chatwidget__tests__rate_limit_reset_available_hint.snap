@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/usage.rs
 expression: rendered
 ---
-• You have 2 rate-limit resets available. Run /usage to use one.
+• You have 2 usage limit resets available. Run /usage to use one.

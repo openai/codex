@@ -5,6 +5,7 @@ use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 
 pub(super) const NUDGE_MODEL_SLUG: &str = "gpt-5.4-mini";
 pub(super) const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
+pub(super) const RATE_LIMIT_SWITCH_PROMPT_VIEW_ID: &str = "rate-limit-switch-prompt";
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const PRIMARY_LIMIT_FALLBACK_LABEL: &str = "usage";
@@ -399,6 +400,7 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(RATE_LIMIT_SWITCH_PROMPT_VIEW_ID),
             title: Some("Approaching rate limits".to_string()),
             subtitle: Some(format!("Switch to {switch_model} for lower credit usage?")),
             footer_hint: Some(standard_popup_hint_line()),

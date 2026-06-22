@@ -1033,6 +1033,39 @@ async fn rate_limit_switch_prompt_shows_once_per_session() {
 }
 
 #[tokio::test]
+async fn account_update_clears_derived_usage_limit_state_and_prompt() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    set_chatgpt_auth(&mut chat);
+    let mut limits = snapshot(/*percent*/ 95.0);
+    limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    chat.on_rate_limit_snapshot(Some(limits));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    assert!(chat.rate_limit_warnings.primary_index > 0);
+    assert!(chat.codex_rate_limit_reached_type.is_some());
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
+
+    assert_eq!(chat.rate_limit_warnings.primary_index, 0);
+    assert_eq!(chat.rate_limit_warnings.secondary_index, 0);
+    assert_eq!(chat.codex_rate_limit_reached_type, None);
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+    assert!(chat.rate_limit_snapshots_by_limit_id.is_empty());
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_respects_hidden_notice() {
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;
