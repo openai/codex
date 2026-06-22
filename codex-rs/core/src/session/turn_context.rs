@@ -536,6 +536,7 @@ impl Session {
             session_configuration.forked_from_thread_id,
             session_configuration.parent_thread_id,
             &session_configuration.session_source,
+            session_configuration.thread_source.clone(),
             sub_id.clone(),
             cwd.clone(),
             &session_configuration.permission_profile(),

@@ -449,6 +449,9 @@
             "browser_use_external": {
               "type": "boolean"
             },
+            "browser_use_full_cdp_access": {
+              "type": "boolean"
+            },
             "chronicle": {
               "type": "boolean"
             },
@@ -2674,10 +2677,13 @@
           "minimum": 0.0,
           "type": "number"
         },
-        "reminder_interval_tokens": {
-          "format": "int64",
-          "minimum": 1.0,
-          "type": "integer"
+        "reminder_at_remaining_tokens": {
+          "description": "Remaining weighted-token values that trigger reminders when crossed.",
+          "items": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": "array"
         },
         "sampling_token_weight": {
           "format": "double",
@@ -4745,6 +4751,9 @@
           "type": "boolean"
         },
         "browser_use_external": {
+          "type": "boolean"
+        },
+        "browser_use_full_cdp_access": {
           "type": "boolean"
         },
         "chronicle": {

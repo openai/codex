@@ -235,7 +235,7 @@ fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<Response
         role: role.to_string(),
         content,
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })
 }
 

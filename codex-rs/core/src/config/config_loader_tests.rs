@@ -1,6 +1,8 @@
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConstraintError;
+use crate::config::PermissionProfileCatalogEntry;
+use crate::config::permission_profile_catalog;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::CloudConfigBundleLoadError;
@@ -1729,6 +1731,74 @@ managed-standard = true
             .contains("Configured value for `permission_profile` is disallowed by requirements")),
         "{:?}",
         config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_catalog_marks_profiles_disallowed_by_requirements() -> anyhow::Result<()>
+{
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+default_permissions = "managed-standard"
+
+[allowed_permission_profiles]
+managed-standard = true
+
+[permissions.managed-standard]
+extends = ":workspace"
+
+[permissions.managed-disabled]
+extends = ":workspace"
+"#,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    assert_eq!(
+        permission_profile_catalog(&config.config_layer_stack)?,
+        vec![
+            PermissionProfileCatalogEntry {
+                id: ":read-only".to_string(),
+                description: None,
+                allowed: false,
+            },
+            PermissionProfileCatalogEntry {
+                id: ":workspace".to_string(),
+                description: None,
+                allowed: false,
+            },
+            PermissionProfileCatalogEntry {
+                id: ":danger-full-access".to_string(),
+                description: None,
+                allowed: false,
+            },
+            PermissionProfileCatalogEntry {
+                id: "managed-disabled".to_string(),
+                description: None,
+                allowed: false,
+            },
+            PermissionProfileCatalogEntry {
+                id: "managed-standard".to_string(),
+                description: None,
+                allowed: true,
+            },
+        ]
     );
     Ok(())
 }

@@ -218,6 +218,7 @@ mod rollout_budget;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+pub(crate) mod step_context;
 pub(crate) mod time_reminder;
 mod token_budget;
 pub(crate) mod turn;
@@ -1371,17 +1372,11 @@ impl Session {
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        if turn_context
-            .config
-            .features
-            .enabled(Feature::ResizeAllImages)
-        {
-            // Keep the recorded rollout unchanged. Prepare its reconstructed history before
-            // installing it, so legacy images are processed once for this resume or fork and
-            // will be processed again if the rollout is reconstructed in a future session.
-            // This meets image resizing requirements without modifying persisted rollouts.
-            prepare_response_items(&mut history);
-        }
+        // Keep the recorded rollout unchanged. Prepare its reconstructed history before
+        // installing it, so legacy images are processed once for this resume or fork and
+        // will be processed again if the rollout is reconstructed in a future session.
+        // This meets image resizing requirements without modifying persisted rollouts.
+        prepare_response_items(&mut history);
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
@@ -2688,13 +2683,7 @@ impl Session {
         items: &'a [ResponseItem],
     ) -> Cow<'a, [ResponseItem]> {
         let mut items = Cow::Borrowed(items);
-        if turn_context
-            .config
-            .features
-            .enabled(Feature::ResizeAllImages)
-        {
-            prepare_response_items(items.to_mut());
-        }
+        prepare_response_items(items.to_mut());
         if turn_context.config.features.enabled(Feature::ItemIds) {
             Self::assign_missing_response_item_ids(items)
         } else {
@@ -2733,23 +2722,10 @@ impl Session {
         items
     }
 
-    pub(crate) fn response_item_from_user_input(
-        &self,
-        turn_context: &TurnContext,
-        input: Vec<UserInput>,
-    ) -> ResponseItem {
-        let local_image_preparation = if turn_context
-            .config
-            .features
-            .enabled(Feature::ResizeAllImages)
-        {
-            LocalImagePreparation::Defer
-        } else {
-            LocalImagePreparation::Process
-        };
+    pub(crate) fn response_item_from_user_input(&self, input: Vec<UserInput>) -> ResponseItem {
         ResponseItem::from(ResponseInputItem::from_user_input(
             input,
-            local_image_preparation,
+            LocalImagePreparation::Defer,
         ))
     }
 
@@ -2770,6 +2746,35 @@ impl Session {
         }
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
+    }
+
+    pub(crate) async fn record_step_environment_context_if_changed(
+        &self,
+        turn_context: &TurnContext,
+        step_context: &step_context::StepContext,
+    ) {
+        if !turn_context.config.include_environment_context {
+            return;
+        }
+
+        let shell = self.user_shell();
+        let Some(environment_context) =
+            crate::context::EnvironmentContext::from_step_context(step_context, shell.as_ref())
+        else {
+            return;
+        };
+        let changed = {
+            let mut state = self.state.lock().await;
+            state
+                .history
+                .update_environment_context_baseline(&environment_context)
+        };
+        if !changed {
+            return;
+        }
+
+        let item = ContextualUserFragment::into(environment_context);
+        self.record_conversation_items(turn_context, &[item]).await;
     }
 
     pub(crate) async fn record_inter_agent_communication(
@@ -3438,6 +3443,22 @@ impl Session {
                     .await,
             );
         }
+        let initial_environment_context = if should_inject_full_context
+            && !context_items.is_empty()
+            && turn_context.config.include_environment_context
+            && turn_context
+                .config
+                .features
+                .enabled(Feature::DeferredExecutor)
+        {
+            let shell = self.user_shell();
+            crate::context::EnvironmentContext::from_attached_environments(
+                &turn_context.environments.turn_environments,
+                shell.as_ref(),
+            )
+        } else {
+            None
+        };
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
@@ -3451,6 +3472,11 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
+        if let Some(environment_context) = initial_environment_context {
+            state
+                .history
+                .update_environment_context_baseline(&environment_context);
+        }
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -3615,7 +3641,7 @@ impl Session {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
-        let response_item = self.response_item_from_user_input(turn_context, input.to_vec());
+        let response_item = self.response_item_from_user_input(input.to_vec());
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
         let mut user_message_item = UserMessageItem::new(input);
