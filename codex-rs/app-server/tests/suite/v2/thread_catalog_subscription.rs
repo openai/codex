@@ -124,42 +124,15 @@ async fn catalog_subscription_reports_thread_outside_loaded_page() -> Result<()>
         changed.thread.name.as_deref(),
         Some("Renamed outside first page")
     );
+    assert!(changed.thread.recency_at.is_some());
+    assert_eq!(
+        changed
+            .thread
+            .recency_at_ms
+            .map(|recency_at_ms| recency_at_ms / 1_000),
+        changed.thread.recency_at
+    );
     assert_eq!(changed.thread.archived_at, None);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn catalog_subscription_reports_ephemeral_thread_updates() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut app = start_app(&codex_home).await?;
-    subscribe(&mut app).await?;
-
-    let thread = start_thread(
-        &mut app,
-        ThreadStartParams {
-            ephemeral: Some(true),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let created = read_catalog_change(&mut app).await?;
-
-    let turn_id = app
-        .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![codex_app_server_protocol::UserInput::Text {
-                text: "Ephemeral catalog preview".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let _: codex_app_server_protocol::TurnStartResponse = read_response(&mut app, turn_id).await?;
-    let changed = read_catalog_change(&mut app).await?;
-    assert_eq!(changed.thread.id, thread.id);
-    assert_eq!(changed.thread.preview, "Ephemeral catalog preview");
-    assert!(changed.thread.updated_at_ms >= created.thread.updated_at_ms);
 
     Ok(())
 }

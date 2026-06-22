@@ -421,13 +421,13 @@ Enable `capabilities.experimentalApi` during initialization, then use `thread/li
 } }
 ```
 
-`threadCatalog/subscribe` watches all future thread metadata changes without draining existing history. For a race-free sidebar bootstrap, start buffering `threadCatalog/changed` notifications before sending the subscribe request. After the subscribe response arrives, call `thread/list`, then apply the buffered complete summaries idempotently and filter them client-side. The summary contains sidebar metadata such as id, preview/name, cwd, second and millisecond timestamps, archive state, git info, and source; it does not contain turns, items, messages, deltas, tool state, status, or runtime history.
+`threadCatalog/subscribe` watches future persisted thread metadata changes without draining existing history. For a race-free sidebar bootstrap, start buffering `threadCatalog/changed` notifications before sending the subscribe request. After the subscribe response arrives, call `thread/list`, then apply the buffered complete summaries idempotently and filter them client-side. The summary contains sidebar metadata such as id, preview/name, cwd, second and millisecond timestamps, archive state, git info, and source; it does not contain turns, items, messages, deltas, tool state, status, or runtime history.
 
 ```json
 { "method": "threadCatalog/subscribe", "id": 21 }
 { "id": 21, "result": {} }
 { "method": "threadCatalog/changed", "params": {
-    "thread": { "id": "thr_z", "preview": "Fix tests", "updatedAt": 1730832222, "updatedAtMs": 1730832222000, "archivedAt": null }
+    "thread": { "id": "thr_z", "preview": "Fix tests", "updatedAt": 1730832222, "updatedAtMs": 1730832222000, "recencyAt": 1730832222, "recencyAtMs": 1730832222000, "archivedAt": null }
 } }
 ```
 

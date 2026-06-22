@@ -241,6 +241,7 @@ pub(super) async fn ensure_listener_task_running(
         .await;
     let thread_settings_baseline =
         thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
+    let mut thread_metadata_updated_rx = conversation.subscribe_thread_metadata_updated();
     let (mut listener_command_rx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
@@ -277,8 +278,6 @@ pub(super) async fn ensure_listener_task_running(
         ..
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
-    let mut thread_metadata_updated_rx = conversation.subscribe_thread_metadata_updated();
-    let is_ephemeral = conversation.config_snapshot().await.ephemeral;
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -371,15 +370,6 @@ pub(super) async fn ensure_listener_task_running(
                         fallback_model_provider.clone(),
                     )
                     .await;
-                    if is_ephemeral
-                        && let Some(summary) = thread_catalog_subscriptions
-                            .update_ephemeral_thread_summary(conversation_id, &event.msg)
-                            .await
-                    {
-                        thread_catalog_subscriptions
-                            .publish_thread_summary(summary)
-                            .await;
-                    }
                 }
                 unloading_watchers_open = unloading_state.wait_for_unloading_trigger() => {
                     if !unloading_watchers_open {

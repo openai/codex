@@ -282,11 +282,13 @@ pub(super) fn thread_summary_from_stored_thread(
 ) -> ThreadSummary {
     let created_at_ms = thread.created_at.timestamp_millis();
     let updated_at_ms = thread.updated_at.timestamp_millis();
+    let recency_at_ms = thread.recency_at.timestamp_millis();
     let archived_at = thread.archived_at.as_ref().map(chrono::DateTime::timestamp);
     let (thread, _) = thread_from_stored_thread(thread, fallback_provider, fallback_cwd);
     let mut summary = thread_summary_from_thread(thread, archived_at);
     summary.created_at_ms = created_at_ms;
     summary.updated_at_ms = updated_at_ms;
+    summary.recency_at_ms = Some(recency_at_ms);
     summary
 }
 
@@ -306,6 +308,10 @@ pub(super) fn thread_summary_from_thread(
         created_at_ms: thread.created_at.saturating_mul(1_000),
         updated_at: thread.updated_at,
         updated_at_ms: thread.updated_at.saturating_mul(1_000),
+        recency_at: thread.recency_at,
+        recency_at_ms: thread
+            .recency_at
+            .map(|recency_at| recency_at.saturating_mul(1_000)),
         archived_at,
         path: thread.path,
         cwd: thread.cwd,
