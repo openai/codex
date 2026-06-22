@@ -40,6 +40,18 @@ fn recognizes_legacy_token_budget_as_contextual_developer_content() {
 }
 
 #[test]
+fn recognizes_context_window_as_contextual_developer_content() {
+    let content = vec![ContentItem::InputText {
+        text:
+            "<context_window>\nThread id 00000000-0000-0000-0000-000000000000.\n</context_window>"
+                .to_string(),
+    }];
+
+    assert!(is_contextual_dev_message_content(&content));
+    assert!(!has_non_contextual_dev_message_content(&content));
+}
+
+#[test]
 fn parses_user_message_with_text_and_two_images() {
     let img1 = "https://example.com/one.png".to_string();
     let img2 = "https://example.com/two.jpg".to_string();

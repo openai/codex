@@ -37,7 +37,7 @@ fn token_budget_contexts(request: &ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text.starts_with("Thread id "))
+        .filter(|text| text.starts_with("<context_window>\nThread id "))
         .collect()
 }
 
@@ -47,7 +47,7 @@ fn token_budget_window_ids(
 ) -> (String, Option<String>, String) {
     let captures = assert_regex_match(
         &format!(
-            r"^Thread id {thread_id}\.\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})(?:\nPrevious context window id: ([0-9a-f-]{{36}}))?$"
+            r"^<context_window>\nThread id {thread_id}\.\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})(?:\nPrevious context window id: ([0-9a-f-]{{36}}))?\n</context_window>$"
         ),
         text,
     );
@@ -191,7 +191,7 @@ async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
     assert_eq!(token_budgets.len(), 1);
     let captures = assert_regex_match(
         &format!(
-            r"^Thread id {thread_id}\.\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})\nmanual history hint for thread {thread_id}\nunstructured notes/thread_hint fixture result$"
+            r"^<context_window>\nThread id {thread_id}\.\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})\nmanual history hint for thread {thread_id}\nunstructured notes/thread_hint fixture result\n</context_window>$"
         ),
         &token_budgets[0],
     );

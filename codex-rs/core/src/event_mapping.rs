@@ -36,6 +36,7 @@ const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     "<personality_spec>",
     // Keep recognizing token-budget wrappers persisted by older versions.
     "<token_budget>",
+    "<context_window>",
     "<rollout_budget>",
 ];
 
