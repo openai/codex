@@ -129,7 +129,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
 }
 
 fn normalized_app_server_cwd(cwd: &LegacyAppPathString) -> LegacyAppPathString {
-    cwd.to_inferred_path_uri()
+    cwd.to_file_uri()
         .map(LegacyAppPathString::from)
         .unwrap_or_else(|| cwd.clone())
 }

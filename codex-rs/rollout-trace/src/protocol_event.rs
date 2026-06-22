@@ -156,7 +156,7 @@ struct ExecCommandBeginTracePayload<'a> {
     turn_id: &'a str,
     started_at_ms: i64,
     command: &'a [String],
-    cwd: &'a str,
+    cwd: String,
     parsed_cmd: &'a [codex_protocol::parse_command::ParsedCommand],
     source: ExecCommandSource,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,7 +182,10 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
             turn_id,
             started_at_ms: *started_at_ms,
             command,
-            cwd: cwd.as_str(),
+            cwd: cwd
+                .to_file_uri()
+                .map(|cwd| cwd.inferred_native_path_string())
+                .unwrap_or_else(|| cwd.as_str().to_string()),
             parsed_cmd,
             source: *source,
             interaction_input: interaction_input.as_deref(),
@@ -201,7 +204,7 @@ struct ExecCommandEndTracePayload<'a> {
     turn_id: &'a str,
     completed_at_ms: i64,
     command: &'a [String],
-    cwd: &'a str,
+    cwd: String,
     parsed_cmd: &'a [codex_protocol::parse_command::ParsedCommand],
     source: ExecCommandSource,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -241,7 +244,10 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
             turn_id,
             completed_at_ms: *completed_at_ms,
             command,
-            cwd: cwd.as_str(),
+            cwd: cwd
+                .to_file_uri()
+                .map(|cwd| cwd.inferred_native_path_string())
+                .unwrap_or_else(|| cwd.as_str().to_string()),
             parsed_cmd,
             source: *source,
             interaction_input: interaction_input.as_deref(),

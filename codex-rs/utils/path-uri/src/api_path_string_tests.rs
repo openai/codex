@@ -480,6 +480,17 @@ fn converts_raw_file_uris_to_inferred_path_uris() {
             Some(PathUri::parse(raw_uri).expect("raw file URI should parse")),
             "round-tripping {raw_uri:?}",
         );
+        assert_eq!(path.to_file_uri(), path.to_inferred_path_uri());
+    }
+}
+
+#[test]
+fn inferred_path_uri_rejects_relative_file_uri_aliases() {
+    for raw_uri in ["file:repo", "file:../repo"] {
+        let path = serde_json::from_value::<LegacyAppPathString>(serde_json::json!(raw_uri))
+            .expect("raw file URI should deserialize as API text");
+
+        assert_eq!(path.to_inferred_path_uri(), None, "parsing {raw_uri:?}");
     }
 }
 
