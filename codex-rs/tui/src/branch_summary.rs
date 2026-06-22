@@ -479,7 +479,7 @@ async fn run_git_command(
     argv.extend(args.iter().map(|arg| (*arg).to_string()));
     runner
         .run(
-            WorkspaceCommand::new(argv)
+            WorkspaceCommand::local_only_git(argv)
                 .cwd(cwd.to_path_buf())
                 .env("GIT_OPTIONAL_LOCKS", "0"),
         )
@@ -513,9 +513,84 @@ mod tests {
     use super::*;
     use crate::workspace_command::WorkspaceCommand;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
+    use std::fs;
     use std::future::Future;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::pin::Pin;
+    #[cfg(unix)]
+    use std::process::Command as ProcessCommand;
     use std::sync::Mutex;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn branch_diff_stats_do_not_lazy_fetch_promisor_objects() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let source = temp_dir.path().join("source");
+        let clone = temp_dir.path().join("clone");
+        fs::create_dir(&source).expect("create source repository");
+        run_git(&source, &["init", "-q", "--initial-branch=main"]);
+        run_git(&source, &["config", "uploadpack.allowFilter", "true"]);
+
+        fs::write(source.join("data.txt"), "before\n").expect("write initial blob");
+        run_git(&source, &["add", "data.txt"]);
+        commit_all(&source, "initial");
+        let base_sha = run_git_stdout(&source, &["rev-parse", "HEAD"]);
+        let base_blob = run_git_stdout(&source, &["rev-parse", "HEAD:data.txt"]);
+
+        fs::write(source.join("data.txt"), "after\n").expect("write current blob");
+        commit_all(&source, "current");
+
+        let source_url = format!("file://{}", source.display());
+        run_git(
+            temp_dir.path(),
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "clone",
+                "-q",
+                "--no-local",
+                "--filter=blob:none",
+                "--no-checkout",
+                &source_url,
+                clone.to_str().expect("clone path"),
+            ],
+        );
+        run_git(&clone, &["checkout", "-q", "main"]);
+        let missing = run_git_stdout(
+            &clone,
+            &["rev-list", "--objects", "--all", "--missing=print"],
+        );
+        assert!(
+            missing.lines().any(|line| line == format!("?{base_blob}")),
+            "expected historical blob {base_blob} to remain missing:\n{missing}"
+        );
+        run_git(
+            &clone,
+            &["update-ref", "refs/remotes/origin/main", &base_sha],
+        );
+
+        let helper = temp_dir.path().join("transport-helper.sh");
+        fs::write(&helper, "#!/bin/sh\nprintf ran >\"$0.ran\"\nexit 1\n")
+            .expect("write transport helper");
+        let mut permissions = fs::metadata(&helper)
+            .expect("read transport helper metadata")
+            .permissions();
+        permissions.set_mode(/*mode*/ 0o755);
+        fs::set_permissions(&helper, permissions).expect("make transport helper executable");
+        let helper_url = format!("ext::{}", helper.display());
+        run_git(&clone, &["config", "remote.origin.url", &helper_url]);
+        run_git(&clone, &["config", "protocol.ext.allow", "always"]);
+
+        let stats = branch_diff_stats_to_default_branch(&LocalRunner, &clone).await;
+
+        assert_eq!(
+            (stats, helper.with_extension("sh.ran").exists()),
+            (None, false),
+            "local-only branch stats must fail without invoking the promisor transport"
+        );
+    }
 
     #[tokio::test]
     async fn branch_diff_stats_prefers_remote_default_ref_over_stale_local_branch() {
@@ -733,6 +808,86 @@ mod tests {
                     .unwrap_or_else(|| panic!("missing fake response for {:?}", command.argv));
                 let response = responses.remove(index).expect("fake response");
                 Ok(response.output)
+            })
+        }
+    }
+
+    #[cfg(unix)]
+    fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
+        let output = ProcessCommand::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run Git command");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    #[cfg(unix)]
+    fn run_git_stdout(cwd: &Path, args: &[&str]) -> String {
+        String::from_utf8(run_git(cwd, args).stdout)
+            .expect("Git output should be UTF-8")
+            .trim()
+            .to_string()
+    }
+
+    #[cfg(unix)]
+    fn commit_all(cwd: &Path, message: &str) {
+        run_git(
+            cwd,
+            &[
+                "-c",
+                "user.name=Codex Test",
+                "-c",
+                "user.email=codex@example.com",
+                "commit",
+                "-qam",
+                message,
+            ],
+        );
+    }
+
+    #[cfg(unix)]
+    struct LocalRunner;
+
+    #[cfg(unix)]
+    impl WorkspaceCommandExecutor for LocalRunner {
+        fn run(
+            &self,
+            command: WorkspaceCommand,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<WorkspaceCommandOutput, WorkspaceCommandError>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async move {
+                let mut process = ProcessCommand::new(&command.argv[0]);
+                process
+                    .args(&command.argv[1..])
+                    .current_dir(command.cwd.expect("test command cwd"));
+                for (key, value) in command.env {
+                    match value {
+                        Some(value) => {
+                            process.env(key, value);
+                        }
+                        None => {
+                            process.env_remove(key);
+                        }
+                    }
+                }
+                let output = process.output().expect("run test command");
+                Ok(WorkspaceCommandOutput {
+                    exit_code: output.status.code().expect("test command exit code"),
+                    stdout: String::from_utf8(output.stdout).expect("utf8 stdout"),
+                    stderr: String::from_utf8(output.stderr).expect("utf8 stderr"),
+                })
             })
         }
     }

@@ -424,7 +424,11 @@ impl crate::FsmonitorProbeRunner for LocalFsmonitorProbeRunner<'_> {
         // Both probes are fast, bounded metadata queries that do not inspect the
         // worktree or index, so do not reduce the requested command's timeout.
         let mut command = Command::new(self.git);
-        command.args(args).current_dir(self.cwd).kill_on_drop(true);
+        command
+            .envs(crate::local_only_git_env())
+            .args(args)
+            .current_dir(self.cwd)
+            .kill_on_drop(true);
         match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
             Ok(Ok(output)) if output.status.success() => Some(output.stdout),
             _ => None,
@@ -445,6 +449,7 @@ async fn run_git_command_with_timeout_from(
 ) -> Option<std::process::Output> {
     let mut command = Command::new(git);
     command
+        .envs(crate::local_only_git_env())
         .env("GIT_OPTIONAL_LOCKS", "0")
         // Keep internal Git commands independent of repository-selected hooks
         // and fsmonitor helpers while preserving built-in fsmonitor acceleration.
@@ -907,6 +912,120 @@ mod tests {
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
+    fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run Git command");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    #[cfg(unix)]
+    fn run_git_stdout(cwd: &Path, args: &[&str]) -> String {
+        String::from_utf8(run_git(cwd, args).stdout)
+            .expect("Git output should be UTF-8")
+            .trim()
+            .to_string()
+    }
+
+    #[cfg(unix)]
+    fn commit_all(cwd: &Path, message: &str) {
+        run_git(
+            cwd,
+            &[
+                "-c",
+                "user.name=Codex Test",
+                "-c",
+                "user.email=codex@example.com",
+                "commit",
+                "-qam",
+                message,
+            ],
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn diff_against_sha_does_not_lazy_fetch_promisor_objects() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let source = temp_dir.path().join("source");
+        let clone = temp_dir.path().join("clone");
+        std::fs::create_dir(&source).expect("create source repository");
+        run_git(&source, &["init", "-q", "--initial-branch=main"]);
+        run_git(&source, &["config", "uploadpack.allowFilter", "true"]);
+
+        std::fs::write(source.join("data.txt"), "before\n").expect("write initial blob");
+        run_git(&source, &["add", "data.txt"]);
+        commit_all(&source, "initial");
+        let base_sha = run_git_stdout(&source, &["rev-parse", "HEAD"]);
+        let base_blob = run_git_stdout(&source, &["rev-parse", "HEAD:data.txt"]);
+
+        std::fs::write(source.join("data.txt"), "after\n").expect("write current blob");
+        commit_all(&source, "current");
+
+        let complete_diff = diff_against_sha(&source, &GitSha::new(&base_sha))
+            .await
+            .expect("diff complete repository");
+        assert!(
+            complete_diff.contains("-before") && complete_diff.contains("+after"),
+            "complete-repository diff should remain available:\n{complete_diff}"
+        );
+
+        let source_url = format!("file://{}", source.display());
+        run_git(
+            temp_dir.path(),
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "clone",
+                "-q",
+                "--no-local",
+                "--filter=blob:none",
+                "--no-checkout",
+                &source_url,
+                clone.to_str().expect("clone path"),
+            ],
+        );
+        run_git(&clone, &["checkout", "-q", "main"]);
+
+        let missing = run_git_stdout(
+            &clone,
+            &["rev-list", "--objects", "--all", "--missing=print"],
+        );
+        assert!(
+            missing.lines().any(|line| line == format!("?{base_blob}")),
+            "expected historical blob {base_blob} to remain missing:\n{missing}"
+        );
+
+        let helper = temp_dir.path().join("transport-helper.sh");
+        std::fs::write(&helper, "#!/bin/sh\nprintf ran >\"$0.ran\"\nexit 1\n")
+            .expect("write transport helper");
+        let mut permissions = std::fs::metadata(&helper)
+            .expect("read transport helper metadata")
+            .permissions();
+        permissions.set_mode(/*mode*/ 0o755);
+        std::fs::set_permissions(&helper, permissions).expect("make transport helper executable");
+        let helper_url = format!("ext::{}", helper.display());
+        run_git(&clone, &["config", "remote.origin.url", &helper_url]);
+        run_git(&clone, &["config", "protocol.ext.allow", "always"]);
+
+        let diff = diff_against_sha(&clone, &GitSha::new(&base_sha)).await;
+
+        assert_eq!(
+            (diff, helper.with_extension("sh.ran").exists()),
+            (None, false),
+            "local-only diff must fail without invoking the promisor transport"
+        );
+    }
 
     #[test]
     fn canonicalize_git_remote_url_normalizes_github_variants() {
