@@ -235,6 +235,7 @@ impl MemoryStartupContext {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
+            config.features.enabled(Feature::ItemIds),
             /*attestation_provider*/ None,
         );
 
@@ -310,6 +311,7 @@ impl MemoryStartupContext {
                 thread_source: Some(ThreadSource::MemoryConsolidation),
                 dynamic_tools: Vec::new(),
                 metrics_service_name: None,
+                multi_agent_mode: None,
                 parent_trace: None,
                 environments,
                 thread_extension_init: Default::default(),

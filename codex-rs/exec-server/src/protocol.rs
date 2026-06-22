@@ -103,6 +103,12 @@ pub struct ExecParams {
     /// Optional process-visible argv0 override. Values such as `codex-linux-sandbox` are command
     /// names rather than paths, so this is not a [`PathUri`].
     pub arg0: Option<String>,
+    /// Portable sandbox intent. Concrete wrapper argv is resolved by the exec-server.
+    #[serde(default)]
+    pub sandbox: Option<FileSystemSandboxContext>,
+    /// Whether the eventual executor-side sandbox must enforce managed networking.
+    #[serde(default)]
+    pub enforce_managed_network: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +153,9 @@ pub struct ReadResponse {
     pub exit_code: Option<i32>,
     pub closed: bool,
     pub failure: Option<String>,
+    /// Whether the executor classified the process failure as a sandbox denial.
+    #[serde(default)]
+    pub sandbox_denied: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

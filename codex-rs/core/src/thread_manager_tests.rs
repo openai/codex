@@ -42,7 +42,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 fn assistant_msg(text: &str) -> ResponseItem {
@@ -53,7 +53,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -82,7 +82,7 @@ fn truncates_before_requested_user_message() {
             }],
             content: None,
             encrypted_content: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -90,7 +90,7 @@ fn truncates_before_requested_user_message() {
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         assistant_msg("a4"),
     ];
@@ -322,6 +322,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
@@ -462,6 +463,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: selected_root_init("selected-a", "env-a"),
@@ -477,6 +479,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: selected_root_init("selected-b", "env-b"),
@@ -569,6 +572,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: environments.clone(),
             thread_extension_init: Default::default(),
@@ -852,6 +856,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             thread_source: Some(ThreadSource::User),
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),

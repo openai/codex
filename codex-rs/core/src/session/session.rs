@@ -52,6 +52,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) provider: ModelProviderInfo,
 
     pub(super) collaboration_mode: CollaborationMode,
+    pub(super) multi_agent_mode: MultiAgentMode,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(super) service_tier: Option<String>,
 
@@ -192,6 +193,7 @@ impl SessionConfiguration {
             reasoning_summary: self.model_reasoning_summary,
             personality: self.personality,
             collaboration_mode: self.collaboration_mode.clone(),
+            multi_agent_mode: self.multi_agent_mode,
             session_source: self.session_source.clone(),
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
@@ -227,6 +229,9 @@ impl SessionConfiguration {
                 });
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
+        }
+        if let Some(multi_agent_mode) = updates.multi_agent_mode {
+            next_configuration.multi_agent_mode = multi_agent_mode;
         }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
@@ -422,6 +427,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
+    pub(crate) multi_agent_mode: Option<MultiAgentMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<String>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
@@ -519,6 +525,33 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
+        let resumed_session_id = match &initial_history {
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.session_id),
+                    _ => None,
+                })
+            }
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
+        };
+        // Legacy subagent rollouts synthesize session_id from their own thread id.
+        let resumed_session_id = resumed_session_id.filter(|session_id| {
+            !session_configuration.session_source.is_non_root_agent()
+                || *session_id != SessionId::from(thread_id)
+        });
+        let session_id = resumed_session_id.unwrap_or_else(|| {
+            if session_configuration.session_source.is_non_root_agent() {
+                agent_control.session_id()
+            } else {
+                SessionId::from(thread_id)
+            }
+        });
+        let agent_control = agent_control.with_session_id(
+            session_id,
+            config
+                .effective_agent_max_threads(MultiAgentVersion::V2)
+                .unwrap_or(usize::MAX),
+        );
         let time_provider = crate::current_time::resolve_time_provider(
             config.current_time_reminder.as_ref(),
             external_time_provider,
@@ -540,6 +573,7 @@ impl Session {
                 let live_thread = match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
                         let params = CreateThreadParams {
+                            session_id,
                             thread_id,
                             extra_config: config.extra_config.clone(),
                             forked_from_id,
@@ -826,6 +860,7 @@ impl Session {
                 default_shell.clone(),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
+                config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;
@@ -945,17 +980,6 @@ impl Session {
                     config.analytics_enabled,
                 )
             });
-            let session_id = if session_configuration.session_source.is_non_root_agent() {
-                agent_control.session_id()
-            } else {
-                SessionId::from(thread_id)
-            };
-            let agent_control = agent_control.with_session_id(
-                session_id,
-                config
-                    .effective_agent_max_threads(MultiAgentVersion::V2)
-                    .unwrap_or(usize::MAX),
-            );
             // Keep one stable manager handle for the session so extension resource clients
             // automatically observe the manager installed at startup and on later refreshes.
             let mcp_connection_manager = Arc::new(arc_swap::ArcSwap::from_pointee(
@@ -1039,6 +1063,7 @@ impl Session {
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
+                    /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
                     attestation_provider,
                 )
                 .with_prompt_cache_key_override(
@@ -1192,7 +1217,6 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);
             }
-
             Ok(sess)
         }
         .await;

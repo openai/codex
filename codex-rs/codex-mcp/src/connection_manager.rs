@@ -547,14 +547,20 @@ impl McpConnectionManager {
         ))
     }
 
-    /// Returns a single map that contains all resources. Each key is the
-    /// server name and the value is a vector of resources.
-    pub async fn list_all_resources(&self) -> HashMap<String, Vec<Resource>> {
+    /// Returns resources from servers selected by `include_server`. Each key
+    /// is the server name and the value is a vector of resources.
+    pub async fn list_all_resources(
+        &self,
+        include_server: impl Fn(&str) -> bool,
+    ) -> HashMap<String, Vec<Resource>> {
         let mut join_set = JoinSet::new();
 
         let clients_snapshot = &self.clients;
 
-        for (server_name, async_managed_client) in clients_snapshot {
+        for (server_name, async_managed_client) in clients_snapshot
+            .iter()
+            .filter(|(server_name, _)| include_server(server_name))
+        {
             let server_name = server_name.clone();
             let Ok(managed_client) = async_managed_client.client().await else {
                 continue;
@@ -612,14 +618,20 @@ impl McpConnectionManager {
         aggregated
     }
 
-    /// Returns a single map that contains all resource templates. Each key is the
-    /// server name and the value is a vector of resource templates.
-    pub async fn list_all_resource_templates(&self) -> HashMap<String, Vec<ResourceTemplate>> {
+    /// Returns resource templates from servers selected by `include_server`.
+    /// Each key is the server name and the value is a vector of templates.
+    pub async fn list_all_resource_templates(
+        &self,
+        include_server: impl Fn(&str) -> bool,
+    ) -> HashMap<String, Vec<ResourceTemplate>> {
         let mut join_set = JoinSet::new();
 
         let clients_snapshot = &self.clients;
 
-        for (server_name, async_managed_client) in clients_snapshot {
+        for (server_name, async_managed_client) in clients_snapshot
+            .iter()
+            .filter(|(server_name, _)| include_server(server_name))
+        {
             let server_name_cloned = server_name.clone();
             let Ok(managed_client) = async_managed_client.client().await else {
                 continue;

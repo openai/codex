@@ -191,7 +191,7 @@ mod tests {
                 text: "hello from response item".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         });
 
         apply_rollout_item(&mut metadata, &item, "test-provider");
@@ -321,6 +321,7 @@ mod tests {
             &mut metadata,
             &RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
+                    session_id: thread_id.into(),
                     id: thread_id,
                     forked_from_id: Some(
                         ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id"),
@@ -368,6 +369,7 @@ mod tests {
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
+                multi_agent_mode: None,
                 realtime_active: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -412,6 +414,7 @@ mod tests {
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
+                multi_agent_mode: None,
                 realtime_active: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -452,6 +455,7 @@ mod tests {
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
+                multi_agent_mode: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -489,6 +493,7 @@ mod tests {
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
+                multi_agent_mode: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -509,6 +514,7 @@ mod tests {
             &mut metadata,
             &RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
+                    session_id: thread_id.into(),
                     id: thread_id,
                     forked_from_id: None,
                     parent_thread_id: None,

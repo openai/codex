@@ -2809,6 +2809,7 @@ dependencies = [
  "codex-utils-plugins",
  "dirs",
  "dunce",
+ "futures",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -13608,7 +13609,7 @@ dependencies = [
 [[package]]
 name = "tokio-tungstenite"
 version = "0.28.0"
-source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=132f5b39c862e3a970f731d709608b3e6276d5f6#132f5b39c862e3a970f731d709608b3e6276d5f6"
+source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=e5e64b86722c5453c4038131c3193faa49a648ad#e5e64b86722c5453c4038131c3193faa49a648ad"
 dependencies = [
  "futures-util",
  "log",

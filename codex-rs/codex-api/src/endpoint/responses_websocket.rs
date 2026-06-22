@@ -668,7 +668,6 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
-                trace!("websocket event: {text}");
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
@@ -690,6 +689,7 @@ async fn run_websocket_response_stream(
                 }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
+                let safety_buffering = event.safety_buffering();
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -717,6 +717,16 @@ async fn run_websocket_response_stream(
                 if let Some(metadata) = turn_moderation_metadata
                     && tx_event
                         .send(Ok(ResponseEvent::TurnModerationMetadata(metadata)))
+                        .await
+                        .is_err()
+                {
+                    return Err(ApiError::Stream(
+                        "response event consumer dropped".to_string(),
+                    ));
+                }
+                if let Some(buffering) = safety_buffering
+                    && tx_event
+                        .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
                         .await
                         .is_err()
                 {
@@ -815,7 +825,7 @@ mod tests {
                     text: "hello".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             tools: vec![json!({
                 "type": "function",

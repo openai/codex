@@ -1911,6 +1911,29 @@
             },
             "method": {
               "enum": [
+                "account/workspaceMessages/read"
+              ],
+              "title": "Account/workspaceMessages/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/workspaceMessages/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/sendAddCreditsNudgeEmail"
               ],
               "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
@@ -5089,6 +5112,26 @@
             "params"
           ],
           "title": "Turn/moderationMetadataNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "model/safetyBuffering/updated"
+              ],
+              "title": "Model/safetyBuffering/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelSafetyBufferingUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/safetyBuffering/updatedNotification",
           "type": "object"
         },
         {
@@ -10334,6 +10377,28 @@
         "title": "GetAccountTokenUsageResponse",
         "type": "object"
       },
+      "GetWorkspaceMessagesResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "featureEnabled": {
+            "description": "Whether the workspace-message backend route is available for this client.",
+            "type": "boolean"
+          },
+          "messages": {
+            "description": "Active workspace messages returned by the backend.",
+            "items": {
+              "$ref": "#/definitions/v2/WorkspaceMessage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "featureEnabled",
+          "messages"
+        ],
+        "title": "GetWorkspaceMessagesResponse",
+        "type": "object"
+      },
       "GitInfo": {
         "properties": {
           "branch": {
@@ -11079,6 +11144,18 @@
             "type": "string"
           }
         ]
+      },
+      "InternalChatMessageMetadataPassthrough": {
+        "description": "Internal Responses API passthrough metadata copied into underlying chat messages.\n\nResponses API strongly types this payload. Do not modify it without first getting API approval and making the corresponding Responses API change.",
+        "properties": {
+          "turn_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "ItemCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -12559,6 +12636,41 @@
         "title": "ModelReroutedNotification",
         "type": "object"
       },
+      "ModelSafetyBufferingUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "useCases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "model",
+          "reasons",
+          "threadId",
+          "turnId",
+          "useCases"
+        ],
+        "title": "ModelSafetyBufferingUpdatedNotification",
+        "type": "object"
+      },
       "ModelServiceTier": {
         "properties": {
           "description": {
@@ -12636,6 +12748,15 @@
         ],
         "title": "ModelVerificationNotification",
         "type": "object"
+      },
+      "MultiAgentMode": {
+        "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
+        "enum": [
+          "none",
+          "explicitRequestOnly",
+          "proactive"
+        ],
+        "type": "string"
       },
       "NetworkAccess": {
         "enum": [
@@ -14833,10 +14954,16 @@
                 },
                 "type": "array"
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -14883,10 +15010,16 @@
                 },
                 "type": "array"
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -14931,10 +15064,16 @@
                   "null"
                 ]
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -14974,10 +15113,17 @@
                   "null"
                 ]
               },
-              "metadata": {
+              "id": {
+                "description": "Legacy id field retained for compatibility with older payloads.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15011,10 +15157,16 @@
               "call_id": {
                 "type": "string"
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15059,10 +15211,16 @@
               "execution": {
                 "type": "string"
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15096,10 +15254,16 @@
               "call_id": {
                 "type": "string"
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15130,13 +15294,19 @@
               "call_id": {
                 "type": "string"
               },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "input": {
                 "type": "string"
               },
-              "metadata": {
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15174,10 +15344,16 @@
               "call_id": {
                 "type": "string"
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15220,10 +15396,16 @@
               "execution": {
                 "type": "string"
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15266,10 +15448,16 @@
                   }
                 ]
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15299,16 +15487,15 @@
           {
             "properties": {
               "id": {
-                "description": "Existing provider ID retained on serialized history for compatibility.",
                 "type": [
                   "string",
                   "null"
                 ]
               },
-              "metadata": {
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15348,10 +15535,16 @@
               "encrypted_content": {
                 "type": "string"
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15375,10 +15568,10 @@
           },
           {
             "properties": {
-              "metadata": {
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15407,10 +15600,16 @@
                   "null"
                 ]
               },
-              "metadata": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
                   },
                   {
                     "type": "null"
@@ -15448,23 +15647,6 @@
             "type": "object"
           }
         ]
-      },
-      "ResponseItemMetadata": {
-        "properties": {
-          "source_call_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "turn_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
       },
       "ResponsesApiWebSearchAction": {
         "oneOf": [
@@ -20269,6 +20451,7 @@
         "enum": [
           "disabled",
           "cached",
+          "indexed",
           "live"
         ],
         "type": "string"
@@ -20420,6 +20603,49 @@
         ],
         "title": "WindowsWorldWritableWarningNotification",
         "type": "object"
+      },
+      "WorkspaceMessage": {
+        "properties": {
+          "archivedAt": {
+            "description": "Unix timestamp (in seconds) when the message was archived.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "description": "Unix timestamp (in seconds) when the message was created.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "messageBody": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "messageType": {
+            "$ref": "#/definitions/v2/WorkspaceMessageType"
+          }
+        },
+        "required": [
+          "messageBody",
+          "messageId",
+          "messageType"
+        ],
+        "type": "object"
+      },
+      "WorkspaceMessageType": {
+        "enum": [
+          "headline",
+          "announcement",
+          "unknown"
+        ],
+        "type": "string"
       },
       "WriteStatus": {
         "enum": [

@@ -484,6 +484,8 @@ mod tests {
             message: "compacted".to_string(),
             replacement_history: None,
             window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         });
 
@@ -577,6 +579,7 @@ mod tests {
     fn session_meta(thread_id: ThreadId) -> SessionMetaLine {
         SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 timestamp: "2025-01-03T12:00:00Z".to_string(),
                 source: SessionSource::Exec,

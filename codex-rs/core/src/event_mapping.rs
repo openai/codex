@@ -15,6 +15,7 @@ use codex_protocol::models::is_image_open_tag_text;
 use codex_protocol::models::is_local_image_close_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
+use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::user_input::UserInput;
@@ -29,9 +30,11 @@ const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     "<permissions instructions>",
     "<model_switch>",
     COLLABORATION_MODE_OPEN_TAG,
+    MULTI_AGENT_MODE_OPEN_TAG,
     REALTIME_CONVERSATION_OPEN_TAG,
     SKILLS_INSTRUCTIONS_OPEN_TAG,
     "<personality_spec>",
+    // Keep recognizing token-budget wrappers persisted by older versions.
     "<token_budget>",
     "<rollout_budget>",
 ];
