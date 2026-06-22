@@ -14,7 +14,7 @@ class TextInput:
 
 @dataclass(slots=True)
 class ImageInput:
-    """Remote image URL supplied as turn input."""
+    """Image data URL supplied as turn input."""
 
     url: str
 

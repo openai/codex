@@ -245,6 +245,9 @@ Input = list[InputItem] | InputItem
 RunInput = Input | str
 ```
 
+Use `ImageInput` with a base64-encoded `data:image/...` URL. HTTP and HTTPS image URLs are
+deprecated; download remote images and pass their local paths with `LocalImageInput` instead.
+
 Use a plain `str` as shorthand for `TextInput(...)` anywhere a turn input is accepted:
 `thread.run("...")`, `thread.turn("...")`, and `turn.steer("...")`.
 

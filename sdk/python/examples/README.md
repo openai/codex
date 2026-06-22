@@ -72,7 +72,7 @@ python examples/01_quickstart_constructor/async.py
 - `06_thread_lifecycle_and_controls/`
   - thread lifecycle + control calls
 - `07_image_and_text/`
-  - remote image URL + text multimodal turn
+  - image data URL + text multimodal turn
 - `08_local_image_and_text/`
   - local image + text multimodal turn using a generated temporary sample image
 - `09_async_parity/`
