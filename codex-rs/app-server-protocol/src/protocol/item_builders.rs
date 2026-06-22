@@ -94,7 +94,7 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.normalize_file_uri(),
+        cwd: payload.cwd.with_serialized_file_uri_rendered_as_path(),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: CommandExecutionStatus::InProgress,
@@ -117,7 +117,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.normalize_file_uri(),
+        cwd: payload.cwd.with_serialized_file_uri_rendered_as_path(),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: (&payload.status).into(),

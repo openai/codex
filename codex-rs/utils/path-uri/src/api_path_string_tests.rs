@@ -483,8 +483,14 @@ fn converts_raw_file_uris_to_inferred_path_uris() {
             Some(PathUri::parse(raw_uri).expect("raw file URI should parse")),
             "round-tripping {raw_uri:?}",
         );
-        assert_eq!(path.to_file_uri(), path.to_inferred_path_uri());
-        assert_eq!(path.normalize_file_uri(), expected_path);
+        assert_eq!(
+            path.parse_serialized_file_uri(),
+            path.to_inferred_path_uri()
+        );
+        assert_eq!(
+            path.with_serialized_file_uri_rendered_as_path(),
+            expected_path
+        );
     }
 }
 

@@ -82,7 +82,7 @@ impl LegacyAppPathString {
     }
 
     /// Parses this API string as a serialized file URI.
-    pub fn to_file_uri(&self) -> Option<PathUri> {
+    fn parse_serialized_file_uri(&self) -> Option<PathUri> {
         // Check the original spelling before parsing because URL parsing
         // canonicalizes relative aliases such as `file:repo`, losing the
         // distinction from serialized absolute file URI spellings.
@@ -96,15 +96,15 @@ impl LegacyAppPathString {
     /// Converts a serialized file URI spelling to its inferred native path spelling.
     ///
     /// Non-URI path strings are returned unchanged.
-    pub fn normalize_file_uri(&self) -> Self {
-        self.to_file_uri()
+    pub fn with_serialized_file_uri_rendered_as_path(&self) -> Self {
+        self.parse_serialized_file_uri()
             .map(Self::from)
             .unwrap_or_else(|| self.clone())
     }
 
     /// Parses this API string as a file URI or as an absolute path using its inferred convention.
     pub fn to_inferred_path_uri(&self) -> Option<PathUri> {
-        self.to_file_uri()
+        self.parse_serialized_file_uri()
             .or_else(|| PathUri::try_from(self.clone()).ok())
     }
 
