@@ -2583,6 +2583,39 @@
       ],
       "type": "object"
     },
+    "ModelSafetyBufferingUpdatedNotification": {
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "useCases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "model",
+        "reasons",
+        "threadId",
+        "turnId",
+        "useCases"
+      ],
+      "type": "object"
+    },
     "ModelVerification": {
       "enum": [
         "trustedAccessForCyber"
@@ -6606,6 +6639,26 @@
         "params"
       ],
       "title": "Turn/moderationMetadataNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "model/safetyBuffering/updated"
+          ],
+          "title": "Model/safetyBuffering/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelSafetyBufferingUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Model/safetyBuffering/updatedNotification",
       "type": "object"
     },
     {
