@@ -70,8 +70,7 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
     assert_eq!(
         process_start_response,
         ExecResponse {
-            process_id: ProcessId::from("proc-1"),
-            sandbox: Some(codex_sandboxing::SandboxType::None),
+            process_id: ProcessId::from("proc-1")
         }
     );
 
@@ -136,8 +135,7 @@ async fn exec_server_defaults_omitted_pipe_stdin_to_closed_stdin() -> anyhow::Re
     assert_eq!(
         process_start_response,
         ExecResponse {
-            process_id: ProcessId::from("proc-default-stdin"),
-            sandbox: Some(codex_sandboxing::SandboxType::None),
+            process_id: ProcessId::from("proc-default-stdin")
         }
     );
 

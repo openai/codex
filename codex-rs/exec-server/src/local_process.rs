@@ -11,7 +11,6 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::shell_environment;
-use codex_sandboxing::SandboxType;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
 use codex_utils_pty::TerminalSize;
@@ -151,10 +150,7 @@ impl Default for LocalProcess {
         let (outgoing_tx, mut outgoing_rx) =
             mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
         tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::with_runtime_paths(
-            RpcNotificationSender::new(outgoing_tx),
-            /*runtime_paths*/ None,
-        )
+        Self::with_runtime_paths(RpcNotificationSender::new(outgoing_tx), None)
     }
 }
 
@@ -342,14 +338,7 @@ impl LocalProcess {
             output_notify,
         ));
 
-        Ok((
-            ExecResponse {
-                process_id,
-                sandbox: Some(prepared.sandbox),
-            },
-            wake_tx,
-            events,
-        ))
+        Ok((ExecResponse { process_id }, wake_tx, events))
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
@@ -593,7 +582,6 @@ impl LocalProcess {
                 wake_tx,
                 events,
             }),
-            sandbox: response.sandbox.unwrap_or(SandboxType::None),
         })
     }
 }

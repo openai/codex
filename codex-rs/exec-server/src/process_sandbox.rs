@@ -6,7 +6,6 @@ use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
-use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -20,7 +19,6 @@ pub(crate) struct PreparedExecRequest {
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) env: HashMap<String, String>,
     pub(crate) arg0: Option<String>,
-    pub(crate) sandbox: SandboxType,
 }
 
 pub(crate) fn prepare_exec_request(
@@ -34,7 +32,6 @@ pub(crate) fn prepare_exec_request(
             cwd: native_path(&params.cwd, "cwd")?,
             env,
             arg0: params.arg0.clone(),
-            sandbox: SandboxType::None,
         });
     };
     let runtime_paths = runtime_paths
@@ -114,7 +111,6 @@ pub(crate) fn prepare_exec_request(
         cwd: native_path(&request.cwd, "cwd")?,
         env: request.env,
         arg0: request.arg0,
-        sandbox: request.sandbox,
     })
 }
 

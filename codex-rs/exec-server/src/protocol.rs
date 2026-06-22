@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -126,11 +125,6 @@ pub struct ExecEnvPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
     pub process_id: ProcessId,
-    /// Concrete sandbox selected by this executor.
-    ///
-    /// Older exec servers omit this field, so clients must treat `None` as unknown.
-    #[serde(default)]
-    pub sandbox: Option<SandboxType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
