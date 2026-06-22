@@ -42,9 +42,11 @@ use wiremock::matchers::path;
 
 const TINY_PNG_BYTES: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
-    0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0, 1,
-    122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0,
+    5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
+const TINY_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
 fn image_generation_extensions(auth: &CodexAuth) -> Arc<ExtensionRegistry<Config>> {
     let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
@@ -148,7 +150,7 @@ async fn extension_tool_uses_granted_turn_permissions() -> Result<()> {
         .and(path("/v1/images/edits"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "created": 1,
-            "data": [{"b64_json": "cG5n"}],
+            "data": [{"b64_json": TINY_PNG_BASE64}],
         })))
         .expect(1)
         .mount(&server)
@@ -299,7 +301,7 @@ async fn extension_tool_uses_granted_turn_permissions() -> Result<()> {
     let output = request.function_call_output(image_call_id);
     let image = &output["output"][0];
     assert_eq!(image["type"], "input_image");
-    assert_eq!(image["image_url"], "data:image/png;base64,cG5n");
+    assert_eq!(image["image_url"], TINY_PNG_DATA_URL);
 
     Ok(())
 }

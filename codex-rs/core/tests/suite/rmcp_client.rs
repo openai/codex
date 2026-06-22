@@ -24,7 +24,6 @@ use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::HttpRequestParams;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
 use codex_models_manager::manager::RefreshStrategy;
@@ -1455,10 +1454,6 @@ async fn stdio_image_responses_resize_large_image() -> anyhow::Result<()> {
     let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
     let fixture = test_codex()
         .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::ResizeAllImages)
-                .expect("resize_all_images should be enabled");
             insert_mcp_server(
                 config,
                 server_name,

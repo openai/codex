@@ -1,4 +1,3 @@
-use codex_features::Feature;
 use codex_protocol::items::ImageViewItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -8,9 +7,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::InputModality;
-use codex_utils_image::PromptImageMode;
 use codex_utils_image::data_url_from_bytes;
-use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
@@ -195,24 +192,8 @@ impl ViewImageHandler {
             DEFAULT_IMAGE_DETAIL
         };
 
-        let image_url = if turn.config.features.enabled(Feature::ResizeAllImages) {
-            // The history insertion path owns image decoding and resizing when this is enabled.
-            data_url_from_bytes("application/octet-stream", &file_bytes)
-        } else {
-            let image_mode = if use_original_detail {
-                PromptImageMode::Original
-            } else {
-                PromptImageMode::ResizeToFit
-            };
-            load_for_prompt_bytes(abs_path.as_path(), file_bytes, image_mode)
-                .map_err(|error| {
-                    FunctionCallError::RespondToModel(format!(
-                        "unable to process image at `{}`: {error}",
-                        abs_path.display()
-                    ))
-                })?
-                .into_data_url()
-        };
+        // The history insertion path owns image decoding and resizing.
+        let image_url = data_url_from_bytes("application/octet-stream", &file_bytes);
 
         let item = TurnItem::ImageView(ImageViewItem {
             id: call_id,
@@ -420,9 +401,6 @@ mod tests {
             })
             .await;
 
-        let Err(FunctionCallError::RespondToModel(message)) = result else {
-            panic!("expected image processing error");
-        };
-        assert!(message.contains("unable to process image"), "{message}");
+        result.expect("explicit high detail should be accepted");
     }
 }

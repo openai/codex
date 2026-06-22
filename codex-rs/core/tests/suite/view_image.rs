@@ -7,7 +7,6 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
@@ -181,15 +180,10 @@ async fn write_workspace_png(
 async fn assert_user_turn_local_image_resizes_to(
     original_dimensions: (u32, u32),
     expected_dimensions: (u32, u32),
-    resize_policy: TestImageResizePolicy,
 ) -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(move |config| {
-        if resize_policy == TestImageResizePolicy::AllImages {
-            let _ = config.features.enable(Feature::ResizeAllImages);
-        }
-    });
+    let mut builder = test_codex();
     let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
@@ -263,42 +257,25 @@ async fn assert_user_turn_local_image_resizes_to(
     Ok(())
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum TestImageResizePolicy {
-    Legacy,
-    AllImages,
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    assert_user_turn_local_image_resizes_to((2304, 864), (2048, 768), TestImageResizePolicy::Legacy)
-        .await
+    assert_user_turn_local_image_resizes_to((2304, 864), (2048, 768)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_with_vertical_local_image_resizes_to_square_bounds() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    assert_user_turn_local_image_resizes_to(
-        (1024, 4096),
-        (512, 2048),
-        TestImageResizePolicy::Legacy,
-    )
-    .await
+    assert_user_turn_local_image_resizes_to((1024, 4096), (512, 2048)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resize_all_images_applies_patch_budget_to_local_user_image() -> anyhow::Result<()> {
+async fn user_turn_local_image_applies_patch_budget() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    assert_user_turn_local_image_resizes_to(
-        (2048, 2048),
-        (1600, 1600),
-        TestImageResizePolicy::AllImages,
-    )
-    .await
+    assert_user_turn_local_image_resizes_to((2048, 2048), (1600, 1600)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1209,90 +1186,11 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
+async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-
     let mut builder = test_codex();
-    let test = builder.build_with_remote_env(&server).await?;
-    let TestCodex {
-        codex,
-        session_configured,
-        ..
-    } = &test;
-
-    let rel_path = "assets/example.json";
-    let abs_path =
-        write_workspace_file(&test, rel_path, br#"{ "message": "hello" }"#.to_vec()).await?;
-
-    let call_id = "view-image-non-image";
-    let arguments = serde_json::json!({ "path": rel_path }).to_string();
-
-    let first_response = sse(vec![
-        ev_response_created("resp-1"),
-        ev_function_call(call_id, "view_image", &arguments),
-        ev_completed("resp-1"),
-    ]);
-    responses::mount_sse_once(&server, first_response).await;
-
-    let second_response = sse(vec![
-        ev_assistant_message("msg-1", "done"),
-        ev_completed("resp-2"),
-    ]);
-    let mock = responses::mount_sse_once(&server, second_response).await;
-
-    let session_model = session_configured.model.clone();
-
-    codex
-        .submit(disabled_user_turn(
-            &test,
-            vec![UserInput::Text {
-                text: "please use the view_image tool to read the json file".into(),
-                text_elements: Vec::new(),
-            }],
-            session_model,
-        ))
-        .await?;
-
-    wait_for_event_with_timeout(
-        codex,
-        |event| matches!(event, EventMsg::TurnComplete(_)),
-        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
-    )
-    .await;
-
-    let request = mock.single_request();
-    assert!(
-        request.inputs_of_type("input_image").is_empty(),
-        "non-image file should not produce an input_image message"
-    );
-    let (error_text, success) = request
-        .function_call_output_content_and_success(call_id)
-        .expect("function_call_output should be present");
-    assert_eq!(success, None);
-    let error_text = error_text.expect("error text present");
-
-    let expected_error = format!(
-        "unable to process image at `{}`: unsupported image `application/json`",
-        abs_path.display()
-    );
-    assert!(
-        error_text.contains(&expected_error),
-        "error should describe unsupported file type: {error_text}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resize_all_images_turns_invalid_view_image_into_placeholder() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        let _ = config.features.enable(Feature::ResizeAllImages);
-    });
     let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,

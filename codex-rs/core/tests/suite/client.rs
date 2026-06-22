@@ -860,7 +860,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
 async fn resume_replays_image_tool_outputs_with_detail() {
     skip_if_no_network!();
 
-    let image_url = "data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEAAUAmJaACdLoB+AADsAD+8ut//NgVzXPv9//S4P0uD9Lg/9KQAAA=";
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     let function_call_id = "view-image-call";
     let custom_call_id = "js-repl-call";
     let thread_id = ThreadId::default();
@@ -888,7 +888,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                 id: None,
                 name: "view_image".to_string(),
                 namespace: None,
-                arguments: "{\"path\":\"/tmp/example.webp\"}".to_string(),
+                arguments: "{\"path\":\"/tmp/example.png\"}".to_string(),
                 call_id: function_call_id.to_string(),
                 metadata: None,
             }),

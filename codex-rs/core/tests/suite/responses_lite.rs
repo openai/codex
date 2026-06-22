@@ -55,7 +55,7 @@ fn has_hosted_tool(tools: &[Value], tool_type: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_lite_strips_data_image_detail_without_resize_all_images() -> Result<()> {
+async fn responses_lite_strips_data_image_detail() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
