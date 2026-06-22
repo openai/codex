@@ -3,6 +3,8 @@
 mod common;
 
 use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentCapabilities;
+use codex_exec_server::EnvironmentInfo;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
 
@@ -29,7 +31,13 @@ async fn remote_environment_fetches_info_from_exec_server() -> anyhow::Result<()
 
     let remote_info = environment.info().await?;
     let local_info = Environment::default_for_tests().info().await?;
-    assert_eq!(remote_info, local_info);
+    assert_eq!(
+        remote_info,
+        EnvironmentInfo {
+            shell: local_info.shell,
+            capabilities: EnvironmentCapabilities::default(),
+        }
+    );
 
     server.shutdown().await?;
     Ok(())

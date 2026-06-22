@@ -26,19 +26,28 @@ use crate::protocol::FileTransferDigestAlgorithm;
 use crate::protocol::FileTransferOperationState;
 use crate::protocol::FileTransferPrepareUploadParams;
 use crate::protocol::FileTransferPrepareUploadResponse;
+use crate::protocol::FileTransferStartUploadParams;
+use crate::protocol::FileTransferStartUploadResponse;
 use crate::protocol::FileTransferStatusParams;
 use crate::protocol::FileTransferStatusResponse;
+use crate::protocol::FileTransferUploadDescriptorKind;
 use crate::protocol::MAX_PREPARED_FILE_UPLOAD_BYTES;
+use crate::protocol::PREPARED_FILE_UPLOAD_PROTOCOL_VERSION;
+use crate::protocol::PreparedFileUploadCapability;
 use crate::rpc::file_transfer_session_lost;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
+use crate::server::file_transfer_http::UploadOutcome;
+use crate::server::file_transfer_http::upload_bytes;
+use crate::server::file_transfer_http::validate_upload_descriptor;
 
 pub(crate) const FILE_TRANSFER_ENABLED_ENV_VAR: &str =
     "CODEX_EXEC_SERVER_PREPARED_FILE_UPLOAD_ENABLED";
 const MAX_PREPARED_BYTES_PER_SESSION: u64 = 32 * 1024 * 1024;
 const MAX_OPERATIONS_PER_SESSION: usize = 32;
+const MAX_ACTIVE_UPLOADS_PER_SESSION: usize = 2;
 #[cfg(test)]
 const PREPARED_UPLOAD_TTL: Duration = Duration::from_millis(100);
 #[cfg(not(test))]
@@ -72,6 +81,7 @@ struct UploadOperation {
     state: FileTransferOperationState,
     error: Option<String>,
     terminal_at: Option<Instant>,
+    cancellation: CancellationToken,
 }
 
 impl FileTransferHandler {
@@ -94,6 +104,19 @@ impl FileTransferHandler {
         };
         handler.start_expiry_sweeper();
         handler
+    }
+
+    pub(crate) fn capability(&self) -> Option<PreparedFileUploadCapability> {
+        matches!(
+            self.inner.availability,
+            PreparedFileUploadAvailability::EnabledForDevelopment
+        )
+        .then_some(PreparedFileUploadCapability {
+            protocol_version: PREPARED_FILE_UPLOAD_PROTOCOL_VERSION,
+            max_upload_bytes: MAX_PREPARED_FILE_UPLOAD_BYTES,
+            descriptor_kinds: vec![FileTransferUploadDescriptorKind::HttpsPut],
+            supports_status_reconciliation: true,
+        })
     }
 
     pub(crate) async fn prepare_upload(
@@ -137,6 +160,7 @@ impl FileTransferHandler {
             state: FileTransferOperationState::Prepared,
             error: None,
             terminal_at: None,
+            cancellation: CancellationToken::new(),
         };
 
         let mut operations = self.inner.operations.lock().await;
@@ -152,6 +176,70 @@ impl FileTransferHandler {
             digest,
             expires_at_unix_seconds,
         })
+    }
+
+    pub(crate) async fn start_upload(
+        &self,
+        params: FileTransferStartUploadParams,
+    ) -> Result<FileTransferStartUploadResponse, JSONRPCErrorError> {
+        self.require_enabled()?;
+        self.validate_transfer_id(&params.transfer_id)?;
+        {
+            let mut operations = self.inner.operations.lock().await;
+            let active_upload_count = active_uploads(&operations);
+            let operation = operations
+                .get_mut(&params.transfer_id)
+                .ok_or_else(|| not_found("unknown prepared upload".to_string()))?;
+            expire_operation(operation, Instant::now());
+            if operation.state != FileTransferOperationState::Prepared {
+                return Err(invalid_request(format!(
+                    "prepared upload is {}",
+                    state_name(operation.state)
+                )));
+            }
+            if active_upload_count >= MAX_ACTIVE_UPLOADS_PER_SESSION {
+                return Err(invalid_request(
+                    "active file upload quota exceeded".to_string(),
+                ));
+            }
+        }
+        let descriptor = validate_upload_descriptor(params.descriptor).await?;
+        let (bytes, cancellation) = {
+            let mut operations = self.inner.operations.lock().await;
+            let active_upload_count = active_uploads(&operations);
+            let operation = operations
+                .get_mut(&params.transfer_id)
+                .ok_or_else(|| not_found("unknown prepared upload".to_string()))?;
+            expire_operation(operation, Instant::now());
+            if operation.state != FileTransferOperationState::Prepared {
+                return Err(invalid_request(format!(
+                    "prepared upload is {}",
+                    state_name(operation.state)
+                )));
+            }
+            if active_upload_count >= MAX_ACTIVE_UPLOADS_PER_SESSION {
+                return Err(invalid_request(
+                    "active file upload quota exceeded".to_string(),
+                ));
+            }
+            let bytes = operation
+                .bytes
+                .take()
+                .ok_or_else(|| internal_error("prepared upload bytes are missing".to_string()))?;
+            operation.state = FileTransferOperationState::Uploading;
+            (bytes, operation.cancellation.clone())
+        };
+        self.inner.expiry_changed.notify_one();
+
+        let transfer_id = params.transfer_id;
+        let handler = self.clone();
+        let task_transfer_id = transfer_id.clone();
+        let _task = self.inner.tasks.spawn(async move {
+            let outcome = upload_bytes(bytes, descriptor, cancellation).await;
+            handler.finish_upload(&task_transfer_id, outcome).await;
+        });
+
+        Ok(FileTransferStartUploadResponse { transfer_id })
     }
 
     pub(crate) async fn status(
@@ -179,14 +267,22 @@ impl FileTransferHandler {
             .get_mut(&params.transfer_id)
             .ok_or_else(|| not_found("unknown file transfer operation".to_string()))?;
         expire_operation(operation, Instant::now());
-        if operation.state == FileTransferOperationState::Prepared {
-            operation.bytes = None;
-            set_terminal(
-                operation,
-                FileTransferOperationState::Canceled,
-                /*error*/ None,
-            );
-            self.inner.expiry_changed.notify_one();
+        match operation.state {
+            FileTransferOperationState::Prepared => {
+                operation.bytes = None;
+                set_terminal(
+                    operation,
+                    FileTransferOperationState::Canceled,
+                    /*error*/ None,
+                );
+                self.inner.expiry_changed.notify_one();
+            }
+            FileTransferOperationState::Uploading => {
+                operation.cancellation.cancel();
+                operation.state = FileTransferOperationState::CancelRequested;
+                operation.error = None;
+            }
+            _ => {}
         }
         Ok(FileTransferCancelResponse {
             state: operation.state,
@@ -199,10 +295,44 @@ impl FileTransferHandler {
         {
             let mut operations = self.inner.operations.lock().await;
             for operation in operations.values_mut() {
+                operation.cancellation.cancel();
                 operation.bytes = None;
+                if matches!(
+                    operation.state,
+                    FileTransferOperationState::Uploading
+                        | FileTransferOperationState::CancelRequested
+                ) {
+                    set_terminal(
+                        operation,
+                        FileTransferOperationState::CompletionUnknown,
+                        Some("upload completion was lost with the executor session".to_string()),
+                    );
+                }
             }
         }
         self.inner.tasks.wait().await;
+    }
+
+    async fn finish_upload(&self, transfer_id: &str, outcome: UploadOutcome) {
+        let mut operations = self.inner.operations.lock().await;
+        let Some(operation) = operations.get_mut(transfer_id) else {
+            return;
+        };
+        match outcome {
+            UploadOutcome::Succeeded => set_terminal(
+                operation,
+                FileTransferOperationState::Succeeded,
+                /*error*/ None,
+            ),
+            UploadOutcome::Failed(error) => {
+                set_terminal(operation, FileTransferOperationState::Failed, Some(error))
+            }
+            UploadOutcome::CompletionUnknown(error) => set_terminal(
+                operation,
+                FileTransferOperationState::CompletionUnknown,
+                Some(error),
+            ),
+        }
     }
 
     fn require_enabled(&self) -> Result<(), JSONRPCErrorError> {
@@ -321,6 +451,18 @@ fn prepared_bytes(operations: &HashMap<String, UploadOperation>) -> u64 {
         .sum()
 }
 
+fn active_uploads(operations: &HashMap<String, UploadOperation>) -> usize {
+    operations
+        .values()
+        .filter(|operation| {
+            matches!(
+                operation.state,
+                FileTransferOperationState::Uploading | FileTransferOperationState::CancelRequested
+            )
+        })
+        .count()
+}
+
 fn status_response(transfer_id: &str, operation: &UploadOperation) -> FileTransferStatusResponse {
     FileTransferStatusResponse {
         transfer_id: transfer_id.to_string(),
@@ -348,6 +490,19 @@ fn set_terminal(
     operation.state = state;
     operation.error = error;
     operation.terminal_at = Some(Instant::now());
+}
+
+fn state_name(state: FileTransferOperationState) -> &'static str {
+    match state {
+        FileTransferOperationState::Prepared => "prepared",
+        FileTransferOperationState::Uploading => "uploading",
+        FileTransferOperationState::CancelRequested => "cancel requested",
+        FileTransferOperationState::Succeeded => "succeeded",
+        FileTransferOperationState::Failed => "failed",
+        FileTransferOperationState::Canceled => "canceled",
+        FileTransferOperationState::CompletionUnknown => "completion unknown",
+        FileTransferOperationState::Expired => "expired",
+    }
 }
 
 fn unix_seconds(time: SystemTime) -> i64 {
