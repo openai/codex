@@ -27,6 +27,12 @@ pub struct ObserveRequest {
     pub yield_time_ms: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ReleaseObservationRequest {
+    pub cell_id: CellId,
+    pub generation: ObservationGeneration,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct ObservationGeneration(u64);

@@ -28,6 +28,7 @@ pub use runtime::DEFAULT_WAIT_YIELD_TIME_MS;
 pub use runtime::ObservationGeneration;
 pub use runtime::ObserveOutcome;
 pub use runtime::ObserveRequest;
+pub use runtime::ReleaseObservationRequest;
 pub use runtime::RuntimeResponse;
 pub use runtime::TerminateOutcome;
 pub use session::CellId;

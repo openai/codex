@@ -17,6 +17,7 @@ use codex_code_mode_protocol::NotificationFuture;
 use codex_code_mode_protocol::ObservationGeneration;
 use codex_code_mode_protocol::ObserveOutcome;
 use codex_code_mode_protocol::ObserveRequest;
+use codex_code_mode_protocol::ReleaseObservationRequest;
 #[cfg(test)]
 use codex_code_mode_protocol::RuntimeResponse;
 use codex_code_mode_protocol::TerminateOutcome;
@@ -102,9 +103,14 @@ pub struct CodeModeService {
     pending_generations: Mutex<HashMap<runtime::CellId, runtime::PendingGeneration>>,
 }
 
-struct ObservationRecord {
-    request: ObserveRequest,
-    result_rx: watch::Receiver<Option<Result<ObserveOutcome, String>>>,
+enum ObservationRecord {
+    Retained {
+        request: ObserveRequest,
+        result_rx: watch::Receiver<Option<Result<ObserveOutcome, String>>>,
+    },
+    Released {
+        generation: ObservationGeneration,
+    },
 }
 
 impl CodeModeService {
@@ -150,17 +156,24 @@ impl CodeModeService {
         let cell_id = request.cell_id.clone();
         let mut result_rx = {
             let mut observations = self.observations.lock().await;
-            if let Some(existing) = observations.get(&cell_id) {
-                if existing.request.generation == request.generation {
-                    if existing.request != request {
+            let replay = match observations.get(&cell_id) {
+                Some(ObservationRecord::Retained {
+                    request: existing_request,
+                    result_rx,
+                }) if existing_request.generation == request.generation => {
+                    if *existing_request != request {
                         return Err(format!(
                             "observation generation {} for cell {cell_id} was reused for a different request",
                             request.generation.get()
                         ));
                     }
-                    existing.result_rx.clone()
-                } else {
-                    let Some(next_generation) = existing.request.generation.next() else {
+                    Some(result_rx.clone())
+                }
+                Some(ObservationRecord::Retained {
+                    request: existing_request,
+                    result_rx,
+                }) => {
+                    let Some(next_generation) = existing_request.generation.next() else {
                         return Err(format!(
                             "observation generation exhausted for cell {cell_id}"
                         ));
@@ -172,37 +185,43 @@ impl CodeModeService {
                             request.generation.get()
                         ));
                     }
-                    if existing.result_rx.borrow().is_none() {
+                    if result_rx.borrow().is_none() {
                         return Err(format!(
                             "observation generation {} for cell {cell_id} is still pending",
-                            existing.request.generation.get()
+                            existing_request.generation.get()
                         ));
                     }
-                    let (result_tx, result_rx) = watch::channel(None);
-                    observations.insert(
-                        cell_id,
-                        ObservationRecord {
-                            request: request.clone(),
-                            result_rx: result_rx.clone(),
-                        },
-                    );
-                    let runtime = Arc::clone(&self.runtime);
-                    tokio::spawn(async move {
-                        let result = begin_observe_runtime(runtime, request).await.await;
-                        result_tx.send_replace(Some(result));
-                    });
-                    result_rx
+                    None
                 }
-            } else {
-                if request.generation != ObservationGeneration::INITIAL {
+                Some(ObservationRecord::Released { generation }) => {
+                    let Some(next_generation) = generation.next() else {
+                        return Err(format!(
+                            "observation generation exhausted for cell {cell_id}"
+                        ));
+                    };
+                    if request.generation != next_generation {
+                        return Err(format!(
+                            "expected observation generation {} for cell {cell_id}, got {}",
+                            next_generation.get(),
+                            request.generation.get()
+                        ));
+                    }
+                    None
+                }
+                None if request.generation != ObservationGeneration::INITIAL => {
                     return Err(format!(
                         "first observation for cell {cell_id} must use generation 0"
                     ));
                 }
+                None => None,
+            };
+            if let Some(result_rx) = replay {
+                result_rx
+            } else {
                 let (result_tx, result_rx) = watch::channel(None);
                 observations.insert(
                     cell_id,
-                    ObservationRecord {
+                    ObservationRecord::Retained {
                         request: request.clone(),
                         result_rx: result_rx.clone(),
                     },
@@ -225,6 +244,76 @@ impl CodeModeService {
             .borrow()
             .clone()
             .ok_or_else(|| "observation ended before producing a result".to_string())?
+    }
+
+    pub async fn release_observation(
+        &self,
+        request: ReleaseObservationRequest,
+    ) -> Result<(), String> {
+        let mut observations = self.observations.lock().await;
+        let Some(record) = observations.get(&request.cell_id) else {
+            return Ok(());
+        };
+        match record {
+            ObservationRecord::Released { generation } => {
+                if request.generation <= *generation {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "cannot release future observation generation {} for cell {}",
+                    request.generation.get(),
+                    request.cell_id
+                ));
+            }
+            ObservationRecord::Retained {
+                request: retained_request,
+                result_rx,
+            } => {
+                if request.generation < retained_request.generation {
+                    return Ok(());
+                }
+                if request.generation > retained_request.generation {
+                    return Err(format!(
+                        "cannot release future observation generation {} for cell {}; latest generation is {}",
+                        request.generation.get(),
+                        request.cell_id,
+                        retained_request.generation.get()
+                    ));
+                }
+                let result = result_rx.borrow();
+                let result = result.as_ref().ok_or_else(|| {
+                    format!(
+                        "observation generation {} for cell {} is still pending",
+                        request.generation.get(),
+                        request.cell_id
+                    )
+                })?;
+                let outcome = result.as_ref().map_err(|error| {
+                    format!(
+                        "observation generation {} for cell {} failed and cannot be released: {error}",
+                        request.generation.get(),
+                        request.cell_id
+                    )
+                })?;
+                if !matches!(
+                    outcome,
+                    ObserveOutcome::Completed { .. } | ObserveOutcome::Terminated { .. }
+                ) {
+                    return Err(format!(
+                        "observation generation {} for cell {} is not terminal",
+                        request.generation.get(),
+                        request.cell_id
+                    ));
+                }
+            }
+        }
+        observations.insert(
+            request.cell_id,
+            ObservationRecord::Released {
+                generation: request.generation,
+            },
+        );
+        Ok(())
     }
 
     #[cfg(test)]
@@ -386,6 +475,13 @@ impl CodeModeSession for CodeModeService {
         request: ObserveRequest,
     ) -> CodeModeSessionResultFuture<'a, ObserveOutcome> {
         Box::pin(CodeModeService::observe(self, request))
+    }
+
+    fn release_observation<'a>(
+        &'a self,
+        request: ReleaseObservationRequest,
+    ) -> CodeModeSessionResultFuture<'a, ()> {
+        Box::pin(CodeModeService::release_observation(self, request))
     }
 
     fn terminate<'a>(

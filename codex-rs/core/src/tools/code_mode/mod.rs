@@ -175,6 +175,25 @@ impl CodeModeService {
                 yield_time_ms,
             })
             .await?;
+        let is_terminal = matches!(
+            &outcome,
+            codex_code_mode::ObserveOutcome::Completed { .. }
+                | codex_code_mode::ObserveOutcome::Terminated { .. }
+        );
+        if is_terminal
+            && let Err(error) = self
+                .session()?
+                .release_observation(codex_code_mode::ReleaseObservationRequest {
+                    cell_id: cell_id.clone(),
+                    generation,
+                })
+                .await
+        {
+            tracing::warn!(
+                "failed to release terminal observation generation {} for code-mode cell {cell_id}: {error}",
+                generation.get()
+            );
+        }
         let next_generation = generation.next().ok_or_else(|| {
             format!("observation generation exhausted for code-mode cell {cell_id}")
         })?;
@@ -450,6 +469,7 @@ fn build_freeform_tool_payload(
 #[cfg(test)]
 mod tests {
     use super::CodeModeDispatchBroker;
+    use super::CodeModeService;
     use super::InitialObservationGuard;
     use super::build_nested_tool_payload;
     use super::cell_id_for_tool_call;
@@ -460,17 +480,20 @@ mod tests {
     use codex_code_mode::CodeModeSessionResultFuture;
     use codex_code_mode::CodeModeToolKind;
     use codex_code_mode::CreateCellRequest;
+    use codex_code_mode::ObservationGeneration;
     use codex_code_mode::ObserveOutcome;
     use codex_code_mode::ObserveRequest;
     use codex_code_mode::TerminateOutcome;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_tools::ToolName;
     use serde_json::json;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::sync::Mutex;
 
     struct RecordingCodeModeSession {
         terminated_cells: Mutex<Vec<CellId>>,
+        released_observations: Mutex<Vec<codex_code_mode::ReleaseObservationRequest>>,
         termination: tokio::sync::Notify,
     }
 
@@ -488,9 +511,28 @@ mod tests {
 
         fn observe<'a>(
             &'a self,
-            _request: ObserveRequest,
+            request: ObserveRequest,
         ) -> CodeModeSessionResultFuture<'a, ObserveOutcome> {
-            Box::pin(async { panic!("unexpected cell observation") })
+            Box::pin(async move {
+                Ok(ObserveOutcome::Completed {
+                    cell_id: request.cell_id,
+                    content_items: Vec::new(),
+                    error_text: None,
+                })
+            })
+        }
+
+        fn release_observation<'a>(
+            &'a self,
+            request: codex_code_mode::ReleaseObservationRequest,
+        ) -> CodeModeSessionResultFuture<'a, ()> {
+            Box::pin(async move {
+                self.released_observations
+                    .lock()
+                    .expect("released-observation lock should not be poisoned")
+                    .push(request);
+                Ok(())
+            })
         }
 
         fn terminate<'a>(
@@ -590,6 +632,7 @@ mod tests {
     async fn dropping_initial_observation_guard_terminates_the_cell() {
         let session = Arc::new(RecordingCodeModeSession {
             terminated_cells: Mutex::new(Vec::new()),
+            released_observations: Mutex::new(Vec::new()),
             termination: tokio::sync::Notify::new(),
         });
         let session_trait: Arc<dyn CodeModeSession> = session.clone();
@@ -618,6 +661,40 @@ mod tests {
                 .lock()
                 .expect("terminated-cell lock should not be poisoned"),
             vec![cell_id]
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_observation_is_released_after_core_reads_it() {
+        let session = Arc::new(RecordingCodeModeSession {
+            terminated_cells: Mutex::new(Vec::new()),
+            released_observations: Mutex::new(Vec::new()),
+            termination: tokio::sync::Notify::new(),
+        });
+        let cell_id = CellId::new("cell-1".to_string());
+        let service = CodeModeService {
+            session: Some(session.clone()),
+            dispatch_broker: Arc::new(CodeModeDispatchBroker::new()),
+            observation_generations: Mutex::new(HashMap::new()),
+        };
+
+        assert_eq!(
+            service.observe(cell_id.clone(), /*yield_time_ms*/ 10).await,
+            Ok(ObserveOutcome::Completed {
+                cell_id: cell_id.clone(),
+                content_items: Vec::new(),
+                error_text: None,
+            })
+        );
+        assert_eq!(
+            *session
+                .released_observations
+                .lock()
+                .expect("released-observation lock should not be poisoned"),
+            vec![codex_code_mode::ReleaseObservationRequest {
+                cell_id,
+                generation: ObservationGeneration::INITIAL,
+            }]
         );
     }
 }

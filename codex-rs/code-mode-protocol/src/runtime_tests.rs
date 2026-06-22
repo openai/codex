@@ -101,6 +101,16 @@ fn requests_round_trip_with_exact_tool_and_namespace_fields() {
             "yield_time_ms": 250,
         }),
     );
+    assert_json_round_trip(
+        &ReleaseObservationRequest {
+            cell_id: CellId::new("cell-a7".to_string()),
+            generation: ObservationGeneration::new(/*value*/ 3),
+        },
+        json!({
+            "cell_id": "cell-a7",
+            "generation": 3,
+        }),
+    );
 }
 
 #[test]

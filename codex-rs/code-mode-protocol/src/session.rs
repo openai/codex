@@ -12,6 +12,7 @@ use crate::CodeModeNestedToolCall;
 use crate::CreateCellRequest;
 use crate::ObserveOutcome;
 use crate::ObserveRequest;
+use crate::ReleaseObservationRequest;
 use crate::TerminateOutcome;
 
 pub type CodeModeSessionResultFuture<'a, T> =
@@ -94,6 +95,11 @@ pub trait CodeModeSession: Send + Sync {
         &'a self,
         request: ObserveRequest,
     ) -> CodeModeSessionResultFuture<'a, ObserveOutcome>;
+
+    fn release_observation<'a>(
+        &'a self,
+        request: ReleaseObservationRequest,
+    ) -> CodeModeSessionResultFuture<'a, ()>;
 
     fn terminate<'a>(
         &'a self,

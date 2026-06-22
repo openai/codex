@@ -367,6 +367,16 @@ async fn next_observation_generation_evicts_the_previous_result() {
             }],
         }
     );
+    assert_eq!(
+        service
+            .release_observation(ReleaseObservationRequest {
+                cell_id: cell_id("1"),
+                generation: ObservationGeneration::INITIAL,
+            })
+            .await
+            .unwrap_err(),
+        "observation generation 0 for cell 1 is not terminal"
+    );
 
     assert_eq!(
         service
@@ -392,7 +402,10 @@ async fn next_observation_generation_evicts_the_previous_result() {
         assert_eq!(
             observations
                 .get(&cell_id("1"))
-                .map(|record| record.request.generation),
+                .and_then(|record| match record {
+                    ObservationRecord::Retained { request, .. } => Some(request.generation),
+                    ObservationRecord::Released { .. } => None,
+                }),
             Some(ObservationGeneration::new(/*value*/ 1))
         );
     }
@@ -407,6 +420,18 @@ async fn next_observation_generation_evicts_the_previous_result() {
             .unwrap_err(),
         "expected observation generation 2 for cell 1, got 0"
     );
+
+    let release = ReleaseObservationRequest {
+        cell_id: cell_id("1"),
+        generation: ObservationGeneration::new(/*value*/ 1),
+    };
+    assert_eq!(service.release_observation(release.clone()).await, Ok(()));
+    assert_eq!(service.release_observation(release).await, Ok(()));
+    assert!(matches!(
+        service.observations.lock().await.get(&cell_id("1")),
+        Some(ObservationRecord::Released { generation })
+            if *generation == ObservationGeneration::new(/*value*/ 1)
+    ));
 }
 
 #[tokio::test]
