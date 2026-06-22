@@ -92,8 +92,8 @@ use crate::permissions::default_read_only_subpaths_for_writable_root;
 pub use crate::request_permissions::RequestPermissionsArgs;
 pub use crate::request_user_input::RequestUserInputEvent;
 
-/// Open/close tags for special user-input blocks. Used across crates to avoid
-/// duplicated hardcoded strings.
+/// Open/close tags for special context blocks. Used across crates to avoid duplicated hardcoded
+/// strings.
 pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
 pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
@@ -110,6 +110,8 @@ pub const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
 pub const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
+pub const CONTEXT_WINDOW_OPEN_TAG: &str = "<context_window>";
+pub const CONTEXT_WINDOW_CLOSE_TAG: &str = "</context_window>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
 // TODO(anp): Replace `TurnEnvironmentSelection` with `PathUri` once path URIs carry environment
