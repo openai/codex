@@ -54,6 +54,8 @@ async fn selected_execution_environment_runs_target_native_command() -> Result<(
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            sandbox: None,
+            enforce_managed_network: false,
         })
         .await?;
     let mut events = started.process.subscribe_events();
