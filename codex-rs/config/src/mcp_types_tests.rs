@@ -3,15 +3,6 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[cfg(not(windows))]
-const FOREIGN_CWD: &str = r"C:\Users\openai\share";
-#[cfg(not(windows))]
-const FOREIGN_CWD_URI: &str = "file:///C:/Users/openai/share";
-#[cfg(windows)]
-const FOREIGN_CWD: &str = "/home/openai/share";
-#[cfg(windows)]
-const FOREIGN_CWD_URI: &str = "file:///home/openai/share";
-
 #[test]
 fn deserialize_stdio_command_server_config() {
     let cfg: McpServerConfig = toml::from_str(
@@ -61,36 +52,6 @@ fn deserialize_stdio_command_server_config_with_args() {
 }
 
 #[test]
-fn deserialize_remote_stdio_server_requires_absolute_cwd() {
-    let missing_cwd = toml::from_str::<McpServerConfig>(
-        r#"
-            command = "echo"
-            environment_id = "remote"
-        "#,
-    )
-    .expect_err("remote stdio MCP should require cwd");
-    assert!(
-        missing_cwd
-            .to_string()
-            .contains("remote stdio MCP servers require an absolute cwd"),
-        "unexpected error: {missing_cwd}"
-    );
-
-    let relative_cwd = toml::from_str::<McpServerConfig>(
-        r#"
-            command = "echo"
-            environment_id = "remote"
-            cwd = "relative"
-        "#,
-    )
-    .expect_err("remote stdio MCP should require absolute cwd");
-    assert!(
-        relative_cwd.to_string().contains("got `relative`"),
-        "unexpected error: {relative_cwd}"
-    );
-}
-
-#[test]
 fn deserialize_remote_stdio_server_accepts_absolute_cwd() {
     let cwd = std::env::temp_dir();
     let cfg: McpServerConfig = match toml::from_str(&format!(
@@ -104,37 +65,6 @@ fn deserialize_remote_stdio_server_accepts_absolute_cwd() {
         Err(error) => panic!("remote stdio MCP should accept absolute cwd: {error}"),
     };
 
-    assert_eq!(
-        cfg.transport,
-        McpServerTransportConfig::Stdio {
-            command: "echo".to_string(),
-            args: vec![],
-            env: None,
-            env_vars: Vec::new(),
-            cwd: Some(cwd),
-        }
-    );
-}
-
-#[test]
-fn deserialize_remote_stdio_server_accepts_foreign_absolute_cwd() {
-    let cwd = PathBuf::from(FOREIGN_CWD);
-    let cwd_toml = toml::Value::String(FOREIGN_CWD.to_string());
-    let cfg: McpServerConfig = toml::from_str(&format!(
-        r#"
-            command = "echo"
-            environment_id = "remote"
-            cwd = {cwd_toml}
-        "#
-    ))
-    .expect("remote stdio MCP should accept a foreign absolute cwd");
-
-    assert_eq!(
-        resolve_remote_stdio_cwd(&cfg.transport, &cfg.environment_id),
-        Ok(Some(
-            PathUri::parse(FOREIGN_CWD_URI).expect("foreign cwd URI")
-        ))
-    );
     assert_eq!(
         cfg.transport,
         McpServerTransportConfig::Stdio {

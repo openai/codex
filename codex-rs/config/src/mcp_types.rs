@@ -5,8 +5,6 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use codex_utils_path_uri::LegacyAppPathString;
-use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -360,7 +358,6 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
 
         let environment_id =
             environment_id.unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string());
-        resolve_remote_stdio_cwd(&transport, &environment_id)?;
 
         Ok(Self {
             transport,
@@ -395,34 +392,6 @@ impl<'de> Deserialize<'de> for McpServerConfig {
 
 const fn default_enabled() -> bool {
     true
-}
-
-/// Resolves a remote stdio server's cwd without applying the current host's
-/// path rules. Returns `None` for local or non-stdio servers.
-pub fn resolve_remote_stdio_cwd(
-    transport: &McpServerTransportConfig,
-    environment_id: &str,
-) -> Result<Option<PathUri>, String> {
-    if environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
-        return Ok(None);
-    }
-    let McpServerTransportConfig::Stdio { cwd, .. } = transport else {
-        return Ok(None);
-    };
-    let Some(cwd) = cwd else {
-        return Err(format!(
-            "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`"
-        ));
-    };
-    LegacyAppPathString::from_path(cwd)
-        .to_inferred_path_uri()
-        .map(Some)
-        .ok_or_else(|| {
-            format!(
-                "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`, got `{}`",
-                cwd.display()
-            )
-        })
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

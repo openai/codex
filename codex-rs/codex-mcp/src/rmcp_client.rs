@@ -609,13 +609,6 @@ async fn make_rmcp_client(
     let resolved_environment = runtime_context
         .resolve_server_environment(server_name, &config)
         .map_err(|err| StartupOutcomeError::from(anyhow!(err)))?;
-    let resolved_remote_stdio_cwd = match &config.transport {
-        McpServerTransportConfig::Stdio { .. } => {
-            codex_config::resolve_remote_stdio_cwd(&config.transport, &config.environment_id)
-                .map_err(|err| StartupOutcomeError::from(anyhow!(err)))?
-        }
-        McpServerTransportConfig::StreamableHttp { .. } => None,
-    };
     let is_local_environment = config.is_local_environment();
     let McpServerConfig { transport, .. } = config;
 
@@ -646,9 +639,6 @@ async fn make_rmcp_client(
                     unreachable!(
                         "non-local stdio MCP servers resolve an environment before launch"
                     );
-                };
-                let Some(_) = resolved_remote_stdio_cwd else {
-                    unreachable!("non-local stdio MCP servers resolve a cwd before launch");
                 };
                 Arc::new(ExecutorStdioServerLauncher::new(
                     environment.get_exec_backend(),

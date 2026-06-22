@@ -117,7 +117,6 @@ pub use mcp_types::McpServerOAuthConfig;
 pub use mcp_types::McpServerToolConfig;
 pub use mcp_types::McpServerTransportConfig;
 pub use mcp_types::RawMcpServerConfig;
-pub use mcp_types::resolve_remote_stdio_cwd;
 pub use merge::merge_toml_values;
 pub use overrides::build_cli_overrides_layer;
 pub use plugin_edit::PluginConfigEdit;
