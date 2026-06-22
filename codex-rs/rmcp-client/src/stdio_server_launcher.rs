@@ -35,6 +35,7 @@ use codex_exec_server::ExecEnvPolicy;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 #[cfg(unix)]
 use codex_utils_pty::process_group::kill_process_group;
@@ -479,6 +480,9 @@ impl ExecutorStdioServerLauncher {
                 "executor stdio server requires an explicit cwd",
             ));
         };
+        let cwd: PathUri = LegacyAppPathString::from_path(&cwd)
+            .try_into()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         let program_name = program.to_string_lossy().into_owned();
         let envs = create_env_overlay_for_remote_mcp_server(env, &env_vars);
         let remote_env_vars = remote_mcp_env_var_names(&env_vars);
@@ -488,7 +492,6 @@ impl ExecutorStdioServerLauncher {
         // before sending an executor request.
         let argv = Self::process_api_argv(&program, &args).map_err(io::Error::other)?;
         let env = Self::process_api_env(envs).map_err(io::Error::other)?;
-        let cwd = PathUri::from_host_native_path(cwd)?;
         let process_id = ExecutorProcessTransport::next_process_id();
         // Start the MCP server process on the executor with raw pipes. `tty=false`
         // keeps stdout as a clean protocol stream, while `pipe_stdin=true` lets
