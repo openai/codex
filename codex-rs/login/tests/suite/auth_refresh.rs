@@ -1220,6 +1220,7 @@ impl RefreshTokenTestContext {
             /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await;
 
