@@ -82,7 +82,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
         .assert()
         .success();
 
-    let requests = collector.finish_after_path("/v1/metrics", Duration::from_secs(5))?;
+    let requests = collector.finish_after_exec_server_metrics(Duration::from_secs(10))?;
     let metrics = requests
         .iter()
         .filter(|request| request.path == "/v1/metrics")
@@ -152,13 +152,18 @@ impl TestCollector {
         })
     }
 
-    fn finish_after_path(self, path: &str, timeout: Duration) -> Result<Vec<CapturedRequest>> {
+    fn finish_after_exec_server_metrics(self, timeout: Duration) -> Result<Vec<CapturedRequest>> {
         let deadline = Instant::now() + timeout;
         let mut requests = Vec::new();
         while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
             match self.requests.recv_timeout(remaining) {
                 Ok(request) => {
-                    let found = request.path == path;
+                    let found = request.path == "/v1/metrics"
+                        && request.body.contains("exec_server_connections_active")
+                        && request.body.contains("exec_server_requests_total")
+                        && request.body.contains("initialize")
+                        && (request.body.contains("success")
+                            || request.body.contains("disconnected"));
                     requests.push(request);
                     if found {
                         break;
