@@ -397,6 +397,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn handle_accepts_explicit_high_detail() {
         let (session, mut turn) = make_session_and_context().await;
+        Arc::make_mut(&mut turn.config)
+            .features
+            .disable(Feature::ResizeAllImages)
+            .expect("test config should allow feature update");
         let image_dir = tempfile::tempdir().expect("create image temp dir");
         let image_cwd = image_dir.abs();
 
