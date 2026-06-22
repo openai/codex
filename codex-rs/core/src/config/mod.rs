@@ -4108,7 +4108,7 @@ impl Config {
     }
 
     /// Returns whether effective requirements allow selecting a concrete profile.
-    pub fn permission_profile_allowed(
+    pub fn is_permission_profile_allowed(
         &self,
         profile_id: &str,
         permission_profile: &PermissionProfile,

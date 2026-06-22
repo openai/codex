@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 
 impl ChatWidget {
     pub(super) fn open_permission_profiles_popup(&mut self) {
@@ -48,7 +49,7 @@ impl ChatWidget {
         }
         items.push(self.builtin_permission_mode_selection_item(
             full_access,
-            ":danger-full-access",
+            BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
             full_access.description.to_string(),
             AskForApproval::from(full_access.approval),
             ApprovalsReviewer::User,
@@ -146,7 +147,7 @@ impl ChatWidget {
                 .or_else(|| {
                     (!self
                         .config
-                        .permission_profile_allowed(id, &preset.permission_profile))
+                        .is_permission_profile_allowed(id, &preset.permission_profile))
                     .then(|| "Disabled by requirements.".to_string())
                 }),
             ..Default::default()
