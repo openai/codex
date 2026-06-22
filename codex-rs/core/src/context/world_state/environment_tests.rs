@@ -1,9 +1,11 @@
 use super::*;
+use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
 use anyhow::Result;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
@@ -58,7 +60,7 @@ fn renders_full_environment_state() -> Result<()> {
   </subagents>
 </environment_context>"#,
         )],
-        world_state.render_full(),
+        render_fragments(world_state.render_full()),
     );
     Ok(())
 }
@@ -106,7 +108,7 @@ fn renders_only_changed_environments() -> Result<()> {
   </environments>
 </environment_context>"#,
         )],
-        current.render_diff(&previous),
+        render_fragments(current.render_diff(&previous)),
     );
     Ok(())
 }
@@ -162,7 +164,7 @@ fn persisted_turn_context_values_render_a_diff() -> Result<()> {
   <filesystem><permission_profile type="external"><file_system type="external" /></permission_profile></filesystem>
 </environment_context>"#,
         )],
-        current.render_diff(&previous),
+        render_fragments(current.render_diff(&previous)),
     );
     Ok(())
 }
@@ -188,7 +190,7 @@ fn single_environment_diff_ignores_shell() -> Result<()> {
         ..Default::default()
     };
 
-    assert_eq!(None, current.render_diff(&previous));
+    assert_eq!(None, render_fragment(current.render_diff(Some(&previous))));
     Ok(())
 }
 
@@ -212,7 +214,7 @@ fn removed_legacy_environment_renders_unavailable() -> Result<()> {
   </environments>
 </environment_context>"#,
         )),
-        EnvironmentsState::default().render_diff(&previous),
+        render_fragment(EnvironmentsState::default().render_diff(Some(&previous))),
     );
     Ok(())
 }
@@ -231,6 +233,17 @@ fn starting(cwd: &str) -> Result<EnvironmentState> {
         status: Some(EnvironmentStatus::Starting),
         shell: None,
     })
+}
+
+fn render_fragments(fragments: Vec<Box<dyn ContextualUserFragment>>) -> Vec<ResponseItem> {
+    fragments
+        .into_iter()
+        .map(ContextualUserFragment::into_boxed_response_item)
+        .collect()
+}
+
+fn render_fragment(fragment: Option<Box<dyn ContextualUserFragment>>) -> Option<ResponseItem> {
+    fragment.map(ContextualUserFragment::into_boxed_response_item)
 }
 
 fn user_message(text: &str) -> ResponseItem {

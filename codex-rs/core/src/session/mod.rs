@@ -3258,18 +3258,16 @@ impl Session {
                 .render(),
             );
         }
-        if turn_context.config.include_environment_context {
-            let subagents = self
-                .services
+        let environment_subagents = if turn_context.config.include_environment_context {
+            self.services
                 .agent_control
                 .format_environment_context_subagents(self.thread_id)
-                .await;
-            contextual_user_sections.push(
-                crate::context::EnvironmentsState::from_turn_context(turn_context)
-                    .with_subagents(subagents)
-                    .render(),
-            );
-        }
+                .await
+        } else {
+            String::new()
+        };
+        let world_state_fragments =
+            build_world_state_from_turn_context(turn_context, &environment_subagents).render_full();
 
         let multi_agent_v2_usage_hint_text =
             multi_agents::usage_hint_text(turn_context, &session_source);
@@ -3315,6 +3313,9 @@ impl Session {
         {
             items.push(contextual_user_message);
         }
+        items.extend(crate::context_manager::updates::merge_contextual_fragments(
+            world_state_fragments,
+        ));
         // Emit the guardian policy prompt as a separate developer item so the guardian
         // subagent sees a distinct, easy-to-audit instruction block.
         if separate_guardian_developer_message

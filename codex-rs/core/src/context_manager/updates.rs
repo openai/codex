@@ -199,6 +199,26 @@ pub(crate) fn build_contextual_user_message(text_sections: Vec<String>) -> Optio
     build_text_message("user", text_sections)
 }
 
+pub(crate) fn merge_contextual_fragments(
+    fragments: Vec<Box<dyn ContextualUserFragment>>,
+) -> Vec<ResponseItem> {
+    let mut messages: Vec<(&str, Vec<String>)> = Vec::with_capacity(fragments.len());
+    for fragment in fragments {
+        let role = fragment.role();
+        let text = fragment.render();
+        match messages.last_mut() {
+            Some((previous_role, text_sections)) if *previous_role == role => {
+                text_sections.push(text);
+            }
+            _ => messages.push((role, vec![text])),
+        }
+    }
+    messages
+        .into_iter()
+        .filter_map(|(role, text_sections)| build_text_message(role, text_sections))
+        .collect()
+}
+
 fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<ResponseItem> {
     if text_sections.is_empty() {
         return None;
@@ -232,7 +252,8 @@ pub(crate) fn build_settings_update_items(
     let world_state_updates = previous
         .map(|previous| {
             let previous = build_world_state_from_turn_context_item(previous);
-            build_world_state_from_turn_context(next).render_diff(&previous)
+            let fragments = build_world_state_from_turn_context(next, "").render_diff(&previous);
+            merge_contextual_fragments(fragments)
         })
         .unwrap_or_default();
     let developer_update_sections = [

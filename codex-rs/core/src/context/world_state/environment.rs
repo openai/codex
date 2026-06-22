@@ -5,7 +5,6 @@ use crate::context::environment_context::NetworkContext;
 use crate::context::environment_context::push_xml_escaped_text;
 use crate::session::turn_context::TurnContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -108,7 +107,10 @@ impl EnvironmentsState {
         self
     }
 
-    pub(crate) fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
+    pub(crate) fn render_diff(
+        &self,
+        previous: Option<&Self>,
+    ) -> Option<Box<dyn ContextualUserFragment>> {
         WorldStateSection::render_diff(self, previous)
     }
 
@@ -132,7 +134,9 @@ impl EnvironmentsState {
 }
 
 impl WorldStateSection for EnvironmentsState {
-    fn render_diff(&self, previous: &Self) -> Option<ResponseItem> {
+    fn render_diff(&self, previous: Option<&Self>) -> Option<Box<dyn ContextualUserFragment>> {
+        let empty = Self::default();
+        let previous = previous.unwrap_or(&empty);
         let turn_context_values_changed = self.current_date != previous.current_date
             || self.timezone != previous.timezone
             || self.network != previous.network
@@ -155,7 +159,7 @@ impl WorldStateSection for EnvironmentsState {
                 .values()
                 .all(|update| matches!(update, EnvironmentUpdate::Current(_)));
         (!updates.is_empty() || turn_context_values_changed).then(|| {
-            ContextualUserFragment::into(RenderedEnvironments {
+            Box::new(RenderedEnvironments {
                 updates,
                 legacy_single,
                 current_date: self.current_date.clone(),
@@ -163,7 +167,7 @@ impl WorldStateSection for EnvironmentsState {
                 network: self.network.clone(),
                 filesystem: self.filesystem.clone(),
                 subagents: self.subagents.clone(),
-            })
+            }) as Box<dyn ContextualUserFragment>
         })
     }
 }
