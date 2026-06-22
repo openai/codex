@@ -40,7 +40,7 @@ async fn hydrate_sends_bearer_token_and_preserves_metadata() {
         PersonalAccessTokenAuth {
             access_token: "at-example".to_string(),
             metadata: PersonalAccessTokenMetadata {
-                email: "user@example.com".to_string(),
+                email: Some("user@example.com".to_string()),
                 chatgpt_user_id: "user-123".to_string(),
                 chatgpt_account_id: "account-123".to_string(),
                 chatgpt_plan_type: "enterprise".to_string(),
@@ -52,7 +52,7 @@ async fn hydrate_sends_bearer_token_and_preserves_metadata() {
 }
 
 #[tokio::test]
-async fn hydrate_rejects_missing_email() {
+async fn hydrate_preserves_missing_email() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(WHOAMI_PATH))
@@ -62,13 +62,22 @@ async fn hydrate_rejects_missing_email() {
         .await;
 
     let endpoint = whoami_endpoint(&server.uri());
-    let err = hydrate_personal_access_token(&create_client(), &endpoint, "at-example")
+    let auth = hydrate_personal_access_token(&create_client(), &endpoint, "at-example")
         .await
-        .expect_err("personal access token hydration should reject missing email");
+        .expect("personal access token hydration should accept missing email");
 
-    assert!(
-        err.to_string()
-            .contains("failed to decode personal access token metadata")
+    assert_eq!(
+        auth,
+        PersonalAccessTokenAuth {
+            access_token: "at-example".to_string(),
+            metadata: PersonalAccessTokenMetadata {
+                email: None,
+                chatgpt_user_id: "user-123".to_string(),
+                chatgpt_account_id: "account-123".to_string(),
+                chatgpt_plan_type: "enterprise".to_string(),
+                chatgpt_account_is_fedramp: true,
+            },
+        }
     );
     server.verify().await;
 }

@@ -506,8 +506,8 @@ impl CodexAuth {
     /// Returns `None` if Codex backend auth does not expose an account email.
     pub fn get_account_email(&self) -> Option<String> {
         match self {
-            Self::AgentIdentity(auth) => Some(auth.email().to_string()),
-            Self::PersonalAccessToken(auth) => Some(auth.email().to_string()),
+            Self::AgentIdentity(auth) => auth.email().map(str::to_string),
+            Self::PersonalAccessToken(auth) => auth.email().map(str::to_string),
             _ => self.get_current_token_data().and_then(|t| t.id_token.email),
         }
     }
@@ -723,7 +723,7 @@ impl ManagedChatGptAgentIdentityBinding {
         Some(Self {
             account_id,
             chatgpt_user_id,
-            email: token_data.id_token.email.clone().unwrap_or_default(),
+            email: token_data.id_token.email.clone(),
             plan_type: auth.account_plan_type().unwrap_or(AccountPlanType::Unknown),
             chatgpt_account_is_fedramp: auth.is_fedramp_account(),
             access_token: token_data.access_token,

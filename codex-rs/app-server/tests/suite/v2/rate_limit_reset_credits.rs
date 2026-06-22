@@ -204,12 +204,11 @@ async fn consume_timeout_releases_account_auth_queue() -> Result<()> {
         "rate limit reset consume timed out"
     );
 
-    let account_error = read_error_response(&mut mcp, account_id).await?;
-    assert_eq!(account_error.error.code, INVALID_REQUEST_ERROR_CODE);
-    assert_eq!(
-        account_error.error.message,
-        "email and plan type are required for chatgpt authentication"
-    );
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(account_id)),
+    )
+    .await??;
     Ok(())
 }
 

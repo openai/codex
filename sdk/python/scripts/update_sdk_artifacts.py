@@ -503,6 +503,33 @@ def _annotate_schema(value: Any, base: str | None = None) -> None:
         _annotate_schema(child, base)
 
 
+def _make_chatgpt_account_email_nullable(schema: dict[str, Any]) -> None:
+    definitions = schema.get("definitions")
+    if not isinstance(definitions, dict):
+        raise RuntimeError("Schema bundle is missing definitions")
+
+    account = definitions.get("Account")
+    if not isinstance(account, dict):
+        raise RuntimeError("Schema bundle is missing the Account definition")
+
+    for variant in account.get("oneOf", []):
+        if not isinstance(variant, dict):
+            continue
+        properties = variant.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        account_type = properties.get("type")
+        if not isinstance(account_type, dict) or account_type.get("enum") != ["chatgpt"]:
+            continue
+        email = properties.get("email")
+        if not isinstance(email, dict):
+            raise RuntimeError("ChatGPT account schema is missing email")
+        email["type"] = ["string", "null"]
+        return
+
+    raise RuntimeError("Schema bundle is missing the ChatGPT account variant")
+
+
 def generate_schema_from_pinned_runtime(schema_dir: Path) -> Path:
     """Generate app-server schemas by invoking the installed pinned runtime binary."""
     codex_path = pinned_runtime_codex_path()
@@ -525,6 +552,7 @@ def generate_schema_from_pinned_runtime(schema_dir: Path) -> Path:
 def _normalized_schema_bundle_text(schema_dir: Path) -> str:
     """Normalize the schema bundle before feeding it to the Python type generator."""
     schema = json.loads(schema_bundle_path(schema_dir).read_text())
+    _make_chatgpt_account_email_nullable(schema)
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
         for definition in definitions.values():
@@ -580,7 +608,32 @@ def generate_v2_all(schema_dir: Path) -> None:
             ],
             cwd=sdk_root(),
         )
+    _require_nullable_chatgpt_account_email(out_path)
     _normalize_generated_timestamps(out_path)
+
+
+def _require_nullable_chatgpt_account_email(out_path: Path) -> None:
+    """Preserve required-but-nullable email semantics in the generated SDK model."""
+    source = out_path.read_text()
+    class_start = source.find("class ChatgptAccount(BaseModel):")
+    if class_start == -1:
+        raise RuntimeError("Generated SDK is missing ChatgptAccount")
+    class_end = source.find("\n\nclass ", class_start)
+    if class_end == -1:
+        class_end = len(source)
+
+    class_source = source[class_start:class_end]
+    nullable_with_default = "    email: str | None = None"
+    if class_source.count(nullable_with_default) != 1:
+        raise RuntimeError(
+            "Generated ChatgptAccount email did not have the expected nullable shape"
+        )
+    class_source = class_source.replace(
+        nullable_with_default,
+        "    email: str | None",
+        1,
+    )
+    out_path.write_text(source[:class_start] + class_source + source[class_end:])
 
 
 def _notification_specs(schema_dir: Path) -> list[tuple[str, str]]:

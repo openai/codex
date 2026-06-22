@@ -90,7 +90,7 @@ pub struct AgentIdentityAuth {
 pub(super) struct ManagedChatGptAgentIdentityBinding {
     pub(super) account_id: String,
     pub(super) chatgpt_user_id: String,
-    pub(super) email: String,
+    pub(super) email: Option<String>,
     pub(super) plan_type: AccountPlanType,
     pub(super) chatgpt_account_is_fedramp: bool,
     pub(super) access_token: String,
@@ -156,8 +156,8 @@ impl AgentIdentityAuth {
         &self.record.chatgpt_user_id
     }
 
-    pub fn email(&self) -> &str {
-        &self.record.email
+    pub fn email(&self) -> Option<&str> {
+        self.record.email.as_deref()
     }
 
     pub fn plan_type(&self) -> AccountPlanType {
@@ -363,7 +363,7 @@ mod tests {
             agent_private_key: private_key,
             account_id: "account-1".to_string(),
             chatgpt_user_id: "user-1".to_string(),
-            email: "agent@example.com".to_string(),
+            email: Some("agent@example.com".to_string()),
             plan_type: AccountPlanType::Plus,
             chatgpt_account_is_fedramp: false,
             task_id: None,

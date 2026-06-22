@@ -320,7 +320,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
         account,
         GetAccountResponse {
             account: Some(Account::Chatgpt {
-                email: "embedded@example.com".to_string(),
+                email: Some("embedded@example.com".to_string()),
                 plan_type: AccountPlanType::Pro,
             }),
             requires_openai_auth: true,
@@ -388,7 +388,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
         account,
         GetAccountResponse {
             account: Some(Account::Chatgpt {
-                email: "embedded@example.com".to_string(),
+                email: Some("embedded@example.com".to_string()),
                 plan_type: AccountPlanType::Pro,
             }),
             requires_openai_auth: true,
@@ -1817,12 +1817,57 @@ async fn get_account_with_chatgpt() -> Result<()> {
 
     let expected = GetAccountResponse {
         account: Some(Account::Chatgpt {
-            email: "user@example.com".to_string(),
+            email: Some("user@example.com".to_string()),
             plan_type: AccountPlanType::Pro,
         }),
         requires_openai_auth: true,
     };
     assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_chatgpt_without_email() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            ..Default::default()
+        },
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt").plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(response)?;
+
+    assert_eq!(
+        received,
+        GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: None,
+                plan_type: AccountPlanType::Pro,
+            }),
+            requires_openai_auth: true,
+        }
+    );
     Ok(())
 }
 
@@ -1944,7 +1989,7 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
 
     let expected = GetAccountResponse {
         account: Some(Account::Chatgpt {
-            email: "user@example.com".to_string(),
+            email: Some("user@example.com".to_string()),
             plan_type: AccountPlanType::Unknown,
         }),
         requires_openai_auth: true,
