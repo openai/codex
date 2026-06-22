@@ -2,18 +2,17 @@ module(name = "codex")
 
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "llvm", version = "0.7.1")
+bazel_dep(name = "llvm", version = "0.7.9")
 
-# The upstream LLVM archive contains a few unix-only symlink entries and is
-# missing a couple of MinGW compatibility archives that windows-gnullvm needs
-# during extraction and linking, so patch it until upstream grows native support.
+# Patch hermetic LLVM for Codex's custom libc++ and Windows gnullvm runtime
+# needs that have not landed upstream.
 single_version_override(
     module_name = "llvm",
     patch_strip = 1,
     patches = [
         "//patches:llvm_rusty_v8_custom_libcxx.patch",
         "//patches:llvm_windows_arm64_powl.patch",
-        "//patches:llvm_windows_symlink_extract.patch",
+        "//patches:llvm_windows_mingw_compat.patch",
     ],
 )
 
@@ -80,7 +79,7 @@ use_repo(osx, "macos_sdk")
 
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
-bazel_dep(name = "rules_cc", version = "0.2.16")
+bazel_dep(name = "rules_cc", version = "0.2.18")
 single_version_override(
     module_name = "rules_cc",
     patch_strip = 1,
