@@ -1,5 +1,7 @@
 use super::ContextualUserFragment;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
+use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +41,7 @@ impl ContextualUserFragment for TokenBudgetContext {
     }
 
     fn type_markers() -> (&'static str, &'static str) {
-        ("", "")
+        (CONTEXT_WINDOW_OPEN_TAG, CONTEXT_WINDOW_CLOSE_TAG)
     }
 
     fn body(&self) -> String {
@@ -57,7 +59,7 @@ impl ContextualUserFragment for TokenBudgetContext {
         if let Some(mcp_result) = &self.mcp_result {
             lines.push(mcp_result.clone());
         }
-        lines.join("\n")
+        format!("\n{}\n", lines.join("\n"))
     }
 }
 
