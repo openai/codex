@@ -87,6 +87,7 @@ use codex_tools::default_namespace_description;
 use codex_tools::request_user_input_available_modes;
 use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
+use codex_tools::tool_search_tool_name;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -999,6 +1000,7 @@ fn append_extension_tool_executors(
             .any(|executor| executor.exposure() == ToolExposure::Deferred)
     {
         reserved_tool_names.insert(ToolName::plain(TOOL_SEARCH_TOOL_NAME));
+        reserved_tool_names.insert(tool_search_tool_name());
     }
 
     let standalone_web_search_enabled = standalone_web_search_enabled(turn_context);

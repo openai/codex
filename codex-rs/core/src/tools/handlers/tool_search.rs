@@ -18,6 +18,7 @@ use codex_tools::ToolSearchEntry;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::coalesce_loadable_tool_specs;
+use codex_tools::tool_search_tool_name;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::instrument;
@@ -96,7 +97,7 @@ impl ToolSearchHandler {
 
 impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(TOOL_SEARCH_TOOL_NAME)
+        tool_search_tool_name()
     }
 
     fn spec(&self) -> ToolSpec {

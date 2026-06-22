@@ -27,6 +27,7 @@ use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use codex_tools::ToolOutput;
 use codex_tools::ToolSpec;
+use codex_tools::tool_search_tool_name;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -742,10 +743,12 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     )
     .await;
     enabled.assert_visible_contains(&["tool_search"]);
+    let tool_search_name = tool_search_tool_name().to_string();
     enabled.assert_registered_contains(&[
-        "tool_search",
+        &tool_search_name,
         &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
     ]);
+    enabled.assert_registered_lacks(&["tool_search"]);
 }
 
 #[tokio::test]
@@ -1085,7 +1088,7 @@ async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
     );
     plan.assert_registered_contains(&[
         &ToolName::namespaced("excluded", "lookup").to_string(),
-        "tool_search",
+        &tool_search_tool_name().to_string(),
     ]);
 }
 

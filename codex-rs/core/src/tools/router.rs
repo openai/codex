@@ -18,6 +18,7 @@ use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_tools::tool_search_tool_name;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
@@ -139,7 +140,7 @@ impl ToolRouter {
                         ))
                     })?;
                 Ok(Some(ToolCall {
-                    tool_name: ToolName::plain("tool_search"),
+                    tool_name: tool_search_tool_name(),
                     call_id,
                     payload: ToolPayload::ToolSearch { arguments },
                 }))
