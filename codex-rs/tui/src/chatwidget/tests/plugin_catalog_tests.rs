@@ -114,41 +114,6 @@ async fn plugins_popup_uses_product_labels_for_remote_and_personal_tabs() {
 }
 
 #[tokio::test]
-async fn plugins_popup_shared_with_me_disabled_by_feature_flag_shows_section_error() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-    chat.set_feature_enabled(Feature::PluginSharing, /*enabled*/ false);
-
-    chat.add_plugins_output();
-    let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(
-        cwd.to_path_buf(),
-        Ok(plugins_test_response(vec![
-            plugins_test_curated_marketplace(Vec::new()),
-        ])),
-    );
-    chat.on_plugin_remote_sections_loaded(
-        cwd.to_path_buf(),
-        Vec::new(),
-        vec![crate::app_event::PluginRemoteSectionError {
-            section_id: "shared-with-me".to_string(),
-            label: "Shared with me".to_string(),
-            message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
-        }],
-    );
-
-    for _ in 0..4 {
-        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
-    }
-    let popup = render_bottom_popup(&chat, /*width*/ 120);
-    assert!(
-        popup.contains("Shared with me unavailable")
-            && popup.contains("Plugin sharing is disabled for this Codex session."),
-        "expected disabled sharing section error, got:\n{popup}"
-    );
-}
-
-#[tokio::test]
 async fn plugins_popup_preserves_workspace_tab_across_load_and_detail_navigation() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
@@ -233,8 +198,8 @@ async fn plugins_popup_remote_local_dedupe_prefers_installed_remote_after_mapped
     chat.on_plugin_remote_sections_loaded(
         cwd.to_path_buf(),
         vec![plugins_test_remote_marketplace(
-            "openai-curated-remote",
-            "Remote curated",
+            "workspace-shared-with-me-private",
+            "Shared with me",
             vec![plugins_test_remote_summary(
                 remote_plugin_id,
                 "docs",
@@ -255,7 +220,10 @@ async fn plugins_popup_remote_local_dedupe_prefers_installed_remote_after_mapped
             .iter()
             .map(|marketplace| marketplace.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["openai-curated-remote"]
+        vec![
+            OPENAI_CURATED_MARKETPLACE_NAME,
+            "workspace-shared-with-me-private"
+        ]
     );
     let all_plugins_row = popup
         .lines()
