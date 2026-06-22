@@ -1291,6 +1291,14 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
         "expected installed remote duplicate to win over local mapped share, got:\n{popup}"
     );
 
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    let installed_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        installed_popup.contains("Showing 1 installed plugins.")
+            && installed_popup.contains("Docs"),
+        "expected installed remote duplicate in the Installed tab, got:\n{installed_popup}"
+    );
+
     while rx.try_recv().is_ok() {}
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
