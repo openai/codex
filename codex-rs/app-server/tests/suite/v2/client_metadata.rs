@@ -63,7 +63,10 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request(ThreadStartParams {
+            thread_source: Some(ThreadSource::Feature("automation".to_string())),
+            ..Default::default()
+        })
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -75,7 +78,6 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     let client_metadata = HashMap::from([
         ("fiber_run_id".to_string(), "fiber-start-123".to_string()),
         ("origin".to_string(), "gaas".to_string()),
-        ("thread_source".to_string(), "client-supplied".to_string()),
     ]);
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -110,7 +112,7 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         .expect("x-codex-turn-metadata header should be present");
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
-    assert_eq!(metadata["thread_source"].as_str(), Some("client-supplied"));
+    assert_eq!(metadata["thread_source"].as_str(), Some("automation"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("installation_id").is_some());
     assert!(metadata.get("session_id").is_some());
@@ -561,7 +563,10 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request(ThreadStartParams {
+            thread_source: Some(ThreadSource::Feature("automation".to_string())),
+            ..Default::default()
+        })
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -619,6 +624,7 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
         .expect("websocket x-codex-turn-metadata client metadata should be present");
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
+    assert_eq!(metadata["thread_source"].as_str(), Some("automation"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("session_id").is_some());
     assert_eq!(
