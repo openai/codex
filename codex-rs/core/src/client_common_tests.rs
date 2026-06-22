@@ -20,9 +20,10 @@ fn prompt_with_image_outputs() -> Prompt {
                     detail: Some(ImageDetail::Original),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: "function-call".to_string(),
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
@@ -30,9 +31,10 @@ fn prompt_with_image_outputs() -> Prompt {
                         detail: Some(ImageDetail::High),
                     },
                 ]),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: "custom-call".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
@@ -41,7 +43,7 @@ fn prompt_with_image_outputs() -> Prompt {
                         detail: Some(ImageDetail::Auto),
                     },
                 ]),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ],
         ..Default::default()
@@ -66,9 +68,10 @@ fn responses_lite_request_copies_strip_image_details() {
                     detail: None,
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: "function-call".to_string(),
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
@@ -76,9 +79,10 @@ fn responses_lite_request_copies_strip_image_details() {
                         detail: None,
                     },
                 ]),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: "custom-call".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
@@ -87,7 +91,7 @@ fn responses_lite_request_copies_strip_image_details() {
                         detail: None,
                     },
                 ]),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ]
     );

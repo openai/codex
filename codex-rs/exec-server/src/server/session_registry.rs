@@ -7,14 +7,16 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::ExecServerRuntimePaths;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::invalid_request;
+use crate::rpc::session_already_attached;
 use crate::server::process_handler::ProcessHandler;
 
 #[cfg(test)]
 const DETACHED_SESSION_TTL: Duration = Duration::from_millis(200);
 #[cfg(not(test))]
-const DETACHED_SESSION_TTL: Duration = Duration::from_secs(10);
+const DETACHED_SESSION_TTL: Duration = Duration::from_secs(30);
 
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,
@@ -59,6 +61,7 @@ impl SessionRegistry {
         self: &Arc<Self>,
         resume_session_id: Option<String>,
         notifications: RpcNotificationSender,
+        runtime_paths: ExecServerRuntimePaths,
     ) -> Result<SessionHandle, JSONRPCErrorError> {
         enum AttachOutcome {
             Attached(Arc<SessionEntry>),
@@ -82,7 +85,7 @@ impl SessionRegistry {
                     })?;
                     Ok(AttachOutcome::Expired { session_id, entry })
                 } else if entry.has_active_connection() {
-                    Err(invalid_request(format!(
+                    Err(session_already_attached(format!(
                         "session {session_id} is already attached to another connection"
                     )))
                 } else {
@@ -94,7 +97,7 @@ impl SessionRegistry {
                 let session_id = Uuid::new_v4().to_string();
                 let entry = Arc::new(SessionEntry::new(
                     session_id.clone(),
-                    ProcessHandler::new(notifications),
+                    ProcessHandler::new(notifications, runtime_paths),
                     connection_id,
                 ));
                 sessions.insert(session_id, Arc::clone(&entry));
@@ -176,6 +179,7 @@ impl SessionEntry {
             return false;
         }
 
+        self.process.set_notification_sender(/*notifications*/ None);
         attachment.current_connection_id = None;
         attachment.detached_connection_id = Some(connection_id);
         attachment.detached_expires_at = Some(tokio::time::Instant::now() + DETACHED_SESSION_TTL);
@@ -244,10 +248,6 @@ impl SessionHandle {
         if !self.entry.detach(self.connection_id) {
             return;
         }
-
-        self.entry
-            .process
-            .set_notification_sender(/*notifications*/ None);
 
         let registry = Arc::clone(&self.registry);
         let session_id = self.entry.session_id.clone();

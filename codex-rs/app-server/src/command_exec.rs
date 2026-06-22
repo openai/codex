@@ -237,6 +237,10 @@ impl CommandExecManager {
             arg0,
             ..
         } = exec_request;
+        // TODO(anp): Keep PathUri through the local command launch boundary.
+        let cwd = cwd
+            .to_abs_path()
+            .map_err(|err| invalid_request(format!("invalid command cwd: {err}")))?;
 
         let stream_stdin = tty || stream_stdin;
         let stream_stdout_stderr = tty || stream_stdout_stderr;
@@ -700,6 +704,7 @@ mod tests {
             cwd.clone(),
             HashMap::new(),
             /*network*/ None,
+            /*network_environment_id*/ None,
             ExecExpiration::DefaultTimeout,
             codex_core::exec::ExecCapturePolicy::ShellTool,
             SandboxType::WindowsRestrictedToken,
@@ -817,6 +822,7 @@ mod tests {
                     cwd.clone(),
                     HashMap::new(),
                     /*network*/ None,
+                    /*network_environment_id*/ None,
                     ExecExpiration::Cancellation(CancellationToken::new()),
                     codex_core::exec::ExecCapturePolicy::ShellTool,
                     SandboxType::None,
@@ -904,6 +910,7 @@ mod tests {
                     cwd.clone(),
                     HashMap::new(),
                     /*network*/ None,
+                    /*network_environment_id*/ None,
                     ExecExpiration::TimeoutOrCancellation {
                         timeout: Duration::from_secs(30),
                         cancellation,

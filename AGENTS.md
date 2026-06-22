@@ -105,6 +105,7 @@ Codex maintains a context (history of messages) that is sent to the model in inf
 Search for breaking changes in external integration surfaces:
 
 - app-server APIs
+- raw response item events (`rawResponseItem/*`), even while experimental
 - CLI parameters
 - configuration loading
 - resuming sessions from existing rollouts

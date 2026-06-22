@@ -237,7 +237,7 @@ impl ExternalAgentConfigService {
     pub(crate) async fn import(
         &self,
         migration_items: Vec<ExternalAgentConfigMigrationItem>,
-    ) -> io::Result<ExternalAgentConfigImportOutcome> {
+    ) -> ExternalAgentConfigImportOutcome {
         let mut outcome = ExternalAgentConfigImportOutcome::default();
         for migration_item in migration_items {
             let item_type = migration_item.item_type;
@@ -413,17 +413,28 @@ impl ExternalAgentConfigService {
                 })(),
                 ExternalAgentConfigMigrationItemType::Sessions => Ok(()),
             };
-            if let Err(err) = import_result {
-                if item_type == ExternalAgentConfigMigrationItemType::Plugins {
-                    outcome.item_results.push(item_result);
-                    continue;
-                }
-                return Err(err);
+            if let Err(err) = import_result
+                && item_type != ExternalAgentConfigMigrationItemType::Plugins
+            {
+                let message = err.to_string();
+                let error_type = if message.contains("invalid existing config.toml") {
+                    "invalid_existing_config"
+                } else {
+                    "external_agent_config_import_error"
+                };
+                item_result.record_error(ExternalAgentConfigImportRawError {
+                    item_type,
+                    error_type: Some(error_type.to_string()),
+                    failure_stage: "import_request_failed".to_string(),
+                    message,
+                    cwd: item_result.cwd.clone(),
+                    source: None,
+                });
             }
             outcome.item_results.push(item_result);
         }
 
-        Ok(outcome)
+        outcome
     }
 
     async fn detect_migrations(

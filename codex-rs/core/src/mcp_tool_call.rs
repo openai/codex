@@ -81,6 +81,7 @@ use codex_rollout::state_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
@@ -142,14 +143,7 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
-    let item_metadata = McpToolCallItemMetadata {
-        mcp_app_resource_uri: metadata
-            .as_ref()
-            .and_then(|metadata| metadata.mcp_app_resource_uri.clone()),
-        plugin_id: metadata
-            .as_ref()
-            .and_then(|metadata| metadata.plugin_id.clone()),
-    };
+    let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, metadata.as_ref());
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
         let annotations = metadata
             .as_ref()
@@ -311,10 +305,30 @@ pub(crate) struct HandledMcpToolCall {
     pub(crate) tool_input: JsonValue,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct McpToolCallItemMetadata {
+    connector_id: Option<String>,
+    link_id: Option<String>,
     mcp_app_resource_uri: Option<String>,
     plugin_id: Option<String>,
+}
+
+impl McpToolCallItemMetadata {
+    fn from_tool_metadata(server: &str, metadata: Option<&McpToolApprovalMetadata>) -> Self {
+        let trusted_mcp_app_metadata = if server == CODEX_APPS_MCP_SERVER_NAME {
+            metadata
+        } else {
+            None
+        };
+        Self {
+            connector_id: trusted_mcp_app_metadata
+                .and_then(|metadata| metadata.connector_id.clone()),
+            link_id: trusted_mcp_app_metadata.and_then(|metadata| metadata.link_id.clone()),
+            mcp_app_resource_uri: metadata
+                .and_then(|metadata| metadata.mcp_app_resource_uri.clone()),
+            plugin_id: metadata.and_then(|metadata| metadata.plugin_id.clone()),
+        }
+    }
 }
 
 async fn handle_approved_mcp_tool_call(
@@ -713,10 +727,8 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     server: &str,
     mut meta: Option<serde_json::Value>,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let supports_sandbox_state_meta = sess
-        .services
-        .mcp_connection_manager
-        .load_full()
+    let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
+    let supports_sandbox_state_meta = mcp_connection_manager
         .server_supports_sandbox_state_meta_capability(server)
         .await
         .unwrap_or(false);
@@ -724,12 +736,17 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         return Ok(meta);
     }
 
+    let server_environment_id = mcp_connection_manager
+        .server_environment_id(server)
+        .unwrap_or(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID);
+    let Some(sandbox_cwd) = sandbox_cwd_for_mcp_server(turn_context, server_environment_id) else {
+        return Ok(meta);
+    };
+    let permission_profile = turn_context.permission_profile();
     let sandbox_state = serde_json::to_value(SandboxState {
-        permission_profile: Some(turn_context.permission_profile()),
-        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: Some(permission_profile),
         codex_linux_sandbox_exe: turn_context.config.codex_linux_sandbox_exe.clone(),
-        #[allow(deprecated)]
-        sandbox_cwd: turn_context.cwd.to_path_buf(),
+        sandbox_cwd,
         use_legacy_landlock: turn_context.config.features.use_legacy_landlock(),
     })?;
 
@@ -752,6 +769,24 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     }
 
     Ok(meta)
+}
+
+fn sandbox_cwd_for_mcp_server(turn_context: &TurnContext, environment_id: &str) -> Option<PathUri> {
+    if let Some(environment) = turn_context
+        .environments
+        .turn_environments
+        .iter()
+        .find(|environment| environment.environment_id == environment_id)
+    {
+        return Some(environment.cwd().clone());
+    }
+
+    if environment_id == codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
+        #[allow(deprecated)]
+        return Some(PathUri::from_abs_path(&turn_context.cwd));
+    }
+
+    None
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(
@@ -870,7 +905,9 @@ async fn notify_mcp_tool_call_started(
         server,
         tool,
         arguments: arguments.unwrap_or(JsonValue::Null),
+        connector_id: item_metadata.connector_id,
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
+        link_id: item_metadata.link_id,
         plugin_id: item_metadata.plugin_id,
         status: McpToolCallStatus::InProgress,
         result: None,
@@ -910,7 +947,9 @@ async fn notify_mcp_tool_call_completed(
         server,
         tool,
         arguments: arguments.unwrap_or(JsonValue::Null),
+        connector_id: item_metadata.connector_id,
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
+        link_id: item_metadata.link_id,
         plugin_id: item_metadata.plugin_id,
         status,
         result,
@@ -976,6 +1015,7 @@ enum McpToolApprovalDecision {
 pub(crate) struct McpToolApprovalMetadata {
     annotations: Option<ToolAnnotations>,
     connector_id: Option<String>,
+    link_id: Option<String>,
     connector_name: Option<String>,
     connector_description: Option<String>,
     plugin_id: Option<String>,
@@ -988,6 +1028,7 @@ pub(crate) struct McpToolApprovalMetadata {
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
+const MCP_TOOL_LINK_ID_META_KEY: &str = "link_id";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
@@ -1471,6 +1512,13 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     Some(McpToolApprovalMetadata {
         annotations: tool_info.tool.annotations,
         connector_id: tool_info.connector_id,
+        link_id: tool_info
+            .tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get(MCP_TOOL_LINK_ID_META_KEY))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
         connector_name: tool_info.connector_name,
         connector_description,
         plugin_id,

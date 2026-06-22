@@ -213,7 +213,7 @@ package_archive_digest() {
   manifest_path="$2"
 
   digest="$(awk -v asset="$asset" '
-    $2 == asset && $1 ~ /^[0-9a-fA-F]{64}$/ {
+    $2 == asset && length($1) == 64 && $1 !~ /[^0-9a-fA-F]/ {
       print tolower($1)
       found = 1
       exit

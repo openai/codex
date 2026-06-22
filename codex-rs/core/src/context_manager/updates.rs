@@ -2,6 +2,7 @@ use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::EnvironmentContext;
 use crate::context::ModelSwitchInstructions;
+use crate::context::MultiAgentModeInstructions;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::RealtimeEndInstructions;
@@ -12,6 +13,7 @@ use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -92,6 +94,32 @@ fn build_collaboration_mode_update_item(
         )
     } else {
         None
+    }
+}
+
+fn build_multi_agent_mode_update_item(
+    previous: Option<&TurnContextItem>,
+    next: &TurnContext,
+) -> Option<String> {
+    let effective_multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(
+        next.multi_agent_version,
+        &next.session_source,
+        next.multi_agent_mode,
+    );
+    let previous = previous?;
+    if previous.multi_agent_mode == effective_multi_agent_mode {
+        return None;
+    }
+
+    match effective_multi_agent_mode {
+        Some(MultiAgentMode::None) => {
+            Some(MultiAgentModeInstructions::new(MultiAgentMode::None).render())
+        }
+        Some(multi_agent_mode) => Some(MultiAgentModeInstructions::new(multi_agent_mode).render()),
+        None if previous.multi_agent_mode == Some(MultiAgentMode::Proactive) => {
+            Some(MultiAgentModeInstructions::new(MultiAgentMode::ExplicitRequestOnly).render())
+        }
+        None => None,
     }
 }
 
@@ -207,7 +235,7 @@ fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<Response
         role: role.to_string(),
         content,
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })
 }
 
@@ -230,6 +258,7 @@ pub(crate) fn build_settings_update_items(
         build_model_instructions_update_item(previous_turn_settings, next),
         build_permissions_update_item(previous, next, exec_policy),
         build_collaboration_mode_update_item(previous, next),
+        build_multi_agent_mode_update_item(previous, next),
         build_realtime_update_item(previous, previous_turn_settings, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
     ]

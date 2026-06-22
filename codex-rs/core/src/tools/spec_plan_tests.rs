@@ -1012,6 +1012,48 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
 }
 
 #[tokio::test]
+async fn code_mode_only_exposes_configured_dynamic_namespace_directly() {
+    let plan = probe_with(
+        |turn| {
+            set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+            turn.model_info.supports_search_tool = true;
+            update_config(turn, |config| {
+                config.code_mode.direct_only_tool_namespaces = vec!["direct_only".to_string()];
+            });
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                Some("direct_only"),
+                "lookup",
+                /*defer_loading*/ true,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+        "direct_only",
+    ]);
+    plan.assert_visible_lacks(&["tool_search"]);
+    assert_eq!(
+        plan.exposure(&ToolName::namespaced("direct_only", "lookup").to_string()),
+        ToolExposure::DirectModelOnly
+    );
+    let ToolSpec::Namespace(namespace) = plan.visible_spec("direct_only") else {
+        panic!("expected direct-only namespace spec");
+    };
+    let ResponsesApiNamespaceTool::Function(tool) = &namespace.tools[0];
+    assert_eq!(tool.defer_loading, None);
+    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+        panic!("expected code mode exec tool");
+    };
+    assert!(!exec.description.contains("direct_only_lookup(args:"));
+}
+
+#[tokio::test]
 async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
     let plan = probe_with(
         |turn| {
@@ -1399,6 +1441,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         live_web_search.visible_spec("web_search"),
         &ToolSpec::WebSearch {
             external_web_access: Some(true),
+            index_gated_web_access: None,
             filters: None,
             user_location: None,
             search_context_size: None,

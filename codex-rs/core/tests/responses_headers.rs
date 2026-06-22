@@ -127,6 +127,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
@@ -140,7 +141,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
             text: "hello".into(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
 
     let mut stream = client_session
@@ -258,6 +259,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
@@ -271,7 +273,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
             text: "hello".into(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
 
     let mut stream = client_session
@@ -375,6 +377,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
@@ -388,7 +391,7 @@ async fn responses_respects_model_info_overrides_from_config() {
             text: "hello".into(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
 
     let mut stream = client_session

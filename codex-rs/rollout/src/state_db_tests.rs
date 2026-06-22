@@ -28,6 +28,22 @@ fn cursor_to_anchor_normalizes_timestamp_format() {
         .expect("nanosecond");
 
     assert_eq!(anchor.ts, expected_ts);
+    assert_eq!(anchor.id, None);
+}
+
+#[test]
+fn cursor_to_anchor_preserves_recency_tie_breaker() {
+    let id = ThreadId::from_string("00000000-0000-0000-0000-000000000123")
+        .expect("thread id should parse");
+    let token = format!("2026-01-27T12:34:56Z|{id}");
+    let cursor = parse_cursor(&token).expect("cursor should parse");
+    let anchor = cursor_to_anchor(Some(&cursor)).expect("anchor should parse");
+
+    assert_eq!(anchor.id, Some(id));
+    assert_eq!(
+        serde_json::to_string(&cursor).expect("cursor should serialize"),
+        format!("\"{token}\"")
+    );
 }
 
 #[tokio::test]
@@ -142,6 +158,7 @@ fn write_rollout_with_user_message(
             timestamp: "2026-06-01T14:26:25Z".to_string(),
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
+                    session_id: thread_id.into(),
                     id: thread_id,
                     forked_from_id: None,
                     parent_thread_id: None,

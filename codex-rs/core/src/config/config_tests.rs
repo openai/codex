@@ -14,7 +14,6 @@ use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ExperimentalRequestUserInput;
 use codex_config::config_toml::ProjectConfig;
-use codex_config::config_toml::RealtimeArchitecture;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RealtimeToml;
 use codex_config::config_toml::RealtimeTransport;
@@ -438,6 +437,7 @@ async fn load_config_resolves_code_mode_config() -> std::io::Result<()> {
 [features.code_mode]
 enabled = true
 excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
+direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -452,8 +452,218 @@ excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
         config.code_mode.excluded_tool_namespaces,
         vec!["mcp__codex_apps".to_string(), "multi_agent_v1".to_string()]
     );
+    assert_eq!(
+        config.code_mode.direct_only_tool_namespaces,
+        vec!["mcp__history".to_string(), "mcp__notes".to_string()]
+    );
     assert!(config.features.enabled(Feature::CodeMode));
     Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
+    for (config_toml, expected) in [
+        (
+            "[features]\ntoken_budget = true\n",
+            TokenBudgetConfig::default(),
+        ),
+        (
+            r#"
+[features.token_budget]
+enabled = true
+reminder_threshold_tokens = 16000
+reminder_message_template = "Custom reminder: {n_remaining} tokens."
+"#,
+            TokenBudgetConfig {
+                reminder_threshold_tokens: Some(16_000),
+                reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
+            },
+        ),
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
+        let config = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert!(config.features.enabled(Feature::TokenBudget));
+        assert_eq!(config.token_budget, Some(expected));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_invalid_token_budget_reminder_template() -> std::io::Result<()> {
+    for reminder_message_template in [
+        String::new(),
+        "x".repeat(TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES + 1),
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(&format!(
+            "[features.token_budget]\nenabled = true\nreminder_message_template = {reminder_message_template:?}\n"
+        ))
+        .expect("TOML should deserialize");
+        let error = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("invalid reminder template should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_non_positive_token_budget_reminder_threshold() -> std::io::Result<()> {
+    for reminder_threshold_tokens in [-1, 0] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(&format!(
+            "[features.token_budget]\nenabled = true\nreminder_threshold_tokens = {reminder_threshold_tokens}\n"
+        ))
+        .expect("TOML should deserialize");
+        let error = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("non-positive reminder threshold should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "features.token_budget.reminder_threshold_tokens must be positive"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_rollout_budget() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"
+[features.rollout_budget]
+enabled = true
+limit_tokens = 100000
+reminder_interval_tokens = 10000
+sampling_token_weight = 1.0
+prefill_token_weight = 0.1
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(config.features.enabled(Feature::RolloutBudget));
+    assert!(!config.features.enabled(Feature::TokenBudget));
+    assert_eq!(
+        config.rollout_budget,
+        Some(RolloutBudgetConfig {
+            limit_tokens: 100_000,
+            reminder_interval_tokens: 10_000,
+            sampling_token_weight: 1.0,
+            prefill_token_weight: 0.1,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_enabled_rollout_budget_without_limit() -> std::io::Result<()> {
+    for config_toml in [
+        "[features]\nrollout_budget = true\n",
+        "[features.rollout_budget]\nenabled = true\n",
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml: ConfigToml =
+            toml::from_str(config_toml).expect("TOML deserialization should succeed");
+        let err = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("enabled rollout budget without limit_tokens should be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            err.to_string(),
+            "features.rollout_budget.limit_tokens is required when rollout_budget is enabled"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_current_time_reminder() -> std::io::Result<()> {
+    for (config_toml, expected) in [
+        (
+            r#"
+[features]
+current_time_reminder = true
+"#,
+            CurrentTimeReminderConfig::default(),
+        ),
+        (
+            r#"
+[features.current_time_reminder]
+enabled = true
+reminder_interval_model_requests = 4
+clock_source = "external"
+"#,
+            CurrentTimeReminderConfig {
+                reminder_interval_model_requests: 4,
+                clock_source: CurrentTimeSource::External,
+            },
+        ),
+    ] {
+        let config = load_current_time_reminder_config(config_toml).await?;
+        assert!(config.features.enabled(Feature::CurrentTimeReminder));
+        assert_eq!(config.current_time_reminder, Some(expected));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_zero_current_time_reminder_interval() -> std::io::Result<()> {
+    let error = load_current_time_reminder_config(
+        r#"
+[features.current_time_reminder]
+enabled = true
+reminder_interval_model_requests = 0
+"#,
+    )
+    .await
+    .expect_err("zero reminder interval should be rejected");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "features.current_time_reminder.reminder_interval_model_requests must be positive"
+    );
+    Ok(())
+}
+
+async fn load_current_time_reminder_config(config_toml: &str) -> std::io::Result<Config> {
+    let codex_home = tempdir()?;
+    let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
+    Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
 }
 
 #[test]
@@ -5061,6 +5271,14 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 }
 
 #[test]
+fn web_search_mode_for_turn_preserves_indexed_for_disabled_permissions() {
+    let web_search_mode = Constrained::allow_any(WebSearchMode::Indexed);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+
+    assert_eq!(mode, WebSearchMode::Indexed);
+}
+
+#[test]
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
     let permission_profile = PermissionProfile::read_only();
@@ -5088,6 +5306,31 @@ fn web_search_mode_for_turn_respects_disabled_for_disabled_permissions() {
 #[test]
 fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Result<()> {
     let allowed = [WebSearchMode::Disabled, WebSearchMode::Cached];
+    let web_search_mode = Constrained::new(WebSearchMode::Cached, move |candidate| {
+        if allowed.contains(candidate) {
+            Ok(())
+        } else {
+            Err(ConstraintError::InvalidValue {
+                field_name: "web_search_mode",
+                candidate: format!("{candidate:?}"),
+                allowed: format!("{allowed:?}"),
+                requirement_source: RequirementSource::Unknown,
+            })
+        }
+    })?;
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+
+    assert_eq!(mode, WebSearchMode::Cached);
+    Ok(())
+}
+
+#[test]
+fn web_search_mode_for_turn_does_not_implicitly_select_indexed() -> anyhow::Result<()> {
+    let allowed = [
+        WebSearchMode::Disabled,
+        WebSearchMode::Cached,
+        WebSearchMode::Indexed,
+    ];
     let web_search_mode = Constrained::new(WebSearchMode::Cached, move |candidate| {
         if allowed.contains(candidate) {
             Ok(())
@@ -8953,6 +9196,39 @@ apps_mcp_product_sku = "tpp"
 }
 
 #[tokio::test]
+async fn config_loads_orchestrator_settings_from_toml() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+model = "gpt-5.4"
+
+[orchestrator.skills]
+enabled = false
+
+[orchestrator.mcp]
+enabled = false
+"#,
+    )
+    .expect("TOML deserialization should succeed for orchestrator settings");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        (
+            config.orchestrator_skills_enabled,
+            config.orchestrator_mcp_enabled
+        ),
+        (false, false)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn config_loads_mcp_oauth_callback_url_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let toml = r#"
@@ -9838,7 +10114,6 @@ max_concurrent_threads_per_session = 5
 min_wait_timeout_ms = 2500
 max_wait_timeout_ms = 120000
 default_wait_timeout_ms = 30000
-usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
@@ -9866,7 +10141,6 @@ non_code_mode_only = true
         ),
         (None, Some(4))
     );
-    assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
         Some("Custom delegation guidance.")
@@ -9929,9 +10203,8 @@ max_concurrent_threads_per_session = 17
 
     let config = resolve_multi_agent_v2_config(&config_toml);
     let concurrency_guidance = "There are 17 available concurrency slots, meaning that up to 17 agents can be active at once, including you.";
-    let expected_suffix = format!(
-        "{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{concurrency_guidance}\n\n{DEFAULT_MULTI_AGENT_V2_NO_SPAWN_HINT_TEXT}"
-    );
+    let expected_suffix =
+        format!("{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{concurrency_guidance}");
     assert!(
         [
             config.root_agent_usage_hint_text,
@@ -10769,7 +11042,6 @@ async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [realtime]
-architecture = "avas"
 version = "v2"
 type = "transcription"
 transport = "webrtc"
@@ -10781,7 +11053,6 @@ voice = "cedar"
     assert_eq!(
         cfg.realtime,
         Some(RealtimeToml {
-            architecture: Some(RealtimeArchitecture::Avas),
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
@@ -10800,7 +11071,6 @@ voice = "cedar"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
-            architecture: RealtimeArchitecture::Avas,
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,

@@ -5,7 +5,6 @@ use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::requests::Compression;
-use crate::requests::attach_item_ids;
 use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
@@ -82,16 +81,8 @@ impl<T: HttpTransport> ResponsesClient<T> {
             turn_state,
         } = options;
 
-        let body = if request.store && self.session.provider().is_azure_responses_endpoint() {
-            let mut body = serde_json::to_value(&request).map_err(|e| {
-                ApiError::Stream(format!("failed to encode responses request: {e}"))
-            })?;
-            attach_item_ids(&mut body, &request.input);
-            EncodedJsonBody::encode(&body)
-        } else {
-            EncodedJsonBody::encode(&request)
-        }
-        .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        let body = EncodedJsonBody::encode(&request)
+            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         let mut headers = extra_headers;
         if let Some(ref thread_id) = thread_id {

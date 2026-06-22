@@ -1,5 +1,6 @@
 use super::*;
 use assert_matches::assert_matches;
+use codex_utils_path_uri::PathUri;
 
 #[tokio::test]
 async fn status_command_renders_immediately_and_refreshes_rate_limits_for_chatgpt_auth() {
@@ -45,8 +46,7 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
         other => panic!("expected rate-limit refresh request, got {other:?}"),
     };
 
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
-    chat.finish_status_rate_limit_refresh(first_request_id);
+    chat.finish_status_rate_limit_refresh(first_request_id, vec![snapshot(/*percent*/ 92.0)]);
     drain_insert_history(&mut rx);
 
     chat.dispatch_command(SlashCommand::Status);
@@ -96,9 +96,23 @@ async fn status_command_uses_catalog_default_reasoning_when_config_empty() {
 }
 
 #[tokio::test]
-async fn status_command_renders_instruction_sources_from_thread_session() {
+async fn status_command_renders_native_and_foreign_instruction_sources() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.instruction_source_paths = vec![chat.config.cwd.join("AGENTS.md")];
+    let (foreign_source, foreign_display) = if cfg!(windows) {
+        (
+            PathUri::parse("file:///remote/AGENTS.md").expect("POSIX instruction source"),
+            "/remote/AGENTS.md",
+        )
+    } else {
+        (
+            PathUri::parse("file:///C:/remote/AGENTS.md").expect("Windows instruction source"),
+            r"C:\remote\AGENTS.md",
+        )
+    };
+    chat.instruction_source_paths = vec![
+        PathUri::from_abs_path(&chat.config.cwd.join("AGENTS.md")),
+        foreign_source,
+    ];
 
     chat.dispatch_command(SlashCommand::Status);
 
@@ -109,8 +123,8 @@ async fn status_command_renders_instruction_sources_from_thread_session() {
         other => panic!("expected status output, got {other:?}"),
     };
     assert!(
-        rendered.contains("Agents.md"),
-        "expected /status to render app-server instruction sources, got: {rendered}"
+        rendered.contains(&format!("AGENTS.md, {foreign_display}")),
+        "expected /status to show native-relative and environment-native foreign paths, got: {rendered}"
     );
     assert!(
         !rendered.contains("Agents.md  <none>"),
@@ -155,10 +169,31 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
         "expected /status to avoid transient refresh text in terminal history, got: {second_rendered}"
     );
 
-    chat.finish_status_rate_limit_refresh(first_request_id);
+    chat.finish_status_rate_limit_refresh(first_request_id, Vec::new());
     pretty_assertions::assert_eq!(chat.refreshing_status_outputs.len(), 1);
 
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
-    chat.finish_status_rate_limit_refresh(second_request_id);
+    chat.finish_status_rate_limit_refresh(second_request_id, vec![snapshot(/*percent*/ 92.0)]);
     assert!(chat.refreshing_status_outputs.is_empty());
+}
+
+#[tokio::test]
+async fn account_update_rejects_stale_status_rate_limit_snapshots() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.dispatch_command(SlashCommand::Status);
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshRateLimits {
+            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+        }) => request_id,
+        other => panic!("expected status refresh request, got {other:?}"),
+    };
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
+    chat.finish_status_rate_limit_refresh(request_id, vec![snapshot(/*percent*/ 92.0)]);
+
+    assert!(chat.rate_limit_snapshots_by_limit_id.is_empty());
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import contextlib
 import importlib.util
 import sys
@@ -93,6 +94,11 @@ def _generated_sample_png_bytes() -> bytes:
         + _png_chunk(b"IDAT", zlib.compress(bytes(rows)))
         + _png_chunk(b"IEND", b"")
     )
+
+
+def generated_sample_image_data_url() -> str:
+    encoded = base64.b64encode(_generated_sample_png_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 @contextlib.contextmanager

@@ -285,6 +285,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         model_provider: "openai".to_string(),
         created_at: 1,
         updated_at: 2,
+        recency_at: Some(2),
         status: AppServerThreadStatus::Idle,
         path: None,
         cwd: test_path_buf("/tmp").abs(),
@@ -313,6 +314,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
     })
 }
 
@@ -330,6 +332,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
         initial_turns_page: None,
     })
 }
@@ -348,6 +351,7 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
     })
 }
 

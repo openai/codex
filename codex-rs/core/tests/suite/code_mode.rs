@@ -6,7 +6,9 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
+use codex_core::config::CurrentTimeReminderConfig;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
@@ -219,6 +221,19 @@ async fn run_code_mode_turn_with_model_and_config(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_call_standalone_web_search() -> Result<()> {
+    assert_code_mode_standalone_web_search(WebSearchMode::Live, serde_json::json!(true)).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_call_indexed_standalone_web_search() -> Result<()> {
+    assert_code_mode_standalone_web_search(WebSearchMode::Indexed, serde_json::json!("indexed"))
+        .await
+}
+
+async fn assert_code_mode_standalone_web_search(
+    web_search_mode: WebSearchMode,
+    expected_external_web_access: Value,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -266,7 +281,7 @@ text(result);
         .with_auth(auth)
         .with_extensions(Arc::new(extension_builder.build()))
         .with_model("test-gpt-5.1-codex")
-        .with_config(|config| {
+        .with_config(move |config| {
             config
                 .features
                 .enable(Feature::CodeMode)
@@ -277,7 +292,7 @@ text(result);
                 .expect("standalone web search should be enabled");
             config
                 .web_search_mode
-                .set(WebSearchMode::Live)
+                .set(web_search_mode)
                 .expect("web search mode should be accepted");
         });
     let test = builder.build(&server).await?;
@@ -308,7 +323,7 @@ text(result);
         search_body["settings"],
         serde_json::json!({
             "allowed_callers": ["direct"],
-            "external_web_access": true,
+            "external_web_access": expected_external_web_access,
         })
     );
     assert_eq!(
@@ -844,6 +859,49 @@ text(JSON.stringify(result));
             "tokens_left": 9500,
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_current_time_returns_structured_result() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_config(
+        &server,
+        "use exec to get the current time",
+        r#"
+const result = await tools.clock__curr_time({});
+text(JSON.stringify(result));
+"#,
+        |config| {
+            config
+                .features
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow current-time reminders");
+            config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                reminder_interval_model_requests: 50,
+                clock_source: CurrentTimeSource::System,
+            });
+        },
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec clock.curr_time call failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(&output)?;
+    let current_time = parsed
+        .get("current_time")
+        .and_then(Value::as_str)
+        .expect("clock.curr_time should return current_time");
+    assert_regex_match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$", current_time);
 
     Ok(())
 }
@@ -2623,7 +2681,7 @@ async fn code_mode_can_output_images_via_global_helper() -> Result<()> {
         &server,
         "use exec to return images",
         r#"
-image("data:image/png;base64,AAA");
+image("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
 "#,
     )
     .await?;
@@ -2648,7 +2706,7 @@ image("data:image/png;base64,AAA");
         items[1],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "data:image/png;base64,AAA",
+            "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
             "detail": "high"
         }),
     );
@@ -2657,17 +2715,14 @@ image("data:image/png;base64,AAA");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resize_all_images_replaces_malformed_code_mode_image() -> Result<()> {
+async fn code_mode_replaces_malformed_image() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn_with_config(
+    let (_test, second_mock) = run_code_mode_turn(
         &server,
         "use exec to return an image",
         r#"image("data:image/png;base64,AAA");"#,
-        |config| {
-            let _ = config.features.enable(Feature::ResizeAllImages);
-        },
     )
     .await?;
 
@@ -2688,7 +2743,7 @@ async fn resize_all_images_replaces_malformed_code_mode_image() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resize_all_images_resizes_explicit_original_code_mode_image() -> Result<()> {
+async fn code_mode_resizes_explicit_original_image() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let original_dimensions = (6401, 100);
@@ -2714,12 +2769,7 @@ async fn resize_all_images_resizes_explicit_original_code_mode_image() -> Result
         "use exec to return a large original-detail image",
         &code,
         "gpt-5.3-codex",
-        |config| {
-            config
-                .features
-                .enable(Feature::ResizeAllImages)
-                .expect("resize_all_images should be enabled");
-        },
+        |_| {},
     )
     .await?;
 

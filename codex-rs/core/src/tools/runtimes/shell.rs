@@ -93,6 +93,7 @@ pub struct ShellRuntime {
 
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct ApprovalKey {
+    environment_id: String,
     command: Vec<String>,
     cwd: AbsolutePathBuf,
     sandbox_permissions: SandboxPermissions,
@@ -127,6 +128,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
 
     fn approval_keys(&self, req: &ShellRequest) -> Vec<Self::ApprovalKey> {
         vec![ApprovalKey {
+            environment_id: req.turn_environment.environment_id.clone(),
             command: canonicalize_command_for_approval(&req.command),
             cwd: req.cwd.clone(),
             sandbox_permissions: req.sandbox_permissions,
@@ -142,6 +144,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let keys = self.approval_keys(req);
         let command = req.command.clone();
         let cwd = req.cwd.clone();
+        let environment_id = Some(req.turn_environment.environment_id.clone());
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         let session = ctx.session;
@@ -173,6 +176,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         turn,
                         call_id,
                         /*approval_id*/ None,
+                        environment_id,
                         command,
                         cwd,
                         reason,
@@ -232,6 +236,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                 tty: None,
             },
             command: req.hook_command.clone(),
+            environment_id: req.turn_environment.environment_id.clone(),
         })
     }
 
@@ -317,7 +322,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let env = attempt
-            .env_for(command, options, managed_network)
+            .env_for(
+                command,
+                options,
+                managed_network,
+                Some(&req.turn_environment.environment_id),
+            )
             .map_err(ToolError::Codex)?;
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await
@@ -325,3 +335,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+#[path = "shell_tests.rs"]
+mod tests;

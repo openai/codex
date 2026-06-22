@@ -192,7 +192,7 @@ fn install_with_version_uses_requested_cache_version() {
 }
 
 #[test]
-fn install_uses_manifest_version_when_present() {
+fn install_prefers_on_disk_manifest_version_over_fallback() {
     let tmp = tempdir().unwrap();
     write_plugin_with_version(
         tmp.path(),
@@ -203,9 +203,10 @@ fn install_uses_manifest_version_when_present() {
     let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
 
     let result = PluginStore::new(tmp.path().to_path_buf())
-        .install(
+        .install_with_fallback_manifest(
             AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
             plugin_id.clone(),
+            r#"{"name":"sample-plugin","version":"9.9.9"}"#,
         )
         .unwrap();
 

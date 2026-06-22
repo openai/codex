@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
@@ -32,6 +33,23 @@ mod read_mcp_resource;
 pub use list_mcp_resource_templates::ListMcpResourceTemplatesHandler;
 pub use list_mcp_resources::ListMcpResourcesHandler;
 pub use read_mcp_resource::ReadMcpResourceHandler;
+
+fn model_can_access_mcp_server(turn: &TurnContext, server: &str) -> bool {
+    turn.config.orchestrator_mcp_enabled || server != CODEX_APPS_MCP_SERVER_NAME
+}
+
+fn ensure_model_can_access_mcp_server(
+    turn: &TurnContext,
+    server: &str,
+) -> Result<(), FunctionCallError> {
+    if model_can_access_mcp_server(turn, server) {
+        Ok(())
+    } else {
+        Err(FunctionCallError::RespondToModel(format!(
+            "MCP server '{server}' is disabled by `orchestrator.mcp.enabled`"
+        )))
+    }
+}
 
 #[derive(Debug, Deserialize, Default)]
 struct ListResourcesArgs {
@@ -203,7 +221,9 @@ async fn emit_tool_call_begin(
         server,
         tool,
         arguments: arguments.unwrap_or(Value::Null),
+        connector_id: None,
         mcp_app_resource_uri: None,
+        link_id: None,
         plugin_id: None,
         status: McpToolCallStatus::InProgress,
         result: None,
@@ -242,7 +262,9 @@ async fn emit_tool_call_end(
         server,
         tool,
         arguments: arguments.unwrap_or(Value::Null),
+        connector_id: None,
         mcp_app_resource_uri: None,
+        link_id: None,
         plugin_id: None,
         status,
         result,

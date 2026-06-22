@@ -181,7 +181,7 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
     });
 
     let fragments = extension
-        .contribute(&ExtensionData::new("session"), &thread_store)
+        .contribute_thread_context(&ExtensionData::new("session"), &thread_store)
         .await;
 
     assert_eq!(fragments.len(), 1);

@@ -535,7 +535,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "stale developer message".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -544,7 +544,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "summary".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ],
         InitialContextInjection::BeforeLastUserMessage,
@@ -694,7 +694,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         config.model_provider.clone(),
     );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -711,7 +711,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         auth_manager,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         extensions: codex_extension_api::empty_extension_registry(),
@@ -732,10 +732,13 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         parent_trace: None,
         environment_selections: Vec::new(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
+        supports_openai_form_elicitation: false,
         analytics_events_client: None,
         thread_store,
         attestation_provider: None,
+        external_time_provider: None,
         inherited_multi_agent_version: None,
+        initial_multi_agent_mode: None,
     })
     .await
     .expect("spawn guardian subagent");
