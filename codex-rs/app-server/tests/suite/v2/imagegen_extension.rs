@@ -256,7 +256,7 @@ async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()>
 
 #[tokio::test]
 async fn standalone_image_edit_uses_recent_pathless_image() -> Result<()> {
-    let image_url = "https://example.com/reference.png";
+    let image_url = TINY_PNG_DATA_URL;
     let edit_request = run_image_edit_test(|_| {
         Ok((
             json!({
