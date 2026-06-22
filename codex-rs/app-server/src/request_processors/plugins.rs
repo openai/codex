@@ -23,7 +23,6 @@ use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::oauth_login_support;
 use codex_mcp::should_retry_without_scopes;
 use codex_plugin::PluginId;
-use codex_plugin::PluginTelemetryMetadata;
 use codex_rmcp_client::perform_oauth_login_silent;
 
 #[derive(Clone)]
@@ -1620,9 +1619,14 @@ impl PluginRequestProcessor {
                 Some(self.effective_plugins_changed_callback()),
             );
 
-        let mut plugin_metadata =
-            plugin_telemetry_metadata_from_root(&result.plugin_id, &result.installed_path).await;
-        plugin_metadata.remote_plugin_id = Some(remote_plugin_id.clone());
+        let plugin_metadata = self
+            .thread_manager
+            .plugins_manager()
+            .telemetry_metadata_for_installed_plugin_with_remote_id(
+                &result.plugin_id,
+                &remote_plugin_id,
+            )
+            .await;
         self.analytics_events_client
             .track_plugin_installed(plugin_metadata);
 
@@ -1713,8 +1717,10 @@ impl PluginRequestProcessor {
         else {
             return;
         };
-        let mut plugin = PluginTelemetryMetadata::from_plugin_id(&plugin_id);
-        plugin.remote_plugin_id = Some(remote_plugin_id.to_string());
+        let plugin = self
+            .thread_manager
+            .plugins_manager()
+            .telemetry_metadata_for_plugin_id_with_remote_id(&plugin_id, remote_plugin_id);
         self.analytics_events_client
             .track_plugin_install_failed(plugin, error_type.to_string());
     }
