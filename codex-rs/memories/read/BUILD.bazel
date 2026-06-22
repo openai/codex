@@ -3,6 +3,9 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "read",
     crate_name = "codex_memories_read",
+    # This test is short once running, but it hit the 60s Windows timeout when
+    # several freshly invalidated tests launched together. Serialize local runs
+    # to avoid runner startup contention while keeping the small test size.
     test_tags_by_target = {
         "read-unit-tests-windows-cross": ["exclusive-if-local"],
     },

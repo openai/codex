@@ -6,6 +6,9 @@ codex_rust_crate(
     test_sizes = {
         "apply-patch-all-test-windows-cross": "medium",
     },
+    # Cold Windows runs take about 54s, while remote results have reported
+    # about 1s and made the medium budget look oversized. Run it alone and
+    # bypass remote test-result caching so CI measures the cold runtime.
     test_tags_by_target = {
         "apply-patch-all-test-windows-cross": [
             "exclusive-if-local",
