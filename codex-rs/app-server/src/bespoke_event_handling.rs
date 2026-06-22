@@ -40,6 +40,7 @@ use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ModelReroutedNotification;
+use codex_app_server_protocol::ModelSafetyBufferingUpdatedNotification;
 use codex_app_server_protocol::ModelVerificationNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
@@ -78,7 +79,6 @@ use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnModerationMetadataNotification;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
-use codex_app_server_protocol::TurnSafetyBufferingUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WarningNotification;
@@ -353,7 +353,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::SafetyBuffering(event) => {
-            let notification = TurnSafetyBufferingUpdatedNotification {
+            let notification = ModelSafetyBufferingUpdatedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
                 model: event.model,
@@ -361,7 +361,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 reasons: event.reasons,
             };
             outgoing
-                .send_server_notification(ServerNotification::TurnSafetyBufferingUpdated(
+                .send_server_notification(ServerNotification::ModelSafetyBufferingUpdated(
                     notification,
                 ))
                 .await;

@@ -8983,6 +8983,41 @@
       "title": "ModelReroutedNotification",
       "type": "object"
     },
+    "ModelSafetyBufferingUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "useCases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "model",
+        "reasons",
+        "threadId",
+        "turnId",
+        "useCases"
+      ],
+      "title": "ModelSafetyBufferingUpdatedNotification",
+      "type": "object"
+    },
     "ModelServiceTier": {
       "properties": {
         "description": {
@@ -13416,20 +13451,20 @@
           "properties": {
             "method": {
               "enum": [
-                "turn/safetyBuffering/updated"
+                "model/safetyBuffering/updated"
               ],
-              "title": "Turn/safetyBuffering/updatedNotificationMethod",
+              "title": "Model/safetyBuffering/updatedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/TurnSafetyBufferingUpdatedNotification"
+              "$ref": "#/definitions/ModelSafetyBufferingUpdatedNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Turn/safetyBuffering/updatedNotification",
+          "title": "Model/safetyBuffering/updatedNotification",
           "type": "object"
         },
         {
@@ -17612,41 +17647,6 @@
         "turnId"
       ],
       "title": "TurnPlanUpdatedNotification",
-      "type": "object"
-    },
-    "TurnSafetyBufferingUpdatedNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "model": {
-          "type": "string"
-        },
-        "reasons": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        },
-        "useCases": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "model",
-        "reasons",
-        "threadId",
-        "turnId",
-        "useCases"
-      ],
-      "title": "TurnSafetyBufferingUpdatedNotification",
       "type": "object"
     },
     "TurnStartParams": {

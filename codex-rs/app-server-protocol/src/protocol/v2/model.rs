@@ -166,7 +166,7 @@ pub struct TurnModerationMetadataNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct TurnSafetyBufferingUpdatedNotification {
+pub struct ModelSafetyBufferingUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub model: String,

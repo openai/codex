@@ -2583,6 +2583,39 @@
       ],
       "type": "object"
     },
+    "ModelSafetyBufferingUpdatedNotification": {
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "useCases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "model",
+        "reasons",
+        "threadId",
+        "turnId",
+        "useCases"
+      ],
+      "type": "object"
+    },
     "ModelVerification": {
       "enum": [
         "trustedAccessForCyber"
@@ -5260,39 +5293,6 @@
       ],
       "type": "object"
     },
-    "TurnSafetyBufferingUpdatedNotification": {
-      "properties": {
-        "model": {
-          "type": "string"
-        },
-        "reasons": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        },
-        "useCases": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "model",
-        "reasons",
-        "threadId",
-        "turnId",
-        "useCases"
-      ],
-      "type": "object"
-    },
     "TurnStartedNotification": {
       "properties": {
         "threadId": {
@@ -6645,20 +6645,20 @@
       "properties": {
         "method": {
           "enum": [
-            "turn/safetyBuffering/updated"
+            "model/safetyBuffering/updated"
           ],
-          "title": "Turn/safetyBuffering/updatedNotificationMethod",
+          "title": "Model/safetyBuffering/updatedNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/TurnSafetyBufferingUpdatedNotification"
+          "$ref": "#/definitions/ModelSafetyBufferingUpdatedNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "Turn/safetyBuffering/updatedNotification",
+      "title": "Model/safetyBuffering/updatedNotification",
       "type": "object"
     },
     {

@@ -30,6 +30,6 @@
     "turnId",
     "useCases"
   ],
-  "title": "TurnSafetyBufferingUpdatedNotification",
+  "title": "ModelSafetyBufferingUpdatedNotification",
   "type": "object"
 }
