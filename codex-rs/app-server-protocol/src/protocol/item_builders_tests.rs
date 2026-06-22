@@ -47,8 +47,8 @@ fn raw_file_uri_cwd_is_converted_for_command_actions() {
     let raw_uri = "file:///C:/src";
     #[cfg(not(windows))]
     let raw_uri = "file:///usr/local/src";
-    let expected_path = PathUri::parse(raw_uri)
-        .expect("raw file URI should parse")
+    let cwd_uri = PathUri::parse(raw_uri).expect("raw file URI should parse");
+    let expected_path = cwd_uri
         .to_abs_path()
         .expect("raw file URI should be native")
         .join("file.txt");
@@ -60,6 +60,10 @@ fn raw_file_uri_cwd_is_converted_for_command_actions() {
         path: PathBuf::from("file.txt"),
     }];
 
+    assert_eq!(
+        normalized_app_server_cwd(&cwd),
+        LegacyAppPathString::from(cwd_uri),
+    );
     assert_eq!(
         command_actions_for_legacy_cwd(&parsed_cmd, &cwd),
         vec![CommandAction::Read {
