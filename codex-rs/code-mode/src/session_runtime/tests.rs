@@ -117,6 +117,7 @@ async fn default_policy_resolves_tools_before_the_first_observation() {
     let runtime = SessionRuntime::new(Arc::new(ImmediateToolDelegate { invocations_tx }));
     let cell = runtime
         .create_cell(CreateCellRequest {
+            idempotency_key: "default-policy".to_string(),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("first"), tool_definition("second")],
             source: r#"
@@ -154,6 +155,31 @@ text("done");
 }
 
 #[tokio::test]
+async fn concurrent_create_retries_return_the_same_cell_for_an_idempotency_key() {
+    let runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
+    let source = "await new Promise(() => {});";
+    let (first, retry) = tokio::join!(
+        runtime.create_cell(execute_request(source)),
+        runtime.create_cell(execute_request(source)),
+    );
+    let first = first.unwrap();
+    let retry = retry.unwrap();
+
+    assert_eq!(retry, first);
+    assert_eq!(runtime.inner.cells.lock().await.len(), 1);
+    assert_eq!(
+        runtime.create_pausable_cell(execute_request(source)).await,
+        Err(Error::WrongCellKind {
+            cell_id: first.id().clone(),
+            expected: CellKind::Pausable,
+            actual: CellKind::Continuing,
+        })
+    );
+
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn pausable_cell_supports_a_synchronous_host_driver() {
     let (invocations_tx, mut invocations_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Semaphore::new(0));
@@ -163,6 +189,7 @@ async fn pausable_cell_supports_a_synchronous_host_driver() {
     }));
     let cell = runtime
         .create_pausable_cell(CreateCellRequest {
+            idempotency_key: "synchronous-driver".to_string(),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("first"), tool_definition("second")],
             source: r#"
@@ -267,6 +294,7 @@ async fn pending_frontier_reports_only_authoritatively_outstanding_parallel_tool
     }));
     let cell = runtime
         .create_pausable_cell(CreateCellRequest {
+            idempotency_key: "authoritative-outstanding".to_string(),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("first"), tool_definition("second")],
             source: r#"
@@ -344,6 +372,7 @@ async fn pausable_cell_drains_a_parallel_host_frontier_without_duplicate_output(
     }));
     let cell = runtime
         .create_pausable_cell(CreateCellRequest {
+            idempotency_key: "parallel-drain".to_string(),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("first"), tool_definition("second")],
             source: r#"
@@ -432,7 +461,10 @@ async fn cell_capabilities_reject_ids_of_the_other_kind() {
         .await
         .unwrap();
     let pausable = runtime
-        .create_pausable_cell(execute_request("await new Promise(() => {});"))
+        .create_pausable_cell(CreateCellRequest {
+            idempotency_key: "pausable-cell".to_string(),
+            ..execute_request("await new Promise(() => {});")
+        })
         .await
         .unwrap();
 
@@ -465,6 +497,7 @@ async fn pending_observation_waits_for_resumed_work_to_reach_a_new_frontier() {
     }));
     let cell = runtime
         .create_pausable_cell(CreateCellRequest {
+            idempotency_key: "pending-observation".to_string(),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("blocked")],
             source: r#"
@@ -561,6 +594,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
 
     let reader = runtime
         .create_cell(CreateCellRequest {
+            idempotency_key: "reader".to_string(),
             tool_call_id: "reader".to_string(),
             enabled_tools: Vec::new(),
             source: r#"text(String(load("candidate")));"#.to_string(),
@@ -581,6 +615,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
 
 fn execute_request(source: &str) -> CreateCellRequest {
     CreateCellRequest {
+        idempotency_key: format!("call-1:{source}"),
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),

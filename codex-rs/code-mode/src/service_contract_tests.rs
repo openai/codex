@@ -287,9 +287,12 @@ async fn observed_natural_completion_wins_over_termination() {
         }
     );
     tokio::time::timeout(Duration::from_secs(1), async {
+        let mut probe_index = 0;
         loop {
+            probe_index += 1;
             let response = service
                 .execute(ExecuteRequest {
+                    tool_call_id: format!("probe-{probe_index}"),
                     yield_time_ms: Some(60_000),
                     ..execute_request(r#"text(String(load("finished")));"#)
                 })

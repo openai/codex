@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -55,10 +56,17 @@ pub(crate) struct SessionRuntime<D: SessionRuntimeDelegate> {
 struct Inner<D: SessionRuntimeDelegate> {
     stored_values: Mutex<HashMap<String, JsonValue>>,
     cells: Mutex<HashMap<CellId, RegisteredCell>>,
+    created_cells: Mutex<HashMap<String, Arc<OnceCell<IdempotentCell>>>>,
     cell_tasks: TaskTracker,
     shutdown_token: CancellationToken,
     delegate: Arc<D>,
     next_cell_id: AtomicU64,
+}
+
+#[derive(Clone)]
+struct IdempotentCell {
+    id: CellId,
+    kind: CellKind,
 }
 
 #[derive(Clone)]
@@ -88,6 +96,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
                 cells: Mutex::new(HashMap::new()),
+                created_cells: Mutex::new(HashMap::new()),
                 cell_tasks: TaskTracker::new(),
                 shutdown_token: CancellationToken::new(),
                 delegate,
@@ -102,7 +111,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
 
     pub(crate) async fn create_cell(&self, request: CreateCellRequest) -> Result<Cell, Error> {
         let id = self
-            .start_cell(
+            .create_idempotent_cell(
                 request,
                 CellExecutionPolicy::ContinueWhenUnblocked,
                 CellKind::Continuing,
@@ -116,7 +125,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         request: CreateCellRequest,
     ) -> Result<PausableCell, Error> {
         let id = self
-            .start_cell(
+            .create_idempotent_cell(
                 request,
                 CellExecutionPolicy::PauseAtPendingFrontier,
                 CellKind::Pausable,
@@ -252,6 +261,37 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         self.inner.cell_tasks.spawn(task);
         drop(cells);
         Ok(cell_id)
+    }
+
+    async fn create_idempotent_cell(
+        &self,
+        request: CreateCellRequest,
+        execution_policy: CellExecutionPolicy,
+        kind: CellKind,
+    ) -> Result<CellId, Error> {
+        let key = request.idempotency_key.clone();
+        let created_cell = {
+            let mut created_cells = self.inner.created_cells.lock().await;
+            Arc::clone(
+                created_cells
+                    .entry(key)
+                    .or_insert_with(|| Arc::new(OnceCell::new())),
+            )
+        };
+        let existing = created_cell
+            .get_or_try_init(|| async move {
+                let id = self.start_cell(request, execution_policy, kind).await?;
+                Ok::<IdempotentCell, Error>(IdempotentCell { id, kind })
+            })
+            .await?;
+        if existing.kind != kind {
+            return Err(Error::WrongCellKind {
+                cell_id: existing.id.clone(),
+                expected: kind,
+                actual: existing.kind,
+            });
+        }
+        Ok(existing.id.clone())
     }
 
     async fn continuing_handle(&self, cell_id: &CellId) -> Result<CellHandle, Error> {

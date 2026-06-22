@@ -348,7 +348,9 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
 }
 
 fn runtime_request(request: ExecuteRequest) -> runtime::CreateCellRequest {
+    let idempotency_key = format!("{}:{}", request.tool_call_id, request.source);
     runtime::CreateCellRequest {
+        idempotency_key,
         tool_call_id: request.tool_call_id,
         enabled_tools: request
             .enabled_tools
