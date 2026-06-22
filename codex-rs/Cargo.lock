@@ -14031,7 +14031,7 @@ dependencies = [
 [[package]]
 name = "tungstenite"
 version = "0.27.0"
-source = "git+ssh://git@github.com/openai-oss-forks/tungstenite-rs.git?rev=4fffad30fe373adbdcffab9545e9e9bf4f2fc19f#4fffad30fe373adbdcffab9545e9e9bf4f2fc19f"
+source = "git+https://github.com/openai-oss-forks/tungstenite-rs?rev=4fffad30fe373adbdcffab9545e9e9bf4f2fc19f#4fffad30fe373adbdcffab9545e9e9bf4f2fc19f"
 dependencies = [
  "bytes",
  "data-encoding",
