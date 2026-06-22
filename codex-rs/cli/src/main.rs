@@ -53,6 +53,9 @@ mod exec_server_telemetry;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
+// Keep the proposed privacy CLI schema out of production builds until it is approved.
+#[cfg(test)]
+mod privacy_cmd;
 mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
@@ -2822,6 +2825,16 @@ mod tests {
             command
                 .get_subcommands()
                 .all(|subcommand| subcommand.get_name() != "responses")
+        );
+    }
+
+    #[test]
+    fn privacy_subcommand_is_not_registered() {
+        let command = MultitoolCli::command();
+        assert!(
+            command
+                .get_subcommands()
+                .all(|subcommand| subcommand.get_name() != "privacy")
         );
     }
 
