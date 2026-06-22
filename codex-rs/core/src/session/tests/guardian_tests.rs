@@ -535,7 +535,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "stale developer message".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -544,7 +544,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "summary".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ],
         InitialContextInjection::BeforeLastUserMessage,
@@ -738,6 +738,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         attestation_provider: None,
         external_time_provider: None,
         inherited_multi_agent_version: None,
+        initial_multi_agent_mode: None,
     })
     .await
     .expect("spawn guardian subagent");

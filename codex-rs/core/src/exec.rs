@@ -42,6 +42,7 @@ use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::WindowsSandboxFilesystemOverrides;
+pub(crate) use codex_sandboxing::is_likely_sandbox_denied;
 #[cfg(test)]
 use codex_sandboxing::permission_profile_supports_windows_restricted_token_sandbox;
 use codex_sandboxing::resolve_windows_elevated_filesystem_overrides;
@@ -126,6 +127,16 @@ fn select_process_exec_tool_sandbox_type(
         windows_sandbox_level,
         enforce_managed_network,
     )
+}
+
+fn network_proxy_environment_error(
+    network_environment_id: Option<&str>,
+    err: impl std::fmt::Display,
+) -> CodexErr {
+    let environment_id = network_environment_id.unwrap_or("default");
+    CodexErr::Io(io::Error::other(format!(
+        "failed to prepare network proxy for environment `{environment_id}`: {err}"
+    )))
 }
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
@@ -345,7 +356,11 @@ pub fn build_exec_request(
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network
+            .apply_to_env_for_optional_environment(&mut env, network_environment_id.as_deref())
+            .map_err(|err| {
+                network_proxy_environment_error(network_environment_id.as_deref(), err)
+            })?;
     }
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -442,6 +457,8 @@ pub(crate) async fn execute_exec_request(
         windows_sandbox_filesystem_overrides,
         network_environment_id,
         arg0,
+        exec_server_sandbox: _,
+        exec_server_enforce_managed_network: _,
     } = exec_request;
 
     // TODO(anp): Keep PathUri through the local process launch boundary.
@@ -598,7 +615,7 @@ async fn exec_windows_sandbox(
         cwd,
         mut env,
         network,
-        network_environment_id: _,
+        network_environment_id,
         expiration,
         capture_policy,
         windows_sandbox_level,
@@ -606,7 +623,11 @@ async fn exec_windows_sandbox(
         ..
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network
+            .apply_to_env_for_optional_environment(&mut env, network_environment_id.as_deref())
+            .map_err(|err| {
+                network_proxy_environment_error(network_environment_id.as_deref(), err)
+            })?;
     }
 
     // Windows sandbox capture still receives timeout and cancellation separately.
@@ -799,68 +820,6 @@ fn finalize_exec_result(
     }
 }
 
-/// We don't have a fully deterministic way to tell if our command failed
-/// because of the sandbox - a command in the user's zshrc file might hit an
-/// error, but the command itself might fail or succeed for other reasons.
-/// For now, we conservatively check for well known command failure exit codes and
-/// also look for common sandbox denial keywords in the command output.
-pub(crate) fn is_likely_sandbox_denied(
-    sandbox_type: SandboxType,
-    exec_output: &ExecToolCallOutput,
-) -> bool {
-    if sandbox_type == SandboxType::None || exec_output.exit_code == 0 {
-        return false;
-    }
-
-    // Quick rejects: well-known non-sandbox shell exit codes
-    // 2: misuse of shell builtins
-    // 126: permission denied
-    // 127: command not found
-    const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
-        "operation not permitted",
-        "permission denied",
-        "read-only file system",
-        "seccomp",
-        "sandbox",
-        "landlock",
-        "failed to write file",
-    ];
-
-    let has_sandbox_keyword = [
-        &exec_output.stderr.text,
-        &exec_output.stdout.text,
-        &exec_output.aggregated_output.text,
-    ]
-    .into_iter()
-    .any(|section| {
-        let lower = section.to_lowercase();
-        SANDBOX_DENIED_KEYWORDS
-            .iter()
-            .any(|needle| lower.contains(needle))
-    });
-
-    if has_sandbox_keyword {
-        return true;
-    }
-
-    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
-    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
-        return false;
-    }
-
-    #[cfg(unix)]
-    {
-        const SIGSYS_CODE: i32 = libc::SIGSYS;
-        if sandbox_type == SandboxType::LinuxSeccomp
-            && exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + SIGSYS_CODE
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
 #[derive(Debug)]
 struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,
@@ -947,7 +906,7 @@ async fn exec(
         cwd,
         mut env,
         network,
-        network_environment_id: _,
+        network_environment_id,
         arg0,
         expiration,
         capture_policy,
@@ -961,7 +920,11 @@ async fn exec(
         justification: _,
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network
+            .apply_to_env_for_optional_environment(&mut env, network_environment_id.as_deref())
+            .map_err(|err| {
+                network_proxy_environment_error(network_environment_id.as_deref(), err)
+            })?;
     }
 
     let (program, args) = command.split_first().ok_or_else(|| {

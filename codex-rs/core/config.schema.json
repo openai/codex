@@ -440,6 +440,9 @@
             "auth_elicitation": {
               "type": "boolean"
             },
+            "auto_compaction": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
@@ -477,6 +480,9 @@
               "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
             },
             "default_mode_request_user_input": {
+              "type": "boolean"
+            },
+            "deferred_executor": {
               "type": "boolean"
             },
             "elevated_windows_sandbox": {
@@ -530,6 +536,9 @@
             "in_app_browser": {
               "type": "boolean"
             },
+            "item_ids": {
+              "type": "boolean"
+            },
             "js_repl": {
               "type": "boolean"
             },
@@ -549,6 +558,9 @@
               "type": "boolean"
             },
             "multi_agent": {
+              "type": "boolean"
+            },
+            "multi_agent_mode": {
               "type": "boolean"
             },
             "multi_agent_v2": {
@@ -660,7 +672,7 @@
               "type": "boolean"
             },
             "token_budget": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_TokenBudgetConfigToml"
             },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
@@ -955,6 +967,16 @@
         },
         {
           "$ref": "#/definitions/RolloutBudgetConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_TokenBudgetConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/TokenBudgetConfigToml"
         }
       ]
     },
@@ -1703,6 +1725,7 @@
           "type": "string"
         },
         "usage_hint_enabled": {
+          "description": "Deprecated compatibility field. Its value is ignored.",
           "type": "boolean"
         },
         "usage_hint_text": {
@@ -2080,6 +2103,29 @@
           "type": "string"
         }
       ]
+    },
+    "OrchestratorFeatureToml": {
+      "additionalProperties": false,
+      "description": "Settings for a feature owned by the orchestrator.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "OrchestratorToml": {
+      "additionalProperties": false,
+      "description": "Orchestrator-owned feature settings.",
+      "properties": {
+        "mcp": {
+          "$ref": "#/definitions/OrchestratorFeatureToml"
+        },
+        "skills": {
+          "$ref": "#/definitions/OrchestratorFeatureToml"
+        }
+      },
+      "type": "object"
     },
     "OtelConfigToml": {
       "additionalProperties": false,
@@ -2803,6 +2849,27 @@
           "type": "object"
         }
       ]
+    },
+    "TokenBudgetConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "reminder_message_template": {
+          "description": "Reminder template. `{n_remaining}` is replaced with the tokens remaining before auto-compaction.",
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "reminder_threshold_tokens": {
+          "description": "Number of tokens remaining before auto-compaction when the wrap-up reminder is emitted.",
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "ToolSuggestConfig": {
       "additionalProperties": false,
@@ -4410,6 +4477,7 @@
       "enum": [
         "disabled",
         "cached",
+        "indexed",
         "live"
       ],
       "type": "string"
@@ -4670,6 +4738,9 @@
         "auth_elicitation": {
           "type": "boolean"
         },
+        "auto_compaction": {
+          "type": "boolean"
+        },
         "browser_use": {
           "type": "boolean"
         },
@@ -4707,6 +4778,9 @@
           "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
         },
         "default_mode_request_user_input": {
+          "type": "boolean"
+        },
+        "deferred_executor": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -4760,6 +4834,9 @@
         "in_app_browser": {
           "type": "boolean"
         },
+        "item_ids": {
+          "type": "boolean"
+        },
         "js_repl": {
           "type": "boolean"
         },
@@ -4779,6 +4856,9 @@
           "type": "boolean"
         },
         "multi_agent": {
+          "type": "boolean"
+        },
+        "multi_agent_mode": {
           "type": "boolean"
         },
         "multi_agent_v2": {
@@ -4890,7 +4970,7 @@
           "type": "boolean"
         },
         "token_budget": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_TokenBudgetConfigToml"
         },
         "tool_call_mcp_elicitation": {
           "type": "boolean"
@@ -5173,6 +5253,14 @@
       "description": "Base URL override for the built-in `openai` model provider.",
       "type": "string"
     },
+    "orchestrator": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OrchestratorToml"
+        }
+      ],
+      "description": "Orchestrator-owned feature settings."
+    },
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
       "type": "string"
@@ -5362,7 +5450,7 @@
           "$ref": "#/definitions/WebSearchMode"
         }
       ],
-      "description": "Controls the web search tool mode: disabled, cached, or live."
+      "description": "Controls the web search tool mode: disabled, cached, indexed, or live."
     },
     "windows": {
       "allOf": [

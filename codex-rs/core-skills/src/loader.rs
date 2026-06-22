@@ -22,6 +22,7 @@ use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::plugin_namespace_for_skill_path;
 use dirs::home_dir;
+use futures::future::join_all;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -534,15 +535,29 @@ async fn discover_skills_under_root(
             }
         };
 
-        for entry in entries {
-            let file_name = entry.file_name;
-            if file_name.starts_with('.') {
-                continue;
-            }
+        let paths = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let file_name = entry.file_name;
+                if file_name.starts_with('.') {
+                    return None;
+                }
+                let path = dir.join(&file_name);
+                let path_uri = PathUri::from_abs_path(&path);
+                Some((file_name, path, path_uri))
+            })
+            .collect::<Vec<_>>();
+        let metadata_results = join_all(
+            paths
+                .iter()
+                .map(|(_, _, path_uri)| fs.get_metadata(path_uri, /*sandbox*/ None)),
+        )
+        .await;
 
-            let path = dir.join(&file_name);
-            let path_uri = PathUri::from_abs_path(&path);
-            let metadata = match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
+        for ((file_name, path, path_uri), metadata_result) in
+            paths.into_iter().zip(metadata_results)
+        {
+            let metadata = match metadata_result {
                 Ok(metadata) => metadata,
                 Err(e) => {
                     error!("failed to stat skills path {}: {e:#}", path.display());
@@ -684,13 +699,8 @@ async fn parse_skill_file(
 
     validate_len(&base_name, MAX_NAME_LEN, "name")?;
     validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")?;
-    validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
-    if let Some(short_description) = short_description.as_deref() {
-        validate_len(
-            short_description,
-            MAX_SHORT_DESCRIPTION_LEN,
-            "metadata.short-description",
-        )?;
+    if description.is_empty() {
+        return Err(SkillParseError::MissingField("description"));
     }
 
     let resolved_path = canonicalize_for_skill_identity(fs, path).await;

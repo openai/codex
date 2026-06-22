@@ -619,14 +619,16 @@ async fn collect_mcp_server_status_snapshot_from_manager(
         mcp_connection_manager.list_all_tools(),
         async {
             if detail.include_resources() {
-                mcp_connection_manager.list_all_resources().await
+                mcp_connection_manager.list_all_resources(|_| true).await
             } else {
                 HashMap::new()
             }
         },
         async {
             if detail.include_resources() {
-                mcp_connection_manager.list_all_resource_templates().await
+                mcp_connection_manager
+                    .list_all_resource_templates(|_| true)
+                    .await
             } else {
                 HashMap::new()
             }

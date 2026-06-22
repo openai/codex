@@ -751,6 +751,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
@@ -1089,9 +1090,6 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
             "type": "agent_message",
             "author": "/root",
             "recipient": "/root/worker",
-            "metadata": {
-                "source_call_id": SPAWN_CALL_ID,
-            },
             "content": [
                 {
                     "type": "input_text",

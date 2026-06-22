@@ -157,7 +157,8 @@ async fn responses_websocket_streams_request() {
 
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
-    let prompt = prompt_with_input(vec![message_item("hello")]);
+    let mut prompt = prompt_with_input(vec![message_item("hello")]);
+    prompt.input[0].set_id(Some("msg_existing".to_string()));
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
@@ -169,6 +170,7 @@ async fn responses_websocket_streams_request() {
     assert_eq!(body["model"].as_str(), Some(MODEL));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
+    assert_eq!(body["input"][0].get("id"), None);
     let handshake = server.single_handshake();
     assert_eq!(
         handshake.header(OPENAI_BETA_HEADER),
@@ -2057,7 +2059,7 @@ fn message_item(text: &str) -> ResponseItem {
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -2067,7 +2069,7 @@ fn assistant_message_item(id: &str, text: &str) -> ResponseItem {
         role: "assistant".into(),
         content: vec![ContentItem::OutputText { text: text.into() }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -2189,6 +2191,7 @@ async fn websocket_harness_with_provider_options(
         /*enable_request_compression*/ false,
         runtime_metrics_enabled,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
         /*attestation_provider*/ None,
     );
 

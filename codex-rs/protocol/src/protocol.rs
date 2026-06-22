@@ -21,6 +21,7 @@ use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ApprovalsReviewer;
 use crate::config_types::CollaborationMode;
 use crate::config_types::ModeKind;
+use crate::config_types::MultiAgentMode;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
@@ -41,7 +42,6 @@ use crate::models::MessagePhase;
 use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
-use crate::models::ResponseItemMetadata;
 use crate::models::SandboxEnforcement;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
@@ -56,7 +56,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::de::Error as _;
 use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
@@ -104,6 +106,8 @@ pub const PLUGINS_INSTRUCTIONS_OPEN_TAG: &str = "<plugins_instructions>";
 pub const PLUGINS_INSTRUCTIONS_CLOSE_TAG: &str = "</plugins_instructions>";
 pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
 pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
+pub const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
+pub const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
@@ -479,6 +483,9 @@ pub struct ThreadSettingsOverrides {
     /// Takes precedence over model, effort, and developer instructions if set.
     pub collaboration_mode: Option<CollaborationMode>,
 
+    /// Updated multi-agent mode for this turn and subsequent turns.
+    pub multi_agent_mode: Option<MultiAgentMode>,
+
     /// Updated personality preference.
     pub personality: Option<Personality>,
 }
@@ -689,9 +696,6 @@ pub struct InterAgentCommunication {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub encrypted_content: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub metadata: Option<ResponseItemMetadata>,
     pub trigger_turn: bool,
 }
 
@@ -709,7 +713,6 @@ impl InterAgentCommunication {
             other_recipients,
             content,
             encrypted_content: None,
-            metadata: None,
             trigger_turn,
         }
     }
@@ -727,7 +730,6 @@ impl InterAgentCommunication {
             other_recipients,
             content: String::new(),
             encrypted_content: Some(encrypted_content),
-            metadata: None,
             trigger_turn,
         }
     }
@@ -771,7 +773,7 @@ impl InterAgentCommunication {
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
             content,
-            metadata: self.metadata.clone(),
+            internal_chat_message_metadata_passthrough: None,
         }
     }
 
@@ -1244,6 +1246,9 @@ pub enum EventMsg {
 
     /// Backend moderation metadata intended for first-party turn presentation.
     TurnModerationMetadata(TurnModerationMetadataEvent),
+
+    /// Backend indicates that response output is waiting on a safety review.
+    SafetyBuffering(SafetyBufferingEvent),
 
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
@@ -1923,6 +1928,13 @@ pub struct TurnModerationMetadataEvent {
     pub metadata: Value,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct SafetyBufferingEvent {
+    pub model: String,
+    pub use_cases: Vec<String>,
+    pub reasons: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ContextCompactedEvent;
 
@@ -1986,6 +1998,8 @@ pub struct ThreadSettingsSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
+    #[serde(default)]
+    pub multi_agent_mode: MultiAgentMode,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
@@ -2548,6 +2562,26 @@ impl InitialHistory {
         }
     }
 
+    pub fn get_latest_effective_multi_agent_mode(&self) -> Option<MultiAgentMode> {
+        let items = match self {
+            InitialHistory::New | InitialHistory::Cleared => return None,
+            InitialHistory::Resumed(resumed) => &resumed.history,
+            InitialHistory::Forked(items) => items,
+        };
+        items
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::TurnContext(turn_context) => Some(turn_context),
+                RolloutItem::SessionMeta(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::InterAgentCommunication(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::EventMsg(_) => None,
+            })
+            .and_then(|turn_context| turn_context.multi_agent_mode)
+    }
+
     pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
         let meta = self.get_resumed_session_meta()?;
         Some((meta.source.clone(), meta.thread_source.clone()))
@@ -2876,6 +2910,7 @@ pub enum MultiAgentVersion {
 /// and should be used when there is no config override.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
+    pub session_id: SessionId,
     pub id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
@@ -2918,8 +2953,10 @@ pub struct SessionMeta {
 
 impl Default for SessionMeta {
     fn default() -> Self {
+        let id = ThreadId::default();
         SessionMeta {
-            id: ThreadId::default(),
+            session_id: id.into(),
+            id,
             forked_from_id: None,
             parent_thread_id: None,
             timestamp: String::new(),
@@ -2940,12 +2977,41 @@ impl Default for SessionMeta {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[derive(Serialize, Debug, Clone, JsonSchema, TS)]
 pub struct SessionMetaLine {
     #[serde(flatten)]
     pub meta: SessionMeta,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitInfo>,
+}
+
+impl<'de> Deserialize<'de> for SessionMetaLine {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SessionMetaLineFields {
+            #[serde(flatten)]
+            meta: SessionMeta,
+            git: Option<GitInfo>,
+        }
+
+        let mut value = Value::deserialize(deserializer)?;
+        let fields = value
+            .as_object_mut()
+            .ok_or_else(|| D::Error::custom("session metadata must be an object"))?;
+        if !fields.contains_key("session_id") {
+            let thread_id = fields
+                .get("id")
+                .cloned()
+                .ok_or_else(|| D::Error::missing_field("id"))?;
+            fields.insert("session_id".to_string(), thread_id);
+        }
+        let SessionMetaLineFields { meta, git } =
+            serde_json::from_value(value).map_err(D::Error::custom)?;
+        Ok(Self { meta, git })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
@@ -2968,6 +3034,12 @@ pub struct CompactedItem {
     /// Monotonic position of this context window within the thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_number: Option<u64>,
+    /// UUIDv7 identity of the first context window in this thread's window chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_window_id: Option<String>,
+    /// UUIDv7 identity of the context window immediately before this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_window_id: Option<String>,
     /// UUIDv7 identity of this context window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_id: Option<String>,
@@ -2982,7 +3054,7 @@ impl From<CompactedItem> for ResponseItem {
                 text: value.message,
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }
     }
 }
@@ -3027,6 +3099,9 @@ pub struct TurnContextItem {
     pub collaboration_mode: Option<CollaborationMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// Effective model-visible mode used as the durable context-diff baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_mode: Option<MultiAgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realtime_active: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4268,7 +4343,6 @@ mod tests {
             other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],
             content: "review the diff".to_string(),
             encrypted_content: None,
-            metadata: None,
             trigger_turn: true,
         };
 
@@ -4309,7 +4383,7 @@ mod tests {
                         encrypted_content: "encrypted payload".to_string(),
                     },
                 ],
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         );
     }
@@ -5343,6 +5417,7 @@ mod tests {
         let thread_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
         let older_meta = SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
@@ -5351,6 +5426,7 @@ mod tests {
         };
         let newer_meta_without_version = SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 multi_agent_version: None,
                 ..Default::default()
@@ -5367,6 +5443,31 @@ mod tests {
                 Some(thread_id),
             ),
             Some(MultiAgentVersion::V2)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn latest_effective_multi_agent_mode_uses_latest_turn_context_even_when_unset() -> Result<()> {
+        let turn_context_item = |multi_agent_mode| -> Result<RolloutItem> {
+            let mut value = json!({
+                "cwd": test_path_buf("/tmp"),
+                "approval_policy": "never",
+                "sandbox_policy": { "type": "danger-full-access" },
+                "model": "gpt-5",
+                "summary": "auto",
+            });
+            value["multi_agent_mode"] = serde_json::to_value(multi_agent_mode)?;
+            Ok(RolloutItem::TurnContext(serde_json::from_value(value)?))
+        };
+
+        assert_eq!(
+            InitialHistory::Forked(vec![
+                turn_context_item(Some(MultiAgentMode::Proactive))?,
+                turn_context_item(/*multi_agent_mode*/ None)?,
+            ])
+            .get_latest_effective_multi_agent_mode(),
+            None
         );
         Ok(())
     }
@@ -5399,6 +5500,7 @@ mod tests {
             personality: None,
             collaboration_mode: None,
             multi_agent_version: None,
+            multi_agent_mode: None,
             realtime_active: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,

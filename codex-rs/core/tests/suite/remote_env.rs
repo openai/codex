@@ -26,6 +26,8 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -49,15 +51,26 @@ use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
+use futures::SinkExt;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tempfile::TempDir;
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
+use tokio::time::timeout;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message;
 async fn unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
@@ -74,6 +87,7 @@ async fn submit_turn_with_approval_and_environments(
     test: &TestCodex,
     prompt: &str,
     environments: Vec<TurnEnvironmentSelection>,
+    approval_policy: AskForApproval,
 ) -> Result<()> {
     let turn_environment_selections = codex_protocol::protocol::TurnEnvironmentSelections::new(
         test.config.cwd.clone(),
@@ -90,7 +104,7 @@ async fn submit_turn_with_approval_and_environments(
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(turn_environment_selections),
-                approval_policy: Some(AskForApproval::OnRequest),
+                approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
@@ -294,6 +308,376 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
     assert!(
         output.is_some_and(|output| output.contains("Process exited with code 0")),
         "remote shell command should exit successfully",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_sandbox_denial_requests_approval_and_retries() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    const CALL_ID: &str = "remote-sandbox-denial";
+    const CONTENTS: &str = "remote sandbox retry succeeded";
+
+    let server = start_mock_server().await;
+    let test = unified_exec_test(&server).await?;
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let remote_cwd = PathBuf::from(format!("/tmp/codex-remote-denial-cwd-{nonce}")).abs();
+    let target_path = PathBuf::from(format!("/tmp/codex-remote-denial-target-{nonce}")).abs();
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
+    let target_uri = PathUri::from_path(&target_path)?;
+    test.fs()
+        .create_directory(
+            &remote_cwd_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .remove(
+            &target_uri,
+            RemoveOptions {
+                recursive: false,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let command = format!("printf {CONTENTS:?} > {target_path:?} && cat {target_path:?}");
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-remote-denial-1"),
+                ev_function_call(
+                    CALL_ID,
+                    "exec_command",
+                    &json!({
+                        "shell": "/bin/sh",
+                        "cmd": command,
+                        "login": false,
+                        "yield_time_ms": 5_000,
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-remote-denial-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-remote-denial-2"),
+                ev_assistant_message("msg-remote-denial", "done"),
+                ev_completed("resp-remote-denial-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn_with_approval_and_environments(
+        &test,
+        "retry a sandbox-denied command in the remote environment",
+        vec![TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&remote_cwd),
+        }],
+        AskForApproval::OnFailure,
+    )
+    .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ExecApprovalRequest(approval) = event else {
+        panic!("expected remote sandbox approval before completion: {event:?}");
+    };
+    assert_eq!(approval.call_id, CALL_ID);
+    assert_eq!(
+        approval.environment_id.as_deref(),
+        Some(REMOTE_ENVIRONMENT_ID)
+    );
+    assert_eq!(
+        approval.reason.as_deref(),
+        Some("command failed; retry without sandbox?")
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert!(
+        response_mock
+            .function_call_output_text(CALL_ID)
+            .is_some_and(|output| output.contains(CONTENTS)),
+        "approved retry should return the remote command output"
+    );
+    assert_eq!(
+        test.fs()
+            .read_file_text(&target_uri, /*sandbox*/ None)
+            .await?,
+        CONTENTS
+    );
+
+    test.fs()
+        .remove(
+            &target_uri,
+            RemoveOptions {
+                recursive: false,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .remove(
+            &remote_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_executor_does_not_duplicate_initial_environment_context() -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("report the environment").await?;
+
+    let user_context = response_mock.single_request().message_input_texts("user");
+    assert_eq!(
+        user_context
+            .iter()
+            .filter(|text| text.contains("<environment_context>"))
+            .count(),
+        1
+    );
+
+    Ok(())
+}
+
+async fn read_exec_server_json(websocket: &mut WebSocketStream<TcpStream>) -> Value {
+    loop {
+        match timeout(Duration::from_secs(5), websocket.next())
+            .await
+            .expect("websocket read should not time out")
+            .expect("websocket should stay open")
+            .expect("websocket frame should read")
+        {
+            Message::Text(text) => {
+                return serde_json::from_str(text.as_ref()).expect("valid JSON-RPC message");
+            }
+            Message::Binary(bytes) => {
+                return serde_json::from_slice(bytes.as_ref()).expect("valid JSON-RPC message");
+            }
+            Message::Ping(_) | Message::Pong(_) => {}
+            other => panic!("expected JSON-RPC message, got {other:?}"),
+        }
+    }
+}
+
+async fn serve_environment_info(listener: TcpListener) {
+    let (stream, _) = listener.accept().await.expect("connection");
+    let mut websocket = accept_async(stream).await.expect("websocket handshake");
+
+    let initialize = read_exec_server_json(&mut websocket).await;
+    assert_eq!(initialize["method"], "initialize");
+    websocket
+        .send(Message::Text(
+            json!({
+                "id": initialize["id"],
+                "result": { "sessionId": "test-session" }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("initialize response");
+    let initialized = read_exec_server_json(&mut websocket).await;
+    assert_eq!(initialized["method"], "initialized");
+
+    let info = read_exec_server_json(&mut websocket).await;
+    assert_eq!(info["method"], "environment/info");
+    websocket
+        .send(Message::Text(
+            json!({
+                "id": info["id"],
+                "result": { "shell": { "name": "zsh", "path": "/bin/zsh" } }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("environment info response");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let server = start_mock_server().await;
+    let user_input_call_id = "wait-for-startup";
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    user_input_call_id,
+                    "request_user_input",
+                    &json!({
+                        "questions": [{
+                            "id": "continue",
+                            "header": "Continue",
+                            "question": "Continue after startup?",
+                            "options": [{
+                                "label": "Yes (Recommended)",
+                                "description": "Continue the test."
+                            }, {
+                                "label": "No",
+                                "description": "Stop the test."
+                            }]
+                        }]
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call(
+                    "update-plan",
+                    "update_plan",
+                    &json!({
+                        "explanation": "Continue after startup.",
+                        "plan": [{"step": "Finish", "status": "completed"}]
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
+        .with_config(|config| {
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+            assert!(
+                config
+                    .features
+                    .enable(Feature::DefaultModeRequestUserInput)
+                    .is_ok()
+            );
+        });
+    let test = timeout(Duration::from_secs(5), builder.build(&server))
+        .await
+        .context("thread startup should not wait for the remote environment")??;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "wait for the environment".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+
+    serve_environment_info(listener).await;
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    "continue".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Yes (Recommended)".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests[0]
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text.contains("<status>starting</status>"))
+    );
+    let ready_user_context = requests[1].message_input_texts("user");
+    assert_eq!(
+        ready_user_context
+            .iter()
+            .filter(|text| text.contains("<shell>zsh</shell>"))
+            .count(),
+        1
+    );
+    let final_user_context = requests[2].message_input_texts("user");
+    assert_eq!(
+        final_user_context
+            .iter()
+            .filter(|text| text.contains("<status>starting</status>"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        final_user_context
+            .iter()
+            .filter(|text| text.contains("<shell>zsh</shell>"))
+            .count(),
+        1
     );
 
     Ok(())
@@ -596,6 +980,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
                 cwd: PathUri::from_abs_path(&remote_cwd),
             },
         ],
+        AskForApproval::OnRequest,
     )
     .await?;
 
@@ -877,6 +1262,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         &test,
         "apply patch in local environment",
         environments.clone(),
+        AskForApproval::OnRequest,
     )
     .await?;
     let approval = expect_patch_approval(&test, "call-local").await;
@@ -896,6 +1282,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         &test,
         "apply patch in remote environment",
         environments.clone(),
+        AskForApproval::OnRequest,
     )
     .await?;
     let approval = expect_patch_approval(&test, "call-remote").await;
@@ -920,6 +1307,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         &test,
         "apply patch again in remote environment",
         environments,
+        AskForApproval::OnRequest,
     )
     .await?;
     wait_for_completion_without_patch_approval(&test).await;
