@@ -24,6 +24,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::BaseInstructions;
@@ -1147,6 +1148,11 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         .features
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
+    config
+        .features
+        .enable(Feature::MultiAgentMode)
+        .expect("test config should allow feature update");
+    turn.multi_agent_mode = Some(MultiAgentMode::Proactive);
     set_turn_config(&mut turn, config);
 
     let session = Arc::new(session);
@@ -1184,6 +1190,10 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
     assert_eq!(
         child_snapshot.session_source.get_agent_path().as_deref(),
         Some("/root/test_process")
+    );
+    assert_eq!(
+        child_snapshot.multi_agent_mode,
+        Some(MultiAgentMode::Proactive)
     );
     assert!(manager.captured_ops().iter().any(|(id, op)| {
         *id == child_thread_id

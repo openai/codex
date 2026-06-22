@@ -13,6 +13,7 @@ mod connection_handling_websocket;
 mod connection_handling_websocket_unix;
 mod current_time;
 mod dynamic_tools;
+mod environment_add;
 #[cfg(not(target_os = "windows"))]
 mod executor_mcp;
 mod executor_skills;

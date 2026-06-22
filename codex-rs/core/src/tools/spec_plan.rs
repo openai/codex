@@ -708,7 +708,9 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     }
 
     if features.enabled(Feature::TokenBudget) {
-        planned_tools.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
+        if features.enabled(Feature::AutoCompaction) {
+            planned_tools.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
+        }
         planned_tools.add(GetContextRemainingHandler);
     }
 

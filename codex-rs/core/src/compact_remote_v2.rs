@@ -165,6 +165,9 @@ async fn run_remote_compact_task_inner(
     attempt
         .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
+    if matches!(&result, Err(CodexErr::TurnAborted)) {
+        return result;
+    }
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
         let event = EventMsg::Error(
@@ -281,7 +284,7 @@ async fn run_remote_compact_task_inner_impl(
         token_usage,
     } = compaction_output_result?;
     if let Some(token_usage) = token_usage {
-        sess.record_rollout_budget_usage(&token_usage);
+        sess.record_rollout_budget_usage(&token_usage)?;
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
         analytics_details.compaction_summary_tokens = Some(token_usage.output_tokens);
         analytics_details.cached_input_tokens = Some(token_usage.cached_input_tokens);
@@ -289,7 +292,7 @@ async fn run_remote_compact_task_inner_impl(
     let (compacted_history, retained_images) =
         build_v2_compacted_history(&prompt_input, compaction_output);
     analytics_details.retained_image_count = Some(retained_images);
-    let (new_window_number, new_window_id) = sess.advance_auto_compact_window().await;
+    let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
     let new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -306,7 +309,9 @@ async fn run_remote_compact_task_inner_impl(
         message: String::new(),
         replacement_history: Some(new_history.clone()),
         window_number: Some(new_window_number),
-        window_id: Some(new_window_id),
+        first_window_id: Some(new_window_ids.first_window_id.to_string()),
+        previous_window_id: new_window_ids.previous_window_id.map(|id| id.to_string()),
+        window_id: Some(new_window_ids.window_id.to_string()),
     };
     compaction_trace.record_installed(&CompactionCheckpointTracePayload {
         input_history: &trace_input_history,

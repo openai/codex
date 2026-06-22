@@ -55,6 +55,7 @@ mod tests {
     use crate::provider::RetryConfig;
     use crate::search::AllowedCaller;
     use crate::search::ApproximateLocation;
+    use crate::search::ExternalWebAccess;
     use crate::search::LocationType;
     use crate::search::OpenOperation;
     use crate::search::SearchCommands;
@@ -193,7 +194,7 @@ mod tests {
                             caption: Some(true),
                         }),
                         allowed_callers: Some(vec![AllowedCaller::Direct]),
-                        external_web_access: Some(true),
+                        external_web_access: Some(ExternalWebAccess::Boolean(true)),
                     }),
                     max_output_tokens: Some(2500),
                 },

@@ -366,6 +366,7 @@ async fn unsandboxed_intercepted_exec_strips_managed_network_env() -> anyhow::Re
         sandbox: SandboxType::None,
         env: HashMap::new(),
         network: None,
+        network_environment_id: None,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         arg0: None,
         sandbox_policy_cwd: workdir.clone(),

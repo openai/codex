@@ -6,8 +6,6 @@ mod relay_proto;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -15,25 +13,20 @@ use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_api::AuthProvider;
-use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
 use codex_exec_server::ExecServerClient;
-use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::FsReadFileParams;
 use codex_exec_server::NoiseChannelIdentity;
 use codex_exec_server::NoiseChannelPublicKey;
 use codex_exec_server::NoiseRendezvousConnectArgs;
 use codex_exec_server::NoiseRendezvousConnectBundle;
-use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
 use codex_utils_path_uri::PathUri;
-use futures::FutureExt;
 use futures::SinkExt;
 use futures::StreamExt;
-use futures::future::BoxFuture;
 use http::HeaderMap;
 use http::HeaderValue;
 use pretty_assertions::assert_eq;
@@ -72,66 +65,8 @@ impl AuthProvider for StaticRegistryAuthProvider {
     }
 }
 
-struct FailingNoiseConnectProvider {
-    attempts: Arc<AtomicUsize>,
-}
-
-impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
-    fn connect_bundle(
-        &self,
-        _: NoiseChannelPublicKey,
-    ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>> {
-        self.attempts.fetch_add(1, Ordering::SeqCst);
-        async {
-            Err(ExecServerError::Protocol(
-                "test registry connect failure".to_string(),
-            ))
-        }
-        .boxed()
-    }
-}
-
 fn static_registry_auth_provider() -> codex_api::SharedAuthProvider {
     Arc::new(StaticRegistryAuthProvider)
-}
-
-#[tokio::test]
-async fn noise_environment_refreshes_bundle_for_each_connection_attempt() -> Result<()> {
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let manager = EnvironmentManager::without_environments();
-    manager.upsert_noise_environment(
-        ENVIRONMENT_ID.to_string(),
-        Arc::new(FailingNoiseConnectProvider {
-            attempts: Arc::clone(&attempts),
-        }),
-    )?;
-    let backend = manager
-        .get_environment(ENVIRONMENT_ID)
-        .context("Noise environment should be materialized")?
-        .get_exec_backend();
-
-    for attempt in 1..=2 {
-        let result = backend
-            .start(ExecParams {
-                process_id: ProcessId::new(format!("proc-{attempt}")),
-                argv: vec!["true".to_string()],
-                cwd: PathUri::from_path(std::env::current_dir()?)?,
-                env_policy: None,
-                env: HashMap::new(),
-                tty: false,
-                pipe_stdin: false,
-                arg0: None,
-            })
-            .await;
-        assert!(matches!(
-            result,
-            Err(ExecServerError::Protocol(ref message))
-                if message == "test registry connect failure"
-        ));
-    }
-
-    assert_eq!(attempts.load(Ordering::SeqCst), 2);
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -215,6 +150,8 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            sandbox: None,
+            enforce_managed_network: false,
         })
         .await?;
     assert_eq!(
