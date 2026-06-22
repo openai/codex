@@ -918,7 +918,10 @@ ON CONFLICT(id) DO UPDATE SET
     name = COALESCE(
         threads.name,
         CASE
-            WHEN threads.title <> '' AND threads.title <> excluded.title THEN threads.title
+            WHEN threads.title <> ''
+                AND (threads.first_user_message = '' OR trim(threads.title) <> trim(threads.first_user_message))
+                AND threads.title <> excluded.title
+            THEN threads.title
             ELSE excluded.name
         END
     ),

@@ -587,7 +587,7 @@ pub async fn read_repair_rollout_path(
             .await
         {
             Ok(true) => return,
-            Ok(false) => saw_existing_metadata = false,
+            Ok(false) => return,
             Err(err) => {
                 warn!(
                     "state db read-repair update failed for {}: {err}",
