@@ -1751,7 +1751,7 @@ fn build_responses_headers(
     headers
 }
 
-fn add_originator_header(headers: &mut ApiHeaderMap, originator: &str) {
+pub(crate) fn add_originator_header(headers: &mut ApiHeaderMap, originator: &str) {
     let default_originator = codex_login::default_client::originator();
     if originator == default_originator.value.as_str() {
         return;

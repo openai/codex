@@ -476,6 +476,11 @@ impl Session {
         self.services.agent_control.session_id()
     }
 
+    pub(crate) async fn originator(&self) -> String {
+        let state = self.state.lock().await;
+        state.session_configuration.originator.clone()
+    }
+
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
