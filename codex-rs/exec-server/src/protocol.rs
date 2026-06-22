@@ -153,6 +153,9 @@ pub struct ReadResponse {
     pub exit_code: Option<i32>,
     pub closed: bool,
     pub failure: Option<String>,
+    /// Whether the executor classified the process failure as a sandbox denial.
+    #[serde(default)]
+    pub sandbox_denied: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

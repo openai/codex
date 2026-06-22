@@ -10,6 +10,7 @@ use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
@@ -157,8 +158,14 @@ fn exec_server_params_for_request(
     tty: bool,
 ) -> codex_exec_server::ExecParams {
     let (env_policy, env) = exec_server_env_for_request(request);
+    // Sandbox retries reuse the unified-exec ID but start a distinct executor process.
+    let exec_server_process_id = if request.exec_server_sandbox.is_some() {
+        format!("{process_id}-{}", Uuid::new_v4())
+    } else {
+        process_id.to_string()
+    };
     codex_exec_server::ExecParams {
-        process_id: exec_server_process_id(process_id).into(),
+        process_id: exec_server_process_id.into(),
         argv: request.command.clone(),
         cwd: request.cwd.clone(),
         env_policy,
@@ -196,10 +203,6 @@ impl Drop for InitialExecCommandGuard {
     fn drop(&mut self) {
         self.active.store(false, Ordering::Release);
     }
-}
-
-fn exec_server_process_id(process_id: i32) -> String {
-    process_id.to_string()
 }
 
 async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
@@ -1041,7 +1044,7 @@ impl UnifiedExecProcessManager {
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
             spawn_lifecycle.after_spawn();
-            return UnifiedExecProcess::from_exec_server_started(started, request.sandbox).await;
+            return UnifiedExecProcess::from_exec_server_started(started).await;
         }
 
         // TODO(anp): Keep PathUri through the local PTY/process launch boundary.

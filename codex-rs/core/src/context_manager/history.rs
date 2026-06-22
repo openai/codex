@@ -359,25 +359,25 @@ impl ContextManager {
                 id,
                 call_id,
                 output,
-                metadata,
+                internal_chat_message_metadata_passthrough: metadata,
             } => ResponseItem::FunctionCallOutput {
                 id: id.clone(),
                 call_id: call_id.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
-                metadata: metadata.clone(),
+                internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::CustomToolCallOutput {
                 id,
                 call_id,
                 name,
                 output,
-                metadata,
+                internal_chat_message_metadata_passthrough: metadata,
             } => ResponseItem::CustomToolCallOutput {
                 id: id.clone(),
                 call_id: call_id.clone(),
                 name: name.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
-                metadata: metadata.clone(),
+                internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::Message { .. }
             | ResponseItem::AgentMessage { .. }

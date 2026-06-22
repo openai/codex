@@ -404,7 +404,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
         role: "user".to_string(),
         content,
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })
 }
 

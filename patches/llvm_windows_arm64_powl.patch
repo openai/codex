@@ -15,10 +15,11 @@ diff --git a/runtimes/mingw/crt_sources.bzl b/runtimes/mingw/crt_sources.bzl
 diff --git a/toolchain/args/windows/BUILD.bazel b/toolchain/args/windows/BUILD.bazel
 --- a/toolchain/args/windows/BUILD.bazel
 +++ b/toolchain/args/windows/BUILD.bazel
-@@ -49,5 +49,6 @@ cc_args(
+@@ -45,5 +45,6 @@ cc_args(
+     args = [
+         "-L{mingw_import_library_search_path}",
+         "-L{mingw_crt_library_search_path}",
+-
 +        "-lmingwex",
-         # For now, we force on ucrt.
-         # TODO(cerisier): make this either a constraint or a build setting
-         "-lucrt",
-     ],
-     data = [
++
+         # Clang will respect the user's chosen CRT variant.

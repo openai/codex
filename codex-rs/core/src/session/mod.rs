@@ -1372,17 +1372,11 @@ impl Session {
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        if turn_context
-            .config
-            .features
-            .enabled(Feature::ResizeAllImages)
-        {
-            // Keep the recorded rollout unchanged. Prepare its reconstructed history before
-            // installing it, so legacy images are processed once for this resume or fork and
-            // will be processed again if the rollout is reconstructed in a future session.
-            // This meets image resizing requirements without modifying persisted rollouts.
-            prepare_response_items(&mut history);
-        }
+        // Keep the recorded rollout unchanged. Prepare its reconstructed history before
+        // installing it, so legacy images are processed once for this resume or fork and
+        // will be processed again if the rollout is reconstructed in a future session.
+        // This meets image resizing requirements without modifying persisted rollouts.
+        prepare_response_items(&mut history);
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
@@ -2689,13 +2683,7 @@ impl Session {
         items: &'a [ResponseItem],
     ) -> Cow<'a, [ResponseItem]> {
         let mut items = Cow::Borrowed(items);
-        if turn_context
-            .config
-            .features
-            .enabled(Feature::ResizeAllImages)
-        {
-            prepare_response_items(items.to_mut());
-        }
+        prepare_response_items(items.to_mut());
         if turn_context.config.features.enabled(Feature::ItemIds) {
             Self::assign_missing_response_item_ids(items)
         } else {
@@ -2734,23 +2722,10 @@ impl Session {
         items
     }
 
-    pub(crate) fn response_item_from_user_input(
-        &self,
-        turn_context: &TurnContext,
-        input: Vec<UserInput>,
-    ) -> ResponseItem {
-        let local_image_preparation = if turn_context
-            .config
-            .features
-            .enabled(Feature::ResizeAllImages)
-        {
-            LocalImagePreparation::Defer
-        } else {
-            LocalImagePreparation::Process
-        };
+    pub(crate) fn response_item_from_user_input(&self, input: Vec<UserInput>) -> ResponseItem {
         ResponseItem::from(ResponseInputItem::from_user_input(
             input,
-            local_image_preparation,
+            LocalImagePreparation::Defer,
         ))
     }
 
@@ -3666,7 +3641,7 @@ impl Session {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
-        let response_item = self.response_item_from_user_input(turn_context, input.to_vec());
+        let response_item = self.response_item_from_user_input(input.to_vec());
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
         let mut user_message_item = UserMessageItem::new(input);
