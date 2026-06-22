@@ -1,5 +1,7 @@
 use super::*;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -8,6 +10,65 @@ use codex_protocol::protocol::SubAgentSource;
 
 const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
+const REMOTE_IMAGE_URL_ERROR: &str =
+    "remote image URLs are not supported; use an inline data URL instead";
+
+fn validate_user_input(input: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
+    if input.iter().any(|item| {
+        matches!(
+            item,
+            V2UserInput::Image { url, .. } if is_remote_image_url(url)
+        )
+    }) {
+        return Err(invalid_request(REMOTE_IMAGE_URL_ERROR));
+    }
+    Ok(())
+}
+
+fn validate_response_items(items: &[ResponseItem]) -> Result<(), JSONRPCErrorError> {
+    if items.iter().any(|item| match item {
+        ResponseItem::Message { content, .. } => content.iter().any(|item| {
+            matches!(
+                item,
+                ContentItem::InputImage { image_url, .. } if is_remote_image_url(image_url)
+            )
+        }),
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => {
+            output.content_items().is_some_and(|content| {
+                content.iter().any(|item| {
+                    matches!(
+                        item,
+                        FunctionCallOutputContentItem::InputImage { image_url, .. }
+                            if is_remote_image_url(image_url)
+                    )
+                })
+            })
+        }
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::AgentMessage { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::CompactionTrigger { .. }
+        | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::Other => false,
+    }) {
+        return Err(invalid_request(REMOTE_IMAGE_URL_ERROR));
+    }
+    Ok(())
+}
+
+fn is_remote_image_url(image_url: &str) -> bool {
+    image_url.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
+}
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -105,6 +166,7 @@ impl TurnRequestProcessor {
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        validate_user_input(&params.input)?;
         self.turn_start_inner(
             request_id,
             params,
@@ -140,6 +202,7 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: TurnSteerParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        validate_user_input(&params.input)?;
         self.turn_steer_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
@@ -764,6 +827,7 @@ impl TurnRequestProcessor {
             })
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(invalid_request)?;
+        validate_response_items(&items)?;
 
         thread
             .inject_response_items(items)

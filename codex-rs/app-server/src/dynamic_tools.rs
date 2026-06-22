@@ -11,6 +11,9 @@ use tracing::error;
 use crate::outgoing_message::ClientRequestResult;
 use crate::server_request_error::is_turn_transition_server_request_error;
 
+const REMOTE_IMAGE_URL_ERROR: &str =
+    "remote image URLs are not supported; use an inline data URL instead";
+
 pub(crate) async fn on_call_response(
     call_id: String,
     receiver: oneshot::Receiver<ClientRequestResult>,
@@ -54,12 +57,33 @@ pub(crate) async fn on_call_response(
 
 fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option<String>) {
     match serde_json::from_value::<DynamicToolCallResponse>(value) {
+        Ok(response)
+            if response.content_items.iter().any(|item| {
+                matches!(
+                    item,
+                    DynamicToolCallOutputContentItem::InputImage { image_url }
+                        if is_remote_image_url(image_url)
+                )
+            }) =>
+        {
+            error!(
+                message = REMOTE_IMAGE_URL_ERROR,
+                "dynamic tool response was invalid"
+            );
+            fallback_response(REMOTE_IMAGE_URL_ERROR)
+        }
         Ok(response) => (response, None),
         Err(err) => {
             error!("failed to deserialize DynamicToolCallResponse: {err}");
             fallback_response("dynamic tool response was invalid")
         }
     }
+}
+
+fn is_remote_image_url(image_url: &str) -> bool {
+    image_url.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
 }
 
 fn fallback_response(message: &str) -> (DynamicToolCallResponse, Option<String>) {
