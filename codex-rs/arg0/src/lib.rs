@@ -328,6 +328,9 @@ fn prepare_path_entry_for_codex_aliases(
     existing_path: Option<OsString>,
 ) -> std::io::Result<(Arg0PathEntryGuard, OsString)> {
     let codex_home = find_codex_home()?;
+    #[cfg(windows)]
+    let apply_patch_launcher_exe =
+        codex_windows_sandbox::resolve_current_exe_for_launch(&codex_home, "codex.exe");
     #[cfg(not(debug_assertions))]
     {
         // Guard against placing helpers in system temp directories outside debug builds.
@@ -392,7 +395,7 @@ fn prepare_path_entry_for_codex_aliases(
         #[cfg(windows)]
         {
             let batch_script = path.join(format!("{filename}.bat"));
-            let exe = exe.display();
+            let exe = apply_patch_launcher_exe.display();
             std::fs::write(
                 &batch_script,
                 format!(
