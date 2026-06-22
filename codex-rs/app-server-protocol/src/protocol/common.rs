@@ -3392,9 +3392,11 @@ mod tests {
             v2::ModelSafetyBufferingUpdatedNotification {
                 thread_id: "thr_123".to_string(),
                 turn_id: "turn_123".to_string(),
-                model: "gpt-5.4".to_string(),
+                model: "current-model".to_string(),
                 use_cases: vec!["cyber".to_string()],
                 reasons: vec!["user_risk".to_string()],
+                show_buffering_ui: true,
+                faster_model: Some("faster-model".to_string()),
             },
         );
         assert_eq!(
@@ -3403,9 +3405,11 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "turnId": "turn_123",
-                    "model": "gpt-5.4",
+                    "model": "current-model",
                     "useCases": ["cyber"],
-                    "reasons": ["user_risk"]
+                    "reasons": ["user_risk"],
+                    "showBufferingUi": true,
+                    "fasterModel": "faster-model"
                 }
             }),
             serde_json::to_value(&notification)?,

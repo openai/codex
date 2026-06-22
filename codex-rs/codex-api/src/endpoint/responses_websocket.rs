@@ -2,6 +2,7 @@ use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
+use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
@@ -634,6 +635,7 @@ async fn run_websocket_response_stream(
     turn_state: Option<&OnceLock<String>>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
     send_websocket_request(
         ws_stream,
         request_text,
@@ -687,9 +689,14 @@ async fn run_websocket_response_stream(
                 {
                     let _ = turn_state.set(response_turn_state);
                 }
+                if let Some(treatment) = event.safety_buffering_treatment() {
+                    safety_buffering_treatment = treatment;
+                }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
-                let safety_buffering = event.safety_buffering();
+                let safety_buffering = event
+                    .safety_buffering()
+                    .map(|buffering| buffering.with_treatment(&safety_buffering_treatment));
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
