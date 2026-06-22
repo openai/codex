@@ -210,7 +210,10 @@ impl RequestOrigin {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Direct and Proxy are constructed by platform resolvers added in later PRs"
+)]
 enum SystemProxyDecision {
     Direct,
     Proxy { url: String },
