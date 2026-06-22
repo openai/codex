@@ -20,6 +20,7 @@ use codex_api::TransportError;
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
+use codex_login::AuthFingerprint;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -768,6 +769,8 @@ async fn workspace_restricted_401_uses_request_auth_for_forced_logout() -> anyho
     let request_auth = request_auth_manager
         .auth_cached()
         .expect("request auth should load");
+    let request_auth_fingerprint =
+        AuthFingerprint::from_auth(&request_auth).expect("request auth can be fingerprinted");
     let auth_manager = AuthManager::from_auth_for_testing_with_home(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         codex_home.path().to_path_buf(),
@@ -779,7 +782,7 @@ async fn workspace_restricted_401_uses_request_auth_for_forced_logout() -> anyho
         &mut recovery,
         &test_session_telemetry(),
         &test_model_provider(),
-        Some(&request_auth),
+        Some(&request_auth_fingerprint),
     )
     .await
     .expect_err("matching 401 should force reauth without retry");
@@ -892,7 +895,9 @@ async fn workspace_restricted_stream_401_forces_chatgpt_logout() -> anyhow::Resu
         test_model_provider(),
         Some(super::StreamAuthRecovery {
             auth_recovery: Some(auth_manager.unauthorized_recovery()),
-            rejected_auth: Some(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+            rejected_auth: AuthFingerprint::from_auth(
+                &CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            ),
         }),
     );
 

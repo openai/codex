@@ -21,6 +21,7 @@ pub use server::run_login_server;
 pub use auth::AgentIdentityAuthPolicy;
 pub use auth::AuthConfig;
 pub use auth::AuthDotJson;
+pub use auth::AuthFingerprint;
 pub use auth::AuthKeyringBackendKind;
 pub use auth::AuthManager;
 pub use auth::AuthManagerConfig;

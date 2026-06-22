@@ -1594,6 +1594,55 @@ async fn personal_access_token_does_not_offer_unauthorized_recovery() {
     server.verify().await;
 }
 
+#[test]
+fn auth_fingerprint_debug_redacts_auth_material() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let fingerprint = AuthFingerprint::from_auth(&auth).expect("ChatGPT auth can be fingerprinted");
+
+    let debug = format!("{fingerprint:?}");
+
+    assert!(debug.contains("AuthFingerprint"));
+    assert!(debug.contains("fingerprint_prefix"));
+    assert!(!debug.contains("Access Token"));
+    assert!(!debug.contains("test"));
+    assert!(!debug.contains("account_id"));
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn forced_server_auth_rejection_does_not_reload_access_token_env() {
+    let codex_home = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .and(header("authorization", "Bearer at-env-test"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, "at-env-test");
+    let rejected_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let rejected_auth_fingerprint =
+        AuthFingerprint::from_auth(&rejected_auth).expect("ChatGPT auth can be fingerprinted");
+    let manager = AuthManager::from_auth_for_testing_with_home(
+        rejected_auth.clone(),
+        codex_home.path().to_path_buf(),
+    );
+
+    let changed = manager
+        .force_logout_due_to_server_auth_rejection(Some(&rejected_auth_fingerprint))
+        .await
+        .expect("forced logout should succeed");
+
+    assert!(changed);
+    assert!(manager.auth_cached().is_none());
+    server.verify().await;
+}
+
 #[tokio::test]
 #[serial(codex_auth_env)]
 async fn load_auth_keeps_codex_api_key_env_precedence() {
