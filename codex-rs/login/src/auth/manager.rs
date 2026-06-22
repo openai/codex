@@ -233,7 +233,9 @@ fn fingerprint_single_secret(kind: ApiAuthMode, secret: &str, key: &[u8; 32]) ->
 }
 
 fn auth_fingerprint_mac(kind: ApiAuthMode, key: &[u8; 32]) -> HmacSha256 {
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts keys of any size");
+    let Ok(mut mac) = HmacSha256::new_from_slice(key) else {
+        unreachable!("HMAC accepts keys of any size");
+    };
     update_mac_field(&mut mac, auth_kind_label(kind));
     mac
 }
@@ -1430,6 +1432,7 @@ async fn load_auth(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn load_auth_without_codex_access_token_env(
     codex_home: &Path,
     enable_codex_api_key_env: bool,
@@ -1454,6 +1457,7 @@ async fn load_auth_without_codex_access_token_env(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn load_auth_impl(
     codex_home: &Path,
     enable_codex_api_key_env: bool,

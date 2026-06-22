@@ -2008,7 +2008,7 @@ where
                                     .await
                                 } else {
                                     None
-                            };
+                                };
                             forced_logout_error.unwrap_or_else(|| {
                                 provider.map_api_error(ApiError::Transport(transport))
                             })
