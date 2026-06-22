@@ -238,7 +238,8 @@ async fn run_compact_task_inner_impl(
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,
-            base_instructions: sess.get_base_instructions().await,
+            base_instructions: (!turn_context.inline_instructions)
+                .then_some(sess.get_base_instructions().await),
             ..Default::default()
         };
         let attempt_result = drain_to_completed(

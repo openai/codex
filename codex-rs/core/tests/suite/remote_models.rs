@@ -826,9 +826,13 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let base_model_info = models_manager
         .get_model_info("gpt-5.2", &config.to_models_manager_config())
         .await;
-    let body = response_mock.single_request().body_json();
-    let instructions = body["instructions"].as_str().unwrap();
-    assert_eq!(instructions, base_model_info.base_instructions);
+    let request = response_mock.single_request();
+    assert_eq!(request.body_json().get("instructions"), None);
+    let developer_texts = request.message_input_texts("developer");
+    assert_eq!(
+        developer_texts.first().map(String::as_str),
+        Some(base_model_info.base_instructions.as_str())
+    );
 
     Ok(())
 }

@@ -591,10 +591,14 @@ async fn summarize_context_three_requests_and_instructions() {
     let body3 = requests[2].body_json();
 
     // Manual compact should keep the baseline developer instructions.
-    let instr1 = body1.get("instructions").and_then(|v| v.as_str()).unwrap();
-    let instr2 = body2.get("instructions").and_then(|v| v.as_str()).unwrap();
+    assert_eq!(body1.get("instructions"), None);
+    assert_eq!(body2.get("instructions"), None);
+    let developer_texts1 = requests[0].message_input_texts("developer");
+    let developer_texts2 = requests[1].message_input_texts("developer");
+    let baseline_instructions = developer_texts1.first().expect("developer instructions");
     assert_eq!(
-        instr1, instr2,
+        developer_texts2.first(),
+        Some(baseline_instructions),
         "manual compact should keep the standard developer instructions"
     );
 
@@ -1250,18 +1254,17 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                     return None;
                 }
 
-                let text = value
-                    .get("content")
-                    .and_then(|content| content.as_array())
-                    .and_then(|content| content.first())
-                    .and_then(|item| item.get("text"))
-                    .and_then(|text| text.as_str());
-
                 // Ignore cached prefix messages (project docs + permissions) since they are not
                 // relevant to compaction behavior and can change as bundled prompts evolve.
                 let role = value.get("role").and_then(|role| role.as_str());
                 if role == Some("developer")
-                    && text.is_some_and(|text| text.contains("`sandbox_mode`"))
+                    && value
+                        .get("content")
+                        .and_then(|content| content.as_array())
+                        .and_then(|content| content.get(1))
+                        .and_then(|item| item.get("text"))
+                        .and_then(|text| text.as_str())
+                        .is_some_and(|text| text.contains("`sandbox_mode`"))
                 {
                     return None;
                 }
@@ -1757,17 +1760,16 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let body_first = requests[0].body_json();
     let body_auto = requests[auto_compact_index].body_json();
     let body_follow_up = requests[follow_up_index].body_json();
-    let instructions = body_auto
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let baseline_instructions = body_first
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
+    assert_eq!(body_first.get("instructions"), None);
+    assert_eq!(body_auto.get("instructions"), None);
+    let baseline_developer_texts = requests[0].message_input_texts("developer");
+    let auto_developer_texts = requests[auto_compact_index].message_input_texts("developer");
+    let baseline_instructions = baseline_developer_texts
+        .first()
+        .expect("developer instructions");
     assert_eq!(
-        instructions, baseline_instructions,
+        auto_developer_texts.first(),
+        Some(baseline_instructions),
         "auto compact should keep the standard developer instructions",
     );
 

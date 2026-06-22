@@ -344,18 +344,10 @@ async fn exec_cli_applies_model_instructions_file() {
     assert!(output.status.success());
 
     // Inspect the captured request and verify our custom base instructions were
-    // included in the `instructions` field.
+    // included in developer input.
     let request = resp_mock.single_request();
-    let body = request.body_json();
-    let instructions = body
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    assert!(
-        instructions.contains(marker),
-        "instructions did not contain custom marker; got: {instructions}"
-    );
+    let developer_texts = request.message_input_texts("developer");
+    assert_eq!(developer_texts.first().map(String::as_str), Some(marker));
 }
 
 /// Verify that `codex exec --profile ...` preserves the active user config
@@ -414,16 +406,8 @@ async fn exec_cli_profile_applies_model_instructions_file() {
     assert!(output.status.success());
 
     let request = resp_mock.single_request();
-    let body = request.body_json();
-    let instructions = body
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    assert!(
-        instructions.contains(marker),
-        "instructions did not contain profile marker; got: {instructions}"
-    );
+    let developer_texts = request.message_input_texts("developer");
+    assert_eq!(developer_texts.first().map(String::as_str), Some(marker));
 }
 
 /// Tests streaming responses through the CLI using a local Responses API server.

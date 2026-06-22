@@ -227,7 +227,7 @@ async fn run_remote_compact_task_inner_impl(
         input: prompt_input,
         tools: tool_router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        base_instructions,
+        base_instructions: (!turn_context.inline_instructions).then_some(base_instructions),
         output_schema: None,
         output_schema_strict: true,
     };
@@ -379,8 +379,8 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     let item_count = history.raw_items().len();
 
     for index in (0..item_count).rev() {
-        let Some(estimated_tokens_before) =
-            history.estimate_token_count_with_base_instructions(base_instructions)
+        let Some(estimated_tokens_before) = history
+            .estimate_token_count_with_resolved_base_instructions(turn_context, base_instructions)
         else {
             break;
         };
@@ -398,7 +398,7 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
         items[index] = rewritten_item;
         history.replace(items);
         let estimated_tokens_after = history
-            .estimate_token_count_with_base_instructions(base_instructions)
+            .estimate_token_count_with_resolved_base_instructions(turn_context, base_instructions)
             .unwrap_or_default();
         rewritten_outputs += 1;
         estimated_deleted_tokens = estimated_deleted_tokens

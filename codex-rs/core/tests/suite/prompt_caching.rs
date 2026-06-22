@@ -110,7 +110,6 @@ fn normalize_newlines(text: &str) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
-    use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
     let req1 = mount_sse_once(
@@ -198,7 +197,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "tool_search",
         "web_search",
     ]);
-    let body0 = req1.single_request().body_json();
+    let request0 = req1.single_request();
+    let body0 = request0.body_json();
 
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
         base_instructions
@@ -206,16 +206,21 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         [base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS.to_string()].join("\n")
     };
 
+    assert_eq!(body0.get("instructions"), None);
+    let developer_texts0 = request0.message_input_texts("developer");
     assert_eq!(
-        body0["instructions"],
-        serde_json::json!(expected_instructions),
+        developer_texts0.first().map(String::as_str),
+        Some(expected_instructions.as_str())
     );
     assert_tool_names(&body0, &expected_tools_names);
 
-    let body1 = req2.single_request().body_json();
+    let request1 = req2.single_request();
+    let body1 = request1.body_json();
+    assert_eq!(body1.get("instructions"), None);
+    let developer_texts1 = request1.message_input_texts("developer");
     assert_eq!(
-        body1["instructions"],
-        serde_json::json!(expected_instructions),
+        developer_texts1.first().map(String::as_str),
+        Some(expected_instructions.as_str())
     );
     assert_tool_names(&body1, &expected_tools_names);
 
@@ -280,19 +285,19 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let body0 = req1.single_request().body_json();
-    let instructions0 = body0["instructions"]
-        .as_str()
-        .expect("instructions should be a string");
+    let request0 = req1.single_request();
+    assert_eq!(request0.body_json().get("instructions"), None);
+    let developer_texts0 = request0.message_input_texts("developer");
+    let instructions0 = developer_texts0.first().expect("developer instructions");
     assert!(
         instructions0.contains("You are"),
         "expected non-empty instructions"
     );
 
-    let body1 = req2.single_request().body_json();
-    let instructions1 = body1["instructions"]
-        .as_str()
-        .expect("instructions should be a string");
+    let request1 = req2.single_request();
+    assert_eq!(request1.body_json().get("instructions"), None);
+    let developer_texts1 = request1.message_input_texts("developer");
+    let instructions1 = developer_texts1.first().expect("developer instructions");
     assert_eq!(
         normalize_newlines(instructions1),
         normalize_newlines(instructions0)
@@ -645,26 +650,18 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         "environment context should appear at least once, found {env_count}"
     );
 
-    let permissions_texts: Vec<&str> = input
-        .iter()
-        .filter_map(|msg| {
-            let role = msg["role"].as_str()?;
-            if role != "developer" {
-                return None;
-            }
-            msg["content"]
-                .as_array()
-                .and_then(|content| content.first())
-                .and_then(|item| item["text"].as_str())
-        })
-        .collect();
+    let permissions_text = input
+        .first()
+        .and_then(|message| message["content"].as_array())
+        .and_then(|content| content.get(1))
+        .and_then(|item| item["text"].as_str())
+        .expect("permissions instructions");
+    let normalized_permissions = permissions_text.to_ascii_lowercase();
     assert!(
-        permissions_texts.iter().any(|text| {
-            let lower = text.to_ascii_lowercase();
-            (lower.contains("approval policy") || lower.contains("approval_policy"))
-                && lower.contains("never")
-        }),
-        "permissions message should reflect overridden approval policy: {permissions_texts:?}"
+        (normalized_permissions.contains("approval policy")
+            || normalized_permissions.contains("approval_policy"))
+            && normalized_permissions.contains("never"),
+        "permissions message should reflect overridden approval policy: {permissions_text:?}"
     );
 
     let user_texts: Vec<&str> = input

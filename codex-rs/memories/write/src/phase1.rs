@@ -305,9 +305,9 @@ mod job {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }];
-        prompt.base_instructions = BaseInstructions {
+        prompt.base_instructions = Some(BaseInstructions {
             text: crate::stage_one::PROMPT.to_string(),
-        };
+        });
         prompt.output_schema = Some(output_schema());
         prompt.output_schema_strict = true;
 

@@ -5,16 +5,18 @@ expression: "format_labeled_requests_snapshot(\"Second turn changes cwd, approva
 Scenario: Second turn changes cwd, approval policy, and personality while keeping model constant.
 
 ## First Request (Baseline)
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <SKILLS_INSTRUCTIONS>
+00:message/developer[3]:
+    [01] <MODEL_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <SKILLS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first turn
 
 ## Second Request (Turn Overrides)
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <SKILLS_INSTRUCTIONS>
+00:message/developer[3]:
+    [01] <MODEL_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <SKILLS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first turn
 03:message/assistant:turn one complete

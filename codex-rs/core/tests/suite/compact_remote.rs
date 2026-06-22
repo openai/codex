@@ -61,8 +61,12 @@ fn estimate_compact_input_tokens(request: &responses::ResponsesRequest) -> i64 {
 }
 
 fn estimate_compact_payload_tokens(request: &responses::ResponsesRequest) -> i64 {
-    estimate_compact_input_tokens(request)
-        .saturating_add(approx_token_count(&request.instructions_text()))
+    let body = request.body_json();
+    let instructions = body
+        .get("instructions")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    estimate_compact_input_tokens(request).saturating_add(approx_token_count(instructions))
 }
 
 fn assert_tools_payload_does_not_defer(body: &Value) {
@@ -1986,7 +1990,17 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
             }),
     )
     .await?;
-    let baseline_codex = baseline_harness.test().codex.clone();
+    let baseline_test = baseline_harness.test();
+    let baseline_base_instructions = baseline_test
+        .thread_manager
+        .get_models_manager()
+        .get_model_info(
+            &baseline_test.session_configured.model,
+            &baseline_test.config.to_models_manager_config(),
+        )
+        .await
+        .base_instructions;
+    let baseline_codex = baseline_test.codex.clone();
 
     responses::mount_sse_sequence(
         baseline_harness.server(),
@@ -2071,12 +2085,13 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
 
     let override_base_instructions = format!(
         "{}\nREMOTE_BASE_INSTRUCTIONS_OVERRIDE {}",
-        baseline_compact_request.instructions_text(),
+        baseline_base_instructions,
         "x".repeat(8_000)
     );
     let override_context_window = baseline_payload_tokens.saturating_add(500);
-    let pretrim_override_estimate =
-        baseline_input_tokens.saturating_add(approx_token_count(&override_base_instructions));
+    let pretrim_override_estimate = baseline_input_tokens
+        .saturating_sub(approx_token_count(&baseline_base_instructions))
+        .saturating_add(approx_token_count(&override_base_instructions));
     assert!(
         pretrim_override_estimate > override_context_window,
         "expected override instructions to push pre-trim estimate past the context window"
@@ -2166,8 +2181,13 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
 
     let override_compact_request = override_compact_mock.single_request();
     assert_eq!(
-        override_compact_request.instructions_text(),
-        override_base_instructions
+        override_compact_request.body_json().get("instructions"),
+        None
+    );
+    let override_developer_texts = override_compact_request.message_input_texts("developer");
+    assert_eq!(
+        override_developer_texts.first().map(String::as_str),
+        Some(override_base_instructions.as_str())
     );
     assert!(
         override_compact_request.has_function_call(override_retained_call_id),

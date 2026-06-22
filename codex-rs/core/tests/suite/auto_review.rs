@@ -202,8 +202,10 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
         .find(|request| {
             request.body_contains_text("auto-review-model-override.txt")
                 && request
-                    .instructions_text()
-                    .starts_with("You are judging one planned coding-agent action.")
+                    .message_input_texts("developer")
+                    .first()
+                    .and_then(|text| text.lines().next())
+                    == Some("You are judging one planned coding-agent action.")
         })
         .expect("expected Guardian request for apply_patch");
     assert_eq!(

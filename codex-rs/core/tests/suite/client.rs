@@ -1205,7 +1205,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_base_instructions_override_in_request() {
+async fn inlines_base_instructions_override_in_request() {
     skip_if_no_network!();
     // Mock server
     let server = MockServer::start().await;
@@ -1244,12 +1244,12 @@ async fn includes_base_instructions_override_in_request() {
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
+    let developer_messages = request.message_input_texts("developer");
 
-    assert!(
-        request_body["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("test instructions")
+    assert_eq!(request_body.get("instructions"), None);
+    assert_eq!(
+        developer_messages.first().map(String::as_str),
+        Some("test instructions")
     );
 }
 
@@ -1471,16 +1471,11 @@ async fn includes_user_instructions_message_in_request() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    assert!(
-        !request_body["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("be nice")
-    );
+    assert_eq!(request_body.get("instructions"), None);
     assert_message_role(&request_body["input"][0], "developer");
-    let permissions_text = request_body["input"][0]["content"][0]["text"]
+    let permissions_text = request_body["input"][0]["content"][1]["text"]
         .as_str()
-        .expect("invalid permissions message content");
+        .expect("permissions message content");
     assert!(
         permissions_text.contains("`sandbox_mode`"),
         "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
@@ -2657,17 +2652,11 @@ async fn includes_developer_instructions_message_in_request() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    let permissions_text = request_body["input"][0]["content"][0]["text"]
-        .as_str()
-        .expect("invalid permissions message content");
-
-    assert!(
-        !request_body["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("be nice")
-    );
+    assert_eq!(request_body.get("instructions"), None);
     assert_message_role(&request_body["input"][0], "developer");
+    let permissions_text = request_body["input"][0]["content"][1]["text"]
+        .as_str()
+        .expect("permissions message content");
     assert!(
         permissions_text.contains("`sandbox_mode`"),
         "expected permissions message to mention sandbox_mode, got {permissions_text:?}"

@@ -1885,6 +1885,53 @@ async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     assert_eq!(session.previous_turn_settings().await, None);
 }
 
+#[tokio::test]
+async fn build_initial_context_inlines_base_instructions_for_new_turn_contexts() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let base_instructions = "INLINE_BASE_INSTRUCTIONS_MARKER".to_string();
+    session
+        .state
+        .lock()
+        .await
+        .session_configuration
+        .base_instructions = base_instructions.clone();
+
+    assert!(turn_context.inline_instructions);
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+    assert_eq!(developer_texts.first(), Some(&base_instructions.as_str()));
+
+    turn_context.inline_instructions = false;
+    let legacy_initial_context = session.build_initial_context(&turn_context).await;
+    assert_eq!(
+        developer_input_texts(&legacy_initial_context),
+        developer_texts[1..]
+    );
+}
+
+#[tokio::test]
+async fn new_turn_context_inherits_inline_instructions_from_reference_context() {
+    let (session, turn_context) = make_session_and_context().await;
+    assert_eq!(turn_context.inline_instructions, true);
+
+    let mut legacy_context_item = turn_context.to_turn_context_item();
+    legacy_context_item.inline_instructions = false;
+    session
+        .state
+        .lock()
+        .await
+        .set_reference_context_item(Some(legacy_context_item));
+
+    let resumed_turn_context = session.new_default_turn().await;
+    assert_eq!(resumed_turn_context.inline_instructions, false);
+    assert_eq!(
+        resumed_turn_context
+            .to_turn_context_item()
+            .inline_instructions,
+        false
+    );
+}
+
 fn session_meta_item(
     thread_id: ThreadId,
     multi_agent_version: Option<MultiAgentVersion>,
@@ -2013,7 +2060,8 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
 
 #[tokio::test]
 async fn recompute_token_usage_uses_session_base_instructions() {
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.inline_instructions = false;
 
     let override_instructions = "SESSION_OVERRIDE_INSTRUCTIONS_ONLY".repeat(120);
     {
@@ -2718,6 +2766,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let previous_model = "forked-rollout-model";
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
+        inline_instructions: false,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         workspace_roots: None,

@@ -241,7 +241,7 @@ async fn run_remote_compact_task_inner_impl(
         input,
         tools: tool_router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        base_instructions,
+        base_instructions: (!turn_context.inline_instructions).then_some(base_instructions),
         output_schema: None,
         output_schema_strict: true,
     };
@@ -254,7 +254,10 @@ async fn run_remote_compact_task_inner_impl(
     );
     let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
         "model": turn_context.model_info.slug.as_str(),
-        "instructions": prompt.base_instructions.text.as_str(),
+        "instructions": prompt
+            .base_instructions
+            .as_ref()
+            .map(|instructions| instructions.text.as_str()),
         "input": &prompt.input,
         "parallel_tool_calls": prompt.parallel_tool_calls,
     }));

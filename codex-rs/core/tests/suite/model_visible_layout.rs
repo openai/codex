@@ -5,10 +5,14 @@ use std::sync::Arc;
 use anyhow::Result;
 use codex_config::types::Personality;
 use codex_features::Feature;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
@@ -26,6 +30,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
@@ -373,6 +378,46 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     let initial_request = initial_mock.single_request();
+    let initial_developer_texts = initial_request.message_input_texts("developer");
+    let initial_model_instructions = initial_developer_texts
+        .first()
+        .expect("initial model instructions");
+
+    // Rewrite the seed turn into the legacy representation: no persisted compatibility flag and
+    // no model instructions in history. The resumed request should therefore use the top-level
+    // `instructions` field.
+    let mut removed_inline_instructions = false;
+    let mut found_turn_context = false;
+    let legacy_rollout = fs::read_to_string(&rollout_path)?
+        .lines()
+        .map(|line| -> Result<String> {
+            let mut line: RolloutLine = serde_json::from_str(line)?;
+            match &mut line.item {
+                RolloutItem::TurnContext(turn_context) => {
+                    turn_context.inline_instructions = false;
+                    found_turn_context = true;
+                }
+                RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
+                    if role == "developer" && !removed_inline_instructions =>
+                {
+                    let ContentItem::InputText { text } = content.remove(0) else {
+                        panic!("first developer content should be model instructions");
+                    };
+                    assert_eq!(text, initial_model_instructions.as_str());
+                    removed_inline_instructions = true;
+                }
+                _ => {}
+            }
+            Ok(serde_json::to_string(&line)?)
+        })
+        .collect::<Result<Vec<_>>>()?
+        .join("\n");
+    assert!(found_turn_context, "rollout should contain a turn context");
+    assert!(
+        removed_inline_instructions,
+        "rollout should contain inline model instructions"
+    );
+    fs::write(&rollout_path, format!("{legacy_rollout}\n"))?;
 
     let resumed_mock = mount_sse_once(
         &server,
@@ -437,7 +482,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     insta::assert_snapshot!(
         "model_visible_layout_resume_with_personality_change",
         format_labeled_requests_snapshot(
-            "First post-resume turn where resumed config model differs from rollout and personality changes.",
+            "First post-legacy-resume turn where resumed config model differs from rollout and personality changes.",
             &[
                 ("Last Request Before Resume", &initial_request),
                 ("First Request After Resume", &resumed_request),

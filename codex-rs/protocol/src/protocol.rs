@@ -3073,6 +3073,10 @@ pub struct TurnContextNetworkItem {
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+    /// Whether base model instructions are present in the model input as a developer message.
+    /// Missing values come from legacy rollouts that used the top-level Responses API field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inline_instructions: bool,
     pub cwd: AbsolutePathBuf,
     /// Effective workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions in `permission_profile`.
@@ -5409,6 +5413,7 @@ mod tests {
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
+        assert_eq!(item.inline_instructions, false);
         Ok(())
     }
 
@@ -5476,6 +5481,7 @@ mod tests {
     fn turn_context_item_serializes_network_when_present() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
+            inline_instructions: true,
             cwd: test_path_buf("/tmp").abs(),
             workspace_roots: None,
             current_date: None,
@@ -5507,6 +5513,7 @@ mod tests {
         };
 
         let value = serde_json::to_value(item)?;
+        assert_eq!(value["inline_instructions"], true);
         assert_eq!(
             value["network"],
             json!({
