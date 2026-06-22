@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
+use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CreateCellRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
@@ -125,7 +126,7 @@ fn spawn_cell_actor_harness_with_policy<H: CellHost>(
     let (runtime_tx, runtime_pause_tx, runtime_terminate_handle) = spawn_runtime(
         HashMap::new(),
         CreateCellRequest {
-            idempotency_key: "cell-actor-harness".to_string(),
+            cell_id: CellId::new("cell-actor-harness".to_string()),
             tool_call_id: "call-1".to_string(),
             enabled_tools: Vec::new(),
             source: "await new Promise(() => {});".to_string(),

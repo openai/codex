@@ -5,6 +5,7 @@ use codex_code_mode::CellId;
 use codex_code_mode::CodeModeService;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CreateCellRequest;
+use codex_code_mode::ObservationGeneration;
 use codex_code_mode::ObserveOutcome;
 use codex_code_mode::ObserveRequest;
 
@@ -42,9 +43,10 @@ fn terminal_notification_before_readiness_does_not_reopen_the_dispatch_gate() {
 async fn background_completion_removes_the_dispatch_gate_without_another_observation() {
     let broker = Arc::new(CodeModeDispatchBroker::new());
     let service = CodeModeService::with_delegate(broker.clone());
+    let requested_cell_id = CellId::new("cell-a7".to_string());
     let cell_id = service
         .create_cell(CreateCellRequest {
-            idempotency_key: "delegate-cleanup-cell".to_string(),
+            cell_id: requested_cell_id,
             tool_call_id: "call-1".to_string(),
             enabled_tools: Vec::new(),
             source: concat!(
@@ -60,8 +62,8 @@ async fn background_completion_removes_the_dispatch_gate_without_another_observa
     assert_eq!(
         service
             .observe(ObserveRequest {
-                idempotency_key: "delegate-cleanup-observation".to_string(),
                 cell_id: cell_id.clone(),
+                generation: ObservationGeneration::INITIAL,
                 yield_time_ms: 1,
             })
             .await

@@ -8,6 +8,7 @@ use super::CodeModeNestedToolCall;
 use super::CodeModeService;
 use super::CodeModeSessionDelegate;
 use super::NotificationFuture;
+use super::ObservationGeneration;
 use super::ObserveOutcome;
 use super::ObserveRequest;
 use super::ObserveToPendingOutcome;
@@ -169,7 +170,7 @@ impl CodeModeSessionDelegate for RecordingDelegate {
 
 fn execute_request(source: &str) -> CreateCellRequest {
     CreateCellRequest {
-        idempotency_key: format!("call_1:{source}"),
+        cell_id: cell_id("1"),
         tool_call_id: "call_1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
@@ -203,8 +204,8 @@ async fn execute_with_yield_time(
     let cell_id = service.create_cell(request).await.unwrap();
     service
         .observe(ObserveRequest {
-            idempotency_key: format!("observe:{cell_id}"),
             cell_id,
+            generation: ObservationGeneration::INITIAL,
             yield_time_ms,
         })
         .await
@@ -259,7 +260,7 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
     let write_response = execute(
         &first_session,
         CreateCellRequest {
-            idempotency_key: "write-shared-value".to_string(),
+            cell_id: cell_id("1"),
             source: r#"store("key", "visible");"#.to_string(),
             ..execute_request("")
         },
@@ -269,7 +270,7 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
     let same_session = execute(
         &first_session,
         CreateCellRequest {
-            idempotency_key: "read-shared-value".to_string(),
+            cell_id: cell_id("2"),
             source: r#"text(String(load("key")));"#.to_string(),
             ..execute_request("")
         },
@@ -278,7 +279,7 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
     let other_session = execute(
         &second_session,
         CreateCellRequest {
-            idempotency_key: "read-other-session-value".to_string(),
+            cell_id: cell_id("1"),
             source: r#"text(String(load("key")));"#.to_string(),
             ..execute_request("")
         },
@@ -1090,8 +1091,8 @@ async fn observe_reports_missing_cell_separately_from_runtime_results() {
 
     let response = service
         .observe(ObserveRequest {
-            idempotency_key: "observe-missing".to_string(),
             cell_id: cell_id("missing"),
+            generation: ObservationGeneration::INITIAL,
             yield_time_ms: 1,
         })
         .await
@@ -1108,7 +1109,7 @@ async fn observe_reports_missing_cell_separately_from_runtime_results() {
 #[test]
 fn protocol_requests_map_to_runtime_requests_field_for_field() {
     let request = CreateCellRequest {
-        idempotency_key: "thread-3:response-call-7".to_string(),
+        cell_id: cell_id("cell-a7"),
         tool_call_id: "response-call-7".to_string(),
         enabled_tools: vec![
             ToolDefinition {
@@ -1134,7 +1135,7 @@ fn protocol_requests_map_to_runtime_requests_field_for_field() {
     assert_eq!(
         runtime_request(request),
         runtime::CreateCellRequest {
-            idempotency_key: "thread-3:response-call-7".to_string(),
+            cell_id: runtime::CellId::new("cell-a7"),
             tool_call_id: "response-call-7".to_string(),
             enabled_tools: vec![
                 runtime::ToolDefinition {

@@ -66,7 +66,6 @@ impl CodeModeWaitHandler {
         let ToolInvocation {
             session,
             turn,
-            call_id,
             tool_name,
             payload,
             ..
@@ -77,7 +76,6 @@ impl CodeModeWaitHandler {
                 if tool_name.namespace.is_none() && tool_name.name.as_str() == WAIT_TOOL_NAME =>
             {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
-                let idempotency_key = format!("{}:{call_id}", session.thread_id());
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
                 let cell_id = codex_code_mode::CellId::new(args.cell_id);
@@ -100,11 +98,7 @@ impl CodeModeWaitHandler {
                         .session
                         .services
                         .code_mode_service
-                        .observe(codex_code_mode::ObserveRequest {
-                            idempotency_key,
-                            cell_id,
-                            yield_time_ms: args.yield_time_ms,
-                        })
+                        .observe(cell_id, args.yield_time_ms)
                         .await
                         .map_err(FunctionCallError::RespondToModel)?;
                     let cell_was_present =

@@ -218,7 +218,7 @@ fn cell_id(value: &str) -> CellId {
 
 fn execute_request(source: &str) -> CreateCellRequest {
     CreateCellRequest {
-        idempotency_key: format!("call-1:{source}"),
+        cell_id: cell_id("1"),
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
@@ -237,8 +237,8 @@ async fn execute_with_yield_time(
     let cell_id = service.create_cell(request).await.unwrap();
     service
         .observe(ObserveRequest {
-            idempotency_key: format!("observe:{cell_id}"),
             cell_id,
+            generation: ObservationGeneration::INITIAL,
             yield_time_ms,
         })
         .await
@@ -291,12 +291,12 @@ async fn create_retry_returns_the_cell_from_the_original_ambiguous_request() {
 }
 
 #[tokio::test]
-async fn cancelled_observation_is_replayed_by_its_idempotency_key() {
+async fn cancelled_observation_is_replayed_by_its_generation() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
     let service = Arc::new(CodeModeService::with_delegate(delegate.clone()));
     let created_cell_id = service
         .create_cell(CreateCellRequest {
-            idempotency_key: "ambiguous-observation-cell".to_string(),
+            cell_id: cell_id("1"),
             enabled_tools: vec![blocking_tool()],
             source: r#"await tools.block({}); text("done");"#.to_string(),
             ..execute_request("")
@@ -305,8 +305,8 @@ async fn cancelled_observation_is_replayed_by_its_idempotency_key() {
         .unwrap();
     assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
     let request = ObserveRequest {
-        idempotency_key: "lost-observation-response".to_string(),
         cell_id: created_cell_id,
+        generation: ObservationGeneration::INITIAL,
         yield_time_ms: 60_000,
     };
 
@@ -321,7 +321,7 @@ async fn cancelled_observation_is_replayed_by_its_idempotency_key() {
                 .observations
                 .lock()
                 .await
-                .contains_key("lost-observation-response")
+                .contains_key(&cell_id("1"))
             {
                 break;
             }
@@ -343,6 +343,69 @@ async fn cancelled_observation_is_replayed_by_its_idempotency_key() {
             }],
             error_text: None,
         })
+    );
+}
+
+#[tokio::test]
+async fn next_observation_generation_evicts_the_previous_result() {
+    let service = CodeModeService::new();
+    let first = execute_with_yield_time(
+        &service,
+        CreateCellRequest {
+            source: r#"text("before"); yield_control(); text("after");"#.to_string(),
+            ..execute_request("")
+        },
+        /*yield_time_ms*/ 60_000,
+    )
+    .await;
+    assert_eq!(
+        first,
+        RuntimeResponse::Yielded {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "before".to_string(),
+            }],
+        }
+    );
+
+    assert_eq!(
+        service
+            .observe(ObserveRequest {
+                cell_id: cell_id("1"),
+                generation: ObservationGeneration::new(/*value*/ 1),
+                yield_time_ms: 60_000,
+            })
+            .await
+            .unwrap(),
+        ObserveOutcome::Completed {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "after".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+
+    {
+        let observations = service.observations.lock().await;
+        assert_eq!(observations.len(), 1);
+        assert_eq!(
+            observations
+                .get(&cell_id("1"))
+                .map(|record| record.request.generation),
+            Some(ObservationGeneration::new(/*value*/ 1))
+        );
+    }
+    assert_eq!(
+        service
+            .observe(ObserveRequest {
+                cell_id: cell_id("1"),
+                generation: ObservationGeneration::INITIAL,
+                yield_time_ms: 60_000,
+            })
+            .await
+            .unwrap_err(),
+        "expected observation generation 2 for cell 1, got 0"
     );
 }
 
@@ -371,8 +434,8 @@ async fn yields_and_resumes() {
     assert_eq!(
         service
             .observe(ObserveRequest {
-                idempotency_key: "observe-after-yield".to_string(),
                 cell_id: cell_id("1"),
+                generation: ObservationGeneration::new(/*value*/ 1),
                 yield_time_ms: 60_000,
             })
             .await
@@ -410,8 +473,8 @@ await tools.block({});
     assert_eq!(
         service
             .observe(ObserveRequest {
-                idempotency_key: "yield-boundary".to_string(),
                 cell_id: cell_id.clone(),
+                generation: ObservationGeneration::INITIAL,
                 yield_time_ms: 60_000,
             })
             .await
@@ -428,8 +491,8 @@ await tools.block({});
     assert_eq!(
         service
             .observe(ObserveRequest {
-                idempotency_key: "completion-boundary".to_string(),
                 cell_id: cell_id.clone(),
+                generation: ObservationGeneration::new(/*value*/ 1),
                 yield_time_ms: 60_000,
             })
             .await
@@ -458,8 +521,8 @@ async fn background_completion_notifies_the_delegate_without_another_observation
         tokio::time::timeout(
             Duration::from_secs(2),
             service.observe(ObserveRequest {
-                idempotency_key: "background-completion".to_string(),
                 cell_id: created_cell_id.clone(),
+                generation: ObservationGeneration::INITIAL,
                 yield_time_ms: 1,
             }),
         )
@@ -550,7 +613,7 @@ async fn observed_natural_completion_wins_over_termination() {
             let response = create_and_observe_to_pending(
                 &service,
                 CreateCellRequest {
-                    idempotency_key: format!("completion-probe-{probe_generation}"),
+                    cell_id: cell_id(&format!("completion-probe-{probe_generation}")),
                     ..execute_request(r#"text(String(load("finished")));"#)
                 },
             )
@@ -662,7 +725,10 @@ await tools.block({});
     assert_eq!(
         execute_with_yield_time(
             &service,
-            execute_request(r#"text(String(load("candidate")));"#),
+            CreateCellRequest {
+                cell_id: cell_id("2"),
+                ..execute_request(r#"text(String(load("candidate")));"#)
+            },
             /*yield_time_ms*/ 60_000,
         )
         .await,
@@ -766,8 +832,8 @@ async fn create_cell_returns_before_natural_completion() {
         .unwrap();
     assert_eq!(created_cell_id, cell_id("1"));
     let mut observation = Box::pin(service.observe(ObserveRequest {
-        idempotency_key: "blocked-notification".to_string(),
         cell_id: created_cell_id,
+        generation: ObservationGeneration::INITIAL,
         yield_time_ms: 60_000,
     }));
 
@@ -839,16 +905,16 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
 
     let first_observer = service
         .begin_observe(ObserveRequest {
-            idempotency_key: "first-observer".to_string(),
             cell_id: cell_id("1"),
+            generation: ObservationGeneration::new(/*value*/ 1),
             yield_time_ms: 60_000,
         })
         .await;
     assert_eq!(
         service
             .observe(ObserveRequest {
-                idempotency_key: "second-observer".to_string(),
                 cell_id: cell_id("1"),
+                generation: ObservationGeneration::new(/*value*/ 1),
                 yield_time_ms: 60_000,
             })
             .await
@@ -892,8 +958,8 @@ async fn natural_completion_cleans_up_callbacks_before_responding() {
     assert_eq!(
         service
             .observe(ObserveRequest {
-                idempotency_key: "observe-created-cell".to_string(),
                 cell_id: created_cell_id,
+                generation: ObservationGeneration::INITIAL,
                 yield_time_ms: 60_000,
             })
             .await

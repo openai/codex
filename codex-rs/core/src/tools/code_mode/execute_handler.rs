@@ -40,19 +40,7 @@ impl CodeModeExecuteHandler {
         let enabled_tools =
             codex_tools::collect_code_mode_tool_definitions(&self.nested_tool_specs);
         let started_at = std::time::Instant::now();
-        let idempotency_key = format!("{}:{call_id}", exec.session.thread_id());
-        let cell_id = exec
-            .session
-            .services
-            .code_mode_service
-            .create_cell(codex_code_mode::CreateCellRequest {
-                idempotency_key: idempotency_key.clone(),
-                tool_call_id: call_id.clone(),
-                enabled_tools,
-                source: args.code.clone(),
-            })
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
+        let cell_id = super::cell_id_for_tool_call(&exec.session.thread_id().to_string(), &call_id);
         let runtime_cell_id = cell_id.to_string();
         let code_cell_trace = exec
             .session
@@ -70,6 +58,21 @@ impl CodeModeExecuteHandler {
             code_cell_trace.clone(),
         )
         .map_err(FunctionCallError::RespondToModel)?;
+        let cell_id = exec
+            .session
+            .services
+            .code_mode_service
+            .create_cell(codex_code_mode::CreateCellRequest {
+                cell_id,
+                tool_call_id: call_id.clone(),
+                enabled_tools,
+                source: args.code.clone(),
+            })
+            .await
+            .map_err(|error| {
+                initial_observation_guard.finish_with_error(&error);
+                FunctionCallError::RespondToModel(error)
+            })?;
         exec.session
             .services
             .code_mode_service
@@ -78,13 +81,11 @@ impl CodeModeExecuteHandler {
             .session
             .services
             .code_mode_service
-            .observe(codex_code_mode::ObserveRequest {
-                idempotency_key,
-                cell_id: cell_id.clone(),
-                yield_time_ms: args
-                    .yield_time_ms
+            .observe(
+                cell_id.clone(),
+                args.yield_time_ms
                     .unwrap_or(codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS),
-            })
+            )
             .await;
         let response: codex_code_mode::RuntimeResponse = match observed {
             Ok(outcome) => outcome.into(),

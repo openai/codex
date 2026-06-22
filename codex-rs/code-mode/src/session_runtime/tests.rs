@@ -145,7 +145,7 @@ async fn default_policy_resolves_tools_before_the_first_observation() {
     let runtime = SessionRuntime::new(Arc::new(ImmediateToolDelegate { invocations_tx }));
     let cell = runtime
         .create_cell(CreateCellRequest {
-            idempotency_key: "default-policy".to_string(),
+            cell_id: CellId::new("default-policy"),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("first"), tool_definition("second")],
             source: r#"
@@ -183,7 +183,7 @@ text("done");
 }
 
 #[tokio::test]
-async fn concurrent_create_retries_return_the_same_cell_for_an_idempotency_key() {
+async fn concurrent_create_retries_return_the_same_caller_supplied_cell() {
     let runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
     let source = "await new Promise(() => {});";
     let (first, retry) = tokio::join!(
@@ -195,6 +195,12 @@ async fn concurrent_create_retries_return_the_same_cell_for_an_idempotency_key()
 
     assert_eq!(retry, first);
     assert_eq!(runtime.inner.cells.lock().await.len(), 1);
+    let mut conflicting_request = execute_request("different source");
+    conflicting_request.cell_id = first.id().clone();
+    assert_eq!(
+        runtime.create_cell(conflicting_request).await,
+        Err(Error::ConflictingCreate(first.id().clone()))
+    );
     assert_eq!(
         runtime.create_pausable_cell(execute_request(source)).await,
         Err(Error::WrongCellKind {
@@ -217,7 +223,7 @@ async fn pausable_cell_supports_a_synchronous_host_driver() {
     }));
     let cell = runtime
         .create_pausable_cell(CreateCellRequest {
-            idempotency_key: "synchronous-driver".to_string(),
+            cell_id: CellId::new("synchronous-driver"),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("first"), tool_definition("second")],
             source: r#"
@@ -322,7 +328,7 @@ async fn pending_frontier_reports_only_authoritatively_outstanding_parallel_tool
     }));
     let cell = runtime
         .create_pausable_cell(CreateCellRequest {
-            idempotency_key: "authoritative-outstanding".to_string(),
+            cell_id: CellId::new("authoritative-outstanding"),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("first"), tool_definition("second")],
             source: r#"
@@ -400,7 +406,7 @@ async fn pausable_cell_drains_a_parallel_host_frontier_without_duplicate_output(
     }));
     let cell = runtime
         .create_pausable_cell(CreateCellRequest {
-            idempotency_key: "parallel-drain".to_string(),
+            cell_id: CellId::new("parallel-drain"),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("first"), tool_definition("second")],
             source: r#"
@@ -490,7 +496,7 @@ async fn cell_capabilities_reject_ids_of_the_other_kind() {
         .unwrap();
     let pausable = runtime
         .create_pausable_cell(CreateCellRequest {
-            idempotency_key: "pausable-cell".to_string(),
+            cell_id: CellId::new("pausable-cell"),
             ..execute_request("await new Promise(() => {});")
         })
         .await
@@ -525,7 +531,7 @@ async fn pending_observation_waits_for_resumed_work_to_reach_a_new_frontier() {
     }));
     let cell = runtime
         .create_pausable_cell(CreateCellRequest {
-            idempotency_key: "pending-observation".to_string(),
+            cell_id: CellId::new("pending-observation"),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("blocked")],
             source: r#"
@@ -623,7 +629,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
 
     let reader = runtime
         .create_cell(CreateCellRequest {
-            idempotency_key: "reader".to_string(),
+            cell_id: CellId::new("reader"),
             tool_call_id: "reader".to_string(),
             enabled_tools: Vec::new(),
             source: r#"text(String(load("candidate")));"#.to_string(),
@@ -644,7 +650,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
 
 fn execute_request(source: &str) -> CreateCellRequest {
     CreateCellRequest {
-        idempotency_key: format!("call-1:{source}"),
+        cell_id: CellId::new(format!("call-1:{source}")),
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
@@ -721,7 +727,7 @@ async fn termination_aborts_a_non_cooperative_tool_callback() {
     let runtime = SessionRuntime::new(Arc::new(NonCooperativeToolDelegate { invocations_tx }));
     let cell = runtime
         .create_cell(CreateCellRequest {
-            idempotency_key: "non-cooperative-termination".to_string(),
+            cell_id: CellId::new("non-cooperative-termination"),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("blocked")],
             source: "await tools.blocked({});".to_string(),
@@ -750,7 +756,7 @@ async fn shutdown_aborts_a_non_cooperative_tool_callback() {
     let runtime = SessionRuntime::new(Arc::new(NonCooperativeToolDelegate { invocations_tx }));
     runtime
         .create_cell(CreateCellRequest {
-            idempotency_key: "non-cooperative-shutdown".to_string(),
+            cell_id: CellId::new("non-cooperative-shutdown"),
             tool_call_id: "call-1".to_string(),
             enabled_tools: vec![tool_definition("blocked")],
             source: "await tools.blocked({});".to_string(),
@@ -771,7 +777,7 @@ async fn shutdown_aborts_a_non_cooperative_tool_callback() {
 }
 
 #[tokio::test]
-async fn cell_ids_are_unique_across_runtime_instances() {
+async fn caller_supplied_cell_ids_are_scoped_to_the_runtime_session() {
     let first_runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
     let second_runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
     let first_cell_id = first_runtime
@@ -783,16 +789,7 @@ async fn cell_ids_are_unique_across_runtime_instances() {
         .await
         .unwrap();
 
-    assert_ne!(first_cell_id, second_cell_id);
-    for cell in [&first_cell_id, &second_cell_id] {
-        assert_eq!(cell.id().as_str().len(), CELL_ID_LENGTH);
-        assert!(
-            cell.id()
-                .as_str()
-                .bytes()
-                .all(|byte| CELL_ID_ALPHABET.contains(&byte))
-        );
-    }
+    assert_eq!(first_cell_id, second_cell_id);
 
     first_runtime.shutdown().await.unwrap();
     second_runtime.shutdown().await.unwrap();

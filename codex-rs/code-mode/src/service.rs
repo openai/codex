@@ -14,6 +14,7 @@ use codex_code_mode_protocol::CreateCellRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
 use codex_code_mode_protocol::NotificationFuture;
+use codex_code_mode_protocol::ObservationGeneration;
 use codex_code_mode_protocol::ObserveOutcome;
 use codex_code_mode_protocol::ObserveRequest;
 #[cfg(test)]
@@ -96,7 +97,7 @@ impl CodeModeSessionProvider for InProcessCodeModeSessionProvider {
 
 pub struct CodeModeService {
     runtime: Arc<SessionRuntime<ProtocolDelegate>>,
-    observations: Mutex<HashMap<String, ObservationRecord>>,
+    observations: Mutex<HashMap<CellId, ObservationRecord>>,
     #[cfg(test)]
     pending_generations: Mutex<HashMap<runtime::CellId, runtime::PendingGeneration>>,
 }
@@ -146,20 +147,61 @@ impl CodeModeService {
     }
 
     pub async fn observe(&self, request: ObserveRequest) -> Result<ObserveOutcome, String> {
-        let idempotency_key = request.idempotency_key.clone();
+        let cell_id = request.cell_id.clone();
         let mut result_rx = {
             let mut observations = self.observations.lock().await;
-            if let Some(existing) = observations.get(&idempotency_key) {
-                if existing.request != request {
+            if let Some(existing) = observations.get(&cell_id) {
+                if existing.request.generation == request.generation {
+                    if existing.request != request {
+                        return Err(format!(
+                            "observation generation {} for cell {cell_id} was reused for a different request",
+                            request.generation.get()
+                        ));
+                    }
+                    existing.result_rx.clone()
+                } else {
+                    let Some(next_generation) = existing.request.generation.next() else {
+                        return Err(format!(
+                            "observation generation exhausted for cell {cell_id}"
+                        ));
+                    };
+                    if request.generation != next_generation {
+                        return Err(format!(
+                            "expected observation generation {} for cell {cell_id}, got {}",
+                            next_generation.get(),
+                            request.generation.get()
+                        ));
+                    }
+                    if existing.result_rx.borrow().is_none() {
+                        return Err(format!(
+                            "observation generation {} for cell {cell_id} is still pending",
+                            existing.request.generation.get()
+                        ));
+                    }
+                    let (result_tx, result_rx) = watch::channel(None);
+                    observations.insert(
+                        cell_id,
+                        ObservationRecord {
+                            request: request.clone(),
+                            result_rx: result_rx.clone(),
+                        },
+                    );
+                    let runtime = Arc::clone(&self.runtime);
+                    tokio::spawn(async move {
+                        let result = begin_observe_runtime(runtime, request).await.await;
+                        result_tx.send_replace(Some(result));
+                    });
+                    result_rx
+                }
+            } else {
+                if request.generation != ObservationGeneration::INITIAL {
                     return Err(format!(
-                        "observation idempotency key `{idempotency_key}` was reused for a different request"
+                        "first observation for cell {cell_id} must use generation 0"
                     ));
                 }
-                existing.result_rx.clone()
-            } else {
                 let (result_tx, result_rx) = watch::channel(None);
                 observations.insert(
-                    idempotency_key,
+                    cell_id,
                     ObservationRecord {
                         request: request.clone(),
                         result_rx: result_rx.clone(),
@@ -289,8 +331,8 @@ async fn begin_observe_runtime(
     request: ObserveRequest,
 ) -> CodeModeSessionResultFuture<'static, ObserveOutcome> {
     let ObserveRequest {
-        idempotency_key: _,
         cell_id,
+        generation: _,
         yield_time_ms,
     } = request;
     let runtime_cell_id = runtime_cell_id(&cell_id);
@@ -412,7 +454,7 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
 
 fn runtime_request(request: CreateCellRequest) -> runtime::CreateCellRequest {
     runtime::CreateCellRequest {
-        idempotency_key: request.idempotency_key,
+        cell_id: runtime_cell_id(&request.cell_id),
         tool_call_id: request.tool_call_id,
         enabled_tools: request
             .enabled_tools

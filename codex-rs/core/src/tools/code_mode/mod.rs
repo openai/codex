@@ -5,13 +5,16 @@ mod response_adapter;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::ObservationGeneration;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
@@ -61,6 +64,7 @@ pub(crate) struct ExecContext {
 pub(crate) struct CodeModeService {
     session: Option<Arc<dyn CodeModeSession>>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
+    observation_generations: Mutex<HashMap<CellId, ObservationGeneration>>,
 }
 
 struct InitialObservationGuard {
@@ -128,6 +132,7 @@ impl CodeModeService {
                 dispatch_broker.clone(),
             ))),
             dispatch_broker,
+            observation_generations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -135,14 +140,50 @@ impl CodeModeService {
         &self,
         request: codex_code_mode::CreateCellRequest,
     ) -> Result<CellId, String> {
-        self.session()?.create_cell(request).await
+        let requested_cell_id = request.cell_id.clone();
+        let admitted_cell_id = self.session()?.create_cell(request).await?;
+        if admitted_cell_id != requested_cell_id {
+            return Err(format!(
+                "code-mode host admitted cell {admitted_cell_id} for requested cell {requested_cell_id}"
+            ));
+        }
+        self.observation_generations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(admitted_cell_id.clone())
+            .or_insert(ObservationGeneration::INITIAL);
+        Ok(admitted_cell_id)
     }
 
     pub(crate) async fn observe(
         &self,
-        request: codex_code_mode::ObserveRequest,
+        cell_id: CellId,
+        yield_time_ms: u64,
     ) -> Result<codex_code_mode::ObserveOutcome, String> {
-        self.session()?.observe(request).await
+        let generation = self
+            .observation_generations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&cell_id)
+            .copied()
+            .unwrap_or(ObservationGeneration::INITIAL);
+        let outcome = self
+            .session()?
+            .observe(codex_code_mode::ObserveRequest {
+                cell_id: cell_id.clone(),
+                generation,
+                yield_time_ms,
+            })
+            .await?;
+        let next_generation = generation.next().ok_or_else(|| {
+            format!("observation generation exhausted for code-mode cell {cell_id}")
+        })?;
+        let mut generations = self
+            .observation_generations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        generations.insert(cell_id, next_generation);
+        Ok(outcome)
     }
 
     pub(crate) async fn terminate(
@@ -153,10 +194,15 @@ impl CodeModeService {
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
-        match &self.session {
+        let result = match &self.session {
             Some(session) => session.shutdown().await,
             None => Ok(()),
-        }
+        };
+        self.observation_generations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        result
     }
 
     pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode::CellId) {
@@ -196,6 +242,30 @@ impl CodeModeService {
             .as_ref()
             .ok_or_else(|| "code mode is unavailable".to_string())
     }
+}
+
+fn cell_id_for_tool_call(thread_id: &str, call_id: &str) -> CellId {
+    use sha1::Digest;
+
+    const CELL_ID_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
+    const CELL_ID_LENGTH: usize = 16;
+
+    let digest = sha1::Sha1::new()
+        .chain_update(thread_id.as_bytes())
+        .chain_update([0])
+        .chain_update(call_id.as_bytes())
+        .finalize();
+    let mut encoded = String::with_capacity(CELL_ID_LENGTH);
+    for chunk in digest[..10].chunks_exact(5) {
+        let chunk_bits = chunk
+            .iter()
+            .fold(0_u64, |value, byte| (value << 8) | u64::from(*byte));
+        for shift in (0..40).step_by(5).rev() {
+            let index = ((chunk_bits >> shift) & 0x1f) as usize;
+            encoded.push(char::from(CELL_ID_ALPHABET[index]));
+        }
+    }
+    CellId::new(encoded)
 }
 
 pub(super) async fn handle_runtime_response(
@@ -382,6 +452,7 @@ mod tests {
     use super::CodeModeDispatchBroker;
     use super::InitialObservationGuard;
     use super::build_nested_tool_payload;
+    use super::cell_id_for_tool_call;
     use super::truncate_code_mode_result;
     use crate::tools::context::ToolPayload;
     use codex_code_mode::CellId;
@@ -491,6 +562,27 @@ mod tests {
                 )
                 .to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn cell_id_is_compact_and_stable_for_a_resumed_thread() {
+        let thread_id = "019f2f5a-7b6c-7000-8000-000000000001";
+        let first = cell_id_for_tool_call(thread_id, "call-42");
+        let resumed = cell_id_for_tool_call(thread_id, "call-42");
+
+        assert_eq!(resumed, first);
+        assert_eq!(first.as_str().len(), 16);
+        assert!(
+            first
+                .as_str()
+                .bytes()
+                .all(|byte| b"0123456789abcdefghjkmnpqrstvwxyz".contains(&byte))
+        );
+        assert_ne!(cell_id_for_tool_call(thread_id, "call-43"), first);
+        assert_ne!(
+            cell_id_for_tool_call("019f2f5a-7b6c-7000-8000-000000000002", "call-42"),
+            first
         );
     }
 

@@ -25,6 +25,7 @@ pub use runtime::CreateCellRequest;
 pub use runtime::DEFAULT_EXEC_YIELD_TIME_MS;
 pub use runtime::DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL;
 pub use runtime::DEFAULT_WAIT_YIELD_TIME_MS;
+pub use runtime::ObservationGeneration;
 pub use runtime::ObserveOutcome;
 pub use runtime::ObserveRequest;
 pub use runtime::RuntimeResponse;

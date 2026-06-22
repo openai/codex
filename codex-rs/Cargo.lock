@@ -2499,11 +2499,9 @@ dependencies = [
  "deno_core_icudata",
  "pretty_assertions",
  "serde_json",
- "sha2 0.10.9",
  "tokio",
  "tokio-util",
  "tracing",
- "uuid",
  "v8",
 ]
 

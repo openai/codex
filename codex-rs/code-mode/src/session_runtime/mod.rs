@@ -5,13 +5,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use serde_json::Value as JsonValue;
-use sha2::Digest;
-use sha2::Sha256;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
@@ -51,9 +48,6 @@ type RuntimeEventFuture = Pin<Box<dyn Future<Output = Result<CellEvent, Error>> 
 type PausableRuntimeEventFuture =
     Pin<Box<dyn Future<Output = Result<PausableCellEvent, Error>> + Send + 'static>>;
 
-const CELL_ID_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
-const CELL_ID_LENGTH: usize = 16;
-
 /// Owns all cells and shared state for one transport-neutral code-mode session.
 pub struct SessionRuntime<D: SessionRuntimeDelegate> {
     inner: Arc<Inner<D>>,
@@ -62,18 +56,17 @@ pub struct SessionRuntime<D: SessionRuntimeDelegate> {
 struct Inner<D: SessionRuntimeDelegate> {
     stored_values: Mutex<HashMap<String, JsonValue>>,
     cells: Mutex<HashMap<CellId, RegisteredCell>>,
-    created_cells: Mutex<HashMap<String, Arc<OnceCell<IdempotentCell>>>>,
+    created_cells: Mutex<HashMap<CellId, Arc<OnceCell<IdempotentCell>>>>,
     cell_tasks: TaskTracker,
     shutdown_token: CancellationToken,
     delegate: Arc<D>,
-    cell_id_namespace: CellIdNamespace,
-    next_cell_id: AtomicU64,
 }
 
 #[derive(Clone)]
 struct IdempotentCell {
     id: CellId,
     kind: CellKind,
+    request: CreateCellRequest,
 }
 
 #[derive(Clone)]
@@ -97,23 +90,8 @@ impl RegisteredCell {
     }
 }
 
-enum CellIdNamespace {
-    Runtime(uuid::Uuid),
-    #[cfg(test)]
-    Unscoped,
-}
-
 impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     pub fn new(delegate: Arc<D>) -> Self {
-        Self::with_cell_id_namespace(delegate, CellIdNamespace::Runtime(uuid::Uuid::new_v4()))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_for_test(delegate: Arc<D>) -> Self {
-        Self::with_cell_id_namespace(delegate, CellIdNamespace::Unscoped)
-    }
-
-    fn with_cell_id_namespace(delegate: Arc<D>, cell_id_namespace: CellIdNamespace) -> Self {
         Self {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
@@ -122,10 +100,13 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
                 cell_tasks: TaskTracker::new(),
                 shutdown_token: CancellationToken::new(),
                 delegate,
-                cell_id_namespace,
-                next_cell_id: AtomicU64::new(1),
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(delegate: Arc<D>) -> Self {
+        Self::new(delegate)
     }
 
     pub fn is_alive(&self) -> bool {
@@ -234,32 +215,6 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         Ok(())
     }
 
-    fn allocate_cell_id(&self) -> CellId {
-        let sequence = self.inner.next_cell_id.fetch_add(1, Ordering::Relaxed);
-        let value = match &self.inner.cell_id_namespace {
-            CellIdNamespace::Runtime(runtime_id) => {
-                let digest = Sha256::new()
-                    .chain_update(runtime_id.as_bytes())
-                    .chain_update(sequence.to_be_bytes())
-                    .finalize();
-                let mut encoded = String::with_capacity(CELL_ID_LENGTH);
-                for chunk in digest[..10].chunks_exact(5) {
-                    let chunk_bits = chunk
-                        .iter()
-                        .fold(0_u64, |value, byte| (value << 8) | u64::from(*byte));
-                    for shift in (0..40).step_by(5).rev() {
-                        let index = ((chunk_bits >> shift) & 0x1f) as usize;
-                        encoded.push(char::from(CELL_ID_ALPHABET[index]));
-                    }
-                }
-                encoded
-            }
-            #[cfg(test)]
-            CellIdNamespace::Unscoped => sequence.to_string(),
-        };
-        CellId::new(value)
-    }
-
     async fn start_cell(
         &self,
         request: CreateCellRequest,
@@ -269,7 +224,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
-        let cell_id = self.allocate_cell_id();
+        let cell_id = request.cell_id.clone();
         let stored_values = self.inner.stored_values.lock().await.clone();
         let host = Arc::new(RuntimeCellHost {
             cell_id: cell_id.clone(),
@@ -303,7 +258,8 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         execution_policy: CellExecutionPolicy,
         kind: CellKind,
     ) -> Result<CellId, Error> {
-        let key = request.idempotency_key.clone();
+        let key = request.cell_id.clone();
+        let expected_request = request.clone();
         let created_cell = {
             let mut created_cells = self.inner.created_cells.lock().await;
             Arc::clone(
@@ -314,8 +270,13 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         };
         let existing = created_cell
             .get_or_try_init(|| async move {
+                let stored_request = request.clone();
                 let id = self.start_cell(request, execution_policy, kind).await?;
-                Ok::<IdempotentCell, Error>(IdempotentCell { id, kind })
+                Ok::<IdempotentCell, Error>(IdempotentCell {
+                    id,
+                    kind,
+                    request: stored_request,
+                })
             })
             .await?;
         if existing.kind != kind {
@@ -324,6 +285,9 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
                 expected: kind,
                 actual: existing.kind,
             });
+        }
+        if existing.request != expected_request {
+            return Err(Error::ConflictingCreate(existing.id.clone()));
         }
         Ok(existing.id.clone())
     }

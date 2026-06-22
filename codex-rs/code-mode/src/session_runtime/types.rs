@@ -160,17 +160,17 @@ pub enum ImageDetail {
 
 /// Transport-neutral input for creating a cell.
 ///
-/// The owning session assigns the cell ID when it admits the request.
-#[derive(Debug, PartialEq)]
+/// The caller assigns the cell ID before requesting admission.
+#[derive(Clone, Debug, PartialEq)]
 pub struct CreateCellRequest {
-    pub idempotency_key: String,
+    pub cell_id: CellId,
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,
 }
 
 /// Tool metadata exposed to code running inside a cell.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ToolDefinition {
     pub name: String,
     pub tool_name: ToolName,
@@ -234,6 +234,7 @@ pub trait SessionRuntimeDelegate: Send + Sync + 'static {
 pub enum Error {
     ShuttingDown,
     DuplicateCell(CellId),
+    ConflictingCreate(CellId),
     MissingCell(CellId),
     BusyObserver(CellId),
     AlreadyTerminating(CellId),
@@ -256,6 +257,12 @@ impl fmt::Display for Error {
         match self {
             Self::ShuttingDown => formatter.write_str("code mode session is shutting down"),
             Self::DuplicateCell(cell_id) => write!(formatter, "exec cell {cell_id} already exists"),
+            Self::ConflictingCreate(cell_id) => {
+                write!(
+                    formatter,
+                    "exec cell {cell_id} was created with different parameters"
+                )
+            }
             Self::MissingCell(cell_id) => write!(formatter, "exec cell {cell_id} not found"),
             Self::BusyObserver(cell_id) => {
                 write!(
