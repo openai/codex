@@ -21,8 +21,6 @@ use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::LegacyAppPathString;
-use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -113,7 +111,7 @@ pub(crate) async fn emit_exec_command_begin(
                 turn_id: ctx.turn.sub_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
                 command: command.to_vec(),
-                cwd: legacy_cwd_for_event(cwd),
+                cwd: cwd.clone().into(),
                 parsed_cmd: parsed_cmd.to_vec(),
                 source,
                 interaction_input,
@@ -553,7 +551,7 @@ async fn emit_exec_end(
                 turn_id: ctx.turn.sub_id.clone(),
                 completed_at_ms: now_unix_timestamp_ms(),
                 command: exec_input.command.to_vec(),
-                cwd: legacy_cwd_for_event(exec_input.cwd),
+                cwd: exec_input.cwd.clone().into(),
                 parsed_cmd: exec_input.parsed_cmd.to_vec(),
                 source: exec_input.source,
                 interaction_input: exec_input.interaction_input.map(str::to_owned),
@@ -567,11 +565,6 @@ async fn emit_exec_end(
             }),
         )
         .await;
-}
-
-fn legacy_cwd_for_event(cwd: &PathUri) -> LegacyAppPathString {
-    LegacyAppPathString::from_path_uri(cwd, PathConvention::native())
-        .unwrap_or_else(|_| cwd.clone().into())
 }
 
 async fn emit_patch_end(
@@ -822,13 +815,5 @@ mod tests {
                 break;
             }
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn event_cwd_preserves_drive_shaped_posix_path() {
-        let cwd = PathUri::parse("file:///C:/repo").expect("absolute POSIX path URI");
-
-        assert_eq!(legacy_cwd_for_event(&cwd).as_str(), "/C:/repo");
     }
 }
