@@ -1174,7 +1174,12 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
     let workspace_loading_popup = select_tab_containing(&mut chat, "Loading Workspace plugins.");
 
     chat.on_plugin_remote_sections_loaded(cwd.to_path_buf(), Vec::new(), Vec::new());
-    let shared_empty_popup = select_tab_containing(&mut chat, "Shared with me.");
+    let loaded_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("plugins_popup_empty_shared_section_hidden", loaded_popup);
+    assert!(
+        !loaded_popup.contains("Shared with me"),
+        "expected empty shared section to stay hidden, got:\n{loaded_popup}"
+    );
 
     chat.on_plugin_remote_sections_loaded(
         cwd.to_path_buf(),
@@ -1205,7 +1210,6 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
         [
             remote_section_state(&curated_loading_popup),
             remote_section_state(&workspace_loading_popup),
-            remote_section_state(&shared_empty_popup),
             remote_section_state(&workspace_error_popup),
             remote_section_state(&remote_curated_empty_popup),
         ]
@@ -1216,9 +1220,6 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
 
         Loading Workspace plugins.
         Loading Workspace plugins...  This section updates when app-server returns it.
-
-        Shared with me.
-        No shared plugins available  No plugins have been shared with you.
 
         Workspace unavailable.
         Workspace unavailable  Sign in to ChatGPT to load workspace plugins.

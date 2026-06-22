@@ -156,6 +156,7 @@ struct RemoteMarketplaceSection {
     label: &'static str,
     loading_tab_id: &'static str,
     marketplace_names: &'static [&'static str],
+    show_empty_tab: bool,
     empty_item_name: &'static str,
     empty_item_description: &'static str,
     tab_order: u8,
@@ -167,6 +168,7 @@ const REMOTE_MARKETPLACE_SECTIONS: [RemoteMarketplaceSection; 2] = [
         label: "Workspace",
         loading_tab_id: "workspace-loading",
         marketplace_names: &[REMOTE_WORKSPACE_MARKETPLACE_NAME],
+        show_empty_tab: true,
         empty_item_name: "No workspace plugins available",
         empty_item_description: "No workspace directory plugins are available.",
         tab_order: WORKSPACE_SECTION_TAB_ORDER,
@@ -180,6 +182,7 @@ const REMOTE_MARKETPLACE_SECTIONS: [RemoteMarketplaceSection; 2] = [
             REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
             REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
         ],
+        show_empty_tab: false,
         empty_item_name: "No shared plugins available",
         empty_item_description: "No plugins have been shared with you.",
         tab_order: SHARED_WITH_ME_SECTION_TAB_ORDER,
@@ -206,6 +209,8 @@ impl RemoteMarketplaceSection {
         } else if remote_sections_loaded {
             if let Some(section_error) = plugin_remote_section_error(section_errors, self.id) {
                 remote_section_error_tab(section_error)
+            } else if !self.show_empty_tab {
+                return None;
             } else {
                 remote_section_empty_tab(
                     self.id,
