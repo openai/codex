@@ -1527,6 +1527,23 @@ pub(super) fn plugins_test_popup_row_position(popup: &str, needle: &str) -> usiz
         .unwrap_or_else(|| panic!("expected popup to contain {needle}: {popup}"))
 }
 
+pub(super) fn select_plugins_tab_containing(
+    chat: &mut ChatWidget,
+    width: u16,
+    visible_text: &str,
+) -> String {
+    for _ in 0..8 {
+        let popup = render_bottom_popup(chat, width);
+        if popup.contains(visible_text) {
+            return popup;
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    let popup = render_bottom_popup(chat, width);
+    panic!("expected plugins tab containing {visible_text:?}, got:\n{popup}");
+}
+
 pub(super) fn type_plugins_search_query(chat: &mut ChatWidget, query: &str) {
     for ch in query.chars() {
         chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
