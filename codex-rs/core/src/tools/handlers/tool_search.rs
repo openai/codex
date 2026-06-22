@@ -20,6 +20,7 @@ use codex_tools::ToolSpec;
 use codex_tools::coalesce_loadable_tool_specs;
 use std::sync::Arc;
 use std::sync::Mutex;
+use tracing::instrument;
 
 pub struct ToolSearchHandler {
     search_infos: Vec<ToolSearchInfo>,
@@ -33,6 +34,7 @@ pub(crate) struct ToolSearchHandlerCache {
 }
 
 impl ToolSearchHandlerCache {
+    #[instrument(level = "trace", skip_all, fields(search_info_count = search_infos.len()))]
     pub(crate) fn get_or_build(&self, search_infos: Vec<ToolSearchInfo>) -> Arc<ToolSearchHandler> {
         {
             let cached = self.cached();
@@ -64,6 +66,11 @@ impl ToolSearchHandlerCache {
 }
 
 impl ToolSearchHandler {
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(search_info_count = search_infos.len())
+    )]
     pub(crate) fn new(search_infos: Vec<ToolSearchInfo>) -> Self {
         let search_source_infos = search_infos
             .iter()

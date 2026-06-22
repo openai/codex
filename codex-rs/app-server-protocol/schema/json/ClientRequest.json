@@ -643,7 +643,8 @@
     "ConversationTextRole": {
       "enum": [
         "user",
-        "developer"
+        "developer",
+        "assistant"
       ],
       "type": "string"
     },
@@ -800,7 +801,7 @@
           ]
         },
         "includeHome": {
-          "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+          "description": "If true, include detection under the user's home directory.",
           "type": "boolean"
         }
       },
@@ -813,6 +814,13 @@
             "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
           },
           "type": "array"
+        },
+        "source": {
+          "description": "Source product that produced the migration items. Missing means unspecified.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1262,6 +1270,10 @@
         "experimentalApi": {
           "default": false,
           "description": "Opt into receiving experimental API methods and fields.",
+          "type": "boolean"
+        },
+        "mcpServerOpenaiFormElicitation": {
+          "description": "Allow downstream MCP servers to request OpenAI extended form elicitations.",
           "type": "boolean"
         },
         "optOutNotificationMethods": {
@@ -1748,6 +1760,15 @@
     "ModelProviderCapabilitiesReadParams": {
       "type": "object"
     },
+    "MultiAgentMode": {
+      "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
+      "enum": [
+        "none",
+        "explicitRequestOnly",
+        "proactive"
+      ],
+      "type": "string"
+    },
     "NetworkAccess": {
       "enum": [
         "restricted",
@@ -2107,13 +2128,6 @@
       ],
       "type": "object"
     },
-    "RealtimeConversationArchitecture": {
-      "enum": [
-        "realtimeapi",
-        "avas"
-      ],
-      "type": "string"
-    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -2286,8 +2300,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2339,6 +2352,12 @@
               },
               "type": "array"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -2382,6 +2401,12 @@
               ]
             },
             "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
               "type": [
                 "string",
                 "null"
@@ -2435,8 +2460,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2479,8 +2503,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2534,8 +2557,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2573,6 +2595,12 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2612,8 +2640,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "input": {
               "type": "string"
@@ -2658,6 +2685,12 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2704,6 +2737,12 @@
             },
             "execution": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2755,8 +2794,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2791,7 +2829,10 @@
         {
           "properties": {
             "id": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2824,7 +2865,6 @@
             }
           },
           "required": [
-            "id",
             "result",
             "status",
             "type"
@@ -2836,6 +2876,12 @@
           "properties": {
             "encrypted_content": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2891,6 +2937,12 @@
         {
           "properties": {
             "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
               "type": [
                 "string",
                 "null"
@@ -4164,7 +4216,8 @@
     "ThreadSortKey": {
       "enum": [
         "created_at",
-        "updated_at"
+        "updated_at",
+        "recency_at"
       ],
       "type": "string"
     },
@@ -6407,6 +6460,29 @@
         "method"
       ],
       "title": "Account/usage/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/workspaceMessages/read"
+          ],
+          "title": "Account/workspaceMessages/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/workspaceMessages/readRequest",
       "type": "object"
     },
     {

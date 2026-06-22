@@ -362,6 +362,13 @@
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "direct_only_tool_namespaces": {
+          "description": "Exact tool namespaces to expose only as direct model tools. These tools bypass deferral, remain top-level in code-mode-only sessions, and are omitted from the nested code-mode tool surface.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "enabled": {
           "type": "boolean"
         },
@@ -433,13 +440,13 @@
             "auth_elicitation": {
               "type": "boolean"
             },
+            "auto_compaction": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
             "browser_use_external": {
-              "type": "boolean"
-            },
-            "child_agents_md": {
               "type": "boolean"
             },
             "chronicle": {
@@ -469,7 +476,13 @@
             "connectors": {
               "type": "boolean"
             },
+            "current_time_reminder": {
+              "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
+            },
             "default_mode_request_user_input": {
+              "type": "boolean"
+            },
+            "deferred_executor": {
               "type": "boolean"
             },
             "elevated_windows_sandbox": {
@@ -523,6 +536,9 @@
             "in_app_browser": {
               "type": "boolean"
             },
+            "item_ids": {
+              "type": "boolean"
+            },
             "js_repl": {
               "type": "boolean"
             },
@@ -542,6 +558,9 @@
               "type": "boolean"
             },
             "multi_agent": {
+              "type": "boolean"
+            },
+            "multi_agent_mode": {
               "type": "boolean"
             },
             "multi_agent_v2": {
@@ -604,6 +623,9 @@
             "responses_websockets_v2": {
               "type": "boolean"
             },
+            "rollout_budget": {
+              "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
+            },
             "runtime_metrics": {
               "type": "boolean"
             },
@@ -650,7 +672,7 @@
               "type": "boolean"
             },
             "token_budget": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_TokenBudgetConfigToml"
             },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
@@ -677,6 +699,9 @@
               "type": "boolean"
             },
             "unified_exec_zsh_fork": {
+              "type": "boolean"
+            },
+            "use_agent_identity": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -789,6 +814,30 @@
       },
       "type": "object"
     },
+    "CurrentTimeReminderConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "clock_source": {
+          "$ref": "#/definitions/CurrentTimeSource"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "reminder_interval_model_requests": {
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CurrentTimeSource": {
+      "enum": [
+        "system",
+        "external"
+      ],
+      "type": "string"
+    },
     "DebugConfigLockToml": {
       "additionalProperties": false,
       "properties": {
@@ -881,6 +930,16 @@
         }
       ]
     },
+    "FeatureToml_for_CurrentTimeReminderConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/CurrentTimeReminderConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
         {
@@ -898,6 +957,26 @@
         },
         {
           "$ref": "#/definitions/NetworkProxyConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_RolloutBudgetConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/RolloutBudgetConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_TokenBudgetConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/TokenBudgetConfigToml"
         }
       ]
     },
@@ -1646,6 +1725,7 @@
           "type": "string"
         },
         "usage_hint_enabled": {
+          "description": "Deprecated compatibility field. Its value is ignored.",
           "type": "boolean"
         },
         "usage_hint_text": {
@@ -2023,6 +2103,29 @@
           "type": "string"
         }
       ]
+    },
+    "OrchestratorFeatureToml": {
+      "additionalProperties": false,
+      "description": "Settings for a feature owned by the orchestrator.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "OrchestratorToml": {
+      "additionalProperties": false,
+      "description": "Orchestrator-owned feature settings.",
+      "properties": {
+        "mcp": {
+          "$ref": "#/definitions/OrchestratorFeatureToml"
+        },
+        "skills": {
+          "$ref": "#/definitions/OrchestratorFeatureToml"
+        }
+      },
+      "type": "object"
     },
     "OtelConfigToml": {
       "additionalProperties": false,
@@ -2467,13 +2570,6 @@
       },
       "type": "object"
     },
-    "RealtimeConversationArchitecture": {
-      "enum": [
-        "realtimeapi",
-        "avas"
-      ],
-      "type": "string"
-    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -2484,9 +2580,6 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
-        "architecture": {
-          "$ref": "#/definitions/RealtimeConversationArchitecture"
-        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },
@@ -2564,6 +2657,35 @@
           "type": "string"
         }
       ]
+    },
+    "RolloutBudgetConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "limit_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "prefill_token_weight": {
+          "format": "double",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "reminder_interval_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "sampling_token_weight": {
+          "format": "double",
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "type": "object"
     },
     "SandboxMode": {
       "enum": [
@@ -2727,6 +2849,27 @@
           "type": "object"
         }
       ]
+    },
+    "TokenBudgetConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "reminder_message_template": {
+          "description": "Reminder template. `{n_remaining}` is replaced with the tokens remaining before auto-compaction.",
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "reminder_threshold_tokens": {
+          "description": "Number of tokens remaining before auto-compaction when the wrap-up reminder is emitted.",
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "ToolSuggestConfig": {
       "additionalProperties": false,
@@ -4334,6 +4477,7 @@
       "enum": [
         "disabled",
         "cached",
+        "indexed",
         "live"
       ],
       "type": "string"
@@ -4594,13 +4738,13 @@
         "auth_elicitation": {
           "type": "boolean"
         },
+        "auto_compaction": {
+          "type": "boolean"
+        },
         "browser_use": {
           "type": "boolean"
         },
         "browser_use_external": {
-          "type": "boolean"
-        },
-        "child_agents_md": {
           "type": "boolean"
         },
         "chronicle": {
@@ -4630,7 +4774,13 @@
         "connectors": {
           "type": "boolean"
         },
+        "current_time_reminder": {
+          "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
+        },
         "default_mode_request_user_input": {
+          "type": "boolean"
+        },
+        "deferred_executor": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -4684,6 +4834,9 @@
         "in_app_browser": {
           "type": "boolean"
         },
+        "item_ids": {
+          "type": "boolean"
+        },
         "js_repl": {
           "type": "boolean"
         },
@@ -4703,6 +4856,9 @@
           "type": "boolean"
         },
         "multi_agent": {
+          "type": "boolean"
+        },
+        "multi_agent_mode": {
           "type": "boolean"
         },
         "multi_agent_v2": {
@@ -4765,6 +4921,9 @@
         "responses_websockets_v2": {
           "type": "boolean"
         },
+        "rollout_budget": {
+          "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
+        },
         "runtime_metrics": {
           "type": "boolean"
         },
@@ -4811,7 +4970,7 @@
           "type": "boolean"
         },
         "token_budget": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_TokenBudgetConfigToml"
         },
         "tool_call_mcp_elicitation": {
           "type": "boolean"
@@ -4838,6 +4997,9 @@
           "type": "boolean"
         },
         "unified_exec_zsh_fork": {
+          "type": "boolean"
+        },
+        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {
@@ -5091,6 +5253,14 @@
       "description": "Base URL override for the built-in `openai` model provider.",
       "type": "string"
     },
+    "orchestrator": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OrchestratorToml"
+        }
+      ],
+      "description": "Orchestrator-owned feature settings."
+    },
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
       "type": "string"
@@ -5280,7 +5450,7 @@
           "$ref": "#/definitions/WebSearchMode"
         }
       ],
-      "description": "Controls the web search tool mode: disabled, cached, or live."
+      "description": "Controls the web search tool mode: disabled, cached, indexed, or live."
     },
     "windows": {
       "allOf": [

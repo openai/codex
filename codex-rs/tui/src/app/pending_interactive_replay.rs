@@ -619,7 +619,7 @@ mod tests {
                 reason: None,
                 network_approval_context: None,
                 command: Some("echo hi".to_string()),
-                cwd: Some(test_path_buf("/tmp").abs()),
+                cwd: Some(test_path_buf("/tmp").abs().into()),
                 command_actions: None,
                 additional_permissions: None,
                 proposed_execpolicy_amendment: None,

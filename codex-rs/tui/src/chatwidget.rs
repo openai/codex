@@ -163,6 +163,7 @@ use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::resume_hint;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 use crossterm::event::KeyCode;
@@ -365,6 +366,7 @@ use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
 use self::skills::is_app_mentionable;
+mod plugin_catalog;
 mod plugins;
 use self::plugins::PluginInstallAuthFlowState;
 use self::plugins::PluginListFetchState;
@@ -686,7 +688,7 @@ pub(crate) struct ChatWidget {
     // App-server-backed command runner for status-line workspace metadata lookups.
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     // Instruction source files loaded for the current session, supplied by app-server.
-    instruction_source_paths: Vec<AbsolutePathBuf>,
+    instruction_source_paths: Vec<PathUri>,
     // Runtime network proxy bind addresses from SessionConfigured.
     session_network_proxy: Option<SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
@@ -725,6 +727,16 @@ pub(crate) struct ChatWidget {
     status_line_git_summary_pending: bool,
     // True once we've attempted a Git summary lookup for the current CWD.
     status_line_git_summary_lookup_complete: bool,
+    // Cached workspace notification headline for the status line.
+    status_line_workspace_headline: Option<String>,
+    // Request ID for the async workspace headline fetch currently in flight.
+    status_line_workspace_headline_pending_request_id: Option<u64>,
+    // Request ID to assign to the next workspace headline fetch.
+    next_status_line_workspace_headline_request_id: u64,
+    // Last time a workspace headline fetch was requested.
+    status_line_workspace_headline_last_requested_at: Option<Instant>,
+    // Set after the backend reports the workspace-message feature gate is disabled.
+    status_line_workspace_messages_disabled: bool,
     // Current thread-goal status shown in the status line when plan mode is inactive.
     current_goal_status_indicator: Option<GoalStatusIndicator>,
     current_goal_status: Option<GoalStatusState>,
@@ -839,6 +851,12 @@ fn exec_approval_request_from_params(
     params: CommandExecutionRequestApprovalParams,
     fallback_cwd: &AbsolutePathBuf,
 ) -> ExecApprovalRequestEvent {
+    // TODO(anp): Keep this as PathUri once `tui::approval_events::ExecApprovalRequestEvent` and
+    // approval rendering support foreign paths.
+    let cwd = params
+        .cwd
+        .and_then(|cwd| cwd.to_inferred_abs_path())
+        .unwrap_or_else(|| fallback_cwd.clone());
     ExecApprovalRequestEvent {
         call_id: params.item_id,
         command: params
@@ -846,7 +864,7 @@ fn exec_approval_request_from_params(
             .as_deref()
             .map(split_command_string)
             .unwrap_or_default(),
-        cwd: params.cwd.unwrap_or_else(|| fallback_cwd.clone()),
+        cwd,
         reason: params.reason,
         network_approval_context: params.network_approval_context,
         additional_permissions: params.additional_permissions,
@@ -1180,6 +1198,7 @@ impl ChatWidget {
         {
             self.refresh_terminal_title();
         }
+        self.refresh_status_line_if_workspace_headline_due();
     }
 
     fn flush_active_cell(&mut self) {

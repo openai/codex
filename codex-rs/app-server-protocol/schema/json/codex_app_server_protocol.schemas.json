@@ -1911,6 +1911,29 @@
             },
             "method": {
               "enum": [
+                "account/workspaceMessages/read"
+              ],
+              "title": "Account/workspaceMessages/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/workspaceMessages/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/sendAddCreditsNudgeEmail"
               ],
               "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
@@ -2378,7 +2401,7 @@
         "cwd": {
           "anyOf": [
             {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             {
               "type": "null"
@@ -2898,6 +2921,10 @@
         "experimentalApi": {
           "default": false,
           "description": "Opt into receiving experimental API methods and fields.",
+          "type": "boolean"
+        },
+        "mcpServerOpenaiFormElicitation": {
+          "description": "Allow downstream MCP servers to request OpenAI extended form elicitations.",
           "type": "boolean"
         },
         "optOutNotificationMethods": {
@@ -3647,6 +3674,27 @@
             "requestedSchema": {
               "$ref": "#/definitions/McpElicitationSchema"
             }
+          },
+          "required": [
+            "message",
+            "mode",
+            "requestedSchema"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "openai/form"
+              ],
+              "type": "string"
+            },
+            "requestedSchema": true
           },
           "required": [
             "message",
@@ -5064,6 +5112,26 @@
             "params"
           ],
           "title": "Turn/moderationMetadataNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "model/safetyBuffering/updated"
+              ],
+              "title": "Model/safetyBuffering/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelSafetyBufferingUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/safetyBuffering/updatedNotification",
           "type": "object"
         },
         {
@@ -8707,7 +8775,8 @@
       "ConversationTextRole": {
         "enum": [
           "user",
-          "developer"
+          "developer",
+          "assistant"
         ],
         "type": "string"
       },
@@ -9119,7 +9188,7 @@
             ]
           },
           "includeHome": {
-            "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+            "description": "If true, include detection under the user's home directory.",
             "type": "boolean"
           }
         },
@@ -9282,6 +9351,13 @@
               "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
             },
             "type": "array"
+          },
+          "source": {
+            "description": "Source product that produced the migration items. Missing means unspecified.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -10299,6 +10375,28 @@
           "summary"
         ],
         "title": "GetAccountTokenUsageResponse",
+        "type": "object"
+      },
+      "GetWorkspaceMessagesResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "featureEnabled": {
+            "description": "Whether the workspace-message backend route is available for this client.",
+            "type": "boolean"
+          },
+          "messages": {
+            "description": "Active workspace messages returned by the backend.",
+            "items": {
+              "$ref": "#/definitions/v2/WorkspaceMessage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "featureEnabled",
+          "messages"
+        ],
+        "title": "GetWorkspaceMessagesResponse",
         "type": "object"
       },
       "GitInfo": {
@@ -12086,6 +12184,29 @@
         "title": "McpServerToolCallResponse",
         "type": "object"
       },
+      "McpToolCallAppContext": {
+        "properties": {
+          "connectorId": {
+            "type": "string"
+          },
+          "linkId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceUri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "connectorId"
+        ],
+        "type": "object"
+      },
       "McpToolCallError": {
         "properties": {
           "message": {
@@ -12503,6 +12624,41 @@
         "title": "ModelReroutedNotification",
         "type": "object"
       },
+      "ModelSafetyBufferingUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "useCases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "model",
+          "reasons",
+          "threadId",
+          "turnId",
+          "useCases"
+        ],
+        "title": "ModelSafetyBufferingUpdatedNotification",
+        "type": "object"
+      },
       "ModelServiceTier": {
         "properties": {
           "description": {
@@ -12580,6 +12736,15 @@
         ],
         "title": "ModelVerificationNotification",
         "type": "object"
+      },
+      "MultiAgentMode": {
+        "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
+        "enum": [
+          "none",
+          "explicitRequestOnly",
+          "proactive"
+        ],
+        "type": "string"
       },
       "NetworkAccess": {
         "enum": [
@@ -14274,13 +14439,6 @@
         "title": "RawResponseItemCompletedNotification",
         "type": "object"
       },
-      "RealtimeConversationArchitecture": {
-        "enum": [
-          "realtimeapi",
-          "avas"
-        ],
-        "type": "string"
-      },
       "RealtimeConversationVersion": {
         "enum": [
           "v1",
@@ -14788,8 +14946,7 @@
                 "type": [
                   "string",
                   "null"
-                ],
-                "writeOnly": true
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -14841,6 +14998,12 @@
                 },
                 "type": "array"
               },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "metadata": {
                 "anyOf": [
                   {
@@ -14884,6 +15047,12 @@
                 ]
               },
               "encrypted_content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
                 "type": [
                   "string",
                   "null"
@@ -14937,8 +15106,7 @@
                 "type": [
                   "string",
                   "null"
-                ],
-                "writeOnly": true
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -14981,8 +15149,7 @@
                 "type": [
                   "string",
                   "null"
-                ],
-                "writeOnly": true
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15036,8 +15203,7 @@
                 "type": [
                   "string",
                   "null"
-                ],
-                "writeOnly": true
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15075,6 +15241,12 @@
             "properties": {
               "call_id": {
                 "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15114,8 +15286,7 @@
                 "type": [
                   "string",
                   "null"
-                ],
-                "writeOnly": true
+                ]
               },
               "input": {
                 "type": "string"
@@ -15160,6 +15331,12 @@
             "properties": {
               "call_id": {
                 "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15206,6 +15383,12 @@
               },
               "execution": {
                 "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15257,8 +15440,7 @@
                 "type": [
                   "string",
                   "null"
-                ],
-                "writeOnly": true
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15293,7 +15475,10 @@
           {
             "properties": {
               "id": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15326,7 +15511,6 @@
               }
             },
             "required": [
-              "id",
               "result",
               "status",
               "type"
@@ -15338,6 +15522,12 @@
             "properties": {
               "encrypted_content": {
                 "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "metadata": {
                 "anyOf": [
@@ -15393,6 +15583,12 @@
           {
             "properties": {
               "encrypted_content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
                 "type": [
                   "string",
                   "null"
@@ -16645,6 +16841,14 @@
             "description": "Usually the first user message in the thread, if available.",
             "type": "string"
           },
+          "recencyAt": {
+            "description": "Unix timestamp (in seconds) used for thread recency ordering.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "sessionId": {
             "description": "Session id shared by threads that belong to the same session tree.",
             "type": "string"
@@ -16949,9 +17153,9 @@
           },
           "instructionSources": {
             "default": [],
-            "description": "Instruction source files currently loaded for this thread.",
+            "description": "Environment-native paths to instruction source files currently loaded for this thread.",
             "items": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": "array"
           },
@@ -17416,7 +17620,7 @@
               "cwd": {
                 "allOf": [
                   {
-                    "$ref": "#/definitions/v2/AbsolutePathBuf"
+                    "$ref": "#/definitions/v2/LegacyAppPathString"
                   }
                 ],
                 "description": "The command's working directory."
@@ -17510,6 +17714,16 @@
           },
           {
             "properties": {
+              "appContext": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/McpToolCallAppContext"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "arguments": true,
               "durationMs": {
                 "description": "The duration of the MCP tool call in milliseconds.",
@@ -17533,6 +17747,7 @@
                 "type": "string"
               },
               "mcpAppResourceUri": {
+                "description": "Deprecated: use `appContext.resourceUri` instead.",
                 "type": [
                   "string",
                   "null"
@@ -18653,9 +18868,9 @@
           },
           "instructionSources": {
             "default": [],
-            "description": "Instruction source files currently loaded for this thread.",
+            "description": "Environment-native paths to instruction source files currently loaded for this thread.",
             "items": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": "array"
           },
@@ -18904,7 +19119,8 @@
       "ThreadSortKey": {
         "enum": [
           "created_at",
-          "updated_at"
+          "updated_at",
+          "recency_at"
         ],
         "type": "string"
       },
@@ -19069,9 +19285,9 @@
           },
           "instructionSources": {
             "default": [],
-            "description": "Instruction source files currently loaded for this thread.",
+            "description": "Environment-native paths to instruction source files currently loaded for this thread.",
             "items": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": "array"
           },
@@ -20240,6 +20456,7 @@
         "enum": [
           "disabled",
           "cached",
+          "indexed",
           "live"
         ],
         "type": "string"
@@ -20391,6 +20608,49 @@
         ],
         "title": "WindowsWorldWritableWarningNotification",
         "type": "object"
+      },
+      "WorkspaceMessage": {
+        "properties": {
+          "archivedAt": {
+            "description": "Unix timestamp (in seconds) when the message was archived.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "description": "Unix timestamp (in seconds) when the message was created.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "messageBody": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "messageType": {
+            "$ref": "#/definitions/v2/WorkspaceMessageType"
+          }
+        },
+        "required": [
+          "messageBody",
+          "messageId",
+          "messageType"
+        ],
+        "type": "object"
+      },
+      "WorkspaceMessageType": {
+        "enum": [
+          "headline",
+          "announcement",
+          "unknown"
+        ],
+        "type": "string"
       },
       "WriteStatus": {
         "enum": [

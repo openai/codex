@@ -26,6 +26,7 @@ codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
 futures = { workspace = true }
 regex-lite = { workspace = true }

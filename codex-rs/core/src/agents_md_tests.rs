@@ -250,8 +250,13 @@ async fn load_agents_md(config: &TestConfig) -> Option<LoadedAgentsMd> {
     .await
 }
 
-async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<AbsolutePathBuf>> {
-    super::agents_md_paths(&config.config, &config.cwd, LOCAL_FS.as_ref()).await
+async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<PathUri>> {
+    super::agents_md_paths(
+        &config.config,
+        &PathUri::from_abs_path(&config.cwd),
+        LOCAL_FS.as_ref(),
+    )
+    .await
 }
 
 fn resolved_local_environments<const N: usize>(
@@ -272,15 +277,105 @@ fn resolved_local_environments<const N: usize>(
                 )
             })
             .collect(),
+        starting: Vec::new(),
     }
 }
 
 fn project_provenance(path: AbsolutePathBuf, cwd: AbsolutePathBuf) -> InstructionProvenance {
     InstructionProvenance::Project {
-        source_path: path,
+        source_path: PathUri::from_abs_path(&path),
         environment_id: "local".to_string(),
-        cwd,
+        cwd: PathUri::from_abs_path(&cwd),
     }
+}
+
+#[test]
+fn foreign_agents_md_uses_environment_native_paths() {
+    let (cwd, rendered_cwd) = if cfg!(windows) {
+        (
+            PathUri::parse("file:///codex%20runtime").expect("POSIX cwd URI"),
+            "/codex runtime",
+        )
+    } else {
+        (
+            PathUri::parse("file:///C:/codex%20runtime").expect("Windows cwd URI"),
+            r"C:\codex runtime",
+        )
+    };
+    let source_path = cwd.join("AGENTS.md").expect("AGENTS.md URI");
+    let loaded = LoadedAgentsMd {
+        user_instructions: None,
+        entries: vec![InstructionEntry {
+            contents: "remote instructions".to_string(),
+            provenance: InstructionProvenance::Project {
+                source_path: source_path.clone(),
+                environment_id: "remote".to_string(),
+                cwd,
+            },
+        }],
+    };
+
+    assert_eq!(
+        loaded.render(),
+        format!(
+            "# AGENTS.md instructions for {rendered_cwd}
+
+<INSTRUCTIONS>
+remote instructions
+</INSTRUCTIONS>"
+        )
+    );
+    assert_eq!(loaded.sources().collect::<Vec<_>>(), vec![source_path]);
+}
+
+#[test]
+fn multi_environment_agents_md_renders_mixed_path_conventions() {
+    let posix_cwd = PathUri::parse("file:///srv/project").expect("POSIX cwd URI");
+    let windows_cwd = PathUri::parse("file:///C:/workspace").expect("Windows cwd URI");
+    let posix_source = posix_cwd.join("AGENTS.md").expect("POSIX AGENTS.md URI");
+    let windows_source = windows_cwd
+        .join("AGENTS.md")
+        .expect("Windows AGENTS.md URI");
+    let loaded = LoadedAgentsMd {
+        user_instructions: None,
+        entries: vec![
+            InstructionEntry {
+                contents: "POSIX instructions".to_string(),
+                provenance: InstructionProvenance::Project {
+                    source_path: posix_source.clone(),
+                    environment_id: "posix".to_string(),
+                    cwd: posix_cwd,
+                },
+            },
+            InstructionEntry {
+                contents: "Windows instructions".to_string(),
+                provenance: InstructionProvenance::Project {
+                    source_path: windows_source.clone(),
+                    environment_id: "windows".to_string(),
+                    cwd: windows_cwd,
+                },
+            },
+        ],
+    };
+
+    assert_eq!(
+        loaded.render(),
+        r#"# AGENTS.md instructions
+
+<INSTRUCTIONS>
+for `posix` with root /srv/project
+
+POSIX instructions
+
+for `windows` with root C:\workspace
+
+Windows instructions
+</INSTRUCTIONS>"#
+    );
+    assert_eq!(
+        loaded.sources().collect::<Vec<_>>(),
+        vec![posix_source, windows_source]
+    );
 }
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
@@ -508,7 +603,7 @@ async fn read_agents_md_propagates_metadata_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &cwd)
+    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
         .await
         .expect_err("metadata error");
 
@@ -526,7 +621,7 @@ async fn read_agents_md_propagates_read_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &cwd)
+    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
         .await
         .expect_err("read error");
 
@@ -544,7 +639,7 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
     };
 
     let cwd = config.cwd.clone();
-    let loaded = read_agents_md(&config.config, &fs, "local", &cwd)
+    let loaded = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
         .await
         .expect("removed file is recoverable");
 
@@ -659,17 +754,18 @@ secondary doc"#,
     );
     assert_eq!(loaded.render(), expected_fragment);
     assert_eq!(
-        loaded.sources().cloned().collect::<Vec<_>>(),
+        loaded.sources().collect::<Vec<_>>(),
         vec![
-            config
-                .user_instructions
-                .as_ref()
-                .expect("global instructions")
-                .source
-                .clone(),
-            primary.path().join("AGENTS.md").abs(),
-            primary_nested.join("AGENTS.md").abs(),
-            secondary.path().join("AGENTS.md").abs(),
+            PathUri::from_abs_path(
+                &config
+                    .user_instructions
+                    .as_ref()
+                    .expect("global instructions")
+                    .source,
+            ),
+            PathUri::from_abs_path(&primary.path().join("AGENTS.md").abs()),
+            PathUri::from_abs_path(&primary_nested.join("AGENTS.md").abs()),
+            PathUri::from_abs_path(&secondary.path().join("AGENTS.md").abs()),
         ]
     );
 }
@@ -814,32 +910,6 @@ async fn secondary_environment_invalid_utf8_does_not_suppress_other_docs() {
     assert!(loaded.text().contains("secondary\u{FFFD}doc"));
 }
 
-#[tokio::test]
-async fn child_agents_guidance_is_appended_once_after_environment_groups() {
-    let primary = tempfile::tempdir().expect("primary tempdir");
-    let secondary = tempfile::tempdir().expect("secondary tempdir");
-    fs::write(primary.path().join("AGENTS.md"), "primary doc").unwrap();
-    fs::write(secondary.path().join("AGENTS.md"), "secondary doc").unwrap();
-    let mut config = make_config(&primary, /*limit*/ 4096, /*instructions*/ None).await;
-    config.features.enable(Feature::ChildAgentsMd).unwrap();
-    let environments = resolved_local_environments([
-        ("primary", config.cwd.clone()),
-        ("secondary", secondary.abs()),
-    ]);
-
-    let loaded = load_project_instructions(
-        &config.config,
-        /*user_instructions*/ None,
-        &environments,
-    )
-    .await
-    .expect("instructions expected");
-    let text = loaded.text();
-
-    assert_eq!(text.matches(HIERARCHICAL_AGENTS_MESSAGE).count(), 1);
-    assert!(text.ends_with(HIERARCHICAL_AGENTS_MESSAGE));
-}
-
 /// If there are existing system instructions but AGENTS.md docs are
 /// missing we expect the original instructions to be returned unchanged.
 #[tokio::test]
@@ -898,7 +968,10 @@ async fn concatenates_root_and_cwd_docs() {
     assert_eq!(loaded.text(), "root doc\n\ncrate doc");
     assert_eq!(
         loaded.sources().collect::<Vec<_>>(),
-        vec![&root_agents, &crate_agents]
+        vec![
+            PathUri::from_abs_path(&root_agents),
+            PathUri::from_abs_path(&crate_agents),
+        ]
     );
 }
 
@@ -925,8 +998,8 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
     let expected_parent = root.path().join("AGENTS.md").abs();
     let expected_child = cfg.cwd.join("AGENTS.md");
     assert_eq!(discovery.len(), 2);
-    assert_eq!(discovery[0], expected_parent);
-    assert_eq!(discovery[1], expected_child);
+    assert_eq!(discovery[0], PathUri::from_abs_path(&expected_parent));
+    assert_eq!(discovery[1], PathUri::from_abs_path(&expected_child));
 
     let res = get_user_instructions(&cfg).await.expect("doc expected");
     assert_eq!(res, "parent doc\n\nchild doc");
@@ -971,8 +1044,8 @@ async fn project_layers_do_not_override_project_root_markers() {
     assert_eq!(
         discovery,
         vec![
-            root.path().join("AGENTS.md").abs(),
-            config.cwd.join("AGENTS.md"),
+            PathUri::from_abs_path(&root.path().join("AGENTS.md").abs()),
+            PathUri::from_abs_path(&config.cwd.join("AGENTS.md")),
         ]
     );
 }
@@ -991,36 +1064,13 @@ async fn agents_md_paths_preserve_symlinked_cwd() {
     cfg.cwd = linked_cwd.abs();
 
     let discovery = agents_md_paths(&cfg).await.expect("discover paths");
-    assert_eq!(discovery, vec![cfg.cwd.join("AGENTS.md")]);
+    assert_eq!(
+        discovery,
+        vec![PathUri::from_abs_path(&cfg.cwd.join("AGENTS.md"))]
+    );
 
     let res = get_user_instructions(&cfg).await.expect("doc expected");
     assert_eq!(res, "project doc");
-}
-
-#[tokio::test]
-async fn child_agents_message_after_global_instructions_uses_plain_separator() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let mut cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
-    cfg.features.enable(Feature::ChildAgentsMd).unwrap();
-
-    let loaded = load_agents_md(&cfg).await.expect("instructions expected");
-    let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
-    let expected = LoadedAgentsMd {
-        user_instructions: Some(UserInstructions {
-            text: "global doc".to_string(),
-            source: global_agents,
-        }),
-        entries: vec![InstructionEntry {
-            contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-            provenance: InstructionProvenance::Internal,
-        }],
-    };
-
-    assert_eq!(loaded, expected);
-    assert_eq!(
-        loaded.text(),
-        format!("global doc\n\n{HIERARCHICAL_AGENTS_MESSAGE}")
-    );
 }
 
 #[tokio::test]
@@ -1050,52 +1100,14 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     assert_eq!(loaded.user_instructions(), cfg.user_instructions.as_ref());
     assert_eq!(
         loaded.sources().collect::<Vec<_>>(),
-        vec![&global_agents, &project_agents]
+        vec![
+            PathUri::from_abs_path(&global_agents),
+            PathUri::from_abs_path(&project_agents),
+        ]
     );
     assert_eq!(
         loaded.text(),
         format!("global doc{AGENTS_MD_SEPARATOR}project doc")
-    );
-}
-
-#[tokio::test]
-async fn child_agents_message_after_project_docs_is_not_an_instruction_source() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
-
-    let mut cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
-    cfg.features.enable(Feature::ChildAgentsMd).unwrap();
-    let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
-    fs::create_dir_all(&cfg.codex_home).unwrap();
-    fs::write(&global_agents, "global doc").unwrap();
-
-    let loaded = load_agents_md(&cfg).await.expect("instructions expected");
-    let project_agents = cfg.cwd.join("AGENTS.md");
-
-    let expected = LoadedAgentsMd {
-        user_instructions: Some(UserInstructions {
-            text: "global doc".to_string(),
-            source: global_agents.clone(),
-        }),
-        entries: vec![
-            InstructionEntry {
-                contents: "project doc".to_string(),
-                provenance: project_provenance(project_agents.clone(), cfg.cwd.clone()),
-            },
-            InstructionEntry {
-                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-                provenance: InstructionProvenance::Internal,
-            },
-        ],
-    };
-    assert_eq!(loaded, expected);
-    assert_eq!(
-        loaded.sources().collect::<Vec<_>>(),
-        vec![&global_agents, &project_agents]
-    );
-    assert_eq!(
-        loaded.text(),
-        format!("global doc{AGENTS_MD_SEPARATOR}project doc\n\n{HIERARCHICAL_AGENTS_MESSAGE}")
     );
 }
 
@@ -1117,8 +1129,8 @@ async fn agents_local_md_preferred() {
     let discovery = agents_md_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert_eq!(
-        discovery[0].file_name().unwrap().to_string_lossy(),
-        LOCAL_AGENTS_MD_FILENAME
+        discovery[0].basename().as_deref(),
+        Some(LOCAL_AGENTS_MD_FILENAME)
     );
 }
 
@@ -1166,12 +1178,9 @@ async fn agents_md_preferred_over_fallbacks() {
 
     let discovery = agents_md_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery.len(), 1);
-    assert!(
-        discovery[0]
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .eq(DEFAULT_AGENTS_MD_FILENAME)
+    assert_eq!(
+        discovery[0].basename().as_deref(),
+        Some(DEFAULT_AGENTS_MD_FILENAME)
     );
 }
 
@@ -1186,7 +1195,7 @@ async fn agents_md_directory_is_ignored() {
     assert_eq!(res, None);
 
     let discovery = agents_md_paths(&cfg).await.expect("discover paths");
-    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
+    assert_eq!(discovery, Vec::<PathUri>::new());
 }
 
 #[cfg(unix)]
@@ -1209,7 +1218,7 @@ async fn agents_md_special_file_is_ignored() {
     assert_eq!(res, None);
 
     let discovery = agents_md_paths(&cfg).await.expect("discover paths");
-    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
+    assert_eq!(discovery, Vec::<PathUri>::new());
 }
 
 #[tokio::test]
@@ -1228,11 +1237,8 @@ async fn override_directory_falls_back_to_agents_md_file() {
     let discovery = agents_md_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert_eq!(
-        discovery[0]
-            .file_name()
-            .expect("file name")
-            .to_string_lossy(),
-        DEFAULT_AGENTS_MD_FILENAME
+        discovery[0].basename().as_deref(),
+        Some(DEFAULT_AGENTS_MD_FILENAME)
     );
 }
 

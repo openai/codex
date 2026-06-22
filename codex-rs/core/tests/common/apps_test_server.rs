@@ -7,6 +7,8 @@ use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use serde_json::Value;
 use serde_json::json;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -17,6 +19,7 @@ use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 const CONNECTOR_ID: &str = "calendar";
+pub const LINK_ID: &str = "link_calendar";
 const CONNECTOR_NAME: &str = "Calendar";
 const DISCOVERABLE_CALENDAR_ID: &str = "connector_2128aebfecb84f64a069897515042a44";
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
@@ -58,6 +61,13 @@ pub enum AppsTestToolLoading {
     Searchable,
 }
 
+#[derive(Clone, Copy)]
+enum AppsTestToolsListBehavior {
+    AlwaysAvailable,
+    AvailableAfterInitialList,
+    AlwaysUnavailable,
+}
+
 impl AppsTestServer {
     pub async fn mount(server: &MockServer) -> Result<Self> {
         Self::mount_with_connector_name(server, CONNECTOR_NAME).await
@@ -72,6 +82,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
+            AppsTestToolsListBehavior::AlwaysAvailable,
         )
         .await;
         Ok(Self {
@@ -91,6 +102,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ false,
             /*include_app_only_tool*/ false,
+            AppsTestToolsListBehavior::AlwaysAvailable,
         )
         .await;
         Ok(Self {
@@ -110,6 +122,42 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             matches!(tool_loading, AppsTestToolLoading::Searchable),
             /*include_app_only_tool*/ true,
+            AppsTestToolsListBehavior::AlwaysAvailable,
+        )
+        .await;
+        Ok(Self {
+            chatgpt_base_url: server.uri(),
+        })
+    }
+
+    pub async fn mount_with_tools_available_after_initial_list(
+        server: &MockServer,
+    ) -> Result<Self> {
+        Self::mount_with_tools_list_behavior(
+            server,
+            AppsTestToolsListBehavior::AvailableAfterInitialList,
+        )
+        .await
+    }
+
+    pub async fn mount_without_tools(server: &MockServer) -> Result<Self> {
+        Self::mount_with_tools_list_behavior(server, AppsTestToolsListBehavior::AlwaysUnavailable)
+            .await
+    }
+
+    async fn mount_with_tools_list_behavior(
+        server: &MockServer,
+        tools_list_behavior: AppsTestToolsListBehavior,
+    ) -> Result<Self> {
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        mount_streamable_http_json_rpc(
+            server,
+            CONNECTOR_NAME.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ false,
+            /*include_app_only_tool*/ false,
+            tools_list_behavior,
         )
         .await;
         Ok(Self {
@@ -263,6 +311,7 @@ async fn mount_streamable_http_json_rpc(
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    tools_list_behavior: AppsTestToolsListBehavior,
 ) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
@@ -271,6 +320,8 @@ async fn mount_streamable_http_json_rpc(
             connector_description,
             searchable,
             include_app_only_tool,
+            tools_list_behavior,
+            tools_list_calls: AtomicUsize::new(0),
         })
         .mount(server)
         .await;
@@ -281,6 +332,8 @@ struct CodexAppsJsonRpcResponder {
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    tools_list_behavior: AppsTestToolsListBehavior,
+    tools_list_calls: AtomicUsize,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -326,6 +379,12 @@ impl Respond for CodexAppsJsonRpcResponder {
             }
             "notifications/initialized" => ResponseTemplate::new(202),
             "tools/list" => {
+                let list_index = self.tools_list_calls.fetch_add(1, Ordering::SeqCst);
+                let tools_available = match self.tools_list_behavior {
+                    AppsTestToolsListBehavior::AlwaysAvailable => true,
+                    AppsTestToolsListBehavior::AvailableAfterInitialList => list_index > 0,
+                    AppsTestToolsListBehavior::AlwaysUnavailable => false,
+                };
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
                 let mut response = json!({
                     "jsonrpc": "2.0",
@@ -352,6 +411,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 },
                                 "_meta": {
                                     "connector_id": CONNECTOR_ID,
+                                    "link_id": LINK_ID,
                                     "connector_name": self.connector_name.clone(),
                                     "connector_description": self.connector_description.clone(),
                                     "openai/outputTemplate": CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI,
@@ -378,6 +438,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 },
                                 "_meta": {
                                     "connector_id": CONNECTOR_ID,
+                                    "link_id": LINK_ID,
                                     "connector_name": self.connector_name.clone(),
                                     "connector_description": self.connector_description.clone(),
                                     "_codex_apps": {
@@ -410,6 +471,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 },
                                 "_meta": {
                                     "connector_id": CONNECTOR_ID,
+                                    "link_id": LINK_ID,
                                     "connector_name": self.connector_name.clone(),
                                     "connector_description": self.connector_description.clone(),
                                     "openai/fileParams": ["file"],
@@ -424,7 +486,15 @@ impl Respond for CodexAppsJsonRpcResponder {
                         "nextCursor": null
                     }
                 });
-                if self.searchable
+                if !tools_available
+                    && let Some(tools) = response
+                        .pointer_mut("/result/tools")
+                        .and_then(Value::as_array_mut)
+                {
+                    tools.clear();
+                }
+                if tools_available
+                    && self.searchable
                     && let Some(tools) = response
                         .pointer_mut("/result/tools")
                         .and_then(Value::as_array_mut)
@@ -451,7 +521,8 @@ impl Respond for CodexAppsJsonRpcResponder {
                         }));
                     }
                 }
-                if self.include_app_only_tool
+                if tools_available
+                    && self.include_app_only_tool
                     && let Some(tools) = response
                         .pointer_mut("/result/tools")
                         .and_then(Value::as_array_mut)

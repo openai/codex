@@ -1,5 +1,6 @@
 use crate::shell::ShellType;
 
+use super::EnvironmentContextEnvironmentStatus::Ready;
 use super::*;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -37,7 +38,9 @@ fn serialize_workspace_write_environment_context() {
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
             cwd: PathUri::from_abs_path(&cwd.abs()),
-            shell: fake_shell_name(),
+            status: Ready {
+                shell: fake_shell_name(),
+            },
         }],
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
@@ -64,7 +67,9 @@ fn serialize_environment_context_with_foreign_windows_cwd() {
         vec![EnvironmentContextEnvironment {
             id: "remote".to_string(),
             cwd: PathUri::parse("file:///C:/windows").expect("Windows cwd URI"),
-            shell: "powershell".to_string(),
+            status: Ready {
+                shell: "powershell".to_string(),
+            },
         }],
         /*current_date*/ None,
         /*timezone*/ None,
@@ -91,7 +96,9 @@ fn serialize_environment_context_with_network() {
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
             cwd: PathUri::from_abs_path(&test_abs_path("/repo")),
-            shell: fake_shell_name(),
+            status: Ready {
+                shell: fake_shell_name(),
+            },
         }],
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
@@ -153,7 +160,9 @@ fn serialize_environment_context_with_full_filesystem_profile() {
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
             cwd: PathUri::from_abs_path(&test_abs_path("/repo")),
-            shell: fake_shell_name(),
+            status: Ready {
+                shell: fake_shell_name(),
+            },
         }],
         /*current_date*/ None,
         /*timezone*/ None,
@@ -204,6 +213,7 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
         personality: None,
         collaboration_mode: None,
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: None,
         effort: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -258,7 +268,9 @@ fn equals_except_shell_compares_cwd() {
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
             cwd: PathUri::from_abs_path(&test_abs_path("/repo")),
-            shell: fake_shell_name(),
+            status: Ready {
+                shell: fake_shell_name(),
+            },
         }],
         /*current_date*/ None,
         /*timezone*/ None,
@@ -269,7 +281,9 @@ fn equals_except_shell_compares_cwd() {
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
             cwd: PathUri::from_abs_path(&test_abs_path("/repo")),
-            shell: fake_shell_name(),
+            status: Ready {
+                shell: fake_shell_name(),
+            },
         }],
         /*current_date*/ None,
         /*timezone*/ None,
@@ -285,7 +299,9 @@ fn equals_except_shell_compares_cwd_differences() {
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
             cwd: PathUri::from_abs_path(&test_abs_path("/repo1")),
-            shell: fake_shell_name(),
+            status: Ready {
+                shell: fake_shell_name(),
+            },
         }],
         /*current_date*/ None,
         /*timezone*/ None,
@@ -296,7 +312,9 @@ fn equals_except_shell_compares_cwd_differences() {
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
             cwd: PathUri::from_abs_path(&test_abs_path("/repo2")),
-            shell: fake_shell_name(),
+            status: Ready {
+                shell: fake_shell_name(),
+            },
         }],
         /*current_date*/ None,
         /*timezone*/ None,
@@ -313,7 +331,9 @@ fn equals_except_shell_ignores_shell() {
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
             cwd: PathUri::from_abs_path(&test_abs_path("/repo")),
-            shell: "bash".to_string(),
+            status: Ready {
+                shell: "bash".to_string(),
+            },
         }],
         /*current_date*/ None,
         /*timezone*/ None,
@@ -324,7 +344,9 @@ fn equals_except_shell_ignores_shell() {
         vec![EnvironmentContextEnvironment {
             id: "other".to_string(),
             cwd: PathUri::from_abs_path(&test_abs_path("/repo")),
-            shell: "zsh".to_string(),
+            status: Ready {
+                shell: "zsh".to_string(),
+            },
         }],
         /*current_date*/ None,
         /*timezone*/ None,
@@ -341,7 +363,9 @@ fn serialize_environment_context_with_subagents() {
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
             cwd: PathUri::from_abs_path(&test_abs_path("/repo")),
-            shell: fake_shell_name(),
+            status: Ready {
+                shell: fake_shell_name(),
+            },
         }],
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
@@ -375,12 +399,16 @@ fn serialize_environment_context_with_multiple_selected_environments() {
             EnvironmentContextEnvironment {
                 id: "local".to_string(),
                 cwd: PathUri::from_abs_path(&local_cwd.abs()),
-                shell: "bash".to_string(),
+                status: Ready {
+                    shell: "bash".to_string(),
+                },
             },
             EnvironmentContextEnvironment {
                 id: "remote".to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd.abs()),
-                shell: "bash".to_string(),
+                status: Ready {
+                    shell: "bash".to_string(),
+                },
             },
         ],
         Some("2026-02-26".to_string()),
@@ -420,12 +448,16 @@ fn serialize_environment_context_prefers_environment_shell_when_present() {
             EnvironmentContextEnvironment {
                 id: "local".to_string(),
                 cwd: PathUri::from_abs_path(&local_cwd.abs()),
-                shell: "powershell".to_string(),
+                status: Ready {
+                    shell: "powershell".to_string(),
+                },
             },
             EnvironmentContextEnvironment {
                 id: "remote".to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd.abs()),
-                shell: "cmd".to_string(),
+                status: Ready {
+                    shell: "cmd".to_string(),
+                },
             },
         ],
         /*current_date*/ None,

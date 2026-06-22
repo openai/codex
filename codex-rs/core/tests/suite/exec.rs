@@ -41,6 +41,7 @@ where
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
+        network_environment_id: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,

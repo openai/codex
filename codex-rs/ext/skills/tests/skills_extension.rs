@@ -10,10 +10,14 @@ use codex_core_skills::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::SkillMetadata;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
+use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::ToolCall;
+use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnInputContext;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -23,6 +27,7 @@ use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
@@ -183,7 +188,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         .await;
 
     let prompt_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store)
         .await;
     assert_eq!(1, prompt_fragments.len());
     assert!(
@@ -228,7 +233,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         read_request_keys(&read_requests)
     );
     let rebuilt_prompt_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store)
         .await;
     assert_eq!(1, rebuilt_prompt_fragments.len());
     assert!(rebuilt_prompt_fragments[0].text().contains("lint-fix"));
@@ -251,6 +256,128 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         .await;
 
     assert!(next_fragments.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_context_truncates_catalog_descriptions() -> TestResult {
+    let description = "x".repeat(1_025);
+    let mut entry = test_entry(
+        SkillSourceKind::Orchestrator,
+        "codex_apps",
+        "orchestrator/long-description",
+        "skill://orchestrator/long-description/SKILL.md",
+    );
+    entry.description = description.clone();
+    let providers =
+        SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: vec![entry],
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: None,
+            fail_first_list: false,
+        }));
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let session_source = SessionSource::Cli;
+    let config = default_config();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            environments: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let fragments = registry.context_contributors()[0]
+        .contribute_thread_context(&session_store, &thread_store)
+        .await;
+    assert_eq!(1, fragments.len());
+    let rendered = fragments[0].text();
+    assert!(rendered.contains(&("x".repeat(1_021) + "...")));
+    assert!(!rendered.contains(&"x".repeat(1_024)));
+    assert!(!rendered.contains(&description));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResult {
+    let description = "x".repeat(1_025);
+    let mut entry = test_entry(
+        SkillSourceKind::Orchestrator,
+        "codex_apps",
+        "orchestrator/long-description",
+        "skill://orchestrator/long-description/SKILL.md",
+    );
+    entry.description = description.clone();
+    let providers =
+        SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: vec![entry],
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: None,
+            fail_first_list: false,
+        }));
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let session_source = SessionSource::Cli;
+    let config = default_config();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            environments: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let tools = registry.tool_contributors()[0].tools(&session_store, &thread_store);
+    let list_tool = tools
+        .iter()
+        .find(|tool| tool.tool_name().name == "list")
+        .ok_or("skills.list tool should be registered")?;
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({"authority": {"kind": "orchestrator"}}).to_string(),
+    };
+    let output = list_tool
+        .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
+            call_id: "call-1".to_string(),
+            tool_name: list_tool.tool_name(),
+            model: "gpt-test".to_string(),
+            truncation_policy: TruncationPolicy::Bytes(1_024),
+            conversation_history: ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+            environments: Vec::new(),
+            payload: payload.clone(),
+        })
+        .await?;
+    let response = output
+        .post_tool_use_response("call-1", &payload)
+        .ok_or("skills.list should expose structured output")?;
+    let rendered_description = response["skills"][0]["description"]
+        .as_str()
+        .ok_or("skills.list response should include a description")?;
+
+    assert_eq!(rendered_description, "x".repeat(1_021) + "...");
+    assert_ne!(rendered_description, description);
 
     Ok(())
 }
@@ -294,7 +421,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         .await;
 
     let initial_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store)
         .await;
     assert!(initial_fragments.is_empty());
     let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
@@ -565,12 +692,14 @@ fn test_entry(
 struct TestConfig {
     include_instructions: bool,
     bundled_skills_enabled: bool,
+    orchestrator_skills_enabled: bool,
 }
 
 fn default_config() -> TestConfig {
     TestConfig {
         include_instructions: true,
         bundled_skills_enabled: true,
+        orchestrator_skills_enabled: true,
     }
 }
 
@@ -578,6 +707,7 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
     SkillsExtensionConfig {
         include_instructions: config.include_instructions,
         bundled_skills_enabled: config.bundled_skills_enabled,
+        orchestrator_skills_enabled: config.orchestrator_skills_enabled,
     }
 }
 

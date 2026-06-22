@@ -732,10 +732,13 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         parent_trace: None,
         environment_selections: Vec::new(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
+        supports_openai_form_elicitation: false,
         analytics_events_client: None,
         thread_store,
         attestation_provider: None,
+        external_time_provider: None,
         inherited_multi_agent_version: None,
+        initial_multi_agent_mode: None,
     })
     .await
     .expect("spawn guardian subagent");

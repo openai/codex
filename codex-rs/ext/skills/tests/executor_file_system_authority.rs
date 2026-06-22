@@ -188,16 +188,20 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
     assert!(!alias_root.as_path().exists());
     assert!(!canonical_root.as_path().exists());
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: alias_root.clone(),
-        scope: SkillScope::User,
-        file_system: Arc::new(SyntheticFileSystem {
-            alias_root,
-            canonical_root: canonical_root.clone(),
-        }),
-        plugin_id: None,
-        plugin_root: None,
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: alias_root.clone(),
+            scope: SkillScope::User,
+            file_system: Arc::new(SyntheticFileSystem {
+                alias_root,
+                canonical_root: canonical_root.clone(),
+            }),
+            plugin_id: None,
+            plugin_namespace: None,
+            plugin_root: None,
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
     .await;
     assert_eq!(outcome.errors, Vec::new());
     assert_eq!(outcome.skills.len(), 1);

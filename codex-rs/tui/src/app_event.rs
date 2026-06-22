@@ -341,6 +341,11 @@ pub(crate) enum AppEvent {
         result: Result<GetAccountTokenUsageResponse, String>,
     },
 
+    /// Fetch workspace messages for the status-line headline item.
+    RefreshStatusLineWorkspaceHeadline {
+        request_id: u64,
+    },
+
     /// Commit settled asynchronous usage output after active-output barriers clear.
     CommitPendingUsageOutput,
 
@@ -443,6 +448,12 @@ pub(crate) enum AppEvent {
     PluginsLoaded {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
+    },
+
+    /// Open the plugin list from an already cached response.
+    OpenPluginsList {
+        cwd: PathBuf,
+        response: PluginListResponse,
     },
 
     /// Result of explicitly fetching remote-backed plugin sections.
@@ -693,6 +704,11 @@ pub(crate) enum AppEvent {
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
+
+    /// Finish a settings selection after its preceding update events have been applied.
+    SettingsSelectionClosed,
+    /// Run after any nested settings events emitted while handling the close event.
+    SettingsSelectionSettled,
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
@@ -976,6 +992,11 @@ pub(crate) enum AppEvent {
     StatusLineGitSummaryUpdated {
         cwd: PathBuf,
         summary: crate::chatwidget::StatusLineGitSummary,
+    },
+    /// Async update of the workspace notification headline for status line rendering.
+    StatusLineWorkspaceHeadlineUpdated {
+        request_id: u64,
+        result: Result<crate::workspace_messages::WorkspaceHeadlineFetchResult, String>,
     },
     /// Apply a user-confirmed status-line item ordering/selection.
     StatusLineSetup {

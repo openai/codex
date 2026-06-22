@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 async fn pending_approvals_are_deduped_per_host_protocol_and_port() {
     let service = NetworkApprovalService::default();
     let key = HostApprovalKey {
+        environment_id: "local".to_string(),
         host: "example.com".to_string(),
         protocol: "http",
         port: 443,
@@ -30,11 +31,13 @@ async fn pending_approvals_are_deduped_per_host_protocol_and_port() {
 async fn pending_approvals_do_not_dedupe_across_ports() {
     let service = NetworkApprovalService::default();
     let first_key = HostApprovalKey {
+        environment_id: "local".to_string(),
         host: "example.com".to_string(),
         protocol: "https",
         port: 443,
     };
     let second_key = HostApprovalKey {
+        environment_id: "local".to_string(),
         host: "example.com".to_string(),
         protocol: "https",
         port: 8443,
@@ -49,22 +52,75 @@ async fn pending_approvals_do_not_dedupe_across_ports() {
 }
 
 #[tokio::test]
+async fn pending_approvals_do_not_dedupe_across_environments() {
+    let service = NetworkApprovalService::default();
+    let first_key = HostApprovalKey {
+        environment_id: "local".to_string(),
+        host: "example.com".to_string(),
+        protocol: "https",
+        port: 443,
+    };
+    let second_key = HostApprovalKey {
+        environment_id: "remote".to_string(),
+        ..first_key.clone()
+    };
+
+    let (first, first_is_owner) = service.get_or_create_pending_approval(first_key).await;
+    let (second, second_is_owner) = service.get_or_create_pending_approval(second_key).await;
+
+    assert!(first_is_owner);
+    assert!(second_is_owner);
+    assert!(!Arc::ptr_eq(&first, &second));
+}
+
+#[tokio::test]
+async fn session_approved_hosts_are_scoped_by_environment() {
+    let service = NetworkApprovalService::default();
+    let local_key = HostApprovalKey {
+        environment_id: "local".to_string(),
+        host: "example.com".to_string(),
+        protocol: "https",
+        port: 443,
+    };
+    let remote_key = HostApprovalKey {
+        environment_id: "remote".to_string(),
+        ..local_key.clone()
+    };
+    service
+        .session_approved_hosts
+        .lock()
+        .await
+        .insert(local_key);
+
+    assert!(
+        !service
+            .session_approved_hosts
+            .lock()
+            .await
+            .contains(&remote_key)
+    );
+}
+
+#[tokio::test]
 async fn session_approved_hosts_preserve_protocol_and_port_scope() {
     let source = NetworkApprovalService::default();
     {
         let mut approved_hosts = source.session_approved_hosts.lock().await;
         approved_hosts.extend([
             HostApprovalKey {
+                environment_id: "local".to_string(),
                 host: "example.com".to_string(),
                 protocol: "https",
                 port: 443,
             },
             HostApprovalKey {
+                environment_id: "local".to_string(),
                 host: "example.com".to_string(),
                 protocol: "https",
                 port: 8443,
             },
             HostApprovalKey {
+                environment_id: "local".to_string(),
                 host: "example.com".to_string(),
                 protocol: "http",
                 port: 80,
@@ -82,22 +138,32 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
         .iter()
         .cloned()
         .collect::<Vec<_>>();
-    copied.sort_by(|a, b| (&a.host, a.protocol, a.port).cmp(&(&b.host, b.protocol, b.port)));
+    copied.sort_by(|a, b| {
+        (&a.environment_id, &a.host, a.protocol, a.port).cmp(&(
+            &b.environment_id,
+            &b.host,
+            b.protocol,
+            b.port,
+        ))
+    });
 
     assert_eq!(
         copied,
         vec![
             HostApprovalKey {
+                environment_id: "local".to_string(),
                 host: "example.com".to_string(),
                 protocol: "http",
                 port: 80,
             },
             HostApprovalKey {
+                environment_id: "local".to_string(),
                 host: "example.com".to_string(),
                 protocol: "https",
                 port: 443,
             },
             HostApprovalKey {
+                environment_id: "local".to_string(),
                 host: "example.com".to_string(),
                 protocol: "https",
                 port: 8443,
@@ -112,6 +178,7 @@ async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
     {
         let mut approved_hosts = source.session_approved_hosts.lock().await;
         approved_hosts.insert(HostApprovalKey {
+            environment_id: "local".to_string(),
             host: "source.example.com".to_string(),
             protocol: "https",
             port: 443,
@@ -122,6 +189,7 @@ async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
     {
         let mut approved_hosts = target.session_approved_hosts.lock().await;
         approved_hosts.insert(HostApprovalKey {
+            environment_id: "local".to_string(),
             host: "stale.example.com".to_string(),
             protocol: "https",
             port: 8443,
@@ -141,6 +209,7 @@ async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
     assert_eq!(
         copied,
         vec![HostApprovalKey {
+            environment_id: "local".to_string(),
             host: "source.example.com".to_string(),
             protocol: "https",
             port: 443,
@@ -237,6 +306,7 @@ async fn register_call_with_default_shell_trigger(
                 tty: None,
             },
             "curl https://example.com".to_string(),
+            "local".to_string(),
             cancellation_token.clone(),
         )
         .await;
@@ -263,6 +333,7 @@ async fn active_call_preserves_triggering_command_context() {
             "turn-1".to_string(),
             expected.clone(),
             "curl https://example.com".to_string(),
+            "remote".to_string(),
             CancellationToken::new(),
         )
         .await;
@@ -274,6 +345,21 @@ async fn active_call_preserves_triggering_command_context() {
 
     assert_eq!(&call.trigger, &expected);
     assert_eq!(call.command, "curl https://example.com");
+    assert_eq!(call.environment_id, "remote");
+}
+
+#[tokio::test]
+async fn multiple_active_calls_are_ambiguous_even_in_the_same_environment() {
+    let service = NetworkApprovalService::default();
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
+    register_call_with_default_shell_trigger(&service, "registration-2").await;
+
+    match service.resolve_active_call_attribution().await {
+        ActiveNetworkApprovalAttribution::Ambiguous => {}
+        ActiveNetworkApprovalAttribution::None | ActiveNetworkApprovalAttribution::Single(_) => {
+            panic!("multiple active calls should be ambiguous")
+        }
+    }
 }
 
 #[tokio::test]

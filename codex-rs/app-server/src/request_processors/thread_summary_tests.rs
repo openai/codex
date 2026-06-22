@@ -13,6 +13,7 @@ fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
 
     let head = vec![
         json!({
+            "session_id": conversation_id.to_string(),
             "id": conversation_id.to_string(),
             "timestamp": timestamp,
             "cwd": "/",
