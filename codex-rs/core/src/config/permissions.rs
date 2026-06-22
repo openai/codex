@@ -346,7 +346,6 @@ pub(crate) fn network_proxy_config_for_profile_selection(
 pub(crate) fn compile_permission_profile(
     permissions: &PermissionsToml,
     profile_name: &str,
-    policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
     let profile = resolve_permission_profile(permissions, profile_name)?;
@@ -383,7 +382,6 @@ pub(crate) fn compile_permission_profile(
                     .extend(compile_filesystem_permission(
                         path,
                         permission,
-                        policy_cwd,
                         startup_warnings,
                     )?);
             }
@@ -412,7 +410,6 @@ pub(crate) fn compile_permission_profile_selection(
     permissions: Option<&PermissionsToml>,
     profile_name: &str,
     workspace_write: Option<&SandboxWorkspaceWrite>,
-    policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
     if let Some(permission_profile) = builtin_permission_profile(profile_name, workspace_write) {
@@ -426,7 +423,7 @@ pub(crate) fn compile_permission_profile_selection(
             "default_permissions requires a `[permissions]` table",
         )
     })?;
-    compile_permission_profile(permissions, profile_name, policy_cwd, startup_warnings)
+    compile_permission_profile(permissions, profile_name, startup_warnings)
 }
 
 pub(crate) fn compile_permission_profile_workspace_roots(
@@ -524,7 +521,6 @@ fn compile_network_sandbox_policy(
 fn compile_filesystem_permission(
     path: &str,
     permission: &FilesystemPermissionToml,
-    policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<Vec<FileSystemSandboxEntry>> {
     let mut entries = Vec::new();
@@ -548,9 +544,7 @@ fn compile_filesystem_permission(
                     // exact-path parser so existing path semantics stay intact.
                     let entry = FileSystemSandboxEntry {
                         path: FileSystemPath::GlobPattern {
-                            pattern: compile_scoped_filesystem_pattern(
-                                path, subpath, *access, policy_cwd,
-                            )?,
+                            pattern: compile_scoped_filesystem_pattern(path, subpath, *access)?,
                         },
                         access: *access,
                     };
@@ -643,7 +637,6 @@ fn compile_scoped_filesystem_pattern(
     path: &str,
     subpath: &str,
     access: FileSystemAccessMode,
-    _policy_cwd: &Path,
 ) -> io::Result<String> {
     // Pattern entries currently mean deny-read only. Supporting broader access
     // modes here would imply glob-based read/write allow semantics that the
