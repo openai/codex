@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::FileChangeItem;
@@ -3708,7 +3709,11 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
             resume.multi_agent_mode,
             fork.multi_agent_mode,
         ),
-        (None, None, None)
+        (
+            MultiAgentMode::ExplicitRequestOnly,
+            MultiAgentMode::ExplicitRequestOnly,
+            MultiAgentMode::ExplicitRequestOnly,
+        )
     );
 
     let foreign_source: LegacyAppPathString =

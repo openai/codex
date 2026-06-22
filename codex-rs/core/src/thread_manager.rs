@@ -976,7 +976,7 @@ impl ThreadManager {
         };
         let initial_multi_agent_mode = match source_thread_id {
             Some(thread_id) => match self.get_thread(thread_id).await {
-                Ok(thread) => thread.config_snapshot().await.multi_agent_mode,
+                Ok(thread) => Some(thread.config_snapshot().await.multi_agent_mode),
                 Err(_) => history.get_latest_effective_multi_agent_mode(),
             },
             None => history.get_latest_effective_multi_agent_mode(),

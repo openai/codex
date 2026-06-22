@@ -52,12 +52,8 @@ async fn handle_spawn_agent(
     let fork_mode = args.fork_mode()?;
     let multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(
         turn.multi_agent_version,
-        &turn.config.multi_agent_v2,
         &turn.session_source,
         turn.multi_agent_mode,
-        turn.config
-            .features
-            .enabled(codex_features::Feature::MultiAgentMode),
     );
     let role_name = args
         .agent_type

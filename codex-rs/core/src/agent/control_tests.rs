@@ -850,10 +850,7 @@ async fn spawn_thread_subagent_uses_supplied_initial_multi_agent_mode_without_hi
         .config_snapshot()
         .await;
 
-    assert_eq!(
-        child_snapshot.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
-    );
+    assert_eq!(child_snapshot.multi_agent_mode, MultiAgentMode::Proactive);
 }
 
 #[tokio::test]
@@ -987,7 +984,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("child thread should be registered");
     assert_eq!(
         child_thread.config_snapshot().await.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
+        MultiAgentMode::Proactive
     );
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
@@ -1025,18 +1022,13 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         "full-history forked child should preserve the parent diff baseline"
     );
 
-    let mut disabled_hint_child_config = harness.config.clone();
-    let _ = disabled_hint_child_config
-        .features
-        .enable(Feature::MultiAgentV2);
-    disabled_hint_child_config.multi_agent_v2.usage_hint_enabled = false;
-    disabled_hint_child_config
-        .multi_agent_v2
-        .subagent_usage_hint_text = Some("Disabled child subagent guidance.".to_string());
-    let disabled_hint_child_thread_id = harness
+    let mut no_hint_child_config = harness.config.clone();
+    let _ = no_hint_child_config.features.enable(Feature::MultiAgentV2);
+    no_hint_child_config.multi_agent_v2.subagent_usage_hint_text = None;
+    let no_hint_child_thread_id = harness
         .control
         .spawn_agent_with_metadata(
-            disabled_hint_child_config,
+            no_hint_child_config,
             text_input("child task without hints"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -1052,24 +1044,17 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             },
         )
         .await
-        .expect("forked spawn should honor disabled usage hints")
+        .expect("forked spawn should honor an empty subagent usage hint")
         .thread_id;
-    let disabled_hint_child_thread = harness
+    let no_hint_child_thread = harness
         .manager
-        .get_thread(disabled_hint_child_thread_id)
+        .get_thread(no_hint_child_thread_id)
         .await
-        .expect("disabled-hint child thread should be registered");
-    let disabled_hint_history = disabled_hint_child_thread
-        .codex
-        .session
-        .clone_history()
-        .await;
+        .expect("no-hint child thread should be registered");
+    let no_hint_history = no_hint_child_thread.codex.session.clone_history().await;
     assert!(
-        !history_contains_text(
-            disabled_hint_history.raw_items(),
-            "Disabled child subagent guidance.",
-        ),
-        "full-history forked child should not add subagent guidance when usage hints are disabled"
+        !history_contains_text(no_hint_history.raw_items(), "Child subagent guidance."),
+        "full-history forked child should not add empty subagent guidance"
     );
 
     let expected = (
@@ -1099,9 +1084,9 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("child shutdown should submit");
     let _ = harness
         .control
-        .shutdown_live_agent(disabled_hint_child_thread_id)
+        .shutdown_live_agent(no_hint_child_thread_id)
         .await
-        .expect("disabled-hint child shutdown should submit");
+        .expect("no-hint child shutdown should submit");
     let _ = parent_thread
         .submit(Op::Shutdown {})
         .await
@@ -1406,7 +1391,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .expect("child thread should be registered");
     assert_eq!(
         child_thread.config_snapshot().await.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
+        MultiAgentMode::Proactive
     );
     let history = child_thread.codex.session.clone_history().await;
 
@@ -2422,10 +2407,7 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
     assert_eq!(resumed_agent_path, Some(agent_path));
     assert_eq!(resumed_nickname, Some(original_nickname));
     assert_eq!(resumed_role, Some("explorer".to_string()));
-    assert_eq!(
-        resumed_snapshot.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
-    );
+    assert_eq!(resumed_snapshot.multi_agent_mode, MultiAgentMode::Proactive);
 
     let _ = harness
         .control

@@ -117,10 +117,7 @@ async fn thread_settings_update_multi_agent_mode_applies_to_future_turns() -> Re
     write_mock_responses_config_toml(
         codex_home.path(),
         &server.uri(),
-        &BTreeMap::from([
-            (Feature::MultiAgentV2, true),
-            (Feature::MultiAgentMode, true),
-        ]),
+        &BTreeMap::from([(Feature::MultiAgentV2, true)]),
         /*auto_compact_limit*/ 200_000,
         /*requires_openai_auth*/ None,
         "mock_provider",
@@ -158,7 +155,7 @@ async fn thread_settings_update_multi_agent_mode_applies_to_future_turns() -> Re
     assert_eq!(updated.thread_id, thread.id);
     assert_eq!(
         updated.thread_settings.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
+        MultiAgentMode::Proactive
     );
 
     start_text_turn(&mut mcp, thread.id).await?;
