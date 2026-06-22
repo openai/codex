@@ -466,6 +466,24 @@ fn converts_absolute_api_paths_using_the_inferred_convention() {
 }
 
 #[test]
+fn converts_raw_file_uris_to_inferred_path_uris() {
+    for raw_uri in [
+        "file:///workspace/file.rs",
+        "file:///C:/workspace/file.rs",
+        "file://server/share/file.rs",
+    ] {
+        let path = serde_json::from_value::<LegacyAppPathString>(serde_json::json!(raw_uri))
+            .expect("raw file URI should deserialize as API text");
+
+        assert_eq!(
+            path.to_inferred_path_uri(),
+            Some(PathUri::parse(raw_uri).expect("raw file URI should parse")),
+            "round-tripping {raw_uri:?}",
+        );
+    }
+}
+
+#[test]
 fn converts_native_api_path_to_inferred_absolute_path() {
     #[cfg(windows)]
     let raw_path = r"C:\workspace\file.rs";

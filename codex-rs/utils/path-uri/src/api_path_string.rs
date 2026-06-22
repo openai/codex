@@ -81,9 +81,11 @@ impl LegacyAppPathString {
         })
     }
 
-    /// Parses this API string as an absolute path using the convention inferred from its spelling.
+    /// Parses this API string as a file URI or as an absolute path using its inferred convention.
     pub fn to_inferred_path_uri(&self) -> Option<PathUri> {
-        PathUri::try_from(self.clone()).ok()
+        PathUri::parse(&self.0)
+            .ok()
+            .or_else(|| PathUri::try_from(self.clone()).ok())
     }
 
     /// Parses this API string as a host-native absolute path.

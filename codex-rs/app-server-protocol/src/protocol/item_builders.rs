@@ -35,8 +35,8 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_shell_command::parse_command::shlex_join;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathConvention;
-use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::warn;
@@ -90,11 +90,11 @@ pub fn build_command_execution_approval_request_item(
 }
 
 pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> ThreadItem {
-    let command_actions = command_actions_for_path_uri(&payload.parsed_cmd, &payload.cwd);
+    let command_actions = command_actions_for_legacy_cwd(&payload.parsed_cmd, &payload.cwd);
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.clone().into(),
+        cwd: payload.cwd.clone(),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: CommandExecutionStatus::InProgress,
@@ -112,12 +112,12 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
         Some(payload.aggregated_output.clone())
     };
     let duration_ms = i64::try_from(payload.duration.as_millis()).unwrap_or(i64::MAX);
-    let command_actions = command_actions_for_path_uri(&payload.parsed_cmd, &payload.cwd);
+    let command_actions = command_actions_for_legacy_cwd(&payload.parsed_cmd, &payload.cwd);
 
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.clone().into(),
+        cwd: payload.cwd.clone(),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: (&payload.status).into(),
@@ -128,14 +128,19 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     }
 }
 
-fn command_actions_for_path_uri(parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> Vec<CommandAction> {
+fn command_actions_for_legacy_cwd(
+    parsed_cmd: &[ParsedCommand],
+    cwd: &LegacyAppPathString,
+) -> Vec<CommandAction> {
     // TODO(anp): Carry PathUri into CommandAction so foreign Read actions retain resolved paths.
     // Until then, omit those actions rather than project a foreign cwd onto the host.
-    let native_cwd = if cwd.infer_path_convention() == Some(PathConvention::native()) {
-        cwd.to_abs_path().ok()
-    } else {
-        None
-    };
+    let native_cwd = cwd.to_inferred_path_uri().and_then(|cwd| {
+        if cwd.infer_path_convention() == Some(PathConvention::native()) {
+            cwd.to_abs_path().ok()
+        } else {
+            None
+        }
+    });
 
     parsed_cmd
         .iter()

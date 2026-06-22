@@ -147,7 +147,7 @@ impl Serialize for ToolRuntimePayload<'_> {
 /// Rollout-trace representation of an exec begin event.
 ///
 /// Rollout traces share the rollout compatibility requirement that paths remain path-flavored
-/// strings on disk, even though live events carry `PathUri` internally.
+/// strings on disk.
 #[derive(Serialize)]
 struct ExecCommandBeginTracePayload<'a> {
     call_id: &'a str,
@@ -156,7 +156,7 @@ struct ExecCommandBeginTracePayload<'a> {
     turn_id: &'a str,
     started_at_ms: i64,
     command: &'a [String],
-    cwd: String,
+    cwd: &'a str,
     parsed_cmd: &'a [codex_protocol::parse_command::ParsedCommand],
     source: ExecCommandSource,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,7 +182,7 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
             turn_id,
             started_at_ms: *started_at_ms,
             command,
-            cwd: cwd.inferred_native_path_string(),
+            cwd: cwd.as_str(),
             parsed_cmd,
             source: *source,
             interaction_input: interaction_input.as_deref(),
@@ -192,8 +192,7 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
 
 /// Rollout-trace representation of an exec end event.
 ///
-/// Like [`ExecCommandBeginTracePayload`], this renders `cwd` as an inferred native path to preserve
-/// the on-disk format rather than serializing the internal `PathUri`.
+/// Like [`ExecCommandBeginTracePayload`], this preserves the native-path `cwd` spelling.
 #[derive(Serialize)]
 struct ExecCommandEndTracePayload<'a> {
     call_id: &'a str,
@@ -202,7 +201,7 @@ struct ExecCommandEndTracePayload<'a> {
     turn_id: &'a str,
     completed_at_ms: i64,
     command: &'a [String],
-    cwd: String,
+    cwd: &'a str,
     parsed_cmd: &'a [codex_protocol::parse_command::ParsedCommand],
     source: ExecCommandSource,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -242,7 +241,7 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
             turn_id,
             completed_at_ms: *completed_at_ms,
             command,
-            cwd: cwd.inferred_native_path_string(),
+            cwd: cwd.as_str(),
             parsed_cmd,
             source: *source,
             interaction_input: interaction_input.as_deref(),
