@@ -13,25 +13,13 @@ use crate::GenerateAttestationFuture;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
-use base64::Engine;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_app_server_protocol::AuthMode;
-use codex_config::types::AuthCredentialsStoreMode;
-use codex_login::AuthDotJson;
 use codex_login::AuthFingerprint;
-use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::ExternalAuth;
-use codex_login::ExternalAuthFuture;
-use codex_login::ExternalAuthRefreshContext;
-use codex_login::ExternalAuthTokens;
-use codex_login::TokenData;
-use codex_login::load_auth_dot_json;
-use codex_login::save_auth;
-use codex_login::token_data::IdTokenInfo;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -167,45 +155,6 @@ fn test_session_telemetry() -> SessionTelemetry {
     )
 }
 
-fn test_auth_dot_json() -> AuthDotJson {
-    test_auth_dot_json_with_account("account_id")
-}
-
-fn test_auth_dot_json_with_account(account_id: &str) -> AuthDotJson {
-    test_auth_dot_json_with_account_and_tokens(account_id, "Access Token", "test")
-}
-
-fn test_auth_dot_json_with_account_and_tokens(
-    account_id: &str,
-    access_token: &str,
-    refresh_token: &str,
-) -> AuthDotJson {
-    AuthDotJson {
-        auth_mode: Some(AuthMode::Chatgpt),
-        openai_api_key: None,
-        tokens: Some(TokenData {
-            id_token: IdTokenInfo {
-                chatgpt_account_id: Some(account_id.to_string()),
-                raw_jwt: fake_jwt_with_account(account_id),
-                ..Default::default()
-            },
-            access_token: access_token.to_string(),
-            refresh_token: refresh_token.to_string(),
-            account_id: Some(account_id.to_string()),
-        }),
-        last_refresh: Some(chrono::Utc::now()),
-        agent_identity: None,
-        personal_access_token: None,
-        bedrock_api_key: None,
-    }
-}
-
-fn test_chatgpt_auth_tokens_dot_json(account_id: &str, access_token: &str) -> AuthDotJson {
-    let mut auth = test_auth_dot_json_with_account_and_tokens(account_id, access_token, "");
-    auth.auth_mode = Some(AuthMode::ChatgptAuthTokens);
-    auth
-}
-
 fn unauthorized_transport(body: &str) -> TransportError {
     unauthorized_transport_with_headers(body, /*headers*/ None)
 }
@@ -219,47 +168,6 @@ fn unauthorized_transport_with_headers(
         url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
         headers,
         body: Some(body.to_string()),
-    }
-}
-
-fn fake_jwt_with_account(account_id: &str) -> String {
-    let header = json!({
-        "alg": "none",
-        "typ": "JWT",
-    });
-    let payload = json!({
-        "email": "user@example.com",
-        "https://api.openai.com/auth": {
-            "chatgpt_user_id": "user-12345",
-            "user_id": "user-12345",
-            "chatgpt_account_id": account_id,
-        },
-    });
-    let b64 = |value: serde_json::Value| {
-        base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&value).expect("serialize jwt segment"))
-    };
-    format!("{}.{}.{}", b64(header), b64(payload), b64(json!("sig")))
-}
-
-struct TestExternalAuth;
-
-impl ExternalAuth for TestExternalAuth {
-    fn auth_mode(&self) -> AuthMode {
-        AuthMode::ChatgptAuthTokens
-    }
-
-    fn refresh(
-        &self,
-        _context: ExternalAuthRefreshContext,
-    ) -> ExternalAuthFuture<'_, ExternalAuthTokens> {
-        Box::pin(async {
-            Ok(ExternalAuthTokens::chatgpt(
-                "access-token",
-                "account_id",
-                /*chatgpt_plan_type*/ None,
-            ))
-        })
     }
 }
 
@@ -681,10 +589,11 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
 }
 
 #[tokio::test]
-async fn workspace_restricted_401_preserves_external_auth_bridge() {
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    auth_manager.set_external_auth(Arc::new(TestExternalAuth));
+async fn workspace_restricted_401_forces_chatgpt_logout_without_retry() {
+    let rejected_auth_snapshot = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let rejected_auth_fingerprint = AuthFingerprint::from_auth(&rejected_auth_snapshot)
+        .expect("ChatGPT auth can be fingerprinted");
+    let auth_manager = AuthManager::from_auth_for_testing(rejected_auth_snapshot);
     let mut recovery = Some(auth_manager.unauthorized_recovery());
 
     let err = super::handle_unauthorized(
@@ -692,97 +601,7 @@ async fn workspace_restricted_401_preserves_external_auth_bridge() {
         &mut recovery,
         &test_session_telemetry(),
         &test_model_provider(),
-        /*rejected_auth*/ None,
-    )
-    .await
-    .expect_err("matching 401 should force reauth without retry");
-
-    assert!(matches!(err, CodexErr::RefreshTokenFailed(_)));
-    assert!(auth_manager.auth_cached().is_none());
-    assert!(auth_manager.has_external_auth());
-}
-
-#[tokio::test]
-async fn workspace_restricted_401_preserves_newer_same_account_auth() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    save_auth(
-        codex_home.path(),
-        &test_auth_dot_json_with_account_and_tokens("account_id", "new-access-token", "new-test"),
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )?;
-    let auth_manager = AuthManager::from_auth_for_testing_with_home(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-        codex_home.path().to_path_buf(),
-    );
-    let mut recovery = Some(auth_manager.unauthorized_recovery());
-
-    let err = super::handle_unauthorized(
-        unauthorized_transport(r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#),
-        &mut recovery,
-        &test_session_telemetry(),
-        &test_model_provider(),
-        /*rejected_auth*/ None,
-    )
-    .await
-    .expect_err("matching 401 should force reauth without retry");
-
-    assert!(matches!(err, CodexErr::RefreshTokenFailed(_)));
-    let persisted_auth = load_auth_dot_json(
-        codex_home.path(),
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )?
-    .expect("newer auth should not be removed");
-    assert_eq!(
-        persisted_auth
-            .tokens
-            .map(|tokens| tokens.access_token)
-            .as_deref(),
-        Some("new-access-token")
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn workspace_restricted_401_uses_request_auth_for_forced_logout() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    save_auth(
-        codex_home.path(),
-        &test_auth_dot_json_with_account_and_tokens(
-            "account_id",
-            "request-access-token",
-            "request-refresh-token",
-        ),
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )?;
-    let request_auth_manager = AuthManager::shared(
-        codex_home.path().to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        AuthCredentialsStoreMode::File,
-        /*chatgpt_base_url*/ None,
-        AuthKeyringBackendKind::default(),
-    )
-    .await;
-    let request_auth = request_auth_manager
-        .auth_cached()
-        .expect("request auth should load");
-    let request_auth_fingerprint =
-        AuthFingerprint::from_auth(&request_auth).expect("request auth can be fingerprinted");
-    let auth_manager = AuthManager::from_auth_for_testing_with_home(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-        codex_home.path().to_path_buf(),
-    );
-    let mut recovery = Some(auth_manager.unauthorized_recovery());
-
-    let err = super::handle_unauthorized(
-        unauthorized_transport(r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#),
-        &mut recovery,
-        &test_session_telemetry(),
-        &test_model_provider(),
-        Some(&request_auth_fingerprint),
+        Some(&rejected_auth_fingerprint),
     )
     .await
     .expect_err("matching 401 should force reauth without retry");
@@ -796,94 +615,16 @@ async fn workspace_restricted_401_uses_request_auth_for_forced_logout() -> anyho
         }
         other => panic!("expected RefreshTokenFailed, got {other:?}"),
     }
-    assert!(
-        load_auth_dot_json(
-            codex_home.path(),
-            AuthCredentialsStoreMode::File,
-            AuthKeyringBackendKind::default(),
-        )?
-        .is_none()
-    );
-    assert!(!recovery.as_ref().expect("recovery").has_next());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn workspace_restricted_401_clears_stale_persistent_external_auth() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    save_auth(
-        codex_home.path(),
-        &test_auth_dot_json_with_account("old_persistent_account"),
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )?;
-    save_auth(
-        codex_home.path(),
-        &test_chatgpt_auth_tokens_dot_json("account_id", "external-access-token"),
-        AuthCredentialsStoreMode::Ephemeral,
-        AuthKeyringBackendKind::default(),
-    )?;
-    let auth_manager = AuthManager::shared(
-        codex_home.path().to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        AuthCredentialsStoreMode::File,
-        /*chatgpt_base_url*/ None,
-        AuthKeyringBackendKind::default(),
-    )
-    .await;
-    assert!(
-        auth_manager
-            .auth_cached()
-            .is_some_and(|auth| { matches!(auth.api_auth_mode(), AuthMode::ChatgptAuthTokens) })
-    );
-    let mut recovery = Some(auth_manager.unauthorized_recovery());
-
-    let err = super::handle_unauthorized(
-        unauthorized_transport(r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#),
-        &mut recovery,
-        &test_session_telemetry(),
-        &test_model_provider(),
-        /*rejected_auth*/ None,
-    )
-    .await
-    .expect_err("matching 401 should force reauth without retry");
-
-    assert!(matches!(err, CodexErr::RefreshTokenFailed(_)));
     assert!(auth_manager.auth_cached().is_none());
-    assert!(
-        load_auth_dot_json(
-            codex_home.path(),
-            AuthCredentialsStoreMode::Ephemeral,
-            AuthKeyringBackendKind::default(),
-        )?
-        .is_none()
-    );
-    assert!(
-        load_auth_dot_json(
-            codex_home.path(),
-            AuthCredentialsStoreMode::File,
-            AuthKeyringBackendKind::default(),
-        )?
-        .is_none()
-    );
-
-    Ok(())
+    assert!(!recovery.as_ref().expect("recovery").has_next());
 }
 
 #[tokio::test]
-async fn workspace_restricted_stream_401_forces_chatgpt_logout() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    save_auth(
-        codex_home.path(),
-        &test_auth_dot_json(),
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )?;
-    let auth_manager = AuthManager::from_auth_for_testing_with_home(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-        codex_home.path().to_path_buf(),
-    );
+async fn workspace_restricted_stream_401_forces_chatgpt_logout() {
+    let rejected_auth_snapshot = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let rejected_auth_fingerprint = AuthFingerprint::from_auth(&rejected_auth_snapshot)
+        .expect("ChatGPT auth can be fingerprinted");
+    let auth_manager = AuthManager::from_auth_for_testing(rejected_auth_snapshot);
     let api_stream = futures::stream::iter([Err(ApiError::Transport(unauthorized_transport(
         r#"{"type":"error","status":401,"error":{"code":"chatgpt_ip_workspace_restricted"}}"#,
     )))]);
@@ -895,9 +636,7 @@ async fn workspace_restricted_stream_401_forces_chatgpt_logout() -> anyhow::Resu
         test_model_provider(),
         Some(super::StreamAuthRecovery {
             auth_recovery: Some(auth_manager.unauthorized_recovery()),
-            rejected_auth: AuthFingerprint::from_auth(
-                &CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-            ),
+            rejected_auth_fingerprint: Some(rejected_auth_fingerprint),
         }),
     );
 
@@ -909,42 +648,26 @@ async fn workspace_restricted_stream_401_forces_chatgpt_logout() -> anyhow::Resu
 
     assert!(matches!(err, CodexErr::RefreshTokenFailed(_)));
     assert!(auth_manager.auth_cached().is_none());
-    assert!(
-        load_auth_dot_json(
-            codex_home.path(),
-            AuthCredentialsStoreMode::File,
-            AuthKeyringBackendKind::default(),
-        )?
-        .is_none()
-    );
-
-    Ok(())
 }
 
 #[tokio::test]
 async fn workspace_restricted_401_ignores_non_matching_cases() {
-    for body in [
-        r#"{"error":{"code":"token_expired"}}"#,
-        "not json",
-        r#"{"error":{"message":"missing code"}}"#,
-    ] {
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-        let mut recovery = Some(auth_manager.unauthorized_recovery());
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut recovery = Some(auth_manager.unauthorized_recovery());
 
-        let err = super::handle_unauthorized(
-            unauthorized_transport(body),
-            &mut recovery,
-            &test_session_telemetry(),
-            &test_model_provider(),
-            /*rejected_auth*/ None,
-        )
-        .await
-        .expect_err("non-matching 401 should fall back to normal recovery");
+    let err = super::handle_unauthorized(
+        unauthorized_transport(r#"{"error":{"code":"token_expired"}}"#),
+        &mut recovery,
+        &test_session_telemetry(),
+        &test_model_provider(),
+        /*rejected_auth_fingerprint*/ None,
+    )
+    .await
+    .expect_err("generic 401 should fall back to normal recovery");
 
-        assert!(matches!(err, CodexErr::RefreshTokenFailed(_)));
-        assert!(auth_manager.auth_cached().is_some());
-    }
+    assert!(matches!(err, CodexErr::RefreshTokenFailed(_)));
+    assert!(auth_manager.auth_cached().is_some());
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
     let mut recovery = Some(auth_manager.unauthorized_recovery());
@@ -953,7 +676,7 @@ async fn workspace_restricted_401_ignores_non_matching_cases() {
         &mut recovery,
         &test_session_telemetry(),
         &test_model_provider(),
-        /*rejected_auth*/ None,
+        /*rejected_auth_fingerprint*/ None,
     )
     .await
     .expect_err("api key auth should not use ChatGPT forced logout");
@@ -968,14 +691,23 @@ async fn workspace_restricted_401_ignores_non_matching_cases() {
 
 #[test]
 fn workspace_restricted_error_code_parser_accepts_body_and_header_shapes() {
-    for body in [
-        r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#,
-        r#"{"code":"chatgpt_ip_workspace_restricted"}"#,
+    for (body, expected) in [
+        (
+            r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#,
+            true,
+        ),
+        (r#"{"code":"chatgpt_ip_workspace_restricted"}"#, true),
+        (r#"{"error":{"code":"token_expired"}}"#, false),
+        ("not json", false),
+        (r#"{"error":{"message":"missing code"}}"#, false),
     ] {
-        assert!(super::is_chatgpt_ip_workspace_restricted_unauthorized(
-            &unauthorized_transport(body),
-            &Default::default()
-        ));
+        assert_eq!(
+            super::is_chatgpt_ip_workspace_restricted_unauthorized(
+                &unauthorized_transport(body),
+                &Default::default()
+            ),
+            expected
+        );
     }
 
     let mut headers = http::HeaderMap::new();

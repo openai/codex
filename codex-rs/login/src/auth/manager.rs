@@ -1324,17 +1324,17 @@ fn logout_all_stores(
     Ok(removed_ephemeral || removed_managed)
 }
 
-fn logout_store_matching_rejected_auth(
+fn logout_store_matching_rejected_auth_fingerprint(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
-    rejected_auth: &AuthFingerprint,
+    rejected_auth_fingerprint: &AuthFingerprint,
 ) -> std::io::Result<bool> {
     logout_store_if(
         codex_home,
         auth_credentials_store_mode,
         keyring_backend_kind,
-        |auth_dot_json| rejected_auth.matches_auth_dot_json(auth_dot_json),
+        |auth_dot_json| rejected_auth_fingerprint.matches_auth_dot_json(auth_dot_json),
     )
 }
 
@@ -1848,7 +1848,7 @@ pub struct UnauthorizedRecovery {
     manager: Arc<AuthManager>,
     step: UnauthorizedRecoveryStep,
     expected_account_id: Option<String>,
-    rejected_auth: Option<CodexAuth>,
+    rejected_auth_snapshot: Option<CodexAuth>,
     mode: UnauthorizedRecoveryMode,
 }
 
@@ -1884,7 +1884,7 @@ impl UnauthorizedRecovery {
             manager,
             step,
             expected_account_id,
-            rejected_auth: cached_auth,
+            rejected_auth_snapshot: cached_auth,
             mode,
         }
     }
@@ -1970,16 +1970,17 @@ impl UnauthorizedRecovery {
 
     pub async fn force_logout_due_to_server_auth_rejection(
         &mut self,
-        rejected_auth: Option<&AuthFingerprint>,
+        rejected_auth_fingerprint: Option<&AuthFingerprint>,
     ) -> std::io::Result<bool> {
         self.step = UnauthorizedRecoveryStep::Done;
-        let fallback_rejected_auth = self
-            .rejected_auth
+        let fallback_rejected_auth_fingerprint = self
+            .rejected_auth_snapshot
             .as_ref()
             .and_then(AuthFingerprint::from_auth);
-        let rejected_auth = rejected_auth.or(fallback_rejected_auth.as_ref());
+        let rejected_auth_fingerprint =
+            rejected_auth_fingerprint.or(fallback_rejected_auth_fingerprint.as_ref());
         self.manager
-            .force_logout_due_to_server_auth_rejection(rejected_auth)
+            .force_logout_due_to_server_auth_rejection(rejected_auth_fingerprint)
             .await
     }
 
@@ -2742,13 +2743,14 @@ impl AuthManager {
 
     pub async fn force_logout_due_to_server_auth_rejection(
         &self,
-        rejected_auth: Option<&AuthFingerprint>,
+        rejected_auth_fingerprint: Option<&AuthFingerprint>,
     ) -> std::io::Result<bool> {
         if !self.current_auth_uses_codex_backend() {
             return Ok(false);
         }
 
-        let removal_result = self.logout_stores_matching_rejected_auth(rejected_auth);
+        let removal_result =
+            self.logout_stores_matching_rejected_auth_fingerprint(rejected_auth_fingerprint);
         let cache_changed = self.set_cached_auth(
             self.load_auth_from_storage_without_codex_access_token_env()
                 .await,
@@ -2757,11 +2759,11 @@ impl AuthManager {
         Ok(removed || cache_changed)
     }
 
-    fn logout_stores_matching_rejected_auth(
+    fn logout_stores_matching_rejected_auth_fingerprint(
         &self,
-        rejected_auth: Option<&AuthFingerprint>,
+        rejected_auth_fingerprint: Option<&AuthFingerprint>,
     ) -> std::io::Result<bool> {
-        let Some(rejected_auth) = rejected_auth else {
+        let Some(rejected_auth_fingerprint) = rejected_auth_fingerprint else {
             return logout_all_stores(
                 &self.codex_home,
                 self.auth_credentials_store_mode,
@@ -2769,12 +2771,12 @@ impl AuthManager {
             );
         };
 
-        if rejected_auth.is_external_chatgpt_tokens() {
-            let removed_ephemeral = logout_store_matching_rejected_auth(
+        if rejected_auth_fingerprint.is_external_chatgpt_tokens() {
+            let removed_ephemeral = logout_store_matching_rejected_auth_fingerprint(
                 &self.codex_home,
                 AuthCredentialsStoreMode::Ephemeral,
                 AuthKeyringBackendKind::default(),
-                rejected_auth,
+                rejected_auth_fingerprint,
             )?;
             if self.auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
                 return Ok(removed_ephemeral);
@@ -2800,35 +2802,35 @@ impl AuthManager {
         }
 
         if self.auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
-            return logout_store_matching_rejected_auth(
+            return logout_store_matching_rejected_auth_fingerprint(
                 &self.codex_home,
                 AuthCredentialsStoreMode::Ephemeral,
                 AuthKeyringBackendKind::default(),
-                rejected_auth,
+                rejected_auth_fingerprint,
             );
         }
 
-        let removed_ephemeral = logout_store_matching_rejected_auth(
+        let removed_ephemeral = logout_store_matching_rejected_auth_fingerprint(
             &self.codex_home,
             AuthCredentialsStoreMode::Ephemeral,
             AuthKeyringBackendKind::default(),
-            rejected_auth,
+            rejected_auth_fingerprint,
         )?;
         let removed_file = if self.auth_credentials_store_mode == AuthCredentialsStoreMode::File {
             false
         } else {
-            logout_store_matching_rejected_auth(
+            logout_store_matching_rejected_auth_fingerprint(
                 &self.codex_home,
                 AuthCredentialsStoreMode::File,
                 AuthKeyringBackendKind::default(),
-                rejected_auth,
+                rejected_auth_fingerprint,
             )?
         };
-        let removed_managed = logout_store_matching_rejected_auth(
+        let removed_managed = logout_store_matching_rejected_auth_fingerprint(
             &self.codex_home,
             self.auth_credentials_store_mode,
             self.keyring_backend_kind,
-            rejected_auth,
+            rejected_auth_fingerprint,
         )?;
         Ok(removed_ephemeral || removed_file || removed_managed)
     }

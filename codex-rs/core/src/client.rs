@@ -276,7 +276,7 @@ struct LastResponse {
 #[derive(Debug, Default)]
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
-    connection_auth: Option<AuthFingerprint>,
+    connection_auth_fingerprint: Option<AuthFingerprint>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
@@ -1041,7 +1041,7 @@ impl ModelClientSession {
 
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
-        self.websocket_session.connection_auth = None;
+        self.websocket_session.connection_auth_fingerprint = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
         self.websocket_session.last_response_from_untraced_warmup = false;
@@ -1194,7 +1194,7 @@ impl ModelClientSession {
             client_setup.api_auth.as_ref(),
             PendingUnauthorizedRetry::default(),
         );
-        let connection_auth = client_setup
+        let connection_auth_fingerprint = client_setup
             .auth
             .as_ref()
             .and_then(AuthFingerprint::from_auth);
@@ -1210,7 +1210,7 @@ impl ModelClientSession {
             )
             .await?;
         self.websocket_session.connection = Some(connection);
-        self.websocket_session.connection_auth = connection_auth;
+        self.websocket_session.connection_auth_fingerprint = connection_auth_fingerprint;
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
         Ok(())
@@ -1250,7 +1250,7 @@ impl ModelClientSession {
             self.websocket_session.last_request = None;
             self.websocket_session.last_response_rx = None;
             self.websocket_session.last_response_from_untraced_warmup = false;
-            self.websocket_session.connection_auth = None;
+            self.websocket_session.connection_auth_fingerprint = None;
             let new_conn = match self
                 .client
                 .connect_websocket(
@@ -1272,7 +1272,7 @@ impl ModelClientSession {
                 }
             };
             self.websocket_session.connection = Some(new_conn);
-            self.websocket_session.connection_auth = auth;
+            self.websocket_session.connection_auth_fingerprint = auth;
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ false);
         } else {
@@ -1389,7 +1389,7 @@ impl ModelClientSession {
                         Arc::clone(&self.client.state.provider),
                         Some(StreamAuthRecovery {
                             auth_recovery,
-                            rejected_auth: client_setup
+                            rejected_auth_fingerprint: client_setup
                                 .auth
                                 .as_ref()
                                 .and_then(AuthFingerprint::from_auth),
@@ -1407,7 +1407,7 @@ impl ModelClientSession {
                         response_debug_context.request_id.as_deref(),
                         /*output_items*/ &[],
                     );
-                    let rejected_auth = client_setup
+                    let rejected_auth_fingerprint = client_setup
                         .auth
                         .as_ref()
                         .and_then(AuthFingerprint::from_auth);
@@ -1417,7 +1417,7 @@ impl ModelClientSession {
                             &mut auth_recovery,
                             session_telemetry,
                             &self.client.state.provider,
-                            rejected_auth.as_ref(),
+                            rejected_auth_fingerprint.as_ref(),
                         )
                         .await?,
                     );
@@ -1537,7 +1537,7 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
-                    let rejected_auth = client_setup
+                    let rejected_auth_fingerprint = client_setup
                         .auth
                         .as_ref()
                         .and_then(AuthFingerprint::from_auth);
@@ -1547,7 +1547,7 @@ impl ModelClientSession {
                             &mut auth_recovery,
                             session_telemetry,
                             &self.client.state.provider,
-                            rejected_auth.as_ref(),
+                            rejected_auth_fingerprint.as_ref(),
                         )
                         .await?,
                     );
@@ -1604,12 +1604,16 @@ impl ModelClientSession {
                     );
                     err
                 })?;
-            let rejected_auth = self.websocket_session.connection_auth.clone().or_else(|| {
-                client_setup
-                    .auth
-                    .as_ref()
-                    .and_then(AuthFingerprint::from_auth)
-            });
+            let rejected_auth_fingerprint = self
+                .websocket_session
+                .connection_auth_fingerprint
+                .clone()
+                .or_else(|| {
+                    client_setup
+                        .auth
+                        .as_ref()
+                        .and_then(AuthFingerprint::from_auth)
+                });
             let (stream, last_request_rx) = map_response_stream(
                 stream_result,
                 request_session_telemetry,
@@ -1617,7 +1621,7 @@ impl ModelClientSession {
                 Arc::clone(&self.client.state.provider),
                 Some(StreamAuthRecovery {
                     auth_recovery,
-                    rejected_auth,
+                    rejected_auth_fingerprint,
                 }),
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
@@ -1999,7 +2003,7 @@ where
                                         &transport,
                                         &mut stream_auth_recovery.auth_recovery,
                                         &session_telemetry,
-                                        stream_auth_recovery.rejected_auth.as_ref(),
+                                        stream_auth_recovery.rejected_auth_fingerprint.as_ref(),
                                     )
                                     .await
                                 } else {
@@ -2115,14 +2119,14 @@ struct WebsocketConnectParams<'a> {
 
 struct StreamAuthRecovery {
     auth_recovery: Option<UnauthorizedRecovery>,
-    rejected_auth: Option<AuthFingerprint>,
+    rejected_auth_fingerprint: Option<AuthFingerprint>,
 }
 
 async fn force_logout_if_workspace_restricted_unauthorized(
     transport: &TransportError,
     auth_recovery: &mut Option<UnauthorizedRecovery>,
     session_telemetry: &SessionTelemetry,
-    rejected_auth: Option<&AuthFingerprint>,
+    rejected_auth_fingerprint: Option<&AuthFingerprint>,
 ) -> Option<CodexErr> {
     let debug = extract_response_debug_context(transport);
     if !is_chatgpt_ip_workspace_restricted_unauthorized(transport, &debug) {
@@ -2144,7 +2148,7 @@ async fn force_logout_if_workspace_restricted_unauthorized(
             .unwrap_or(CHATGPT_IP_WORKSPACE_RESTRICTED_ERROR_CODE),
     );
     let auth_state_changed = match recovery
-        .force_logout_due_to_server_auth_rejection(rejected_auth)
+        .force_logout_due_to_server_auth_rejection(rejected_auth_fingerprint)
         .await
     {
         Ok(changed) => Some(changed),
@@ -2186,13 +2190,13 @@ async fn handle_unauthorized(
     auth_recovery: &mut Option<UnauthorizedRecovery>,
     session_telemetry: &SessionTelemetry,
     provider: &SharedModelProvider,
-    rejected_auth: Option<&AuthFingerprint>,
+    rejected_auth_fingerprint: Option<&AuthFingerprint>,
 ) -> Result<UnauthorizedRecoveryExecution> {
     if let Some(err) = force_logout_if_workspace_restricted_unauthorized(
         &transport,
         auth_recovery,
         session_telemetry,
-        rejected_auth,
+        rejected_auth_fingerprint,
     )
     .await
     {
