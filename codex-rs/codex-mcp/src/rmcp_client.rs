@@ -839,20 +839,21 @@ mod tests {
             },
         );
 
+        let expected = ToolInfo {
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            supports_parallel_tool_calls: false,
+            server_origin: None,
+            callable_name: "capture_file_upload".to_string(),
+            callable_namespace: "codex_apps__Gmail".to_string(),
+            namespace_description: Some("Mail connector".to_string()),
+            tool: expected_tool,
+            connector_id: Some("connector_gmail".to_string()),
+            connector_name: Some("Gmail".to_string()),
+            plugin_display_names: Vec::new(),
+        };
         assert_eq!(
-            tool_info,
-            ToolInfo {
-                server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                supports_parallel_tool_calls: false,
-                server_origin: None,
-                callable_name: "capture_file_upload".to_string(),
-                callable_namespace: "codex_apps__Gmail".to_string(),
-                namespace_description: Some("Mail connector".to_string()),
-                tool: expected_tool,
-                connector_id: Some("connector_gmail".to_string()),
-                connector_name: Some("Gmail".to_string()),
-                plugin_display_names: Vec::new(),
-            }
+            serde_json::to_value(tool_info).expect("serialize actual tool info"),
+            serde_json::to_value(expected).expect("serialize expected tool info")
         );
     }
 }
