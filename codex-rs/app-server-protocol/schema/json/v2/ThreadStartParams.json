@@ -73,13 +73,8 @@
               "type": "string"
             },
             "path": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/PathUri"
-                }
-              ],
-              "description": "Canonical `file:` URI for the root in the selected environment.",
-              "pattern": "^file:"
+              "description": "Absolute path for the root in the selected environment.",
+              "type": "string"
             },
             "type": {
               "enum": [
@@ -206,9 +201,6 @@
         "explicitRequestOnly",
         "proactive"
       ],
-      "type": "string"
-    },
-    "PathUri": {
       "type": "string"
     },
     "Personality": {

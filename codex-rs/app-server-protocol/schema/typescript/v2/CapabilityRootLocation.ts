@@ -7,6 +7,6 @@
  */
 export type CapabilityRootLocation = { "type": "environment", environmentId: string,
 /**
- * Canonical `file:` URI for the root in the selected environment.
+ * Absolute path for the root in the selected environment.
  */
 path: string, };

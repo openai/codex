@@ -7042,15 +7042,10 @@
               "environmentId": {
                 "type": "string"
               },
-              "path": {
-                "allOf": [
-                  {
-                    "$ref": "#/definitions/v2/PathUri"
-                  }
-                ],
-                "description": "Canonical `file:` URI for the root in the selected environment.",
-                "pattern": "^file:"
-              },
+                "path": {
+                  "description": "Absolute path for the root in the selected environment.",
+                  "type": "string"
+                },
               "type": {
                 "enum": [
                   "environment"
@@ -13004,9 +12999,6 @@
             "type": "object"
           }
         ]
-      },
-      "PathUri": {
-        "type": "string"
       },
       "PermissionProfileListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
