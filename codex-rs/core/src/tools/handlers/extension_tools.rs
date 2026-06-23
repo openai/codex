@@ -463,7 +463,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn image_generation_completion_runs_turn_item_contributors() {
+    async fn extension_completion_runs_turn_item_contributors() {
         let (mut session, turn) = crate::session::tests::make_session_and_context().await;
         let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
         builder.turn_item_contributor(Arc::new(RecordExtensionTurnItemContributor));
@@ -477,12 +477,10 @@ mod tests {
 
         codex_tools::TurnItemEmitter::emit_completed(
             &emitter,
-            ExtensionTurnItem::ImageGeneration(codex_protocol::items::ImageGenerationItem {
-                id: "image-1".to_string(),
-                status: "completed".to_string(),
-                revised_prompt: None,
-                result: String::new(),
-                saved_path: None,
+            ExtensionTurnItem::WebSearch(WebSearchItem {
+                id: "search-1".to_string(),
+                query: "contributors".to_string(),
+                action: WebSearchAction::Other,
             }),
         )
         .await;
