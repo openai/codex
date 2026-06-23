@@ -112,9 +112,9 @@ def test_root_fmt_recipes_use_shared_formatter_driver() -> None:
         "fmt_comment": (
             "# Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts."
         ),
-        "fmt_commands": ["{{ python }} ../scripts/format.py"],
+        "fmt_commands": ["@{{ python }} ../scripts/format.py"],
         "fmt_check_comment": "# Check formatting without modifying files.",
-        "fmt_check_commands": ["{{ python }} ../scripts/format.py --check"],
+        "fmt_check_commands": ["@{{ python }} ../scripts/format.py --check"],
     }
 
     assert actual == expected, (
@@ -243,6 +243,75 @@ def test_root_format_driver_covers_all_formatter_groups(
         ("ruff", "format", "--check", "sdk/python"),
         ("ruff", "format", "--check", "scripts"),
     ]
+
+
+def test_root_format_driver_discards_successful_command_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _load_root_format_script_module()
+    processes = iter(
+        (
+            script.subprocess.CompletedProcess(("first",), 0, "routine output\n"),
+            script.subprocess.CompletedProcess(("second",), 2, "failure output\n"),
+        )
+    )
+    monkeypatch.setattr(script.subprocess, "run", lambda *args, **kwargs: next(processes))
+    group = script.FormatterGroup(
+        "Test",
+        (script.Command(("first",)), script.Command(("second",))),
+    )
+
+    assert script.run_formatter_group(group) == script.FormatterResult(
+        "Test",
+        "$ second\nfailure output\n",
+        2,
+    )
+
+
+def test_root_format_driver_is_silent_when_all_formatters_succeed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _load_root_format_script_module()
+    groups = (script.FormatterGroup("Quiet", ()),)
+    monkeypatch.setattr(script, "formatter_groups", lambda *, check: groups)
+    monkeypatch.setattr(
+        script,
+        "run_formatter_group",
+        lambda group: script.FormatterResult(group.name, "hidden output\n", 0),
+    )
+    monkeypatch.setattr(sys, "argv", ["format.py"])
+
+    assert script.main() == 0
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+
+def test_root_format_driver_reports_only_failed_formatters(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _load_root_format_script_module()
+    groups = (
+        script.FormatterGroup("Quiet", ()),
+        script.FormatterGroup("Broken", ()),
+    )
+    monkeypatch.setattr(script, "formatter_groups", lambda *, check: groups)
+
+    def fake_run(group):
+        if group.name == "Broken":
+            return script.FormatterResult(group.name, "$ broken\nfailure output\n", 2)
+        return script.FormatterResult(group.name, "hidden output\n", 0)
+
+    monkeypatch.setattr(script, "run_formatter_group", fake_run)
+    monkeypatch.setattr(sys, "argv", ["format.py"])
+
+    assert script.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "==> Broken formatter failed\n$ broken\nfailure output\nFormatting failed: Broken\n"
+    )
 
 
 def test_generate_types_wires_all_generation_steps() -> None:
