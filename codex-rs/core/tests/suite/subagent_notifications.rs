@@ -6,9 +6,11 @@ use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -766,7 +768,6 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
-            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
@@ -1042,7 +1043,8 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result<()> {
+async fn encrypted_multi_agent_v2_spawn_inherits_ultra_reasoning_and_sends_agent_message()
+-> Result<()> {
     let server = start_mock_server().await;
     let encrypted_message = "opaque-encrypted-message";
     let spawn_args = serde_json::to_string(&json!({
@@ -1086,24 +1088,61 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
     )
     .await;
 
-    let mut builder = test_codex().with_model("koffing").with_config(|config| {
-        config
-            .features
-            .enable(Feature::Collab)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-    });
+    let model = codex_core::test_support::get_model_offline(/*model*/ None);
+    let mut builder = test_codex()
+        .with_model_info_override(&model, |model_info| {
+            model_info.supports_reasoning_summaries = true;
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+            model_info
+                .supported_reasoning_levels
+                .push(ReasoningEffortPreset {
+                    effort: ReasoningEffort::Ultra,
+                    description: "Uses maximum reasoning with proactive delegation".to_string(),
+                });
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentMode)
+                .expect("test config should allow feature update");
+        });
     let test = builder.build(&server).await?;
 
-    test.submit_turn(TURN_1_PROMPT).await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: TURN_1_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                effort: Some(Some(ReasoningEffort::Ultra)),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event_match(test.codex.as_ref(), |event| match event {
+        EventMsg::TurnComplete(_) => Some(()),
+        _ => None,
+    })
+    .await;
 
     let child_request = wait_for_requests(&child_request_log)
         .await?
         .pop()
         .expect("child request");
+    assert_eq!(child_request.body_json()["reasoning"]["effort"], "max");
+    assert!(child_request.body_contains_text("Proactive multi-agent delegation is active."));
     assert_eq!(
         strip_metadata_from_json(Value::Array(child_request.inputs_of_type("agent_message"))),
         Value::Array(vec![json!({

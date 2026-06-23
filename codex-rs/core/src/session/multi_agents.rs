@@ -35,16 +35,18 @@ fn configured_usage_hint_text_for_source<'a>(
     }
 }
 
-pub(crate) fn effective_multi_agent_mode(
-    multi_agent_version: MultiAgentVersion,
-    session_source: &SessionSource,
-    multi_agent_mode: MultiAgentMode,
-) -> Option<MultiAgentMode> {
-    if multi_agent_version != MultiAgentVersion::V2 {
+pub(crate) fn effective_multi_agent_mode(turn_context: &TurnContext) -> Option<MultiAgentMode> {
+    if turn_context.multi_agent_version != MultiAgentVersion::V2 {
         return None;
     }
 
-    match session_source {
+    let multi_agent_mode = if turn_context.ultra_reasoning_active() {
+        MultiAgentMode::Proactive
+    } else {
+        MultiAgentMode::ExplicitRequestOnly
+    };
+
+    match &turn_context.session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
         | SessionSource::Cli
         | SessionSource::VSCode

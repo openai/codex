@@ -14,7 +14,6 @@ use codex_experimental_api_macros::ExperimentalApi;
 pub use codex_protocol::capabilities::CapabilityRootLocation;
 pub use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 pub use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
@@ -94,12 +93,6 @@ pub struct ThreadStartParams {
     pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
-    /// Set the initial multi-agent mode for this thread. `none` leaves the
-    /// multi-agent tools available without injecting mode instructions.
-    /// Omitted defaults to `explicitRequestOnly`.
-    #[experimental("thread/start.multiAgentMode")]
-    #[ts(optional = nullable)]
-    pub multi_agent_mode: Option<MultiAgentMode>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
@@ -186,10 +179,6 @@ pub struct ThreadStartResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
-    /// Current multi-agent mode for this thread.
-    #[experimental("thread/start.multiAgentMode")]
-    #[serde(default)]
-    pub multi_agent_mode: MultiAgentMode,
 }
 
 impl ThreadStartResponse {
@@ -250,10 +239,6 @@ pub struct ThreadSettingsUpdateParams {
     #[experimental("thread/settings/update.collaborationMode")]
     #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,
-    /// Select the multi-agent mode for subsequent turns.
-    #[experimental("thread/settings/update.multiAgentMode")]
-    #[ts(optional = nullable)]
-    pub multi_agent_mode: Option<MultiAgentMode>,
     /// Override the personality for subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
@@ -264,7 +249,7 @@ pub struct ThreadSettingsUpdateParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadSettingsUpdateResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadSettings {
@@ -279,10 +264,6 @@ pub struct ThreadSettings {
     pub effort: Option<ReasoningEffort>,
     pub summary: Option<ReasoningSummary>,
     pub collaboration_mode: CollaborationMode,
-    /// Current multi-agent mode for this thread.
-    #[experimental("thread/settings.multiAgentMode")]
-    #[serde(default)]
-    pub multi_agent_mode: MultiAgentMode,
     pub personality: Option<Personality>,
 }
 
@@ -419,10 +400,6 @@ pub struct ThreadResumeResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
-    /// Current multi-agent mode for this thread.
-    #[experimental("thread/resume.multiAgentMode")]
-    #[serde(default)]
-    pub multi_agent_mode: MultiAgentMode,
     /// `thread/turns/list` page returned when requested by `initialTurnsPage`.
     #[experimental("thread/resume.initialTurnsPage")]
     #[serde(default)]
@@ -578,10 +555,6 @@ pub struct ThreadForkResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
-    /// Current multi-agent mode for this thread.
-    #[experimental("thread/fork.multiAgentMode")]
-    #[serde(default)]
-    pub multi_agent_mode: MultiAgentMode,
 }
 
 impl ThreadForkResponse {

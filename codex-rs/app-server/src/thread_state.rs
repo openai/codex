@@ -241,7 +241,6 @@ mod tests {
                     developer_instructions: None,
                 },
             },
-            multi_agent_mode: Default::default(),
             personality: None,
         }
     }

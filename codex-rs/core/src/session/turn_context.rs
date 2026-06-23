@@ -126,7 +126,6 @@ pub struct TurnContext {
     pub(crate) developer_instructions: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
-    pub(crate) multi_agent_mode: MultiAgentMode,
     pub(crate) multi_agent_version: MultiAgentVersion,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
@@ -180,6 +179,16 @@ impl TurnContext {
         } else {
             None
         }
+    }
+
+    pub(crate) fn ultra_reasoning_active(&self) -> bool {
+        self.config.features.enabled(Feature::MultiAgentMode)
+            && self
+                .model_info
+                .supported_reasoning_levels
+                .iter()
+                .any(|preset| preset.effort == ReasoningEffortConfig::Ultra)
+            && self.effective_reasoning_effort() == Some(ReasoningEffortConfig::Ultra)
     }
 
     pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
@@ -278,7 +287,6 @@ impl TurnContext {
             developer_instructions: self.developer_instructions.clone(),
             user_instructions: self.user_instructions.clone(),
             collaboration_mode,
-            multi_agent_mode: self.multi_agent_mode,
             multi_agent_version: self.multi_agent_version,
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
@@ -377,11 +385,7 @@ impl TurnContext {
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
             multi_agent_version: Some(self.multi_agent_version),
-            multi_agent_mode: super::multi_agents::effective_multi_agent_mode(
-                self.multi_agent_version,
-                &self.session_source,
-                self.multi_agent_mode,
-            ),
+            multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self),
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
@@ -567,7 +571,6 @@ impl Session {
                 .as_ref()
                 .map(LoadedAgentsMd::render),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
-            multi_agent_mode: session_configuration.multi_agent_mode,
             multi_agent_version,
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),

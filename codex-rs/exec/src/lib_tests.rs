@@ -792,6 +792,5 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         },
         active_permission_profile: None,
         reasoning_effort: None,
-        multi_agent_mode: Default::default(),
     }
 }

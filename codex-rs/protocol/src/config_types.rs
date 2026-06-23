@@ -296,10 +296,10 @@ pub enum Personality {
     Pragmatic,
 }
 
-/// Controls whether the model receives multi-agent delegation instructions and,
-/// when it does, whether it should only spawn sub-agents after an explicit user
-/// request or may delegate proactively when doing so would help. `none` leaves
-/// the multi-agent tools available without injecting delegation instructions.
+/// Records the effective multi-agent delegation instructions for a turn.
+///
+/// `none` is retained for compatibility with rollout history written before
+/// multi-agent mode became derived from the turn's reasoning effort.
 #[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
 )]
