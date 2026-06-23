@@ -1,5 +1,4 @@
 use super::*;
-use codex_utils_absolute_path::AbsolutePathBufGuard;
 use pretty_assertions::assert_eq;
 #[cfg(windows)]
 use std::ffi::OsString;
@@ -418,14 +417,14 @@ fn path_uri_serializes_as_a_string() {
 }
 
 #[test]
-fn path_uri_deserializes_legacy_absolute_paths() {
+fn path_uri_rejects_native_absolute_paths_during_deserialization() {
     let path = AbsolutePathBuf::current_dir()
         .expect("current directory")
         .join("workspace/src");
     let json = serde_json::to_string(&path).expect("absolute path should serialize");
-    let uri: PathUri = serde_json::from_str(&json).expect("legacy absolute path should parse");
 
-    assert_eq!(uri, PathUri::from_abs_path(&path));
+    serde_json::from_str::<PathUri>(&json)
+        .expect_err("native absolute path should not deserialize as a URI");
 }
 
 #[test]
@@ -437,13 +436,11 @@ fn path_uri_rejects_relative_native_paths() {
 }
 
 #[test]
-fn path_uri_rejects_legacy_relative_paths_with_absolute_path_guard() {
-    let base = AbsolutePathBuf::current_dir().expect("current directory");
-    let _guard = AbsolutePathBufGuard::new(base.as_path());
+fn path_uri_rejects_relative_strings_during_deserialization() {
     let error = serde_json::from_str::<PathUri>(r#""src/lib.rs""#)
-        .expect_err("legacy relative path should be rejected");
+        .expect_err("relative path should be rejected");
 
-    assert!(error.to_string().contains("path is not absolute"));
+    assert!(error.to_string().contains("relative URL without a base"));
 }
 
 #[test]
