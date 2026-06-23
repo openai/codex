@@ -714,8 +714,10 @@ If the thread does not already have an active turn, the server starts a standalo
 Turns attach user input (text or images) to a thread and trigger Codex generation. The `input` field is a list of discriminated unions:
 
 - `{"type":"text","text":"Explain this diff"}`
-- `{"type":"image","url":"https://…png"}`
+- `{"type":"image","url":"data:image/png;base64,…"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
+
+The `image` variant accepts inline data URLs. Remote HTTP(S) image URLs are rejected; use a data URL or `localImage` instead.
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn. Experimental `environments` is turn-scoped: omit it to inherit the thread's sticky environments, pass `[]` to run the turn with no environments, or pass explicit environment ids to override the sticky selection for this turn only.
 
@@ -828,7 +830,7 @@ Invoke a plugin by including a UI mention token such as `@sample` in the text in
 
 ### Example: Inject raw history items
 
-Use `thread/inject_items` to append prebuilt Responses API items to a loaded thread’s prompt history without starting a user turn. These items are persisted to the rollout and included in subsequent model requests.
+Use `thread/inject_items` to append prebuilt Responses API items to a loaded thread’s prompt history without starting a user turn. These items are persisted to the rollout and included in subsequent model requests. Any `input_image` items must use inline data URLs; remote HTTP(S) image URLs are rejected.
 
 ```json
 { "method": "thread/inject_items", "id": 36, "params": {
@@ -1585,7 +1587,7 @@ The server also emits item lifecycle notifications around the request:
 3. Client response.
 4. `item/completed` with `item.type = "dynamicToolCall"`, final `status`, and the returned `contentItems`/`success`.
 
-The client must respond with content items. Use `inputText` for text and `inputImage` for image URLs/data URLs:
+The client must respond with content items. Use `inputText` for text and `inputImage` for inline data URLs. Remote HTTP(S) image URLs make the dynamic tool response invalid.
 
 ```json
 {

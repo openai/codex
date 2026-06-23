@@ -223,7 +223,7 @@ where
         ))
     }
 
-    fn with_screen_size_and_cursor_position(
+    pub(crate) fn with_screen_size_and_cursor_position(
         backend: B,
         screen_size: Size,
         cursor_pos: Position,

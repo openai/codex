@@ -1284,6 +1284,13 @@ pub(super) fn plugins_test_absolute_path(path: &str) -> AbsolutePathBuf {
         .abs()
 }
 
+pub(super) fn plugins_test_personal_marketplace_path() -> AbsolutePathBuf {
+    dirs::home_dir()
+        .expect("home directory should be available")
+        .join(".agents/plugins/marketplace.json")
+        .abs()
+}
+
 pub(super) fn plugins_test_interface(
     display_name: Option<&str>,
     short_description: Option<&str>,
@@ -1372,6 +1379,21 @@ pub(super) fn plugins_test_remote_summary(
     }
 }
 
+pub(super) fn plugins_test_remote_marketplace(
+    name: &str,
+    display_name: &str,
+    plugins: Vec<PluginSummary>,
+) -> PluginMarketplaceEntry {
+    PluginMarketplaceEntry {
+        name: name.to_string(),
+        path: None,
+        interface: Some(MarketplaceInterface {
+            display_name: Some(display_name.to_string()),
+        }),
+        plugins,
+    }
+}
+
 pub(super) fn plugins_test_curated_marketplace(
     plugins: Vec<PluginSummary>,
 ) -> PluginMarketplaceEntry {
@@ -1408,11 +1430,23 @@ pub(super) fn plugins_test_response(
 
 pub(super) fn render_loaded_plugins_popup(
     chat: &mut ChatWidget,
-    response: PluginListResponse,
+    mut response: PluginListResponse,
 ) -> String {
     let cwd = chat.config.cwd.clone();
+    let remote_marketplaces = response
+        .marketplaces
+        .iter()
+        .filter(|marketplace| marketplace.path.is_none())
+        .cloned()
+        .collect();
+    response
+        .marketplaces
+        .retain(|marketplace| marketplace.path.is_some());
+    let response_for_refresh = response.clone();
     chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response_for_refresh));
+    chat.on_plugin_remote_sections_loaded(cwd.to_path_buf(), remote_marketplaces, Vec::new());
     render_bottom_popup(chat, /*width*/ 100)
 }
 
@@ -1470,10 +1504,46 @@ pub(super) fn plugins_test_detail(
     }
 }
 
+pub(super) fn plugins_test_remote_detail(
+    marketplace_name: &str,
+    summary: PluginSummary,
+    description: Option<&str>,
+) -> PluginDetail {
+    PluginDetail {
+        marketplace_name: marketplace_name.to_string(),
+        marketplace_path: None,
+        summary,
+        share_url: None,
+        description: description.map(str::to_string),
+        skills: Vec::new(),
+        hooks: Vec::new(),
+        apps: Vec::new(),
+        app_templates: Vec::new(),
+        mcp_servers: Vec::new(),
+    }
+}
+
 pub(super) fn plugins_test_popup_row_position(popup: &str, needle: &str) -> usize {
     popup
         .find(needle)
         .unwrap_or_else(|| panic!("expected popup to contain {needle}: {popup}"))
+}
+
+pub(super) fn select_plugins_tab_containing(
+    chat: &mut ChatWidget,
+    width: u16,
+    visible_text: &str,
+) -> String {
+    for _ in 0..8 {
+        let popup = render_bottom_popup(chat, width);
+        if popup.contains(visible_text) {
+            return popup;
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    let popup = render_bottom_popup(chat, width);
+    panic!("expected plugins tab containing {visible_text:?}, got:\n{popup}");
 }
 
 pub(super) fn type_plugins_search_query(chat: &mut ChatWidget, query: &str) {
