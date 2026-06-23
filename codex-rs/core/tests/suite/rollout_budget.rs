@@ -53,7 +53,7 @@ fn wire_request_contains(request: &wiremock::Request, text: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn adds_weighted_initial_and_threshold_reminders() -> Result<()> {
+async fn skips_initial_prefill_then_adds_weighted_threshold_reminders() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -76,7 +76,23 @@ async fn adds_weighted_initial_and_threshold_reminders() -> Result<()> {
                     }
                 }),
             ]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp-2",
+                        "usage": {
+                            "input_tokens": 20,
+                            "input_tokens_details": { "cached_tokens": 0 },
+                            "output_tokens": 5,
+                            "output_tokens_details": null,
+                            "total_tokens": 25
+                        }
+                    }
+                }),
+            ]),
+            sse(vec![ev_response_created("resp-3"), ev_completed("resp-3")]),
         ],
     )
     .await;
@@ -93,6 +109,7 @@ async fn adds_weighted_initial_and_threshold_reminders() -> Result<()> {
 
     test.submit_turn("first turn").await?;
     test.submit_turn("second turn").await?;
+    test.submit_turn("third turn").await?;
 
     let requests = responses.requests();
     assert_eq!(
@@ -103,7 +120,15 @@ async fn adds_weighted_initial_and_threshold_reminders() -> Result<()> {
         rollout_budget_texts(&requests[1]),
         vec![
             rollout_budget_message(/*remaining_tokens*/ 100),
-            rollout_budget_message(/*remaining_tokens*/ 60),
+            rollout_budget_message(/*remaining_tokens*/ 70),
+        ]
+    );
+    assert_eq!(
+        rollout_budget_texts(&requests[2]),
+        vec![
+            rollout_budget_message(/*remaining_tokens*/ 100),
+            rollout_budget_message(/*remaining_tokens*/ 70),
+            rollout_budget_message(/*remaining_tokens*/ 50),
         ]
     );
 

@@ -2,6 +2,7 @@ use crate::config::RolloutBudgetConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::TokenUsage;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::OnceLock;
@@ -20,6 +21,8 @@ pub(crate) struct RolloutBudget {
 struct RolloutBudgetState {
     config: RolloutBudgetConfig,
     weighted_tokens_used: f64,
+    /// Threads whose initial prompt prefill has already been skipped.
+    threads_with_usage: HashSet<ThreadId>,
     /// Last reminder delivered to each thread, so every thread observes crossed thresholds.
     deliveries: HashMap<ThreadId, ThreadBudgetDelivery>,
 }
@@ -35,19 +38,25 @@ impl RolloutBudget {
             Mutex::new(RolloutBudgetState {
                 config,
                 weighted_tokens_used: 0.0,
+                threads_with_usage: HashSet::new(),
                 deliveries: HashMap::new(),
             })
         });
     }
 
     /// Returns true once the configured budget is exhausted, including on later calls.
-    pub(crate) fn record_usage(&self, usage: &TokenUsage) -> bool {
+    pub(crate) fn record_usage(&self, thread_id: ThreadId, usage: &TokenUsage) -> bool {
         let Some(mut state) = self.lock() else {
             return false;
         };
+        let charge_prefill = state.threads_with_usage.insert(thread_id);
         state.weighted_tokens_used += usage.output_tokens.max(0) as f64
             * state.config.sampling_token_weight
-            + usage.non_cached_input() as f64 * state.config.prefill_token_weight;
+            + if charge_prefill {
+                usage.non_cached_input() as f64 * state.config.prefill_token_weight
+            } else {
+                0.0
+            };
         state.weighted_tokens_used >= state.config.limit_tokens as f64
     }
 
