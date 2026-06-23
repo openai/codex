@@ -97,11 +97,11 @@ fn add_originator_header_omits_default_originator() {
 fn add_originator_header_includes_non_default_originator() {
     let mut headers = http::HeaderMap::new();
 
-    add_originator_header(&mut headers, "codex_work_desktop_local");
+    add_originator_header(&mut headers, "codex_work_desktop");
 
     assert_eq!(
         headers.get("originator"),
-        Some(&http::HeaderValue::from_static("codex_work_desktop_local"))
+        Some(&http::HeaderValue::from_static("codex_work_desktop"))
     );
 }
 

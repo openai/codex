@@ -153,7 +153,7 @@ fn uses_quicksilver_alpha_header_for_realtime_v1() {
         Some("session_1"),
         Some("sk-test"),
         RealtimeWsVersion::V1,
-        "codex_work_desktop_local",
+        "codex_work_desktop",
     )
     .expect("headers")
     .expect("headers");
@@ -172,7 +172,7 @@ fn omits_quicksilver_alpha_header_for_realtime_v2() {
         Some("session_1"),
         Some("sk-test"),
         RealtimeWsVersion::V2,
-        "codex_work_desktop_local",
+        "codex_work_desktop",
     )
     .expect("headers")
     .expect("headers");
@@ -186,7 +186,7 @@ fn realtime_headers_include_non_default_originator() {
         Some("session_1"),
         Some("sk-test"),
         RealtimeWsVersion::V2,
-        "codex_work_desktop_cloud",
+        "codex_work_desktop",
     )
     .expect("headers")
     .expect("headers");
@@ -195,7 +195,7 @@ fn realtime_headers_include_non_default_originator() {
         headers
             .get("originator")
             .and_then(|value| value.to_str().ok()),
-        Some("codex_work_desktop_cloud")
+        Some("codex_work_desktop")
     );
 }
 

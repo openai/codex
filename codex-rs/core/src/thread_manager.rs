@@ -196,13 +196,24 @@ pub struct StartThreadOptions {
 
 fn originator_from_service_name(service_name: Option<&str>) -> Option<String> {
     let service_name = service_name?.trim();
-    if service_name.eq_ignore_ascii_case("CODEX_WORK_LOCAL") {
-        return Some("codex_work_desktop_local".to_string());
-    }
-    if service_name.eq_ignore_ascii_case("CODEX_WORK_CLOUD") {
-        return Some("codex_work_desktop_cloud".to_string());
+    if service_name.eq_ignore_ascii_case("codex_work_desktop") {
+        return Some("codex_work_desktop".to_string());
     }
     None
+}
+
+fn effective_originator_value(
+    metrics_service_name: Option<&str>,
+    env_originator: Option<String>,
+    persisted_originator: Option<String>,
+    inherited_originator: Option<String>,
+    default_originator: String,
+) -> String {
+    originator_from_service_name(metrics_service_name)
+        .or(env_originator)
+        .or(persisted_originator)
+        .or(inherited_originator)
+        .unwrap_or(default_originator)
 }
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
@@ -1279,13 +1290,16 @@ impl ThreadManagerState {
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => None,
         };
 
-        std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
+        let env_originator = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
             .is_ok()
-            .then(|| originator().value)
-            .or_else(|| originator_from_service_name(metrics_service_name))
-            .or(persisted_originator)
-            .or(inherited_originator)
-            .unwrap_or_else(|| originator().value)
+            .then(|| originator().value);
+        effective_originator_value(
+            metrics_service_name,
+            env_originator,
+            persisted_originator,
+            inherited_originator,
+            originator().value,
+        )
     }
 
     /// Spawn a new thread with no history using a provided config.

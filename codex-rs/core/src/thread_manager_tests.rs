@@ -68,6 +68,20 @@ fn developer_interrupted_marker() -> ResponseItem {
 }
 
 #[test]
+fn work_service_name_overrides_env_originator() {
+    assert_eq!(
+        effective_originator_value(
+            Some("codex_work_desktop"),
+            Some("Codex Desktop".to_string()),
+            Some("persisted_originator".to_string()),
+            Some("inherited_originator".to_string()),
+            "codex_cli_rs".to_string(),
+        ),
+        "codex_work_desktop"
+    );
+}
+
+#[test]
 fn truncates_before_requested_user_message() {
     let items = [
         user_msg("u1"),
