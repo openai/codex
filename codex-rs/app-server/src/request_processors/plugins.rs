@@ -23,6 +23,8 @@ use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::oauth_login_support;
 use codex_mcp::should_retry_without_scopes;
 use codex_plugin::PluginId;
+use codex_plugin::PluginTelemetryLegacyIdSource;
+use codex_plugin::PluginTelemetryMetadata;
 use codex_rmcp_client::perform_oauth_login_silent;
 
 #[derive(Clone)]
@@ -1526,6 +1528,7 @@ impl PluginRequestProcessor {
                 self.track_plugin_install_failed_for_remote_plugin(
                     &remote_plugin_id,
                     &remote_marketplace_name,
+                    /*local_plugin_id*/ None,
                     error_type,
                     err.to_string(),
                 );
@@ -1536,6 +1539,12 @@ impl PluginRequestProcessor {
             })?;
         let actual_remote_marketplace_name = remote_detail.marketplace_name.clone();
         let remote_plugin_name = remote_detail.summary.name.clone();
+        let resolved_plugin_id = PluginId::parse(&remote_detail.summary.id).map_err(|err| {
+            internal_error(format!(
+                "invalid resolved plugin id `{}`: {err}",
+                remote_detail.summary.id
+            ))
+        })?;
         if remote_detail.summary.availability == PluginAvailability::DisabledByAdmin {
             return Err(invalid_request(format!(
                 "remote plugin {remote_plugin_id} is disabled by admin"
@@ -1567,6 +1576,7 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
+                Some(&resolved_plugin_id),
                 error_type,
                 err.to_string(),
             );
@@ -1583,6 +1593,7 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
+                Some(&resolved_plugin_id),
                 error_type,
                 err.to_string(),
             );
@@ -1604,6 +1615,7 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
+                Some(&result.plugin_id),
                 error_type,
                 err.to_string(),
             );
@@ -1700,6 +1712,7 @@ impl PluginRequestProcessor {
         &self,
         remote_plugin_id: &str,
         marketplace_name: &str,
+        local_plugin_id: Option<&PluginId>,
         error_type: &'static str,
         error_message: String,
     ) {
@@ -1710,16 +1723,18 @@ impl PluginRequestProcessor {
             error = %error_message,
             "remote plugin install failed"
         );
-        // The remote id is reported separately; this local name only satisfies
-        // PluginId validation before remote details are available.
-        let Ok(plugin_id) = PluginId::new("unknown".to_string(), marketplace_name.to_string())
-        else {
-            return;
+        let plugin = if let Some(local_plugin_id) = local_plugin_id {
+            self.thread_manager
+                .plugins_manager()
+                .telemetry_metadata_for_plugin_id_with_remote_id(local_plugin_id, remote_plugin_id)
+        } else {
+            PluginTelemetryMetadata {
+                plugin_id: None,
+                remote_plugin_id: Some(remote_plugin_id.to_string()),
+                legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Remote,
+                capability_summary: None,
+            }
         };
-        let plugin = self
-            .thread_manager
-            .plugins_manager()
-            .telemetry_metadata_for_plugin_id_with_remote_id(&plugin_id, remote_plugin_id);
         self.analytics_events_client
             .track_plugin_install_failed(plugin, error_type.to_string());
     }

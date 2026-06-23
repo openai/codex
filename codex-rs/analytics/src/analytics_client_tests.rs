@@ -3558,7 +3558,7 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     let plugin = PluginTelemetryMetadata {
-        plugin_id: PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
+        plugin_id: None,
         remote_plugin_id: Some("plugins~Plugin_00000000000000000000000000000000".to_string()),
         legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Remote,
         capability_summary: None,
@@ -3583,10 +3583,10 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
             "event_type": "codex_plugin_install_failed",
             "event_params": {
                 "plugin_id": "plugins~Plugin_00000000000000000000000000000000",
-                "local_plugin_id": "unknown@openai-curated-remote",
+                "local_plugin_id": null,
                 "remote_plugin_id": "plugins~Plugin_00000000000000000000000000000000",
-                "plugin_name": "unknown",
-                "marketplace_name": "openai-curated-remote",
+                "plugin_name": null,
+                "marketplace_name": null,
                 "has_skills": null,
                 "mcp_server_count": null,
                 "connector_ids": null,
@@ -4625,7 +4625,7 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
-        plugin_id: PluginId::parse("sample@test").expect("valid plugin id"),
+        plugin_id: Some(PluginId::parse("sample@test").expect("valid plugin id")),
         remote_plugin_id: None,
         legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
         capability_summary: Some(PluginCapabilitySummary {

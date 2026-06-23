@@ -859,7 +859,7 @@ async fn installed_plugin_telemetry_metadata_collects_capabilities() {
     assert_eq!(
         metadata,
         PluginTelemetryMetadata {
-            plugin_id,
+            plugin_id: Some(plugin_id),
             remote_plugin_id: None,
             legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(PluginCapabilitySummary {
@@ -892,7 +892,7 @@ async fn installed_plugin_telemetry_metadata_resolves_persisted_remote_identity(
     assert_eq!(
         metadata,
         PluginTelemetryMetadata {
-            plugin_id,
+            plugin_id: Some(plugin_id),
             remote_plugin_id: Some("plugins~Plugin_linear".to_string()),
             legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(PluginCapabilitySummary {
@@ -926,7 +926,7 @@ async fn installed_plugin_telemetry_metadata_prefers_remote_snapshot_identity() 
     assert_eq!(
         metadata,
         PluginTelemetryMetadata {
-            plugin_id,
+            plugin_id: Some(plugin_id),
             remote_plugin_id: Some("plugins~Plugin_linear".to_string()),
             legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(PluginCapabilitySummary {
@@ -955,7 +955,7 @@ async fn installed_plugin_telemetry_metadata_accepts_authoritative_remote_identi
     assert_eq!(
         metadata,
         PluginTelemetryMetadata {
-            plugin_id,
+            plugin_id: Some(plugin_id),
             remote_plugin_id: Some("plugins~Plugin_linear".to_string()),
             legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Remote,
             capability_summary: None,
@@ -981,8 +981,9 @@ fn capability_summary_telemetry_metadata_uses_local_identity() {
     assert_eq!(
         metadata,
         Some(PluginTelemetryMetadata {
-            plugin_id: PluginId::parse("linear@openai-curated-remote")
-                .expect("plugin id should parse"),
+            plugin_id: Some(
+                PluginId::parse("linear@openai-curated-remote").expect("plugin id should parse"),
+            ),
             remote_plugin_id: None,
             legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(summary),
@@ -1014,7 +1015,7 @@ fn capability_summary_telemetry_metadata_resolves_persisted_remote_identity() {
     assert_eq!(
         metadata,
         Some(PluginTelemetryMetadata {
-            plugin_id,
+            plugin_id: Some(plugin_id),
             remote_plugin_id: Some("plugins~Plugin_linear".to_string()),
             legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(summary),

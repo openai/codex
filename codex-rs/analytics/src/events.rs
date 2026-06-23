@@ -26,6 +26,7 @@ use crate::now_unix_millis;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_login::default_client::originator;
+use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryLegacyIdSource;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -1044,19 +1045,21 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
         legacy_plugin_id_source,
         capability_summary,
     } = plugin;
-    let local_plugin_id = plugin_id.as_key();
+    let local_plugin_id = plugin_id.as_ref().map(PluginId::as_key);
     let legacy_plugin_id = match legacy_plugin_id_source {
         PluginTelemetryLegacyIdSource::Local => local_plugin_id.clone(),
-        PluginTelemetryLegacyIdSource::Remote => remote_plugin_id
-            .clone()
-            .unwrap_or_else(|| local_plugin_id.clone()),
+        PluginTelemetryLegacyIdSource::Remote => {
+            remote_plugin_id.clone().or_else(|| local_plugin_id.clone())
+        }
     };
     CodexPluginMetadata {
-        plugin_id: Some(legacy_plugin_id),
-        local_plugin_id: Some(local_plugin_id),
+        plugin_id: legacy_plugin_id,
+        local_plugin_id,
         remote_plugin_id,
-        plugin_name: Some(plugin_id.plugin_name),
-        marketplace_name: Some(plugin_id.marketplace_name),
+        plugin_name: plugin_id
+            .as_ref()
+            .map(|plugin_id| plugin_id.plugin_name.clone()),
+        marketplace_name: plugin_id.map(|plugin_id| plugin_id.marketplace_name),
         has_skills: capability_summary
             .as_ref()
             .map(|summary| summary.has_skills),

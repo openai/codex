@@ -771,7 +771,7 @@ impl PluginsManager {
         plugin_id: &PluginId,
     ) -> PluginTelemetryMetadata {
         PluginTelemetryMetadata {
-            plugin_id: plugin_id.clone(),
+            plugin_id: Some(plugin_id.clone()),
             remote_plugin_id: self.remote_plugin_id_for(plugin_id),
             legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: None,
@@ -797,7 +797,7 @@ impl PluginsManager {
         let plugin_id = PluginId::parse(&summary.config_name).ok()?;
         Some(PluginTelemetryMetadata {
             remote_plugin_id: self.remote_plugin_id_for(&plugin_id),
-            plugin_id,
+            plugin_id: Some(plugin_id),
             legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(summary.clone()),
         })

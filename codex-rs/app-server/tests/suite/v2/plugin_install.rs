@@ -539,16 +539,10 @@ async fn plugin_install_tracks_analytics_when_remote_detail_fetch_fails() -> Res
         "codex_plugin_install_failed"
     );
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(
-        event_params["local_plugin_id"],
-        "unknown@caller-marketplace-is-ignored"
-    );
+    assert_eq!(event_params["local_plugin_id"], json!(null));
     assert_eq!(event_params["remote_plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(event_params["plugin_name"], "unknown");
-    assert_eq!(
-        event_params["marketplace_name"],
-        "caller-marketplace-is-ignored"
-    );
+    assert_eq!(event_params["plugin_name"], json!(null));
+    assert_eq!(event_params["marketplace_name"], json!(null));
     assert_eq!(
         event_params["error_type"],
         "remote_catalog_unexpected_status"
@@ -1086,7 +1080,7 @@ async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_la
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(
         event_params["local_plugin_id"],
-        "unknown@openai-curated-remote"
+        "linear@openai-curated-remote"
     );
     assert_eq!(event_params["remote_plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
