@@ -212,7 +212,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         "fetch from the local environment",
         environments.clone(),
         ApprovalsReviewer::User,
-        AskForApproval::OnFailure,
+        AskForApproval::UnlessTrusted,
     )
     .await?;
     let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
@@ -237,7 +237,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         "fetch from the remote environment",
         environments.clone(),
         ApprovalsReviewer::User,
-        AskForApproval::OnFailure,
+        AskForApproval::UnlessTrusted,
     )
     .await?;
     let approval = expect_network_approval(&test, REMOTE_ENVIRONMENT_ID).await?;
