@@ -25,7 +25,7 @@ use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
 use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
-use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
+use crate::codex_apps::write_codex_apps_tools_cache;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
@@ -55,6 +55,7 @@ use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StdioServerLauncher;
+use codex_rmcp_client::ToolWithConnectorId;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
@@ -129,6 +130,7 @@ impl ManagedClient {
 #[derive(Clone)]
 pub(crate) struct AsyncManagedClient {
     pub(crate) client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
+    pub(crate) is_codex_apps_mcp_server: bool,
     pub(crate) cached_tool_info_snapshot: Option<Vec<ToolInfo>>,
     pub(crate) cached_server_info: Option<McpServerInfo>,
     pub(crate) startup_complete: Arc<AtomicBool>,
@@ -155,20 +157,23 @@ impl AsyncManagedClient {
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
     ) -> Self {
+        let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
         let tool_filter = server
             .configured_config()
             .map(ToolFilter::from_config)
             .unwrap_or_default();
-        let cached_tool_info_snapshot = load_startup_cached_codex_apps_tools_snapshot(
-            &server_name,
-            codex_apps_tools_cache_context.as_ref(),
-        );
+        let (cached_tool_info_snapshot, cached_server_info) = if is_codex_apps_mcp_server {
+            (
+                load_startup_cached_codex_apps_tools_snapshot(
+                    codex_apps_tools_cache_context.as_ref(),
+                ),
+                load_startup_cached_codex_apps_server_info(codex_apps_tools_cache_context.as_ref()),
+            )
+        } else {
+            (None, None)
+        };
         let cached_tool_info_snapshot =
             cached_tool_info_snapshot.map(|tools| filter_tools(tools, &tool_filter));
-        let cached_server_info = load_startup_cached_codex_apps_server_info(
-            &server_name,
-            codex_apps_tools_cache_context.as_ref(),
-        );
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
@@ -194,6 +199,7 @@ impl AsyncManagedClient {
                     server_name,
                     client,
                     StartServerTaskParams {
+                        is_codex_apps_mcp_server,
                         startup_timeout: server
                             .configured_config()
                             .and_then(|config| config.startup_timeout_sec)
@@ -232,6 +238,7 @@ impl AsyncManagedClient {
 
         Self {
             client,
+            is_codex_apps_mcp_server,
             cached_tool_info_snapshot,
             cached_server_info,
             startup_complete,
@@ -255,65 +262,7 @@ impl AsyncManagedClient {
         }
     }
 
-    fn cached_tool_info_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
-        if !self.startup_complete.load(Ordering::Acquire) {
-            return self.cached_tool_info_snapshot.clone();
-        }
-        None
-    }
-
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
-        let annotate_tools = |tools: Vec<ToolInfo>| {
-            let mut tools = tools;
-            for tool in &mut tools {
-                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                }
-
-                let plugin_names = match tool.connector_id.as_deref() {
-                    Some(connector_id) => self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_connector_id(connector_id),
-                    None => self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
-                };
-                tool.plugin_display_names = plugin_names.to_vec();
-
-                if plugin_names.is_empty() {
-                    continue;
-                }
-
-                let plugin_source_note = if plugin_names.len() == 1 {
-                    format!("This tool is part of plugin `{}`.", plugin_names[0])
-                } else {
-                    format!(
-                        "This tool is part of plugins {}.",
-                        plugin_names
-                            .iter()
-                            .map(|plugin_name| format!("`{plugin_name}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                let description = tool
-                    .tool
-                    .description
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or("");
-                let annotated_description = if description.is_empty() {
-                    plugin_source_note
-                } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
-                    format!("{description} {plugin_source_note}")
-                } else {
-                    format!("{description}. {plugin_source_note}")
-                };
-                tool.tool.description = Some(Cow::Owned(annotated_description));
-            }
-            tools
-        };
-
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
         let tools = if let Some(startup_tools) = self.cached_tool_info_snapshot_while_initializing()
         {
@@ -323,8 +272,19 @@ impl AsyncManagedClient {
                 Ok(client) => Some(client.listed_tools()),
                 Err(_) => self.cached_tool_info_snapshot.clone(),
             }
-        };
-        tools.map(annotate_tools)
+        }?;
+        Some(if self.is_codex_apps_mcp_server {
+            prepare_codex_apps_tools_for_model(tools, &self.tool_plugin_provenance)
+        } else {
+            prepare_regular_mcp_tools_for_model(tools, &self.tool_plugin_provenance)
+        })
+    }
+
+    fn cached_tool_info_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
+        if !self.startup_complete.load(Ordering::Acquire) {
+            return self.cached_tool_info_snapshot.clone();
+        }
+        None
     }
 }
 
@@ -348,6 +308,7 @@ impl From<anyhow::Error> for StartupOutcomeError {
 
 pub(crate) async fn list_tools_for_client_uncached(
     server_name: &str,
+    is_codex_apps_mcp_server: bool,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
     server_instructions: Option<&str>,
@@ -359,68 +320,165 @@ pub(crate) async fn list_tools_for_client_uncached(
         .tools
         .into_iter()
         .map(|tool| {
-            let mut tool_def = tool.tool;
-            let (connector_id, connector_name, connector_description) =
-                sanitize_tool_connector_metadata(
-                    server_name,
-                    &mut tool_def,
-                    tool.connector_id,
-                    tool.connector_name,
-                    tool.connector_description,
-                );
-            let callable_name = normalize_codex_apps_callable_name(
+            tool_info_from_listed_tool(
                 server_name,
-                &tool_def.name,
-                connector_id.as_deref(),
-                connector_name.as_deref(),
-            );
-            let callable_namespace =
-                normalize_codex_apps_callable_namespace(server_name, connector_name.as_deref());
-            if let Some(title) = tool_def.title.as_deref() {
-                let normalized_title =
-                    normalize_codex_apps_tool_title(server_name, connector_name.as_deref(), title);
-                if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
-                    tool_def.title = Some(normalized_title);
-                }
-            }
-            let has_connector_metadata = connector_id.is_some()
-                || connector_name.is_some()
-                || connector_description.is_some();
-            let namespace_description = if has_connector_metadata {
-                connector_description
-            } else {
-                server_instructions.map(str::to_string)
-            };
-            ToolInfo {
-                server_name: server_name.to_owned(),
-                supports_parallel_tool_calls: false,
-                server_origin: None,
-                callable_name,
-                callable_namespace,
-                namespace_description,
-                tool: tool_def,
-                connector_id,
-                connector_name,
-                plugin_display_names: Vec::new(),
-            }
+                is_codex_apps_mcp_server,
+                server_instructions,
+                tool,
+            )
         })
         .collect();
     Ok(tools)
 }
 
-fn sanitize_tool_connector_metadata(
-    server_name: &str,
-    tool: &mut RmcpTool,
-    connector_id: Option<String>,
-    connector_name: Option<String>,
-    connector_description: Option<String>,
-) -> (Option<String>, Option<String>, Option<String>) {
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        return (connector_id, connector_name, connector_description);
+/// Presents declared Codex Apps file parameters to the model as local-path inputs and adds plugin
+/// names to each tool. Plugin membership is resolved by connector ID, falling back to the MCP
+/// server when absent.
+fn prepare_codex_apps_tools_for_model(
+    mut tools: Vec<ToolInfo>,
+    tool_plugin_provenance: &ToolPluginProvenance,
+) -> Vec<ToolInfo> {
+    for tool in &mut tools {
+        tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+        let plugin_names = match tool.connector_id.as_deref() {
+            Some(connector_id) => {
+                tool_plugin_provenance.plugin_display_names_for_connector_id(connector_id)
+            }
+            None => tool_plugin_provenance
+                .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
+        };
+        add_plugin_provenance_to_tool(tool, plugin_names);
+    }
+    tools
+}
+
+/// Stores plugin names on the tool and appends a model-visible plugin membership note.
+fn add_plugin_provenance_to_tool(tool: &mut ToolInfo, plugin_names: &[String]) {
+    tool.plugin_display_names = plugin_names.to_vec();
+    if plugin_names.is_empty() {
+        return;
     }
 
-    strip_untrusted_connector_meta(tool);
-    (None, None, None)
+    let plugin_source_note = if plugin_names.len() == 1 {
+        format!("This tool is part of plugin `{}`.", plugin_names[0])
+    } else {
+        format!(
+            "This tool is part of plugins {}.",
+            plugin_names
+                .iter()
+                .map(|plugin_name| format!("`{plugin_name}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let description = tool
+        .tool
+        .description
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
+    let annotated_description = if description.is_empty() {
+        plugin_source_note
+    } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
+        format!("{description} {plugin_source_note}")
+    } else {
+        format!("{description}. {plugin_source_note}")
+    };
+    tool.tool.description = Some(Cow::Owned(annotated_description));
+}
+
+/// Adds server-scoped plugin names to regular MCP tools without changing their input schemas.
+fn prepare_regular_mcp_tools_for_model(
+    mut tools: Vec<ToolInfo>,
+    tool_plugin_provenance: &ToolPluginProvenance,
+) -> Vec<ToolInfo> {
+    for tool in &mut tools {
+        let plugin_names = tool_plugin_provenance
+            .plugin_display_names_for_mcp_server_name(tool.server_name.as_str());
+        add_plugin_provenance_to_tool(tool, plugin_names);
+    }
+    tools
+}
+
+fn tool_info_from_listed_tool(
+    server_name: &str,
+    is_codex_apps_mcp_server: bool,
+    server_instructions: Option<&str>,
+    tool: ToolWithConnectorId,
+) -> ToolInfo {
+    if is_codex_apps_mcp_server {
+        codex_apps_tool_info_from_listed_tool(server_name, server_instructions, tool)
+    } else {
+        regular_mcp_tool_info_from_listed_tool(server_name, server_instructions, tool)
+    }
+}
+
+/// Converts a Codex Apps tool by preserving connector fields, removing connector prefixes from
+/// model-visible names and titles, and using the connector description for its tool namespace.
+fn codex_apps_tool_info_from_listed_tool(
+    server_name: &str,
+    server_instructions: Option<&str>,
+    tool: ToolWithConnectorId,
+) -> ToolInfo {
+    let mut tool_def = tool.tool;
+    let connector_id = tool.connector_id;
+    let connector_name = tool.connector_name;
+    let connector_description = tool.connector_description;
+    let callable_name = normalize_codex_apps_callable_name(
+        &tool_def.name,
+        connector_id.as_deref(),
+        connector_name.as_deref(),
+    );
+    let callable_namespace =
+        normalize_codex_apps_callable_namespace(server_name, connector_name.as_deref());
+    if let Some(title) = tool_def.title.as_deref() {
+        let normalized_title = normalize_codex_apps_tool_title(connector_name.as_deref(), title);
+        if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
+            tool_def.title = Some(normalized_title);
+        }
+    }
+    let has_connector_metadata =
+        connector_id.is_some() || connector_name.is_some() || connector_description.is_some();
+    let namespace_description = if has_connector_metadata {
+        connector_description
+    } else {
+        server_instructions.map(str::to_string)
+    };
+    ToolInfo {
+        server_name: server_name.to_owned(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
+        callable_name,
+        callable_namespace,
+        namespace_description,
+        tool: tool_def,
+        connector_id,
+        connector_name,
+        plugin_display_names: Vec::new(),
+    }
+}
+
+/// Converts a regular MCP tool by removing reserved connector metadata, keeping its raw tool name,
+/// and using the MCP server name and instructions for the model-visible namespace.
+fn regular_mcp_tool_info_from_listed_tool(
+    server_name: &str,
+    server_instructions: Option<&str>,
+    tool: ToolWithConnectorId,
+) -> ToolInfo {
+    let mut tool_def = tool.tool;
+    strip_untrusted_connector_meta(&mut tool_def);
+    ToolInfo {
+        server_name: server_name.to_owned(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
+        callable_name: tool_def.name.to_string(),
+        callable_namespace: server_name.to_string(),
+        namespace_description: server_instructions.map(str::to_string),
+        tool: tool_def,
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+    }
 }
 
 fn strip_untrusted_connector_meta(tool: &mut RmcpTool) {
@@ -477,6 +535,7 @@ async fn start_server_task(
     params: StartServerTaskParams,
 ) -> Result<ManagedClient, StartupOutcomeError> {
     let StartServerTaskParams {
+        is_codex_apps_mcp_server,
         startup_timeout,
         tool_timeout,
         tool_filter,
@@ -508,6 +567,7 @@ async fn start_server_task(
     let fetch_start = Instant::now();
     let tools = list_tools_for_client_uncached(
         &server_name,
+        is_codex_apps_mcp_server,
         &client,
         startup_timeout,
         initialize_result.instructions.as_deref(),
@@ -520,19 +580,21 @@ async fn start_server_task(
         &[],
     );
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
-    write_cached_codex_apps_tools_if_needed(
-        &server_name,
-        codex_apps_tools_cache_context.as_ref(),
-        &server_info,
-        &tools,
-    );
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+    let codex_apps_tools_cache_context = if is_codex_apps_mcp_server {
+        write_codex_apps_tools_cache(
+            codex_apps_tools_cache_context.as_ref(),
+            &server_info,
+            &tools,
+        );
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-    }
+        codex_apps_tools_cache_context
+    } else {
+        None
+    };
     let tools = filter_tools(tools, &tool_filter);
 
     let managed = ManagedClient {
@@ -585,6 +647,7 @@ fn mcp_server_info_from_implementation(server_info: Implementation) -> McpServer
 }
 
 struct StartServerTaskParams {
+    is_codex_apps_mcp_server: bool,
     startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
     tool_timeout: Duration,
     tool_filter: ToolFilter,
@@ -645,6 +708,7 @@ async fn make_rmcp_client(
                 )) as Arc<dyn StdioServerLauncher>
             };
 
+            let cwd = cwd.map(codex_utils_path_uri::LegacyAppPathString::into_string);
             RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, launcher)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
@@ -684,6 +748,7 @@ async fn make_rmcp_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::Meta;
 
@@ -736,18 +801,7 @@ mod tests {
     fn custom_mcp_connector_metadata_is_stripped() {
         let mut tool = tool_with_connector_meta();
 
-        let (connector_id, connector_name, connector_description) =
-            sanitize_tool_connector_metadata(
-                "minimaltest",
-                &mut tool,
-                Some("connector_gmail".to_string()),
-                Some("Gmail".to_string()),
-                Some("Mail connector".to_string()),
-            );
-
-        assert_eq!(connector_id, None);
-        assert_eq!(connector_name, None);
-        assert_eq!(connector_description, None);
+        strip_untrusted_connector_meta(&mut tool);
 
         let meta = tool.meta.as_ref().expect("meta");
         for key in [
@@ -770,32 +824,36 @@ mod tests {
 
     #[test]
     fn codex_apps_connector_metadata_is_preserved() {
-        let mut tool = tool_with_connector_meta();
+        let tool = tool_with_connector_meta();
+        let expected_tool = tool.clone();
 
-        let (connector_id, connector_name, connector_description) =
-            sanitize_tool_connector_metadata(
-                CODEX_APPS_MCP_SERVER_NAME,
-                &mut tool,
-                Some("connector_gmail".to_string()),
-                Some("Gmail".to_string()),
-                Some("Mail connector".to_string()),
-            );
+        let tool_info = tool_info_from_listed_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            /*is_codex_apps_mcp_server*/ true,
+            /*server_instructions*/ None,
+            ToolWithConnectorId {
+                tool,
+                connector_id: Some("connector_gmail".to_string()),
+                connector_name: Some("Gmail".to_string()),
+                connector_description: Some("Mail connector".to_string()),
+            },
+        );
 
-        assert_eq!(connector_id.as_deref(), Some("connector_gmail"));
-        assert_eq!(connector_name.as_deref(), Some("Gmail"));
-        assert_eq!(connector_description.as_deref(), Some("Mail connector"));
-
-        let meta = tool.meta.as_ref().expect("meta");
-        for key in [
-            "connector_id",
-            "connector_name",
-            "connector_display_name",
-            "connector_description",
-            "connectorDescription",
-            "connectorFutureField",
-            "CONNECTOR_UPPERCASE",
-        ] {
-            assert!(meta.0.contains_key(key), "{key} should be preserved");
-        }
+        let expected = ToolInfo {
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            supports_parallel_tool_calls: false,
+            server_origin: None,
+            callable_name: "capture_file_upload".to_string(),
+            callable_namespace: "codex_apps__gmail".to_string(),
+            namespace_description: Some("Mail connector".to_string()),
+            tool: expected_tool,
+            connector_id: Some("connector_gmail".to_string()),
+            connector_name: Some("Gmail".to_string()),
+            plugin_display_names: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(tool_info).expect("serialize actual tool info"),
+            serde_json::to_value(expected).expect("serialize expected tool info")
+        );
     }
 }

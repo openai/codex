@@ -89,6 +89,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_path_uri::LegacyAppPathString;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -461,6 +462,90 @@ direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
 }
 
 #[tokio::test]
+async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
+    for (config_toml, expected) in [
+        (
+            "[features]\ntoken_budget = true\n",
+            TokenBudgetConfig::default(),
+        ),
+        (
+            r#"
+[features.token_budget]
+enabled = true
+reminder_threshold_tokens = 16000
+reminder_message_template = "Custom reminder: {n_remaining} tokens."
+"#,
+            TokenBudgetConfig {
+                reminder_threshold_tokens: Some(16_000),
+                reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
+            },
+        ),
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
+        let config = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert!(config.features.enabled(Feature::TokenBudget));
+        assert_eq!(config.token_budget, Some(expected));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_invalid_token_budget_reminder_template() -> std::io::Result<()> {
+    for reminder_message_template in [
+        String::new(),
+        "x".repeat(TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES + 1),
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(&format!(
+            "[features.token_budget]\nenabled = true\nreminder_message_template = {reminder_message_template:?}\n"
+        ))
+        .expect("TOML should deserialize");
+        let error = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("invalid reminder template should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_non_positive_token_budget_reminder_threshold() -> std::io::Result<()> {
+    for reminder_threshold_tokens in [-1, 0] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(&format!(
+            "[features.token_budget]\nenabled = true\nreminder_threshold_tokens = {reminder_threshold_tokens}\n"
+        ))
+        .expect("TOML should deserialize");
+        let error = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("non-positive reminder threshold should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "features.token_budget.reminder_threshold_tokens must be positive"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_rollout_budget() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     let config_toml: ConfigToml = toml::from_str(
@@ -468,7 +553,7 @@ async fn load_config_resolves_rollout_budget() -> std::io::Result<()> {
 [features.rollout_budget]
 enabled = true
 limit_tokens = 100000
-reminder_interval_tokens = 10000
+reminder_at_remaining_tokens = [50000, 25000, 10000]
 sampling_token_weight = 1.0
 prefill_token_weight = 0.1
 "#,
@@ -487,7 +572,7 @@ prefill_token_weight = 0.1
         config.rollout_budget,
         Some(RolloutBudgetConfig {
             limit_tokens: 100_000,
-            reminder_interval_tokens: 10_000,
+            reminder_at_remaining_tokens: vec![50_000, 25_000, 10_000],
             sampling_token_weight: 1.0,
             prefill_token_weight: 0.1,
         })
@@ -3108,9 +3193,10 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
 
     assert_eq!(
         config.custom_permission_profiles,
-        vec![CustomPermissionProfileSummary {
+        vec![PermissionProfileCatalogEntry {
             id: "dev".to_string(),
             description: Some("Workspace access.".to_string()),
+            allowed: true,
         }]
     );
     assert!(
@@ -5187,6 +5273,14 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 }
 
 #[test]
+fn web_search_mode_for_turn_preserves_indexed_for_disabled_permissions() {
+    let web_search_mode = Constrained::allow_any(WebSearchMode::Indexed);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+
+    assert_eq!(mode, WebSearchMode::Indexed);
+}
+
+#[test]
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
     let permission_profile = PermissionProfile::read_only();
@@ -5214,6 +5308,31 @@ fn web_search_mode_for_turn_respects_disabled_for_disabled_permissions() {
 #[test]
 fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Result<()> {
     let allowed = [WebSearchMode::Disabled, WebSearchMode::Cached];
+    let web_search_mode = Constrained::new(WebSearchMode::Cached, move |candidate| {
+        if allowed.contains(candidate) {
+            Ok(())
+        } else {
+            Err(ConstraintError::InvalidValue {
+                field_name: "web_search_mode",
+                candidate: format!("{candidate:?}"),
+                allowed: format!("{allowed:?}"),
+                requirement_source: RequirementSource::Unknown,
+            })
+        }
+    })?;
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+
+    assert_eq!(mode, WebSearchMode::Cached);
+    Ok(())
+}
+
+#[test]
+fn web_search_mode_for_turn_does_not_implicitly_select_indexed() -> anyhow::Result<()> {
+    let allowed = [
+        WebSearchMode::Disabled,
+        WebSearchMode::Cached,
+        WebSearchMode::Indexed,
+    ];
     let web_search_mode = Constrained::new(WebSearchMode::Cached, move |candidate| {
         if allowed.contains(candidate) {
             Ok(())
@@ -5436,6 +5555,7 @@ async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()
 #[tokio::test]
 async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
+    let expected_cwd = LegacyAppPathString::from_path(codex_home.path());
 
     let mut servers = BTreeMap::new();
     servers.insert(
@@ -5446,7 +5566,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
                 args: vec!["hello".to_string()],
                 env: None,
                 env_vars: Vec::new(),
-                cwd: Some(codex_home.path().to_path_buf()),
+                cwd: Some(expected_cwd.clone()),
             },
             environment_id: "remote".to_string(),
             enabled: true,
@@ -5485,7 +5605,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             assert_eq!(args, &vec!["hello".to_string()]);
             assert!(env.is_none());
             assert!(env_vars.is_empty());
-            assert_eq!(cwd, &Some(codex_home.path().to_path_buf()));
+            assert_eq!(cwd, &Some(expected_cwd));
         }
         other => panic!("unexpected transport {other:?}"),
     }
@@ -5986,6 +6106,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
 
     let cwd_path = PathBuf::from("/tmp/codex-mcp");
+    let cwd = LegacyAppPathString::from_path(&cwd_path);
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
@@ -5994,7 +6115,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
-                cwd: Some(cwd_path.clone()),
+                cwd: Some(cwd.clone()),
             },
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
@@ -6029,7 +6150,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
     let docs = loaded.get("docs").expect("docs entry");
     match &docs.transport {
         McpServerTransportConfig::Stdio { cwd, .. } => {
-            assert_eq!(cwd.as_deref(), Some(Path::new("/tmp/codex-mcp")));
+            assert_eq!(cwd, &Some(LegacyAppPathString::from_path(&cwd_path)));
         }
         other => panic!("unexpected transport {other:?}"),
     }
@@ -9079,6 +9200,39 @@ apps_mcp_product_sku = "tpp"
 }
 
 #[tokio::test]
+async fn config_loads_orchestrator_settings_from_toml() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+model = "gpt-5.4"
+
+[orchestrator.skills]
+enabled = false
+
+[orchestrator.mcp]
+enabled = false
+"#,
+    )
+    .expect("TOML deserialization should succeed for orchestrator settings");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        (
+            config.orchestrator_skills_enabled,
+            config.orchestrator_mcp_enabled
+        ),
+        (false, false)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn config_loads_mcp_oauth_callback_url_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let toml = r#"
@@ -9601,6 +9755,7 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
 [features]
 in_app_browser = false
 browser_use = false
+browser_use_full_cdp_access = false
 "#,
             ),
         )
@@ -9609,6 +9764,7 @@ browser_use = false
 
     assert!(!config.features.enabled(Feature::InAppBrowser));
     assert!(!config.features.enabled(Feature::BrowserUse));
+    assert!(!config.features.enabled(Feature::BrowserUseFullCdpAccess));
 
     Ok(())
 }
@@ -9964,7 +10120,6 @@ max_concurrent_threads_per_session = 5
 min_wait_timeout_ms = 2500
 max_wait_timeout_ms = 120000
 default_wait_timeout_ms = 30000
-usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
@@ -9992,7 +10147,6 @@ non_code_mode_only = true
         ),
         (None, Some(4))
     );
-    assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
         Some("Custom delegation guidance.")

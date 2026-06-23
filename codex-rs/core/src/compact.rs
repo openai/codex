@@ -30,9 +30,9 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -302,7 +302,12 @@ async fn run_compact_task_inner_impl(
     let user_messages = collect_user_messages(history_items);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
-    let (window_number, window_id) = sess.advance_auto_compact_window().await;
+    if let Some(summary_item) = new_history.last_mut() {
+        // This replacement history skips `record_conversation_items`; only the appended summary
+        // belongs to this compaction turn.
+        summary_item.set_turn_id_if_missing(&turn_context.sub_id);
+    }
+    let (window_number, window_ids) = sess.advance_auto_compact_window().await;
 
     if matches!(
         initial_context_injection,
@@ -320,7 +325,9 @@ async fn run_compact_task_inner_impl(
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
         window_number: Some(window_number),
-        window_id: Some(window_id),
+        first_window_id: Some(window_ids.first_window_id.to_string()),
+        previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
+        window_id: Some(window_ids.window_id.to_string()),
     };
     sess.replace_compacted_history(
         turn_context.as_ref(),
@@ -457,7 +464,7 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CompactedUserMessage {
     message: String,
-    metadata: Option<ResponseItemMetadata>,
+    internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
 }
 
 pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<CompactedUserMessage> {
@@ -470,8 +477,11 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<CompactedUser
                 } else {
                     Some(CompactedUserMessage {
                         message: user.message(),
-                        metadata: match item {
-                            ResponseItem::Message { metadata, .. } => metadata.clone(),
+                        internal_chat_message_metadata_passthrough: match item {
+                            ResponseItem::Message {
+                                internal_chat_message_metadata_passthrough,
+                                ..
+                            } => internal_chat_message_metadata_passthrough.clone(),
                             _ => None,
                         },
                     })
@@ -578,7 +588,9 @@ fn build_compacted_history_with_limit(
                     truncate_text(&message.message, TruncationPolicy::Tokens(remaining));
                 selected_messages.push(CompactedUserMessage {
                     message: truncated,
-                    metadata: message.metadata.clone(),
+                    internal_chat_message_metadata_passthrough: message
+                        .internal_chat_message_metadata_passthrough
+                        .clone(),
                 });
                 break;
             }
@@ -594,7 +606,9 @@ fn build_compacted_history_with_limit(
                 text: message.message.clone(),
             }],
             phase: None,
-            metadata: message.metadata.clone(),
+            internal_chat_message_metadata_passthrough: message
+                .internal_chat_message_metadata_passthrough
+                .clone(),
         });
     }
 
@@ -609,7 +623,7 @@ fn build_compacted_history_with_limit(
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     });
 
     history

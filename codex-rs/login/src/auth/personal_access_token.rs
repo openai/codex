@@ -5,7 +5,8 @@ use serde::Deserialize;
 use std::env;
 use std::fmt;
 
-use crate::default_client::create_client;
+use crate::default_client::create_default_auth_client;
+use crate::outbound_proxy::AuthRouteConfig;
 
 const PROD_AUTHAPI_BASE_URL: &str = "https://auth.openai.com/api/accounts";
 const CODEX_AUTHAPI_BASE_URL_ENV_VAR: &str = "CODEX_AUTHAPI_BASE_URL";
@@ -13,7 +14,7 @@ const WHOAMI_PATH: &str = "/v1/user-auth-credential/whoami";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 struct PersonalAccessTokenMetadata {
-    email: String,
+    email: Option<String>,
     chatgpt_user_id: String,
     chatgpt_account_id: String,
     chatgpt_plan_type: String,
@@ -36,13 +37,18 @@ impl fmt::Debug for PersonalAccessTokenAuth {
 }
 
 impl PersonalAccessTokenAuth {
-    pub(super) async fn load(access_token: &str) -> std::io::Result<Self> {
+    pub(super) async fn load(
+        access_token: &str,
+        auth_route_config: Option<&AuthRouteConfig>,
+    ) -> std::io::Result<Self> {
         let authapi_base_url = env::var(CODEX_AUTHAPI_BASE_URL_ENV_VAR)
             .ok()
             .map(|base_url| base_url.trim().trim_end_matches('/').to_string())
             .filter(|base_url| !base_url.is_empty())
             .unwrap_or_else(|| PROD_AUTHAPI_BASE_URL.to_string());
-        hydrate_personal_access_token(&create_client(), &authapi_base_url, access_token).await
+        let endpoint = whoami_endpoint(&authapi_base_url);
+        let client = create_default_auth_client(&endpoint, auth_route_config)?;
+        hydrate_personal_access_token(&client, &endpoint, access_token).await
     }
 
     pub fn access_token(&self) -> &str {
@@ -57,8 +63,8 @@ impl PersonalAccessTokenAuth {
         &self.metadata.chatgpt_user_id
     }
 
-    pub fn email(&self) -> &str {
-        &self.metadata.email
+    pub fn email(&self) -> Option<&str> {
+        self.metadata.email.as_deref()
     }
 
     pub fn plan_type(&self) -> AccountPlanType {
@@ -72,12 +78,11 @@ impl PersonalAccessTokenAuth {
 
 async fn hydrate_personal_access_token(
     client: &CodexHttpClient,
-    authapi_base_url: &str,
+    endpoint: &str,
     access_token: &str,
 ) -> std::io::Result<PersonalAccessTokenAuth> {
-    let endpoint = format!("{}{WHOAMI_PATH}", authapi_base_url.trim_end_matches('/'));
     let response = client
-        .get(&endpoint)
+        .get(endpoint)
         .bearer_auth(access_token)
         .send()
         .await
@@ -105,6 +110,10 @@ async fn hydrate_personal_access_token(
         access_token: access_token.to_string(),
         metadata,
     })
+}
+
+fn whoami_endpoint(authapi_base_url: &str) -> String {
+    format!("{}{WHOAMI_PATH}", authapi_base_url.trim_end_matches('/'))
 }
 
 #[cfg(test)]

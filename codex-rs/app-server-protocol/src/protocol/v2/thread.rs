@@ -94,9 +94,9 @@ pub struct ThreadStartParams {
     pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
-    /// Set the initial multi-agent mode for this thread.
-    /// Omitted leaves the thread without a selected mode. Eligible multi-agent
-    /// v2 turns still default to `explicitRequestOnly`.
+    /// Set the initial multi-agent mode for this thread. `none` leaves the
+    /// multi-agent tools available without injecting mode instructions.
+    /// Omitted defaults to `explicitRequestOnly`.
     #[experimental("thread/start.multiAgentMode")]
     #[ts(optional = nullable)]
     pub multi_agent_mode: Option<MultiAgentMode>,
@@ -186,10 +186,10 @@ pub struct ThreadStartResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
-    /// Current selected multi-agent mode for this thread, if one was selected.
+    /// Current multi-agent mode for this thread.
     #[experimental("thread/start.multiAgentMode")]
     #[serde(default)]
-    pub multi_agent_mode: Option<MultiAgentMode>,
+    pub multi_agent_mode: MultiAgentMode,
 }
 
 impl ThreadStartResponse {
@@ -279,10 +279,10 @@ pub struct ThreadSettings {
     pub effort: Option<ReasoningEffort>,
     pub summary: Option<ReasoningSummary>,
     pub collaboration_mode: CollaborationMode,
-    /// Current selected multi-agent mode for this thread, if one was selected.
+    /// Current multi-agent mode for this thread.
     #[experimental("thread/settings.multiAgentMode")]
     #[serde(default)]
-    pub multi_agent_mode: Option<MultiAgentMode>,
+    pub multi_agent_mode: MultiAgentMode,
     pub personality: Option<Personality>,
 }
 
@@ -419,10 +419,10 @@ pub struct ThreadResumeResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
-    /// Current selected multi-agent mode for this thread, if one was selected.
+    /// Current multi-agent mode for this thread.
     #[experimental("thread/resume.multiAgentMode")]
     #[serde(default)]
-    pub multi_agent_mode: Option<MultiAgentMode>,
+    pub multi_agent_mode: MultiAgentMode,
     /// `thread/turns/list` page returned when requested by `initialTurnsPage`.
     #[experimental("thread/resume.initialTurnsPage")]
     #[serde(default)]
@@ -578,10 +578,10 @@ pub struct ThreadForkResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
-    /// Current selected multi-agent mode for this thread, if one was selected.
+    /// Current multi-agent mode for this thread.
     #[experimental("thread/fork.multiAgentMode")]
     #[serde(default)]
-    pub multi_agent_mode: Option<MultiAgentMode>,
+    pub multi_agent_mode: MultiAgentMode,
 }
 
 impl ThreadForkResponse {

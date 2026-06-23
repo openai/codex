@@ -141,8 +141,8 @@ async fn agents_override_is_preferred_over_agents_md() -> Result<()> {
         agents_instructions(test_codex().with_workspace_setup(|cwd, fs| async move {
             let agents_md = cwd.join("AGENTS.md");
             let override_md = cwd.join("AGENTS.override.md");
-            let agents_md_uri = PathUri::from_path(&agents_md)?;
-            let override_md_uri = PathUri::from_path(&override_md)?;
+            let agents_md_uri = PathUri::from_host_native_path(&agents_md)?;
+            let override_md_uri = PathUri::from_host_native_path(&override_md)?;
             fs.write_file(&agents_md_uri, b"base doc".to_vec(), /*sandbox*/ None)
                 .await?;
             fs.write_file(
@@ -177,8 +177,8 @@ async fn configured_fallback_is_used_when_agents_candidate_is_directory() -> Res
             .with_workspace_setup(|cwd, fs| async move {
                 let agents_dir = cwd.join("AGENTS.md");
                 let fallback = cwd.join("WORKFLOW.md");
-                let agents_dir_uri = PathUri::from_path(&agents_dir)?;
-                let fallback_uri = PathUri::from_path(&fallback)?;
+                let agents_dir_uri = PathUri::from_host_native_path(&agents_dir)?;
+                let fallback_uri = PathUri::from_host_native_path(&fallback)?;
                 fs.create_directory(
                     &agents_dir_uri,
                     CreateDirectoryOptions { recursive: true },
@@ -220,10 +220,10 @@ async fn agents_docs_are_concatenated_from_project_root_to_cwd() -> Result<()> {
                 let root_agents = root.join("AGENTS.md");
                 let git_marker = root.join(".git");
                 let nested_agents = nested.join("AGENTS.md");
-                let nested_uri = PathUri::from_path(&nested)?;
-                let root_agents_uri = PathUri::from_path(&root_agents)?;
-                let git_marker_uri = PathUri::from_path(&git_marker)?;
-                let nested_agents_uri = PathUri::from_path(&nested_agents)?;
+                let nested_uri = PathUri::from_host_native_path(&nested)?;
+                let root_agents_uri = PathUri::from_host_native_path(&root_agents)?;
+                let git_marker_uri = PathUri::from_host_native_path(&git_marker)?;
+                let nested_agents_uri = PathUri::from_host_native_path(&nested_agents)?;
 
                 fs.create_directory(
                     &nested_uri,
@@ -363,7 +363,7 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
     let mut builder = test_codex()
         .with_home(home)
         .with_workspace_setup(|cwd, fs| async move {
-            let agents_md_uri = PathUri::from_path(cwd.join("AGENTS.md"))?;
+            let agents_md_uri = PathUri::from_host_native_path(cwd.join("AGENTS.md"))?;
             fs.write_file(
                 &agents_md_uri,
                 b"project doc".to_vec(),
@@ -420,7 +420,8 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
         .with_home(Arc::clone(&home))
         .with_user_instructions_provider(provider.clone())
         .with_workspace_setup(|cwd, fs| async move {
-            let project_agents_uri = PathUri::from_path(cwd.join(GLOBAL_AGENTS_FILENAME))?;
+            let project_agents_uri =
+                PathUri::from_host_native_path(cwd.join(GLOBAL_AGENTS_FILENAME))?;
             fs.write_file(
                 &project_agents_uri,
                 PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
@@ -505,7 +506,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
         .with_workspace_setup(|cwd, fs| async move {
-            let agents_md_uri = PathUri::from_path(cwd.join("AGENTS.md"))?;
+            let agents_md_uri = PathUri::from_host_native_path(cwd.join("AGENTS.md"))?;
             fs.write_file(
                 &agents_md_uri,
                 PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
@@ -534,7 +535,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
     )?;
     test.fs()
         .write_file(
-            &PathUri::from_path(&project_source)?,
+            &PathUri::from_host_native_path(&project_source)?,
             NEW_PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
             /*sandbox*/ None,
         )
@@ -631,7 +632,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
         .with_user_instructions_provider(provider.clone())
         .with_workspace_setup(|cwd, fs| async move {
             fs.write_file(
-                &PathUri::from_path(cwd.join(GLOBAL_AGENTS_FILENAME))?,
+                &PathUri::from_host_native_path(cwd.join(GLOBAL_AGENTS_FILENAME))?,
                 b"remote project instructions".to_vec(),
                 /*sandbox*/ None,
             )
@@ -658,7 +659,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
                 },
                 TurnEnvironmentSelection {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: PathUri::from_path(local_root.path())?,
+                    cwd: PathUri::from_host_native_path(local_root.path())?,
                 },
             ],
             thread_extension_init: Default::default(),
@@ -671,7 +672,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
         vec![
             PathUri::from_abs_path(&global_source),
             PathUri::from_abs_path(&remote_source),
-            PathUri::from_path(&local_source)?,
+            PathUri::from_host_native_path(&local_source)?,
         ]
     );
 
@@ -684,7 +685,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
     )?;
     test.fs()
         .write_file(
-            &PathUri::from_path(test.config.cwd.join(GLOBAL_AGENTS_OVERRIDE_FILENAME))?,
+            &PathUri::from_host_native_path(test.config.cwd.join(GLOBAL_AGENTS_OVERRIDE_FILENAME))?,
             b"new remote project instructions".to_vec(),
             /*sandbox*/ None,
         )
@@ -712,7 +713,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
         vec![
             PathUri::from_abs_path(&global_source),
             PathUri::from_abs_path(&remote_source),
-            PathUri::from_path(&local_source)?,
+            PathUri::from_host_native_path(&local_source)?,
         ]
     );
 

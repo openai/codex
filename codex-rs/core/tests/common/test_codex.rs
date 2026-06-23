@@ -998,7 +998,7 @@ impl TestCodexHarness {
     ) -> Result<()> {
         let abs_path = self.path_abs(rel);
         if let Some(parent) = abs_path.parent() {
-            let parent_uri = PathUri::from_path(&parent)?;
+            let parent_uri = PathUri::from_host_native_path(&parent)?;
             self.test
                 .fs()
                 .create_directory(
@@ -1008,7 +1008,7 @@ impl TestCodexHarness {
                 )
                 .await?;
         }
-        let abs_path_uri = PathUri::from_path(&abs_path)?;
+        let abs_path_uri = PathUri::from_host_native_path(&abs_path)?;
         self.test
             .fs()
             .write_file(
@@ -1022,7 +1022,7 @@ impl TestCodexHarness {
 
     pub async fn read_file_text(&self, rel: impl AsRef<Path>) -> Result<String> {
         let path = self.path_abs(rel);
-        let path_uri = PathUri::from_path(&path)?;
+        let path_uri = PathUri::from_host_native_path(&path)?;
         Ok(self
             .test
             .fs()
@@ -1032,7 +1032,7 @@ impl TestCodexHarness {
 
     pub async fn create_dir_all(&self, rel: impl AsRef<Path>) -> Result<()> {
         let path = self.path_abs(rel);
-        let path_uri = PathUri::from_path(&path)?;
+        let path_uri = PathUri::from_host_native_path(&path)?;
         self.test
             .fs()
             .create_directory(

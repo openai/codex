@@ -32,9 +32,8 @@ fn decoded_image(image_url: &str) -> (Vec<u8>, DynamicImage) {
 }
 
 #[test]
-fn preparation_preserves_small_image_bytes_and_non_data_urls() {
+fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
     let (data_url, original_bytes) = png_data_url(/*width*/ 64, /*height*/ 32);
-    let http_url = "https://example.com/image.png".to_string();
     let mut items = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -44,12 +43,12 @@ fn preparation_preserves_small_image_bytes_and_non_data_urls() {
                 detail: Some(ImageDetail::High),
             },
             ContentItem::InputImage {
-                image_url: http_url.clone(),
+                image_url: "https://example.com/image.png".to_string(),
                 detail: Some(ImageDetail::Low),
             },
         ],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
 
     prepare_response_items(&mut items);
@@ -59,16 +58,13 @@ fn preparation_preserves_small_image_bytes_and_non_data_urls() {
     };
     let [
         ContentItem::InputImage { image_url, .. },
-        ContentItem::InputImage {
-            image_url: preserved_http_url,
-            detail: Some(ImageDetail::Low),
-        },
+        ContentItem::InputText { text },
     ] = content.as_slice()
     else {
         panic!("expected two images");
     };
     assert_eq!(decoded_image(image_url).0, original_bytes);
-    assert_eq!(preserved_http_url, &http_url);
+    assert_eq!(text, REMOTE_IMAGE_URL_PLACEHOLDER);
 }
 
 #[test]
@@ -86,7 +82,7 @@ fn detail_policies_apply_the_expected_budgets() {
             role: "user".to_string(),
             content: vec![ContentItem::InputImage { image_url, detail }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }];
 
         prepare_response_items(&mut items);
@@ -133,7 +129,7 @@ fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
             ]),
             success: Some(true),
         },
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
 
     prepare_response_items(&mut items);
@@ -165,7 +161,7 @@ fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
                 ]),
                 success: Some(true),
             },
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }]
     );
 }
@@ -173,6 +169,10 @@ fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
 #[test]
 fn preparation_errors_use_bounded_actionable_placeholders() {
     let cases = [
+        (
+            ImagePreparationError::RemoteUrlUnsupported,
+            REMOTE_IMAGE_URL_PLACEHOLDER,
+        ),
         (
             ImagePreparationError::UnsupportedLowDetail,
             UNSUPPORTED_LOW_DETAIL_PLACEHOLDER,

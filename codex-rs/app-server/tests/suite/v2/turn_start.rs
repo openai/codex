@@ -107,6 +107,7 @@ const TINY_PNG_BYTES: &[u8] = &[
     0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0, 1,
     122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
+const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     String::from_utf8(req.body.clone())
@@ -889,7 +890,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
             input: vec![V2UserInput::Image {
-                url: "https://example.com/a.png".to_string(),
+                url: TINY_PNG_DATA_URL.to_string(),
                 detail: None,
             }],
             responsesapi_client_metadata: Some(HashMap::from([(
@@ -1769,10 +1770,7 @@ async fn turn_start_accepts_multi_agent_mode_v2() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::from([
-            (Feature::MultiAgentV2, true),
-            (Feature::MultiAgentMode, true),
-        ]),
+        &BTreeMap::from([(Feature::MultiAgentV2, true)]),
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -1846,10 +1844,7 @@ async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::from([
-            (Feature::MultiAgentV2, true),
-            (Feature::MultiAgentMode, true),
-        ]),
+        &BTreeMap::from([(Feature::MultiAgentV2, true)]),
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -1872,7 +1867,7 @@ async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
         multi_agent_mode,
         ..
     } = to_response::<ThreadStartResponse>(thread_resp)?;
-    assert_eq!(multi_agent_mode, Some(MultiAgentMode::Proactive));
+    assert_eq!(multi_agent_mode, MultiAgentMode::Proactive);
 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -1912,27 +1907,29 @@ async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_reports_selected_multi_agent_mode() -> Result<()> {
+async fn thread_start_reports_multi_agent_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let cases = [
         (
             BTreeMap::from([(Feature::MultiAgentV2, true)]),
             Some(MultiAgentMode::Proactive),
-            Some(MultiAgentMode::Proactive),
+            MultiAgentMode::Proactive,
+        ),
+        (
+            BTreeMap::from([(Feature::MultiAgentV2, true)]),
+            Some(MultiAgentMode::None),
+            MultiAgentMode::None,
         ),
         (
             BTreeMap::new(),
             Some(MultiAgentMode::Proactive),
-            Some(MultiAgentMode::Proactive),
+            MultiAgentMode::Proactive,
         ),
         (
-            BTreeMap::from([
-                (Feature::MultiAgentV2, true),
-                (Feature::MultiAgentMode, true),
-            ]),
+            BTreeMap::from([(Feature::MultiAgentV2, true)]),
             None,
-            None,
+            MultiAgentMode::ExplicitRequestOnly,
         ),
     ];
 

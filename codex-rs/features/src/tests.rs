@@ -477,6 +477,23 @@ fn from_sources_ignores_removed_image_detail_original_feature_key() {
 }
 
 #[test]
+fn from_sources_ignores_removed_resize_all_images_feature_key() {
+    let features_toml =
+        FeaturesToml::from(BTreeMap::from([("resize_all_images".to_string(), false)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
 fn from_sources_ignores_removed_undo_feature_key() {
     let features_toml = FeaturesToml::from(BTreeMap::from([("undo".to_string(), true)]));
 
@@ -531,6 +548,25 @@ fn from_sources_ignores_removed_apply_patch_freeform_feature_key() {
 #[test]
 fn from_sources_ignores_removed_plugin_hooks_feature_key() {
     let features_toml = FeaturesToml::from(BTreeMap::from([("plugin_hooks".to_string(), true)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
+fn from_sources_ignores_removed_tool_search_always_defer_mcp_tools_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([(
+        "tool_search_always_defer_mcp_tools".to_string(),
+        false,
+    )]));
 
     let features = Features::from_sources(
         FeatureConfigSource {
@@ -600,45 +636,6 @@ non_code_mode_only = true
             tool_namespace: Some("agents".to_string()),
             hide_spawn_agent_metadata: Some(true),
             non_code_mode_only: Some(true),
-        }))
-    );
-}
-
-#[test]
-fn multi_agent_v2_feature_config_usage_hint_enabled_does_not_enable_feature() {
-    let features_toml: FeaturesToml = toml::from_str(
-        r#"
-[multi_agent_v2]
-usage_hint_enabled = false
-"#,
-    )
-    .expect("features table should deserialize");
-    let features = Features::from_sources(
-        FeatureConfigSource {
-            features: Some(&features_toml),
-            ..Default::default()
-        },
-        FeatureConfigSource::default(),
-        FeatureOverrides::default(),
-    );
-
-    assert_eq!(features.enabled(Feature::MultiAgentV2), false);
-    assert_eq!(features_toml.entries(), BTreeMap::new());
-    assert_eq!(
-        features_toml.multi_agent_v2,
-        Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
-            enabled: None,
-            max_concurrent_threads_per_session: None,
-            min_wait_timeout_ms: None,
-            max_wait_timeout_ms: None,
-            default_wait_timeout_ms: None,
-            usage_hint_enabled: Some(false),
-            usage_hint_text: None,
-            root_agent_usage_hint_text: None,
-            subagent_usage_hint_text: None,
-            tool_namespace: None,
-            hide_spawn_agent_metadata: None,
-            non_code_mode_only: None,
         }))
     );
 }

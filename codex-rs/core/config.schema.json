@@ -440,10 +440,16 @@
             "auth_elicitation": {
               "type": "boolean"
             },
+            "auto_compaction": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
             "browser_use_external": {
+              "type": "boolean"
+            },
+            "browser_use_full_cdp_access": {
               "type": "boolean"
             },
             "chronicle": {
@@ -669,7 +675,7 @@
               "type": "boolean"
             },
             "token_budget": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_TokenBudgetConfigToml"
             },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
@@ -964,6 +970,16 @@
         },
         {
           "$ref": "#/definitions/RolloutBudgetConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_TokenBudgetConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/TokenBudgetConfigToml"
         }
       ]
     },
@@ -1307,6 +1323,9 @@
         }
       ],
       "description": "One action binding value in config.\n\nThis accepts either:\n\n1. A single key spec string (`\"ctrl-a\"`). 2. A list of key spec strings (`[\"ctrl-a\", \"alt-a\"]`).\n\nAn empty list explicitly unbinds the action in that scope. Because an explicit empty list is still a configured value, runtime resolution must not fall through to global or built-in defaults for that action."
+    },
+    "LegacyAppPathString": {
+      "type": "string"
     },
     "MarketplaceConfig": {
       "additionalProperties": false,
@@ -1712,6 +1731,7 @@
           "type": "string"
         },
         "usage_hint_enabled": {
+          "description": "Deprecated compatibility field. Its value is ignored.",
           "type": "boolean"
         },
         "usage_hint_text": {
@@ -2090,6 +2110,29 @@
         }
       ]
     },
+    "OrchestratorFeatureToml": {
+      "additionalProperties": false,
+      "description": "Settings for a feature owned by the orchestrator.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "OrchestratorToml": {
+      "additionalProperties": false,
+      "description": "Orchestrator-owned feature settings.",
+      "properties": {
+        "mcp": {
+          "$ref": "#/definitions/OrchestratorFeatureToml"
+        },
+        "skills": {
+          "$ref": "#/definitions/OrchestratorFeatureToml"
+        }
+      },
+      "type": "object"
+    },
     "OtelConfigToml": {
       "additionalProperties": false,
       "description": "OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.",
@@ -2400,8 +2443,12 @@
           "type": "string"
         },
         "cwd": {
-          "default": null,
-          "type": "string"
+          "allOf": [
+            {
+              "$ref": "#/definitions/LegacyAppPathString"
+            }
+          ],
+          "default": null
         },
         "default_tools_approval_mode": {
           "allOf": [
@@ -2637,10 +2684,13 @@
           "minimum": 0.0,
           "type": "number"
         },
-        "reminder_interval_tokens": {
-          "format": "int64",
-          "minimum": 1.0,
-          "type": "integer"
+        "reminder_at_remaining_tokens": {
+          "description": "Remaining weighted-token values that trigger reminders when crossed.",
+          "items": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": "array"
         },
         "sampling_token_weight": {
           "format": "double",
@@ -2812,6 +2862,27 @@
           "type": "object"
         }
       ]
+    },
+    "TokenBudgetConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "reminder_message_template": {
+          "description": "Reminder template. `{n_remaining}` is replaced with the tokens remaining before auto-compaction.",
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "reminder_threshold_tokens": {
+          "description": "Number of tokens remaining before auto-compaction when the wrap-up reminder is emitted.",
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "ToolSuggestConfig": {
       "additionalProperties": false,
@@ -4419,6 +4490,7 @@
       "enum": [
         "disabled",
         "cached",
+        "indexed",
         "live"
       ],
       "type": "string"
@@ -4679,10 +4751,16 @@
         "auth_elicitation": {
           "type": "boolean"
         },
+        "auto_compaction": {
+          "type": "boolean"
+        },
         "browser_use": {
           "type": "boolean"
         },
         "browser_use_external": {
+          "type": "boolean"
+        },
+        "browser_use_full_cdp_access": {
           "type": "boolean"
         },
         "chronicle": {
@@ -4908,7 +4986,7 @@
           "type": "boolean"
         },
         "token_budget": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_TokenBudgetConfigToml"
         },
         "tool_call_mcp_elicitation": {
           "type": "boolean"
@@ -5191,6 +5269,14 @@
       "description": "Base URL override for the built-in `openai` model provider.",
       "type": "string"
     },
+    "orchestrator": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OrchestratorToml"
+        }
+      ],
+      "description": "Orchestrator-owned feature settings."
+    },
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
       "type": "string"
@@ -5380,7 +5466,7 @@
           "$ref": "#/definitions/WebSearchMode"
         }
       ],
-      "description": "Controls the web search tool mode: disabled, cached, or live."
+      "description": "Controls the web search tool mode: disabled, cached, indexed, or live."
     },
     "windows": {
       "allOf": [

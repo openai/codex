@@ -61,14 +61,14 @@ where
                 .get::<Vec<SelectedCapabilityRoot>>()
                 .map(|selected_roots| selected_roots.as_ref().clone())
                 .unwrap_or_default();
-            let orchestrator_skills_enabled = !input
+            let orchestrator_skills_available = !input
                 .environments
                 .iter()
                 .any(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID);
             input.thread_store.insert(SkillsThreadState::new(
                 (self.config_from_host)(input.config),
                 selected_roots,
-                orchestrator_skills_enabled,
+                orchestrator_skills_available,
             ));
         })
     }
@@ -89,11 +89,11 @@ where
         if let Some(state) = thread_store.get::<SkillsThreadState>() {
             state.set_config(next_config);
         } else {
-            let orchestrator_skills_enabled = true;
+            let orchestrator_skills_available = true;
             thread_store.insert(SkillsThreadState::new(
                 next_config,
                 Vec::new(),
-                orchestrator_skills_enabled,
+                orchestrator_skills_available,
             ));
         }
     }
@@ -287,6 +287,7 @@ where
 }
 
 impl<C> SkillsExtension<C> {
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn list_skills(
         &self,
         mut query: SkillListQuery,
@@ -311,6 +312,7 @@ impl<C> SkillsExtension<C> {
         catalog
     }
 
+    #[tracing::instrument(level = "trace", skip_all, fields(skill = %entry.name))]
     async fn read_main_prompt(
         &self,
         entry: &SkillCatalogEntry,

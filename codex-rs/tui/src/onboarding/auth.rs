@@ -1040,6 +1040,7 @@ mod tests {
                 AuthCredentialsStoreMode::File,
                 AuthKeyringBackendKind::default(),
                 "https://chatgpt.com/backend-api/".to_string(),
+                /*auth_route_config*/ None,
             )
             .await,
             feedback: codex_feedback::CodexFeedback::new(),

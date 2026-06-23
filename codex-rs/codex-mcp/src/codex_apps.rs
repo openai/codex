@@ -8,7 +8,6 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::runtime::emit_duration;
 use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
 use crate::tools::ToolInfo;
@@ -66,15 +65,7 @@ pub(crate) enum CachedCodexAppsToolsLoad {
     Invalid,
 }
 
-pub(crate) fn normalize_codex_apps_tool_title(
-    server_name: &str,
-    connector_name: Option<&str>,
-    value: &str,
-) -> String {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return value.to_string();
-    }
-
+pub(crate) fn normalize_codex_apps_tool_title(connector_name: Option<&str>, value: &str) -> String {
     let Some(connector_name) = connector_name
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -93,15 +84,10 @@ pub(crate) fn normalize_codex_apps_tool_title(
 }
 
 pub(crate) fn normalize_codex_apps_callable_name(
-    server_name: &str,
     tool_name: &str,
     connector_id: Option<&str>,
     connector_name: Option<&str>,
 ) -> String {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return tool_name.to_string();
-    }
-
     let tool_name = sanitize_name(tool_name);
 
     if let Some(connector_name) = connector_name
@@ -131,25 +117,18 @@ pub(crate) fn normalize_codex_apps_callable_namespace(
     server_name: &str,
     connector_name: Option<&str>,
 ) -> String {
-    if server_name == CODEX_APPS_MCP_SERVER_NAME
-        && let Some(connector_name) = connector_name
-    {
+    if let Some(connector_name) = connector_name {
         format!("{}__{}", server_name, sanitize_name(connector_name))
     } else {
         server_name.to_string()
     }
 }
 
-pub(crate) fn write_cached_codex_apps_tools_if_needed(
-    server_name: &str,
+pub(crate) fn write_codex_apps_tools_cache(
     cache_context: Option<&CodexAppsToolsCacheContext>,
     server_info: &McpServerInfo,
     tools: &[ToolInfo],
 ) {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return;
-    }
-
     if let Some(cache_context) = cache_context {
         let cache_write_start = Instant::now();
         write_cached_codex_apps_tools(cache_context, tools);
@@ -165,13 +144,8 @@ pub(crate) fn write_cached_codex_apps_tools_if_needed(
 }
 
 pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
-    server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
 ) -> Option<Vec<ToolInfo>> {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
-    }
-
     let cache_context = cache_context?;
 
     match load_cached_codex_apps_tools(cache_context) {
@@ -181,13 +155,8 @@ pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
 }
 
 pub(crate) fn load_startup_cached_codex_apps_server_info(
-    server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
 ) -> Option<McpServerInfo> {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
-    }
-
     load_cached_codex_apps_server_info(cache_context?)
 }
 
