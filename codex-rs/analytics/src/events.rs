@@ -26,6 +26,7 @@ use crate::now_unix_millis;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_login::default_client::originator;
+use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -933,6 +934,7 @@ pub(crate) struct CodexTurnSteerEventRequest {
 #[derive(Serialize)]
 pub(crate) struct CodexPluginMetadata {
     pub(crate) plugin_id: Option<String>,
+    pub(crate) remote_plugin_id: Option<String>,
     pub(crate) plugin_name: Option<String>,
     pub(crate) marketplace_name: Option<String>,
     pub(crate) has_skills: Option<bool>,
@@ -1040,11 +1042,13 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
         remote_plugin_id,
         capability_summary,
     } = plugin;
-    let event_plugin_id = remote_plugin_id.unwrap_or_else(|| plugin_id.as_key());
     CodexPluginMetadata {
-        plugin_id: Some(event_plugin_id),
-        plugin_name: Some(plugin_id.plugin_name),
-        marketplace_name: Some(plugin_id.marketplace_name),
+        plugin_id: plugin_id.as_ref().map(PluginId::as_key),
+        remote_plugin_id,
+        plugin_name: plugin_id
+            .as_ref()
+            .map(|plugin_id| plugin_id.plugin_name.clone()),
+        marketplace_name: plugin_id.map(|plugin_id| plugin_id.marketplace_name),
         has_skills: capability_summary
             .as_ref()
             .map(|summary| summary.has_skills),

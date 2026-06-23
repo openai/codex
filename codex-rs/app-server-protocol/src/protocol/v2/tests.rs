@@ -168,6 +168,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
     let response = ThreadResumeResponse {
         thread: Thread {
             id: "thr_123".to_string(),
+            extra: None,
             session_id: "thr_123".to_string(),
             forked_from_id: None,
             parent_thread_id: None,
@@ -195,7 +196,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         cwd: absolute_path("tmp"),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
-        approval_policy: AskForApproval::OnFailure,
+        approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox: SandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
@@ -3689,7 +3690,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
         "modelProvider": "openai",
         "serviceTier": null,
         "cwd": absolute_path_string("tmp"),
-        "approvalPolicy": "on-failure",
+        "approvalPolicy": "on-request",
         "approvalsReviewer": "user",
         "sandbox": { "type": "dangerFullAccess" },
         "reasoningEffort": null

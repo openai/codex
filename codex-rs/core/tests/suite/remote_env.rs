@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::ApprovalsReviewer;
+use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Constrained;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
@@ -38,6 +39,7 @@ use core_test_support::get_remote_test_env;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -314,151 +316,6 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_sandbox_denial_requests_approval_and_retries() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
-
-    const CALL_ID: &str = "remote-sandbox-denial";
-    const CONTENTS: &str = "remote sandbox retry succeeded";
-
-    let server = start_mock_server().await;
-    let test = unified_exec_test(&server).await?;
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-    let remote_cwd = PathBuf::from(format!("/tmp/codex-remote-denial-cwd-{nonce}")).abs();
-    let target_path = PathBuf::from(format!("/tmp/codex-remote-denial-target-{nonce}")).abs();
-    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
-    let target_uri = PathUri::from_host_native_path(&target_path)?;
-    test.fs()
-        .create_directory(
-            &remote_cwd_uri,
-            CreateDirectoryOptions { recursive: true },
-            /*sandbox*/ None,
-        )
-        .await?;
-    test.fs()
-        .remove(
-            &target_uri,
-            RemoveOptions {
-                recursive: false,
-                force: true,
-            },
-            /*sandbox*/ None,
-        )
-        .await?;
-
-    let command = format!("printf {CONTENTS:?} > {target_path:?} && cat {target_path:?}");
-    let response_mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-remote-denial-1"),
-                ev_function_call(
-                    CALL_ID,
-                    "exec_command",
-                    &json!({
-                        "shell": "/bin/sh",
-                        "cmd": command,
-                        "login": false,
-                        "yield_time_ms": 5_000,
-                        "environment_id": REMOTE_ENVIRONMENT_ID,
-                    })
-                    .to_string(),
-                ),
-                ev_completed("resp-remote-denial-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-remote-denial-2"),
-                ev_assistant_message("msg-remote-denial", "done"),
-                ev_completed("resp-remote-denial-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    submit_turn_with_approval_and_environments(
-        &test,
-        "retry a sandbox-denied command in the remote environment",
-        vec![TurnEnvironmentSelection {
-            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-            cwd: PathUri::from_abs_path(&remote_cwd),
-        }],
-        AskForApproval::OnFailure,
-    )
-    .await?;
-
-    let event = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-        )
-    })
-    .await;
-    let EventMsg::ExecApprovalRequest(approval) = event else {
-        panic!("expected remote sandbox approval before completion: {event:?}");
-    };
-    assert_eq!(approval.call_id, CALL_ID);
-    assert_eq!(
-        approval.environment_id.as_deref(),
-        Some(REMOTE_ENVIRONMENT_ID)
-    );
-    assert_eq!(
-        approval.reason.as_deref(),
-        Some("command failed; retry without sandbox?")
-    );
-
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::Approved,
-        })
-        .await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
-    assert!(
-        response_mock
-            .function_call_output_text(CALL_ID)
-            .is_some_and(|output| output.contains(CONTENTS)),
-        "approved retry should return the remote command output"
-    );
-    assert_eq!(
-        test.fs()
-            .read_file_text(&target_uri, /*sandbox*/ None)
-            .await?,
-        CONTENTS
-    );
-
-    test.fs()
-        .remove(
-            &target_uri,
-            RemoveOptions {
-                recursive: false,
-                force: true,
-            },
-            /*sandbox*/ None,
-        )
-        .await?;
-    test.fs()
-        .remove(
-            &remote_cwd_uri,
-            RemoveOptions {
-                recursive: true,
-                force: true,
-            },
-            /*sandbox*/ None,
-        )
-        .await?;
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deferred_executor_does_not_duplicate_initial_environment_context() -> Result<()> {
     let server = start_mock_server().await;
     let response_mock = mount_sse_once(
@@ -679,6 +536,141 @@ async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
             .count(),
         1
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_executor_compaction_preserves_then_updates_environment_once() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "wait-for-startup",
+                    "request_user_input",
+                    &json!({
+                        "questions": [{
+                            "id": "continue",
+                            "header": "Continue",
+                            "question": "Continue after startup?",
+                            "options": [{
+                                "label": "Yes (Recommended)",
+                                "description": "Continue the test."
+                            }, {
+                                "label": "No",
+                                "description": "Stop the test."
+                            }]
+                        }]
+                    })
+                    .to_string(),
+                ),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 96),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-compact", "AUTO_COMPACT_SUMMARY"),
+                ev_completed_with_tokens("resp-compact", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
+        .with_config(|config| {
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+            assert!(
+                config
+                    .features
+                    .enable(Feature::DefaultModeRequestUserInput)
+                    .is_ok()
+            );
+            config.model_provider.name = "OpenAI (test)".to_string();
+            config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+            config.model_context_window = Some(100);
+            config.model_auto_compact_token_limit = Some(90);
+        });
+    let test = timeout(Duration::from_secs(5), builder.build(&server))
+        .await
+        .context("thread startup should not wait for the remote environment")??;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "wait for the environment".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+
+    serve_environment_info(listener).await;
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    "continue".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Yes (Recommended)".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let initial_context = requests[0].message_input_texts("user");
+    assert!(
+        initial_context
+            .iter()
+            .any(|text| text.contains("<status>starting</status>"))
+    );
+
+    let post_compaction_context = requests[2].message_input_texts("user");
+    assert_eq!(
+        post_compaction_context
+            .iter()
+            .filter(|text| text.contains("<status>starting</status>"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        post_compaction_context
+            .iter()
+            .filter(|text| text.contains("<shell>zsh</shell>"))
+            .count(),
+        1
+    );
+    let starting_index = post_compaction_context
+        .iter()
+        .position(|text| text.contains("<status>starting</status>"))
+        .expect("compaction should preserve the prior environment state");
+    let ready_index = post_compaction_context
+        .iter()
+        .position(|text| text.contains("<shell>zsh</shell>"))
+        .expect("the next sampling step should report that the environment is ready");
+    assert!(starting_index < ready_index);
 
     Ok(())
 }

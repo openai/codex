@@ -748,15 +748,6 @@ impl Session {
             ) {
                 post_session_configured_events.push(event);
             }
-            if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
-                post_session_configured_events.push(Event {
-                    id: "".to_owned(),
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: "`on-failure` approval policy is deprecated and will be removed in a future release. Use `on-request` for interactive approvals or `never` for non-interactive runs.".to_string(),
-                    }),
-                });
-            }
-
             let auth = auth.as_ref();
             let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
             let account_id = auth.and_then(CodexAuth::get_account_id);
@@ -1138,9 +1129,6 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            let host_owned_codex_apps_enabled = config
-                .features
-                .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
             let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
                 ElicitationCapability {
                     form: Some(FormElicitationCapability::default()),
@@ -1183,7 +1171,6 @@ impl Session {
                 mcp_runtime_context,
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
-                host_owned_codex_apps_enabled,
                 config.prefix_mcp_tool_names(),
                 client_elicitation_capability,
                 sess.services

@@ -32,6 +32,7 @@ use image::Luma;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use std::sync::Arc;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -82,7 +83,7 @@ fn world_state_baseline_deduplicates_until_history_is_replaced() {
         state.add_section(EnvironmentsState::from_turn_context_item(
             &reference_context_item(),
         ));
-        state
+        Arc::new(state)
     };
     let mut history = ContextManager::new();
 

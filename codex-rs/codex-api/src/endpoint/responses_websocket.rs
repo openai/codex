@@ -838,11 +838,11 @@ mod tests {
                 phase: None,
                 internal_chat_message_metadata_passthrough: None,
             }],
-            tools: vec![json!({
+            tools: Some(vec![json!({
                 "type": "function",
                 "name": "lookup",
                 "parameters": {"type": "object"}
-            })],
+            })]),
             tool_choice: "auto".to_string(),
             parallel_tool_calls: true,
             reasoning: None,

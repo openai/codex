@@ -653,10 +653,8 @@ async fn maybe_request_codex_apps_auth_elicitation(
         AskForApproval::Granular(granular_config) if !granular_config.allows_mcp_elicitations() => {
             return result;
         }
-        AskForApproval::OnFailure
-        | AskForApproval::OnRequest
-        | AskForApproval::UnlessTrusted
-        | AskForApproval::Granular(_) => {}
+        AskForApproval::OnRequest | AskForApproval::UnlessTrusted | AskForApproval::Granular(_) => {
+        }
     }
 
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
@@ -744,7 +742,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     };
     let permission_profile = turn_context.permission_profile();
     let sandbox_state = serde_json::to_value(SandboxState {
-        permission_profile: Some(permission_profile),
+        permission_profile,
         codex_linux_sandbox_exe: turn_context.config.codex_linux_sandbox_exe.clone(),
         sandbox_cwd,
         use_legacy_landlock: turn_context.config.features.use_legacy_landlock(),

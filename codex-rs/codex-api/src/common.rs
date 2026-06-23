@@ -28,7 +28,8 @@ pub struct CompactionInput<'a> {
     pub input: &'a [ResponseItem],
     #[serde(skip_serializing_if = "str::is_empty")]
     pub instructions: &'a str,
-    pub tools: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
     pub parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
@@ -210,7 +211,8 @@ pub struct ResponsesApiRequest {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     pub input: Vec<ResponseItem>,
-    pub tools: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
@@ -258,7 +260,8 @@ pub struct ResponseCreateWsRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
     pub input: Vec<ResponseItem>,
-    pub tools: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,

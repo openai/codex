@@ -17,11 +17,10 @@ use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxState {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permission_profile: PermissionProfile,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub sandbox_cwd: PathUri,
     #[serde(default)]
