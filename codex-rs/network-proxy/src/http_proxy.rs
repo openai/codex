@@ -1234,10 +1234,7 @@ mod tests {
 
         let (response, _request) = http_connect_accept(
             Some(decider),
-            NetworkRequestContext {
-                environment_id: Some("remote".to_string()),
-                execution_id: Some("execution-1".to_string()),
-            },
+            NetworkRequestContext::for_execution("remote", "execution-1"),
             req,
         )
         .await

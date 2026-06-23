@@ -4,6 +4,7 @@
 use codex_core::exec_env::create_env;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::PermissionProfile;
+use codex_sandboxing::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::io::Read;
@@ -17,6 +18,7 @@ use tokio::process::Command;
 
 const BWRAP_UNAVAILABLE_ERR: &str = "bubblewrap is unavailable: no system bwrap was found";
 const NETWORK_TIMEOUT_MS: u64 = 4_000;
+const TEST_ATTRIBUTION_TOKEN: &str = "test-attribution-token";
 const MANAGED_PROXY_PERMISSION_ERR_SNIPPETS: &[&str] = &[
     "loopback: Failed RTM_NEWADDR",
     "loopback: Failed RTM_NEWLINK",
@@ -53,6 +55,14 @@ fn strip_proxy_env(env: &mut HashMap<String, String>) {
         let lower = key.to_ascii_lowercase();
         env.remove(lower.as_str());
     }
+    env.remove(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
+}
+
+fn insert_test_attribution_token(env: &mut HashMap<String, String>) {
+    env.insert(
+        PROXY_ATTRIBUTION_TOKEN_ENV_KEY.to_string(),
+        TEST_ATTRIBUTION_TOKEN.to_string(),
+    );
 }
 
 fn is_bwrap_unavailable_output(output: &Output) -> bool {
@@ -88,6 +98,7 @@ async fn managed_proxy_skip_reason() -> Option<String> {
     let mut env = create_env_from_core_vars();
     strip_proxy_env(&mut env);
     env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
+    insert_test_attribution_token(&mut env);
 
     let output = run_linux_sandbox_direct(
         &["bash", "-c", "true"],
@@ -177,6 +188,33 @@ async fn managed_proxy_mode_fails_closed_without_proxy_env() {
 }
 
 #[tokio::test]
+async fn managed_proxy_mode_fails_closed_without_attribution_token() {
+    if should_skip_bwrap_tests().await {
+        return;
+    }
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+    env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
+
+    let output = run_linux_sandbox_direct(
+        &["bash", "-c", "true"],
+        &PermissionProfile::Disabled,
+        /*allow_network_for_proxy*/ true,
+        env,
+        NETWORK_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_eq!(output.status.success(), false);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("managed proxy mode requires an attribution token"),
+        "expected fail-closed attribution message, got stderr: {stderr}"
+    );
+}
+
+#[tokio::test]
 async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
     if let Some(skip_reason) = managed_proxy_skip_reason().await {
         eprintln!("skipping managed proxy test: {skip_reason}");
@@ -194,6 +232,21 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .expect("set read timeout");
+        let mut magic = [0_u8; 8];
+        stream
+            .read_exact(&mut magic)
+            .expect("read attribution frame magic");
+        assert_eq!(&magic, b"\0CDXPXY1");
+        let mut token_len = [0_u8; 2];
+        stream
+            .read_exact(&mut token_len)
+            .expect("read attribution token length");
+        let mut token = vec![0_u8; u16::from_be_bytes(token_len) as usize];
+        stream
+            .read_exact(&mut token)
+            .expect("read attribution token");
+        assert_eq!(token, TEST_ATTRIBUTION_TOKEN.as_bytes());
+
         let mut buf = [0_u8; 4096];
         let read = stream.read(&mut buf).expect("read proxy request");
         let request = String::from_utf8_lossy(&buf[..read]).to_string();
@@ -209,12 +262,13 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
         "HTTP_PROXY".to_string(),
         format!("http://127.0.0.1:{proxy_port}"),
     );
+    insert_test_attribution_token(&mut env);
 
     let routed_output = run_linux_sandbox_direct(
         &[
             "bash",
             "-c",
-            "proxy=\"${HTTP_PROXY#*://}\"; host=\"${proxy%%:*}\"; port=\"${proxy##*:}\"; exec 3<>/dev/tcp/${host}/${port}; printf 'GET http://example.com/ HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n' >&3; IFS= read -r line <&3; printf '%s\\n' \"$line\"",
+            "test -z \"${CODEX_NETWORK_PROXY_ATTRIBUTION+x}\" || exit 42; proxy=\"${HTTP_PROXY#*://}\"; host=\"${proxy%%:*}\"; port=\"${proxy##*:}\"; exec 3<>/dev/tcp/${host}/${port}; printf 'GET http://example.com/ HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n' >&3; IFS= read -r line <&3; printf '%s\\n' \"$line\"",
         ],
         &PermissionProfile::Disabled,
         /*allow_network_for_proxy*/ true,
@@ -278,6 +332,7 @@ async fn managed_proxy_mode_denies_af_unix_socket_but_allows_socketpair() {
     let mut env = create_env_from_core_vars();
     strip_proxy_env(&mut env);
     env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
+    insert_test_attribution_token(&mut env);
 
     let output = run_linux_sandbox_direct(
         &[

@@ -15,6 +15,27 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
 #[test]
+fn attribution_records_are_removed_by_execution() -> anyhow::Result<()> {
+    let registry = AttributionRegistry::default();
+    let context = NetworkRequestContext::for_execution("local", "execution-1");
+    registry.register(
+        "execution-1".to_string(),
+        "token-1".to_string(),
+        context.clone(),
+    );
+
+    assert_eq!(
+        registry.token_for_execution("execution-1", &context)?,
+        "token-1"
+    );
+    assert_eq!(registry.context_for_token("token-1"), Some(context));
+
+    registry.remove("execution-1");
+    assert_eq!(registry.context_for_token("token-1"), None);
+    Ok(())
+}
+
+#[test]
 fn attribution_frame_has_bounded_binary_prefix() -> io::Result<()> {
     let mut frame = Vec::new();
     write_attribution_frame(&mut frame, "token-1")?;
@@ -28,11 +49,12 @@ fn attribution_frame_has_bounded_binary_prefix() -> io::Result<()> {
 #[tokio::test]
 async fn framed_connection_receives_registered_attribution() -> Result<(), BoxError> {
     let registry = AttributionRegistry::default();
-    let expected = NetworkRequestContext {
-        environment_id: Some("local".to_string()),
-        execution_id: Some("execution-1".to_string()),
-    };
-    registry.register("token-1", expected.clone());
+    let expected = NetworkRequestContext::for_execution("local", "execution-1");
+    registry.register(
+        "execution-1".to_string(),
+        "token-1".to_string(),
+        expected.clone(),
+    );
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

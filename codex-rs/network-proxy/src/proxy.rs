@@ -1,5 +1,6 @@
 use crate::attribution::AttributionRegistry;
 use crate::attribution::ConnectionAttribution;
+use crate::attribution::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
@@ -19,6 +20,8 @@ use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
@@ -334,6 +337,7 @@ struct EnvironmentProxyAddrs {
 
 struct EnvironmentProxy {
     addrs: EnvironmentProxyAddrs,
+    request_context: NetworkRequestContext,
     http_task: JoinHandle<Result<()>>,
     socks_task: Option<JoinHandle<Result<()>>>,
 }
@@ -350,6 +354,48 @@ pub struct NetworkProxy {
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
     execution_proxies: AttributionRegistry,
+}
+
+/// Keeps an execution-scoped proxy attribution alive until the command tree exits.
+///
+/// Clones share one lease. Calling [`Self::close`] or dropping the final clone
+/// removes its attribution record.
+#[derive(Clone)]
+pub struct NetworkProxyExecutionLease {
+    inner: Arc<NetworkProxyExecutionLeaseInner>,
+}
+
+struct NetworkProxyExecutionLeaseInner {
+    proxy: NetworkProxy,
+    execution_id: String,
+    closed: AtomicBool,
+}
+
+impl std::fmt::Debug for NetworkProxyExecutionLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NetworkProxyExecutionLease")
+            .field("execution_id", &self.inner.execution_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl NetworkProxyExecutionLease {
+    /// Removes the execution-scoped route immediately.
+    pub fn close(&self) {
+        if !self.inner.closed.swap(true, Ordering::AcqRel) {
+            self.inner
+                .proxy
+                .release_execution_proxy(&self.inner.execution_id);
+        }
+    }
+}
+
+impl Drop for NetworkProxyExecutionLeaseInner {
+    fn drop(&mut self) {
+        if !self.closed.swap(true, Ordering::AcqRel) {
+            self.proxy.release_execution_proxy(&self.execution_id);
+        }
+    }
 }
 
 impl std::fmt::Debug for NetworkProxy {
@@ -401,6 +447,7 @@ const NODE_USE_ENV_PROXY_ENV_KEY: &str = "NODE_USE_ENV_PROXY";
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
 pub const PROXY_ENV_KEYS: &[&str] = &[
     PROXY_ACTIVE_ENV_KEY,
+    PROXY_ATTRIBUTION_TOKEN_ENV_KEY,
     ALLOW_LOCAL_BINDING_ENV_KEY,
     ELECTRON_GET_USE_PROXY_ENV_KEY,
     NODE_USE_ENV_PROXY_ENV_KEY,
@@ -615,6 +662,29 @@ impl NetworkProxy {
         NetworkProxyBuilder::default()
     }
 
+    /// Registers and leases a command's execution-scoped proxy attribution.
+    pub fn execution_lease(
+        &self,
+        environment_id: impl Into<String>,
+        execution_id: impl Into<String>,
+        token: impl Into<String>,
+    ) -> NetworkProxyExecutionLease {
+        let environment_id = environment_id.into();
+        let execution_id = execution_id.into();
+        self.execution_proxies.register(
+            execution_id.clone(),
+            token.into(),
+            NetworkRequestContext::for_execution(environment_id, execution_id.clone()),
+        );
+        NetworkProxyExecutionLease {
+            inner: Arc::new(NetworkProxyExecutionLeaseInner {
+                proxy: self.clone(),
+                execution_id,
+                closed: AtomicBool::new(false),
+            }),
+        }
+    }
+
     pub fn http_addr(&self) -> SocketAddr {
         self.http_addr
     }
@@ -696,11 +766,41 @@ impl NetworkProxy {
         Ok(())
     }
 
+    /// Applies a proxy route whose requests are attributed to one execution tree.
+    pub fn apply_to_env_for_execution(
+        &self,
+        env: &mut HashMap<String, String>,
+        environment_id: &str,
+        execution_id: &str,
+    ) -> Result<()> {
+        let request_context = NetworkRequestContext::for_execution(environment_id, execution_id);
+        let token = self
+            .execution_proxies
+            .token_for_execution(execution_id, &request_context)?;
+        self.apply_to_env(env);
+        env.insert(PROXY_ATTRIBUTION_TOKEN_ENV_KEY.to_string(), token);
+        Ok(())
+    }
+
     pub fn apply_to_env_for_optional_environment(
         &self,
         env: &mut HashMap<String, String>,
         environment_id: Option<&str>,
     ) -> Result<()> {
+        if let (Some(environment_id), Some(token)) = (
+            environment_id,
+            env.get(PROXY_ATTRIBUTION_TOKEN_ENV_KEY).cloned(),
+        ) {
+            let execution_context = self.execution_proxies.context_for_token(&token);
+            if execution_context
+                .as_ref()
+                .is_some_and(|context| context.environment_id.as_deref() == Some(environment_id))
+            {
+                self.apply_to_env(env);
+                return Ok(());
+            }
+            env.remove(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
+        }
         match environment_id {
             Some(environment_id) => self.apply_to_env_for_environment(env, environment_id),
             None => {
@@ -711,27 +811,42 @@ impl NetworkProxy {
     }
 
     fn environment_proxy_addrs(&self, environment_id: &str) -> Result<EnvironmentProxyAddrs> {
-        let mut proxies = self
-            .environment_proxies
+        self.scoped_proxy_addrs(
+            &self.environment_proxies,
+            environment_id,
+            NetworkRequestContext::for_environment(environment_id),
+            format!("environment `{environment_id}`"),
+        )
+    }
+
+    fn scoped_proxy_addrs(
+        &self,
+        proxy_map: &Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
+        key: &str,
+        request_context: NetworkRequestContext,
+        description: String,
+    ) -> Result<EnvironmentProxyAddrs> {
+        let mut proxies = proxy_map
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(proxy) = proxies.get(environment_id) {
+        if let Some(proxy) = proxies.get(key) {
+            anyhow::ensure!(
+                proxy.request_context == request_context,
+                "network proxy route `{key}` was reused with different attribution"
+            );
             return Ok(proxy.addrs);
         }
 
-        let runtime = tokio::runtime::Handle::try_current().with_context(|| {
-            format!("failed to create network proxy for environment `{environment_id}`")
-        })?;
-        let listeners =
-            reserve_loopback_ephemeral_listeners(self.socks_enabled).with_context(|| {
-                format!("failed to reserve network proxy for environment `{environment_id}`")
-            })?;
-        let http_addr = listeners.http_addr().with_context(|| {
-            format!("failed to read HTTP proxy address for environment `{environment_id}`")
-        })?;
-        let socks_addr = listeners.socks_addr(self.socks_addr).with_context(|| {
-            format!("failed to read SOCKS proxy address for environment `{environment_id}`")
-        })?;
+        let runtime = tokio::runtime::Handle::try_current()
+            .with_context(|| format!("failed to create network proxy for {description}"))?;
+        let listeners = reserve_loopback_ephemeral_listeners(self.socks_enabled)
+            .with_context(|| format!("failed to reserve network proxy for {description}"))?;
+        let http_addr = listeners
+            .http_addr()
+            .with_context(|| format!("failed to read HTTP proxy address for {description}"))?;
+        let socks_addr = listeners
+            .socks_addr(self.socks_addr)
+            .with_context(|| format!("failed to read SOCKS proxy address for {description}"))?;
         let addrs = EnvironmentProxyAddrs {
             http_addr,
             socks_addr,
@@ -741,10 +856,10 @@ impl NetworkProxy {
             socks_listener,
         } = listeners;
 
-        let environment_id = environment_id.to_string();
+        let stored_request_context = request_context.clone();
         let http_state = self.state.clone();
         let http_decider = self.policy_decider.clone();
-        let http_request_context = NetworkRequestContext::for_environment(&environment_id);
+        let http_request_context = request_context.clone();
         let http_task = runtime.spawn(async move {
             http_proxy::run_http_proxy_with_std_listener(
                 http_state,
@@ -758,7 +873,7 @@ impl NetworkProxy {
         let socks_task = if self.socks_enabled {
             let socks_state = self.state.clone();
             let socks_decider = self.policy_decider.clone();
-            let socks_request_context = NetworkRequestContext::for_environment(&environment_id);
+            let socks_request_context = request_context;
             let socks5_udp_enabled = self.socks5_udp_enabled;
             socks_listener.map(|listener| {
                 runtime.spawn(async move {
@@ -777,14 +892,19 @@ impl NetworkProxy {
         };
 
         proxies.insert(
-            environment_id,
+            key.to_string(),
             EnvironmentProxy {
                 addrs,
+                request_context: stored_request_context,
                 http_task,
                 socks_task,
             },
         );
         Ok(addrs)
+    }
+
+    fn release_execution_proxy(&self, execution_id: &str) {
+        self.execution_proxies.remove(execution_id);
     }
 
     pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
@@ -1104,6 +1224,71 @@ mod tests {
             remote_env.get("HTTP_PROXY"),
             Some(&format!("http://{}", proxy.http_addr()))
         );
+
+        handle.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn execution_proxy_routes_share_ports_and_are_released_independently() -> Result<()> {
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+        let proxy = NetworkProxy::builder().state(state).build().await?;
+        let handle = proxy.run().await?;
+        let first_lease = proxy.execution_lease("local", "execution-1", "attribution-token-1");
+        let second_lease = proxy.execution_lease("local", "execution-2", "attribution-token-2");
+
+        let mut first_env = HashMap::new();
+        proxy.apply_to_env_for_execution(&mut first_env, "local", "execution-1")?;
+        let mut second_env = HashMap::new();
+        proxy.apply_to_env_for_execution(&mut second_env, "local", "execution-2")?;
+        let mut repeated_first_env = HashMap::new();
+        proxy.apply_to_env_for_execution(&mut repeated_first_env, "local", "execution-1")?;
+
+        assert_eq!(first_env.get("HTTP_PROXY"), second_env.get("HTTP_PROXY"));
+        assert_eq!(
+            first_env.get("HTTP_PROXY"),
+            repeated_first_env.get("HTTP_PROXY")
+        );
+        assert_eq!(
+            first_env.get("HTTP_PROXY"),
+            Some(&format!("http://{}", proxy.http_addr()))
+        );
+        assert_eq!(
+            first_env.get(PROXY_ATTRIBUTION_TOKEN_ENV_KEY),
+            Some(&"attribution-token-1".to_string())
+        );
+        assert_eq!(
+            second_env.get(PROXY_ATTRIBUTION_TOKEN_ENV_KEY),
+            Some(&"attribution-token-2".to_string())
+        );
+        assert_eq!(proxy.execution_proxies.len(), 2);
+        assert_eq!(
+            proxy
+                .execution_proxies
+                .context_for_token("attribution-token-1"),
+            Some(NetworkRequestContext::for_execution("local", "execution-1"))
+        );
+
+        first_lease.close();
+
+        assert_eq!(proxy.execution_proxies.len(), 1);
+        assert_eq!(
+            proxy
+                .execution_proxies
+                .context_for_token("attribution-token-1"),
+            None
+        );
+        assert_eq!(
+            proxy
+                .execution_proxies
+                .context_for_token("attribution-token-2"),
+            Some(NetworkRequestContext::for_execution("local", "execution-2"))
+        );
+
+        drop(second_lease);
+        assert_eq!(proxy.execution_proxies.len(), 0);
 
         handle.shutdown().await?;
         Ok(())

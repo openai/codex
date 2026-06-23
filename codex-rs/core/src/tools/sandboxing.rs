@@ -424,16 +424,24 @@ pub(crate) struct SandboxAttempt<'a> {
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub network_denial_cancellation_token: Option<CancellationToken>,
+    pub network_execution_id: Option<&'a str>,
 }
 
 impl<'a> SandboxAttempt<'a> {
     pub fn env_for(
         &self,
-        command: SandboxCommand,
+        mut command: SandboxCommand,
         options: ExecOptions,
         network: Option<&NetworkProxy>,
         environment_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
+        if let (Some(network), Some(environment_id), Some(execution_id)) =
+            (network, environment_id, self.network_execution_id)
+        {
+            network
+                .apply_to_env_for_execution(&mut command.env, environment_id, execution_id)
+                .map_err(|err| CodexErr::Io(std::io::Error::other(err.to_string())))?;
+        }
         let request = self
             .manager
             .transform(SandboxTransformRequest {
@@ -461,11 +469,18 @@ impl<'a> SandboxAttempt<'a> {
 
     pub fn env_for_exec_server(
         &self,
-        command: SandboxCommand,
+        mut command: SandboxCommand,
         options: ExecOptions,
         network: Option<&NetworkProxy>,
         environment_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
+        if let (Some(network), Some(environment_id), Some(execution_id)) =
+            (network, environment_id, self.network_execution_id)
+        {
+            network
+                .apply_to_env_for_execution(&mut command.env, environment_id, execution_id)
+                .map_err(|err| CodexErr::Io(std::io::Error::other(err.to_string())))?;
+        }
         let exec_server_permissions = effective_permission_profile(
             self.exec_server_permissions,
             command.additional_permissions.as_ref(),

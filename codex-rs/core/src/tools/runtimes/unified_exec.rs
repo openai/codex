@@ -323,17 +323,23 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         );
         let mut env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
         if let Some(network) = managed_network {
-            network
-                .apply_to_env_for_optional_environment(
+            let apply_result = match attempt.network_execution_id {
+                Some(execution_id) => network.apply_to_env_for_execution(
+                    &mut env,
+                    &req.turn_environment.environment_id,
+                    execution_id,
+                ),
+                None => network.apply_to_env_for_optional_environment(
                     &mut env,
                     Some(&req.turn_environment.environment_id),
-                )
-                .map_err(|err| {
-                    ToolError::Codex(CodexErr::Io(io::Error::other(format!(
-                        "failed to prepare network proxy for environment `{}`: {err}",
-                        req.turn_environment.environment_id
-                    ))))
-                })?;
+                ),
+            };
+            apply_result.map_err(|err| {
+                ToolError::Codex(CodexErr::Io(io::Error::other(format!(
+                    "failed to prepare network proxy for environment `{}`: {err}",
+                    req.turn_environment.environment_id
+                ))))
+            })?;
         }
         let explicit_env_overrides = req.explicit_env_overrides.clone();
         #[cfg(unix)]

@@ -32,6 +32,16 @@ impl NetworkRequestContext {
             execution_id: None,
         }
     }
+
+    pub(crate) fn for_execution(
+        environment_id: impl Into<String>,
+        execution_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            environment_id: Some(environment_id.into()),
+            execution_id: Some(execution_id.into()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

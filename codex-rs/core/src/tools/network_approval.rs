@@ -18,6 +18,7 @@ use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkPolicyRequest;
 use codex_network_proxy::NetworkProtocol;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyExecutionLease;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
@@ -57,6 +58,7 @@ pub(crate) struct NetworkApprovalSpec {
 #[derive(Clone, Debug)]
 pub(crate) struct DeferredNetworkApproval {
     registration_id: String,
+    execution_proxy_lease: Option<NetworkProxyExecutionLease>,
     cancellation_token: CancellationToken,
     finish_outcome: Arc<OnceCell<Option<NetworkApprovalOutcome>>>,
 }
@@ -80,6 +82,9 @@ impl DeferredNetworkApproval {
             .get_or_init(|| async { service.finish_call_outcome(&self.registration_id).await })
             .await
             .clone();
+        if let Some(execution_proxy_lease) = self.execution_proxy_lease.as_ref() {
+            execution_proxy_lease.close();
+        }
         network_approval_outcome_to_result(outcome)
     }
 }
@@ -87,6 +92,7 @@ impl DeferredNetworkApproval {
 #[derive(Debug)]
 pub(crate) struct ActiveNetworkApproval {
     registration_id: Option<String>,
+    execution_proxy_lease: Option<NetworkProxyExecutionLease>,
     mode: NetworkApprovalMode,
     cancellation_token: CancellationToken,
 }
@@ -100,16 +106,23 @@ impl ActiveNetworkApproval {
         self.cancellation_token.clone()
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn execution_id(&self) -> Option<&str> {
+        self.registration_id.as_deref()
+    }
+
     pub(crate) fn into_deferred(self) -> Option<DeferredNetworkApproval> {
         let ActiveNetworkApproval {
             registration_id,
+            execution_proxy_lease,
             mode,
             cancellation_token,
         } = self;
-        match (mode, registration_id) {
-            (NetworkApprovalMode::Deferred, Some(registration_id)) => {
+        match (mode, registration_id, execution_proxy_lease) {
+            (NetworkApprovalMode::Deferred, Some(registration_id), execution_proxy_lease) => {
                 Some(DeferredNetworkApproval {
                     registration_id,
+                    execution_proxy_lease,
                     cancellation_token,
                     finish_outcome: Arc::new(OnceCell::new()),
                 })
@@ -305,14 +318,25 @@ impl NetworkApprovalService {
 
     async fn resolve_single_active_call(&self) -> Option<Arc<ActiveNetworkApprovalCall>> {
         let calls = self.calls.lock().await;
-        // Blocked proxy requests are not attributed to a specific tool call. Only pick an owner
+        // Older proxy listeners do not carry an execution ID. Only pick an owner for those requests
         // when there is exactly one candidate; with concurrent calls, canceling one would be a guess.
-        // TODO: Carry blocked-request attribution so concurrent active calls can be handled safely.
         if calls.active_calls.len() == 1 {
             return calls.active_calls.values().next().cloned();
         }
 
         None
+    }
+
+    async fn resolve_active_call_by_execution_id(
+        &self,
+        execution_id: &str,
+    ) -> Option<Arc<ActiveNetworkApprovalCall>> {
+        self.calls
+            .lock()
+            .await
+            .active_calls
+            .get(execution_id)
+            .cloned()
     }
 
     async fn resolve_active_call_attribution(&self) -> ActiveNetworkApprovalAttribution {
@@ -393,8 +417,18 @@ impl NetworkApprovalService {
             return;
         };
 
-        self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(message))
+        if let Some(execution_id) = blocked.execution_id.as_deref() {
+            self.record_call_outcome(
+                execution_id,
+                NetworkApprovalOutcome::DeniedByPolicy(message),
+            )
             .await;
+        } else {
+            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
+                message,
+            ))
+            .await;
+        }
     }
 
     async fn active_turn_context(
@@ -431,28 +465,37 @@ impl NetworkApprovalService {
             NetworkProtocol::Socks5Tcp => NetworkApprovalProtocol::Socks5Tcp,
             NetworkProtocol::Socks5Udp => NetworkApprovalProtocol::Socks5Udp,
         };
-        let (owner_call, active_environment_id) =
-            if let Some(environment_id) = request.environment_id.clone() {
-                let owner_call = match self.resolve_active_call_attribution().await {
-                    ActiveNetworkApprovalAttribution::Single(call) => {
-                        (call.environment_id == environment_id).then_some(call)
-                    }
-                    ActiveNetworkApprovalAttribution::None
-                    | ActiveNetworkApprovalAttribution::Ambiguous => None,
-                };
-                (owner_call, Some(environment_id))
-            } else {
-                match self.resolve_active_call_attribution().await {
-                    ActiveNetworkApprovalAttribution::None => (None, None),
-                    ActiveNetworkApprovalAttribution::Single(call) => {
-                        let environment_id = call.environment_id.clone();
-                        (Some(call), Some(environment_id))
-                    }
-                    ActiveNetworkApprovalAttribution::Ambiguous => {
-                        return NetworkDecision::deny(REASON_NOT_ALLOWED);
-                    }
-                }
+        let attributed_call = if let Some(execution_id) = request.execution_id.as_deref() {
+            let Some(call) = self.resolve_active_call_by_execution_id(execution_id).await else {
+                return NetworkDecision::deny(REASON_NOT_ALLOWED);
             };
+            Some(call)
+        } else {
+            match self.resolve_active_call_attribution().await {
+                ActiveNetworkApprovalAttribution::None => None,
+                ActiveNetworkApprovalAttribution::Single(call) => Some(call),
+                ActiveNetworkApprovalAttribution::Ambiguous => {
+                    return NetworkDecision::deny(REASON_NOT_ALLOWED);
+                }
+            }
+        };
+        let (owner_call, active_environment_id) = if let Some(environment_id) =
+            request.environment_id.clone()
+        {
+            let owner_call = attributed_call.filter(|call| call.environment_id == environment_id);
+            (owner_call, Some(environment_id))
+        } else {
+            match attributed_call {
+                Some(call) => {
+                    let environment_id = call.environment_id.clone();
+                    (Some(call), Some(environment_id))
+                }
+                None => (None, None),
+            }
+        };
+        if request.execution_id.is_some() && owner_call.is_none() {
+            return NetworkDecision::deny(REASON_NOT_ALLOWED);
+        }
         let turn_context = Self::active_turn_context(session.as_ref()).await;
         let Some(environment_id) = active_environment_id.or_else(|| {
             turn_context
@@ -802,6 +845,14 @@ pub(crate) async fn begin_network_approval(
     }
 
     let registration_id = Uuid::new_v4().to_string();
+    let attribution_token = Uuid::new_v4().to_string();
+    let execution_proxy_lease = network.as_ref().map(|network| {
+        network.execution_lease(
+            environment_id.clone(),
+            registration_id.clone(),
+            attribution_token,
+        )
+    });
     let cancellation_token = CancellationToken::new();
     session
         .services
@@ -818,6 +869,7 @@ pub(crate) async fn begin_network_approval(
 
     Some(ActiveNetworkApproval {
         registration_id: Some(registration_id),
+        execution_proxy_lease,
         mode,
         cancellation_token,
     })
@@ -831,11 +883,15 @@ pub(crate) async fn finish_immediate_network_approval(
         return Ok(());
     };
 
-    session
+    let result = session
         .services
         .network_approval
         .finish_call(registration_id)
-        .await
+        .await;
+    if let Some(execution_proxy_lease) = active.execution_proxy_lease.as_ref() {
+        execution_proxy_lease.close();
+    }
+    result
 }
 
 pub(crate) async fn finish_deferred_network_approval(

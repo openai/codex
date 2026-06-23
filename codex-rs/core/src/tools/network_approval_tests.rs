@@ -287,6 +287,12 @@ fn denied_blocked_request(host: &str) -> BlockedRequest {
     })
 }
 
+fn denied_blocked_request_for_execution(host: &str, execution_id: &str) -> BlockedRequest {
+    let mut blocked = denied_blocked_request(host);
+    blocked.execution_id = Some(execution_id.to_string());
+    blocked
+}
+
 async fn register_call_with_default_shell_trigger(
     service: &NetworkApprovalService,
     registration_id: &str,
@@ -429,6 +435,7 @@ async fn deferred_finish_reuses_denial_result_after_first_consumer() {
         register_call_with_default_shell_trigger(&service, "registration-1").await;
     let deferred = DeferredNetworkApproval {
         registration_id: "registration-1".to_string(),
+        execution_proxy_lease: None,
         cancellation_token,
         finish_outcome: Arc::new(OnceCell::new()),
     };
@@ -482,4 +489,28 @@ async fn record_blocked_request_ignores_ambiguous_unattributed_blocked_requests(
 
     assert_eq!(service.take_call_outcome("registration-1").await, None);
     assert_eq!(service.take_call_outcome("registration-2").await, None);
+}
+
+#[tokio::test]
+async fn record_blocked_request_targets_attributed_execution_among_concurrent_calls() {
+    let service = NetworkApprovalService::default();
+    let first = register_call_with_default_shell_trigger(&service, "registration-1").await;
+    let second = register_call_with_default_shell_trigger(&service, "registration-2").await;
+
+    service
+        .record_blocked_request(denied_blocked_request_for_execution(
+            "example.com",
+            "registration-2",
+        ))
+        .await;
+
+    assert!(!first.is_cancelled());
+    assert!(second.is_cancelled());
+    assert_eq!(service.take_call_outcome("registration-1").await, None);
+    assert_eq!(
+        service.take_call_outcome("registration-2").await,
+        Some(NetworkApprovalOutcome::DeniedByPolicy(
+            "Network access to \"example.com\" was blocked: domain is not on the allowlist for the current sandbox mode.".to_string()
+        ))
+    );
 }

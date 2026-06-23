@@ -82,6 +82,12 @@ impl ToolOrchestrator {
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
         };
+        #[cfg(target_os = "linux")]
+        let network_execution_id = network_approval
+            .as_ref()
+            .and_then(ActiveNetworkApproval::execution_id);
+        #[cfg(not(target_os = "linux"))]
+        let network_execution_id = None;
         let attempt_with_network_approval = SandboxAttempt {
             sandbox: attempt.sandbox,
             sandbox_requested: attempt.sandbox_requested,
@@ -98,6 +104,7 @@ impl ToolOrchestrator {
             network_denial_cancellation_token: network_approval
                 .as_ref()
                 .map(ActiveNetworkApproval::cancellation_token),
+            network_execution_id,
         };
         let run_result = tool
             .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
@@ -274,6 +281,7 @@ impl ToolOrchestrator {
                 .permissions
                 .windows_sandbox_private_desktop,
             network_denial_cancellation_token: None,
+            network_execution_id: None,
         };
 
         let initial_attempt_start = Instant::now();
@@ -456,6 +464,7 @@ impl ToolOrchestrator {
                         .permissions
                         .windows_sandbox_private_desktop,
                     network_denial_cancellation_token: None,
+                    network_execution_id: None,
                 };
 
                 // Second attempt.

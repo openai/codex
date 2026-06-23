@@ -1,4 +1,6 @@
 use crate::network_policy::NetworkRequestContext;
+use anyhow::Context;
+use anyhow::Result;
 use rama_core::Service;
 use rama_core::error::BoxError;
 use rama_core::extensions::ExtensionsMut;
@@ -11,7 +13,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
-/// Internal handoff to a trusted proxy bridge.
+/// Internal handoff from Codex to the trusted Linux proxy bridge.
 #[doc(hidden)]
 pub const PROXY_ATTRIBUTION_TOKEN_ENV_KEY: &str = "CODEX_NETWORK_PROXY_ATTRIBUTION";
 
@@ -21,31 +23,85 @@ const ATTRIBUTION_FRAME_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Default)]
 pub(crate) struct AttributionRegistry {
-    contexts: Arc<Mutex<HashMap<String, NetworkRequestContext>>>,
+    records: Arc<Mutex<HashMap<String, AttributionRecord>>>,
+}
+
+#[derive(Clone)]
+struct AttributionRecord {
+    execution_id: String,
+    context: NetworkRequestContext,
 }
 
 impl AttributionRegistry {
+    pub(crate) fn register(
+        &self,
+        execution_id: String,
+        token: String,
+        context: NetworkRequestContext,
+    ) {
+        let mut records = self
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        records.insert(
+            token,
+            AttributionRecord {
+                execution_id,
+                context,
+            },
+        );
+    }
+
+    pub(crate) fn token_for_execution(
+        &self,
+        execution_id: &str,
+        expected_context: &NetworkRequestContext,
+    ) -> Result<String> {
+        let records = self
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (token, record) = records
+            .iter()
+            .find(|(_, record)| record.execution_id == execution_id)
+            .with_context(|| {
+                format!("network proxy execution `{execution_id}` is not registered")
+            })?;
+        anyhow::ensure!(
+            record.context == *expected_context,
+            "network proxy execution `{execution_id}` was reused with different attribution"
+        );
+        Ok(token.clone())
+    }
+
     pub(crate) fn context_for_token(&self, token: &str) -> Option<NetworkRequestContext> {
-        self.contexts
+        self.records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(token)
-            .cloned()
+            .map(|record| record.context.clone())
+    }
+
+    pub(crate) fn remove(&self, execution_id: &str) {
+        self.records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|_, record| record.execution_id != execution_id);
     }
 
     pub(crate) fn clear(&self) {
-        self.contexts
+        self.records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
     }
 
     #[cfg(test)]
-    fn register(&self, token: impl Into<String>, context: NetworkRequestContext) {
-        self.contexts
+    pub(crate) fn len(&self) -> usize {
+        self.records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(token.into(), context);
+            .len()
     }
 }
 

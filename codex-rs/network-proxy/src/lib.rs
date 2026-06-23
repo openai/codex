@@ -53,6 +53,7 @@ pub use proxy::DEFAULT_NO_PROXY_VALUE;
 pub use proxy::NO_PROXY_ENV_KEYS;
 pub use proxy::NetworkProxy;
 pub use proxy::NetworkProxyBuilder;
+pub use proxy::NetworkProxyExecutionLease;
 pub use proxy::NetworkProxyHandle;
 pub use proxy::PROXY_ACTIVE_ENV_KEY;
 pub use proxy::PROXY_ENV_KEYS;

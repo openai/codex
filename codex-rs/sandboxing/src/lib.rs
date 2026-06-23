@@ -31,6 +31,11 @@ pub use windows::resolve_windows_restricted_token_filesystem_overrides;
 pub use windows::unsupported_windows_restricted_token_sandbox_reason;
 pub use windows::windows_sandbox_uses_elevated_backend;
 
+#[cfg(target_os = "linux")]
+pub use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
+#[cfg(target_os = "linux")]
+pub use codex_network_proxy::write_attribution_frame;
+
 use codex_protocol::error::CodexErr;
 
 #[cfg(not(target_os = "linux"))]
