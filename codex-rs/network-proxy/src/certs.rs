@@ -171,7 +171,7 @@ pub(crate) struct ManagedMitmCaTrustBundle {
 }
 
 #[derive(Debug)]
-struct ManagedMitmCaStorage {
+struct MitmCaStorage {
     proxy_dir: PathBuf,
     lock_path: PathBuf,
     keyring_account: String,
@@ -184,7 +184,7 @@ struct StoredManagedMitmCa {
     private_key_pem: String,
 }
 
-impl ManagedMitmCaStorage {
+impl MitmCaStorage {
     fn for_codex_home(codex_home: &Path) -> Self {
         let proxy_dir = codex_home.join(MANAGED_MITM_CA_DIR);
         let canonical_codex_home = codex_home
@@ -206,10 +206,10 @@ impl ManagedMitmCaStorage {
     }
 }
 
-fn managed_ca_storage() -> Result<ManagedMitmCaStorage> {
+fn managed_ca_storage() -> Result<MitmCaStorage> {
     let codex_home =
         find_codex_home().context("failed to resolve CODEX_HOME for managed MITM CA")?;
-    Ok(ManagedMitmCaStorage::for_codex_home(&codex_home))
+    Ok(MitmCaStorage::for_codex_home(&codex_home))
 }
 
 fn managed_ca_dir() -> Result<PathBuf> {
@@ -538,7 +538,7 @@ fn push_certificate_pem(bundle: &mut String, der: &[u8]) {
 
 impl ManagedMitmCa {
     fn load_or_create_with_keyring(
-        storage: &ManagedMitmCaStorage,
+        storage: &MitmCaStorage,
         keyring_store: &dyn KeyringStore,
     ) -> Result<Self> {
         fs::create_dir_all(&storage.proxy_dir)
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn managed_ca_private_key_is_persisted_only_in_keyring() {
         let dir = tempdir().unwrap();
-        let storage = ManagedMitmCaStorage::for_codex_home(dir.path());
+        let storage = MitmCaStorage::for_codex_home(dir.path());
         let keyring_store = MockKeyringStore::default();
 
         let first = ManagedMitmCa::load_or_create_with_keyring(&storage, &keyring_store).unwrap();
