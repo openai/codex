@@ -169,6 +169,16 @@
             "object",
             "null"
           ]
+        },
+        "models": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelsRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -362,6 +372,21 @@
       ],
       "type": "object"
     },
+    "ModelsRequirements": {
+      "properties": {
+        "newThread": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NewThreadModelDefaults"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "NetworkDomainPermission": {
       "enum": [
         "allow",
@@ -483,6 +508,17 @@
         "deny"
       ],
       "type": "string"
+    },
+    "NewThreadModelDefaults": {
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "ResidencyRequirement": {
       "enum": [

@@ -24,9 +24,11 @@ use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
+use codex_app_server_protocol::ModelsRequirements;
 use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
+use codex_app_server_protocol::NewThreadModelDefaults;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_config::ConfigRequirementsToml;
@@ -375,6 +377,11 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+        models: requirements.models.map(|models| ModelsRequirements {
+            new_thread: models.new_thread.map(|new_thread| NewThreadModelDefaults {
+                model: new_thread.model,
+            }),
+        }),
     }
 }
 
@@ -568,6 +575,8 @@ mod tests {
     use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::ModelsRequirementsToml;
+    use codex_config::NewThreadModelDefaultsToml;
     use codex_config::WindowsRequirementsToml;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
@@ -626,6 +635,26 @@ mod tests {
         });
 
         assert_eq!(mapped.allow_remote_control, Some(false));
+    }
+
+    #[test]
+    fn requirements_api_includes_new_thread_model() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            models: Some(ModelsRequirementsToml {
+                new_thread: Some(NewThreadModelDefaultsToml {
+                    model: Some("gpt-managed".to_string()),
+                }),
+            }),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(
+            mapped
+                .models
+                .and_then(|models| models.new_thread)
+                .and_then(|new_thread| new_thread.model),
+            Some("gpt-managed".to_string())
+        );
     }
 
     #[test]

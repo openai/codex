@@ -76,6 +76,39 @@ async fn config_requirements_read_includes_allow_remote_control() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_requirements_read_includes_new_thread_model() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"
+[models.new_thread]
+model = "gpt-managed"
+"#,
+    )?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_config_requirements_read_request().await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ConfigRequirementsReadResponse = to_response(response)?;
+
+    assert_eq!(
+        response
+            .requirements
+            .and_then(|requirements| requirements.models)
+            .and_then(|models| models.new_thread)
+            .and_then(|new_thread| new_thread.model)
+            .as_deref(),
+        Some("gpt-managed")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_returns_effective_and_layers() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
