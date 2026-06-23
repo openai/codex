@@ -28,7 +28,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use indexmap::IndexMap;
 use std::io;
-use tokio::sync::Mutex;
 use toml::Value as TomlValue;
 use tracing::error;
 
@@ -41,84 +40,40 @@ pub const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
 /// concatenated with the following separator.
 pub(crate) const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 
-/// Retains loaded AGENTS.md contents and loads instructions for newly seen
-/// environment IDs.
-#[derive(Debug, Default)]
-pub(crate) struct AgentsMdManager {
-    loaded: Mutex<LoadedAgentsMd>,
-}
-
-impl AgentsMdManager {
-    pub(crate) fn new(user_instructions: Option<UserInstructions>) -> Self {
-        Self {
-            loaded: Mutex::new(LoadedAgentsMd::from_user_instructions(user_instructions)),
-        }
-    }
-
-    pub(crate) async fn snapshot_for_environments(
-        &self,
-        config: &Config,
-        environments: &TurnEnvironmentSnapshot,
-    ) -> LoadedAgentsMd {
-        let loaded = self.loaded.lock().await.clone();
-        let mut additions = Vec::new();
-        for turn_environment in &environments.turn_environments {
-            let environment_id = &turn_environment.environment_id;
-            if loaded.environments.contains_key(environment_id) {
-                continue;
-            }
-            let cwd = turn_environment.cwd();
-            let filesystem = turn_environment.environment.get_filesystem();
-            let environment_instructions =
-                match read_agents_md(config, filesystem.as_ref(), cwd).await {
-                    Ok(instructions) => instructions,
-                    Err(err) => {
-                        error!(
-                            environment_id,
-                            "error trying to find AGENTS.md docs: {err:#}"
-                        );
-                        EnvironmentInstructions::new(cwd.clone())
-                    }
-                };
-            additions.push((environment_id.clone(), environment_instructions));
-        }
-
-        let mut loaded = self.loaded.lock().await;
-        for (environment_id, instructions) in additions {
-            loaded
-                .environments
-                .entry(environment_id)
-                .or_insert(instructions);
-        }
-        loaded.clone()
-    }
-
-    pub(crate) async fn snapshot(&self) -> LoadedAgentsMd {
-        self.loaded.lock().await.clone()
-    }
-}
-
 /// Loads project AGENTS.md content and combines it with host-provided user
 /// instructions.
-#[cfg(test)]
 pub(crate) async fn load_project_instructions(
     config: &Config,
     user_instructions: Option<UserInstructions>,
     environments: &TurnEnvironmentSnapshot,
 ) -> Option<LoadedAgentsMd> {
-    let manager = AgentsMdManager::new(user_instructions);
-    let loaded = manager
-        .snapshot_for_environments(config, environments)
-        .await;
+    let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
+    for turn_environment in &environments.turn_environments {
+        let filesystem = turn_environment.environment.get_filesystem();
+        let environment_id = &turn_environment.environment_id;
+        match read_agents_md(config, filesystem.as_ref(), turn_environment.cwd()).await {
+            Ok(instructions) => {
+                loaded
+                    .environments
+                    .insert(environment_id.clone(), instructions);
+            }
+            Err(err) => {
+                error!(
+                    environment_id,
+                    "error trying to find AGENTS.md docs: {err:#}"
+                );
+            }
+        }
+    }
     (!loaded.is_empty()).then_some(loaded)
 }
 
 /// Attempt to locate and load AGENTS.md documentation.
 ///
 /// On success, the returned environment value contains every discovered doc.
-/// Missing docs produce an empty value so the manager can remember that this
-/// environment and cwd have already been scanned. Unexpected I/O failures
-/// bubble up so callers can decide how to handle them.
+/// Missing docs produce an empty value so the structured result can retain the
+/// environment cwd. Unexpected I/O failures bubble up so callers can decide
+/// how to handle them.
 async fn read_agents_md(
     config: &Config,
     fs: &dyn ExecutorFileSystem,

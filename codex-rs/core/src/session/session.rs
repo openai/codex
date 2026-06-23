@@ -1,6 +1,6 @@
 use super::input_queue::InputQueue;
 use super::*;
-use crate::agents_md::AgentsMdManager;
+use crate::agents_md::load_project_instructions;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -851,10 +851,13 @@ impl Session {
             ));
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;
-            let agents_md = AgentsMdManager::new(user_instructions);
-            agents_md
-                .snapshot_for_environments(config.as_ref(), &resolved_environments)
-                .await;
+            let loaded_agents_md = load_project_instructions(
+                config.as_ref(),
+                user_instructions,
+                &resolved_environments,
+            )
+            .await
+            .unwrap_or_default();
             let plugin_skill_errors = warm_plugins_and_skills_for_session_init(
                 Arc::clone(&config),
                 Arc::clone(&plugins_manager),
@@ -1059,7 +1062,7 @@ impl Session {
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 tool_search_handler_cache: Default::default(),
-                agents_md,
+                loaded_agents_md,
                 turn_environments: Arc::clone(&turn_environments),
             };
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =

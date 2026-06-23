@@ -5223,7 +5223,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         tool_search_handler_cache: Default::default(),
-        agents_md: crate::agents_md::AgentsMdManager::default(),
+        loaded_agents_md: Default::default(),
         turn_environments: Arc::clone(&turn_environments),
     };
 
@@ -7295,7 +7295,7 @@ where
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         tool_search_handler_cache: Default::default(),
-        agents_md: crate::agents_md::AgentsMdManager::default(),
+        loaded_agents_md: Default::default(),
         turn_environments: Arc::clone(&turn_environments),
     };
 

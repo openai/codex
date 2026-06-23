@@ -841,13 +841,7 @@ impl Codex {
     }
 
     pub(crate) async fn instruction_sources(&self) -> Vec<PathUri> {
-        self.session
-            .services
-            .agents_md
-            .snapshot()
-            .await
-            .sources()
-            .collect()
+        self.session.services.loaded_agents_md.sources().collect()
     }
 
     pub(crate) async fn thread_environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
@@ -1391,9 +1385,8 @@ impl Session {
         prepare_response_items(&mut history);
         // Replayed history already contains the rendered AGENTS.md snapshot, but rollouts do not
         // persist its structured state. Preserve the existing replay behavior by treating this
-        // session's creation-time snapshot as the reconstructed baseline; newly added environment
-        // instructions are diffed from it after reconstruction.
-        let loaded_agents_md = self.services.agents_md.snapshot().await;
+        // session's creation-time snapshot as the reconstructed baseline.
+        let loaded_agents_md = self.services.loaded_agents_md.clone();
         let world_state_baseline = reference_context_item.as_ref().map(|turn_context_item| {
             build_world_state_from_turn_context_item(turn_context_item, loaded_agents_md)
         });
@@ -1544,12 +1537,7 @@ impl Session {
     }
 
     pub(crate) async fn user_instructions(&self) -> Option<codex_extension_api::UserInstructions> {
-        self.services
-            .agents_md
-            .snapshot()
-            .await
-            .user_instructions()
-            .cloned()
+        self.services.loaded_agents_md.user_instructions().cloned()
     }
 
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
@@ -3065,11 +3053,6 @@ impl Session {
         turn_context: &TurnContext,
         environments: &TurnEnvironmentSnapshot,
     ) -> WorldState {
-        let agents_md = self
-            .services
-            .agents_md
-            .snapshot_for_environments(turn_context.config.as_ref(), environments)
-            .await;
         let environment_subagents = if turn_context.config.include_environment_context {
             self.services
                 .agent_control
@@ -3082,7 +3065,7 @@ impl Session {
             turn_context,
             environments,
             &environment_subagents,
-            agents_md,
+            self.services.loaded_agents_md.clone(),
         )
     }
 

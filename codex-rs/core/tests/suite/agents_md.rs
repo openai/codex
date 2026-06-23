@@ -595,7 +595,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn newly_added_environment_appends_its_project_instructions() -> Result<()> {
+async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapshot() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -652,10 +652,16 @@ async fn newly_added_environment_appends_its_project_instructions() -> Result<()
             metrics_service_name: None,
             multi_agent_mode: None,
             parent_trace: None,
-            environments: vec![TurnEnvironmentSelection {
-                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                cwd: PathUri::from_abs_path(&test.config.cwd),
-            }],
+            environments: vec![
+                TurnEnvironmentSelection {
+                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                    cwd: PathUri::from_abs_path(&test.config.cwd),
+                },
+                TurnEnvironmentSelection {
+                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: PathUri::from_host_native_path(local_root.path())?,
+                },
+            ],
             thread_extension_init: Default::default(),
             supports_openai_form_elicitation: false,
         })
@@ -666,6 +672,7 @@ async fn newly_added_environment_appends_its_project_instructions() -> Result<()
         vec![
             PathUri::from_abs_path(&global_source),
             PathUri::from_abs_path(&remote_source),
+            PathUri::from_host_native_path(&local_source)?,
         ]
     );
 
@@ -683,56 +690,23 @@ async fn newly_added_environment_appends_its_project_instructions() -> Result<()
             /*sandbox*/ None,
         )
         .await?;
-    thread
-        .thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "second multi-environment turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
-                    test.config.cwd.clone(),
-                    vec![
-                        TurnEnvironmentSelection {
-                            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                            cwd: PathUri::from_abs_path(&test.config.cwd),
-                        },
-                        TurnEnvironmentSelection {
-                            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                            cwd: PathUri::from_host_native_path(local_root.path())?,
-                        },
-                    ],
-                )),
-                ..Default::default()
-            },
-        })
-        .await?;
-    wait_for_event(&thread.thread, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    std::fs::write(
+        local_root.path().join(GLOBAL_AGENTS_OVERRIDE_FILENAME),
+        "new local project instructions",
+    )?;
+    submit_thread_turn(&thread.thread, "second multi-environment turn").await?;
 
-    let initial_contents =
-        format!("{GLOBAL_INSTRUCTIONS}\n\n{PROJECT_SEPARATOR}\n\nremote project instructions");
-    let initial_expected = format!(
-        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\n{initial_contents}\n</INSTRUCTIONS>",
+    let contents = format!(
+        "{GLOBAL_INSTRUCTIONS}\n\nfor `{REMOTE_ENVIRONMENT_ID}` with root {}\n\nremote project instructions\n\nfor `{LOCAL_ENVIRONMENT_ID}` with root {}\n\nlocal project instructions",
         PathUri::from_abs_path(&test.config.cwd).inferred_native_path_string(),
+        local_root.path().display(),
     );
-    let added_expected = format!(
-        "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nfor `{LOCAL_ENVIRONMENT_ID}` with root {}\n\nlocal project instructions\n</INSTRUCTIONS>",
-        local_root.path().display()
-    );
+    let expected =
+        format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>");
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert_single_instruction_fragment(&requests[0], &initial_expected);
-    assert_eq!(
-        instruction_fragments(&requests[1]),
-        vec![initial_expected, added_expected]
-    );
+    assert_single_instruction_fragment(&requests[0], &expected);
+    assert_single_instruction_fragment(&requests[1], &expected);
     assert_eq!(provider.load_count(), 2);
     assert_eq!(
         thread.thread.instruction_sources().await,
