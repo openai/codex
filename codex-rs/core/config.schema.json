@@ -2557,6 +2557,10 @@
         },
         "url": {
           "type": "string"
+        },
+        "use_chatgpt_auth": {
+          "default": null,
+          "type": "boolean"
         }
       },
       "type": "object"

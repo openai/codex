@@ -165,6 +165,7 @@ async fn reads_declared_config_only_through_executor_file_system() {
         vec![(
             "demo".to_string(),
             McpServerConfig {
+                use_chatgpt_auth: false,
                 transport: McpServerTransportConfig::Stdio {
                     command: "demo-mcp".to_string(),
                     args: Vec::new(),
@@ -219,6 +220,7 @@ async fn reads_manifest_object_config_without_executor_file_system_access() {
         vec![(
             "counter".to_string(),
             McpServerConfig {
+                use_chatgpt_auth: false,
                 transport: McpServerTransportConfig::Stdio {
                     command: "counter-mcp".to_string(),
                     args: Vec::new(),

@@ -16,8 +16,6 @@ use tracing::warn;
 
 use crate::server::EffectiveMcpServer;
 
-use super::CODEX_APPS_MCP_SERVER_NAME;
-
 #[derive(Debug, Clone)]
 pub struct McpOAuthLoginConfig {
     pub url: String,
@@ -141,7 +139,9 @@ where
     let futures = servers.into_iter().map(|(name, server)| {
         let name = name.clone();
         let config = server.configured_config().cloned();
-        let has_runtime_auth = name == CODEX_APPS_MCP_SERVER_NAME
+        let has_runtime_auth = config
+            .as_ref()
+            .is_some_and(|config| config.use_chatgpt_auth)
             && auth.is_some_and(CodexAuth::uses_codex_backend)
             && config.as_ref().is_some_and(|config| {
                 matches!(
@@ -228,12 +228,55 @@ async fn compute_auth_status(
 mod tests {
     use anyhow::anyhow;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
 
     use super::McpOAuthScopesSource;
     use super::OAuthProviderError;
     use super::ResolvedMcpOAuthScopes;
+    use super::compute_auth_statuses;
     use super::resolve_oauth_scopes;
     use super::should_retry_without_scopes;
+    use crate::server::EffectiveMcpServer;
+    use codex_config::McpServerTransportConfig;
+    use codex_config::types::AuthKeyringBackendKind;
+    use codex_config::types::OAuthCredentialsStoreMode;
+    use codex_login::CodexAuth;
+    use codex_protocol::protocol::McpAuthStatus;
+
+    #[tokio::test]
+    async fn configured_server_can_use_chatgpt_runtime_auth() {
+        let mut config = crate::mcp::codex_apps_mcp_server_config(
+            "https://chatgpt.example",
+            /*apps_mcp_product_sku*/ None,
+        );
+        let McpServerTransportConfig::StreamableHttp {
+            bearer_token_env_var,
+            ..
+        } = &mut config.transport
+        else {
+            panic!("expected HTTP transport");
+        };
+        *bearer_token_env_var = None;
+        config.use_chatgpt_auth = true;
+        let servers = HashMap::from([(
+            "custom_server".to_string(),
+            EffectiveMcpServer::configured(config),
+        )]);
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+        let statuses = compute_auth_statuses(
+            servers.iter(),
+            OAuthCredentialsStoreMode::default(),
+            AuthKeyringBackendKind::default(),
+            Some(&auth),
+        )
+        .await;
+
+        assert_eq!(
+            statuses.get("custom_server").map(|entry| entry.auth_status),
+            Some(McpAuthStatus::BearerToken)
+        );
+    }
 
     #[test]
     fn resolve_oauth_scopes_prefers_explicit() {

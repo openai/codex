@@ -146,6 +146,7 @@ async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
             servers.insert(
                 "notes".to_string(),
                 McpServerConfig {
+                    use_chatgpt_auth: false,
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),

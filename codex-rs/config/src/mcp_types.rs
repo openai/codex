@@ -131,6 +131,11 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
+    /// When `true`, authenticate HTTP requests with the current ChatGPT session unless an
+    /// environment bearer token is configured.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_chatgpt_auth: bool,
+
     /// Effective environment id for where Codex should start this MCP server.
     pub environment_id: String,
 
@@ -239,6 +244,8 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub environment_id: Option<String>,
     #[serde(default)]
+    pub use_chatgpt_auth: Option<bool>,
+    #[serde(default)]
     pub startup_timeout_sec: Option<f64>,
     #[serde(default)]
     pub startup_timeout_ms: Option<u64>,
@@ -286,6 +293,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             bearer_token,
             bearer_token_env_var,
             environment_id,
+            use_chatgpt_auth,
             startup_timeout_sec,
             startup_timeout_ms,
             tool_timeout_sec,
@@ -329,6 +337,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
             throw_if_set("stdio", "oauth", oauth.as_ref())?;
             throw_if_set("stdio", "oauth_resource", oauth_resource.as_ref())?;
+            throw_if_set("stdio", "use_chatgpt_auth", use_chatgpt_auth.as_ref())?;
             let env_vars = env_vars.unwrap_or_default();
             for env_var in &env_vars {
                 env_var.validate_source()?;
@@ -361,6 +370,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
 
         Ok(Self {
             transport,
+            use_chatgpt_auth: use_chatgpt_auth.unwrap_or_default(),
             environment_id,
             startup_timeout_sec,
             tool_timeout_sec,

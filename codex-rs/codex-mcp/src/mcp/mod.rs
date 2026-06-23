@@ -455,6 +455,7 @@ pub fn codex_apps_mcp_server_config(
     mcp_server_config_for_url(
         codex_apps_mcp_url_for_base_url(chatgpt_base_url),
         apps_mcp_product_sku,
+        /*use_chatgpt_auth*/ true,
     )
 }
 
@@ -469,10 +470,18 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     } else {
         format!("{base_url}/api/codex")
     };
-    mcp_server_config_for_url(format!("{base_url}/ps/mcp"), apps_mcp_product_sku)
+    mcp_server_config_for_url(
+        format!("{base_url}/ps/mcp"),
+        apps_mcp_product_sku,
+        /*use_chatgpt_auth*/ false,
+    )
 }
 
-fn mcp_server_config_for_url(url: String, apps_mcp_product_sku: Option<&str>) -> McpServerConfig {
+fn mcp_server_config_for_url(
+    url: String,
+    apps_mcp_product_sku: Option<&str>,
+    use_chatgpt_auth: bool,
+) -> McpServerConfig {
     let http_headers = apps_mcp_product_sku.map(|product_sku| {
         HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.to_string())])
     });
@@ -484,6 +493,7 @@ fn mcp_server_config_for_url(url: String, apps_mcp_product_sku: Option<&str>) ->
             http_headers,
             env_http_headers: None,
         },
+        use_chatgpt_auth,
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,

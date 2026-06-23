@@ -656,6 +656,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
         servers.insert(
             server_name.to_string(),
             McpServerConfig {
+                use_chatgpt_auth: false,
                 transport: McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),

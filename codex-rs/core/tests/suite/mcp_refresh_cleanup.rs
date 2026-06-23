@@ -30,6 +30,7 @@ async fn refresh_shuts_down_superseded_mcp_stdio_server() -> anyhow::Result<()> 
             servers.insert(
                 "refresh_cleanup".to_string(),
                 McpServerConfig {
+                    use_chatgpt_auth: false,
                     transport: McpServerTransportConfig::Stdio {
                         command,
                         args: Vec::new(),
