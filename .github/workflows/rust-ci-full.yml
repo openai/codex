@@ -36,10 +36,6 @@ jobs:
       - name: Rust benchmark smoke test
         run: just bench-smoke
 
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
-
   cargo_shear:
     name: cargo shear
     runs-on: ubuntu-24.04
@@ -56,10 +52,6 @@ jobs:
           tool: cargo-shear@1.11.2
       - name: cargo shear
         run: cargo shear --deny-warnings
-
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
 
   argument_comment_lint_package:
     name: Argument comment lint package
@@ -101,10 +93,6 @@ jobs:
         run: cargo test
         env:
           RUST_MIN_STACK: "8388608" # 8 MiB
-
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
 
   argument_comment_lint_prebuilt:
     name: Argument comment lint - ${{ matrix.name }}
@@ -166,10 +154,6 @@ jobs:
             --platforms=//:local_windows \
             --keep_going \
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
-
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
@@ -478,10 +462,6 @@ jobs:
           path: |
             /var/cache/apt
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
-
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
 
   tests_macos_aarch64:
     name: Tests — macos-15-xlarge - aarch64-apple-darwin

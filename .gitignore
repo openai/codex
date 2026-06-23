@@ -60,10 +60,7 @@ yarn-error.log*
 # ci
 .vercel/
 .netlify/
-/.cargo-home/
-/.sccache/
 /.tmp/sdk-ci/
-/.zig-cache/
 /upstream-rusty-v8/
 
 # patches
