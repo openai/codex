@@ -864,8 +864,8 @@ fn regular_mcp_tools_cache_context() -> Option<CodexAppsToolsCacheContext> {
     None
 }
 
-/// Selects ChatGPT authentication for opted-in servers unless an environment token takes
-/// precedence.
+/// Makes ChatGPT authentication available to servers that explicitly opt in.
+/// The HTTP transport applies it only when no configured authorization resolves.
 fn chatgpt_auth_provider_for_server(
     server: &EffectiveMcpServer,
     chatgpt_auth_provider: Option<SharedAuthProvider>,
@@ -876,21 +876,7 @@ fn chatgpt_auth_provider_for_server(
     {
         return None;
     }
-    let uses_env_bearer_token =
-        server
-            .configured_config()
-            .is_some_and(|config| match &config.transport {
-                McpServerTransportConfig::StreamableHttp {
-                    bearer_token_env_var,
-                    ..
-                } => bearer_token_env_var.is_some(),
-                McpServerTransportConfig::Stdio { .. } => false,
-            });
-    if uses_env_bearer_token {
-        None
-    } else {
-        chatgpt_auth_provider
-    }
+    chatgpt_auth_provider
 }
 
 async fn emit_update(
