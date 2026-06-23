@@ -527,7 +527,7 @@ impl OutgoingMessageSender {
         request_id: ConnectionRequestId,
         response: ClientResponsePayload,
     ) {
-        self.send_response_as_inner(request_id, response, None)
+        self.send_response_as_inner(request_id, response, /*write_complete_tx*/ None)
             .await;
     }
 
@@ -681,7 +681,7 @@ impl OutgoingMessageSender {
             request_id.connection_id,
             outgoing_message,
             "error",
-            None,
+            /*write_complete_tx*/ None,
         )
         .await;
     }
