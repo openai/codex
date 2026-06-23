@@ -60,6 +60,7 @@ pub(crate) struct DeferredNetworkApproval {
     registration_id: String,
     cancellation_token: CancellationToken,
     finish_outcome: Arc<OnceCell<Option<NetworkApprovalOutcome>>>,
+    _network: Option<NetworkProxy>,
 }
 
 impl DeferredNetworkApproval {
@@ -111,7 +112,7 @@ impl ActiveNetworkApproval {
             registration_id,
             mode,
             cancellation_token,
-            network: _,
+            network,
         } = self;
         match (mode, registration_id) {
             (NetworkApprovalMode::Deferred, Some(registration_id)) => {
@@ -119,6 +120,7 @@ impl ActiveNetworkApproval {
                     registration_id,
                     cancellation_token,
                     finish_outcome: Arc::new(OnceCell::new()),
+                    _network: Some(network),
                 })
             }
             _ => None,
@@ -252,8 +254,6 @@ enum ActiveNetworkApprovalAttribution {
 struct NetworkApprovalCallState {
     active_calls: IndexMap<String, Arc<ActiveNetworkApprovalCall>>,
     call_outcomes: HashMap<String, NetworkApprovalOutcome>,
-    // Keep each listener alive for the same lifetime as its approval registration.
-    request_scopes: HashMap<String, NetworkProxy>,
 }
 
 pub(crate) struct NetworkApprovalService {
@@ -294,9 +294,8 @@ impl NetworkApprovalService {
         cancellation_token: CancellationToken,
     ) {
         let mut calls = self.calls.lock().await;
-        let key = registration_id.clone();
         calls.active_calls.insert(
-            key,
+            registration_id.clone(),
             Arc::new(ActiveNetworkApprovalCall {
                 registration_id,
                 turn_id,
@@ -385,7 +384,6 @@ impl NetworkApprovalService {
     async fn remove_call(&self, registration_id: &str) -> Option<NetworkApprovalOutcome> {
         let mut calls = self.calls.lock().await;
         calls.active_calls.shift_remove(registration_id);
-        calls.request_scopes.remove(registration_id);
         calls.call_outcomes.remove(registration_id)
     }
 
@@ -869,14 +867,6 @@ pub(crate) async fn begin_network_approval(
             cancellation_token.clone(),
         )
         .await;
-    session
-        .services
-        .network_approval
-        .calls
-        .lock()
-        .await
-        .request_scopes
-        .insert(registration_id.clone(), network.clone());
 
     Ok(Some(ActiveNetworkApproval {
         registration_id: Some(registration_id),

@@ -1,3 +1,5 @@
+mod request_scope;
+
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
@@ -18,6 +20,8 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::warn;
+
+use self::request_scope::RequestScopedProxy;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "codex-network-proxy", about = "Codex network sandbox proxy")]
@@ -335,21 +339,6 @@ struct EnvironmentProxy {
     socks_task: Option<JoinHandle<Result<()>>>,
 }
 
-struct RequestScopedProxy {
-    environment_id: String,
-    http_task: JoinHandle<Result<()>>,
-    socks_task: Option<JoinHandle<Result<()>>>,
-}
-
-impl Drop for RequestScopedProxy {
-    fn drop(&mut self) {
-        self.http_task.abort();
-        if let Some(socks_task) = self.socks_task.as_ref() {
-            socks_task.abort();
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct NetworkProxy {
     state: Arc<NetworkProxyState>,
@@ -633,94 +622,6 @@ impl NetworkProxy {
 
     pub fn socks_addr(&self) -> SocketAddr {
         self.socks_addr
-    }
-
-    /// Creates a proxy listener pair whose requests carry one execution-specific origin.
-    /// The listeners remain active until every clone of the returned proxy is dropped.
-    /// On Windows this currently returns the unscoped proxy because its sandbox firewall is shared.
-    pub fn scope_for_request(&self, environment_id: &str, request_origin: String) -> Result<Self> {
-        #[cfg(target_os = "windows")]
-        {
-            // Windows' offline firewall policy is shared by every sandboxed exec. Distinct
-            // endpoints therefore cannot be isolated safely between concurrent processes yet.
-            let _ = (environment_id, request_origin);
-            Ok(self.clone())
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            anyhow::ensure!(
-                self.request_scope.is_none(),
-                "cannot create a request scope from an already scoped network proxy"
-            );
-
-            let runtime = tokio::runtime::Handle::try_current()
-                .context("failed to create request-scoped network proxy")?;
-            let listeners = reserve_loopback_ephemeral_listeners(self.socks_enabled)
-                .context("failed to reserve request-scoped network proxy")?;
-            let http_addr = listeners
-                .http_addr()
-                .context("failed to read request-scoped HTTP proxy address")?;
-            let socks_addr = listeners
-                .socks_addr(self.socks_addr)
-                .context("failed to read request-scoped SOCKS proxy address")?;
-            let ReservedListenerSet {
-                http_listener,
-                socks_listener,
-            } = listeners;
-
-            let state = Arc::new(self.state.with_request_origin(request_origin));
-            let http_state = Arc::clone(&state);
-            let http_decider = self.policy_decider.clone();
-            let http_environment_id = Some(environment_id.to_string());
-            let http_task = runtime.spawn(async move {
-                http_proxy::run_http_proxy_with_std_listener(
-                    http_state,
-                    http_listener,
-                    http_decider,
-                    http_environment_id,
-                )
-                .await
-            });
-
-            let socks_task = if self.socks_enabled {
-                let socks_state = Arc::clone(&state);
-                let socks_decider = self.policy_decider.clone();
-                let socks_environment_id = Some(environment_id.to_string());
-                let socks5_udp_enabled = self.socks5_udp_enabled;
-                socks_listener.map(|listener| {
-                    runtime.spawn(async move {
-                        socks5::run_socks5_with_std_listener(
-                            socks_state,
-                            listener,
-                            socks_decider,
-                            socks_environment_id,
-                            socks5_udp_enabled,
-                        )
-                        .await
-                    })
-                })
-            } else {
-                None
-            };
-
-            Ok(Self {
-                state,
-                http_addr,
-                socks_addr,
-                socks_enabled: self.socks_enabled,
-                socks5_udp_enabled: self.socks5_udp_enabled,
-                runtime_settings: Arc::clone(&self.runtime_settings),
-                reserved_listeners: None,
-                policy_decider: self.policy_decider.clone(),
-                environment_proxies: Arc::new(Mutex::new(HashMap::new())),
-                request_scope: Some(Arc::new(RequestScopedProxy {
-                    environment_id: environment_id.to_string(),
-                    http_task,
-                    socks_task,
-                })),
-            })
-        }
     }
 
     pub async fn current_cfg(&self) -> Result<config::NetworkProxyConfig> {
@@ -1119,19 +1020,11 @@ impl Drop for NetworkProxyHandle {
 mod tests {
     use super::*;
     use crate::config::NetworkProxySettings;
-    #[cfg(not(target_os = "windows"))]
-    use crate::network_policy::NetworkDecision;
     use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::path::Path;
-    #[cfg(not(target_os = "windows"))]
-    use std::time::Duration;
-    #[cfg(not(target_os = "windows"))]
-    use tokio::io::AsyncWriteExt;
-    #[cfg(not(target_os = "windows"))]
-    use tokio::time::timeout;
 
     #[tokio::test]
     async fn managed_proxy_builder_uses_loopback_ports() {
@@ -1223,54 +1116,6 @@ mod tests {
         );
 
         handle.shutdown().await?;
-        Ok(())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[tokio::test]
-    async fn request_scoped_proxy_stamps_policy_and_blocked_requests() -> Result<()> {
-        let (policy_tx, mut policy_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (blocked_tx, mut blocked_rx) = tokio::sync::mpsc::unbounded_channel();
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
-        let proxy = NetworkProxy::builder()
-            .state(state)
-            .policy_decider(
-                move |request: crate::network_policy::NetworkPolicyRequest| {
-                    let policy_tx = policy_tx.clone();
-                    async move {
-                        let _ = policy_tx.send(request.request_origin);
-                        NetworkDecision::deny("not_allowed")
-                    }
-                },
-            )
-            .blocked_request_observer(move |request: crate::runtime::BlockedRequest| {
-                let blocked_tx = blocked_tx.clone();
-                async move {
-                    let _ = blocked_tx.send(request.request_origin);
-                }
-            })
-            .build()
-            .await?;
-        let scoped = proxy.scope_for_request("local", "exec-1".to_string())?;
-
-        assert_ne!(scoped.http_addr(), proxy.http_addr());
-        let mut stream = tokio::net::TcpStream::connect(scoped.http_addr()).await?;
-        stream
-            .write_all(
-                b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
-            )
-            .await?;
-
-        assert_eq!(
-            timeout(Duration::from_secs(2), policy_rx.recv()).await?,
-            Some(Some("exec-1".to_string()))
-        );
-        assert_eq!(
-            timeout(Duration::from_secs(2), blocked_rx.recv()).await?,
-            Some(Some("exec-1".to_string()))
-        );
         Ok(())
     }
 

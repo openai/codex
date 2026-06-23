@@ -1,5 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::config::Constrained;
 use codex_exec_server::CreateDirectoryOptions;
@@ -23,7 +24,6 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::get_remote_test_env;
-use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -55,8 +55,6 @@ use tempfile::TempDir;
 
 const NETWORK_TEST_HOST: &str = "codex-network-test.invalid";
 const NETWORK_TEST_TARGET: &str = "http://codex-network-test.invalid:80";
-const FIRST_CONCURRENT_NETWORK_TEST_HOST: &str = "first.codex-network-test.invalid";
-const SECOND_CONCURRENT_NETWORK_TEST_HOST: &str = "second.codex-network-test.invalid";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> Result<()> {
@@ -66,7 +64,7 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
     skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
-    let test = managed_network_unified_exec_test(&server).await?;
+    let test = managed_network_unified_exec_test(&server, /*allow_local_binding*/ false).await?;
     let barrier_dir = TempDir::new_in(test.cwd.path())?;
     let first_marker = barrier_dir.path().join("first");
     let second_marker = barrier_dir.path().join("second");
@@ -77,16 +75,8 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
             peer_marker.display(),
         )
     };
-    let first_command = network_command(
-        &first_marker,
-        &second_marker,
-        FIRST_CONCURRENT_NETWORK_TEST_HOST,
-    );
-    let second_command = network_command(
-        &second_marker,
-        &first_marker,
-        SECOND_CONCURRENT_NETWORK_TEST_HOST,
-    );
+    let first_command = network_command(&first_marker, &second_marker, "1.1.1.1");
+    let second_command = network_command(&second_marker, &first_marker, "8.8.8.8");
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -95,29 +85,23 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
                 ev_function_call(
                     "exec-network-first",
                     "exec_command",
-                    &serde_json::to_string(&network_exec_args(
-                        LOCAL_ENVIRONMENT_ID,
-                        &first_command,
-                    ))?,
+                    &serde_json::to_string(&network_exec_args(&first_command))?,
                 ),
                 ev_function_call(
                     "exec-network-second",
                     "exec_command",
-                    &serde_json::to_string(&network_exec_args(
-                        LOCAL_ENVIRONMENT_ID,
-                        &second_command,
-                    ))?,
+                    &serde_json::to_string(&network_exec_args(&second_command))?,
                 ),
                 ev_completed("resp-network-concurrent"),
             ]),
             sse(vec![
                 ev_response_created("resp-network-guardian-1"),
-                ev_assistant_message("msg-network-guardian-1", r#"{"outcome":"allow"}"#),
+                ev_assistant_message("msg-network-guardian-1", r#"{"outcome":"deny"}"#),
                 ev_completed("resp-network-guardian-1"),
             ]),
             sse(vec![
                 ev_response_created("resp-network-guardian-2"),
-                ev_assistant_message("msg-network-guardian-2", r#"{"outcome":"allow"}"#),
+                ev_assistant_message("msg-network-guardian-2", r#"{"outcome":"deny"}"#),
                 ev_completed("resp-network-guardian-2"),
             ]),
             sse(vec![
@@ -134,6 +118,7 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
         "run both network requests",
         vec![local(test.config.cwd.clone())],
         ApprovalsReviewer::AutoReview,
+        AskForApproval::OnRequest,
     )
     .await?;
     wait_for_turn_complete(&test).await;
@@ -153,15 +138,14 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
                     .context("expected network access JSON in Guardian request")?
                     .trim(),
             )?;
-            let trigger = &action["trigger"];
             Ok((
-                trigger["callId"]
-                    .as_str()
+                action
+                    .pointer("/trigger/callId")
+                    .and_then(Value::as_str)
                     .context("expected exact trigger call id")?
                     .to_string(),
-                trigger["command"]
-                    .as_array()
-                    .and_then(|command| command.last())
+                action
+                    .pointer("/trigger/command/2")
                     .and_then(Value::as_str)
                     .context("expected exact trigger command")?
                     .to_string(),
@@ -169,12 +153,13 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
         })
         .collect::<Result<Vec<_>>>()?;
     actual_triggers.sort_unstable();
-    let mut expected_triggers = vec![
-        ("exec-network-first".to_string(), first_command),
-        ("exec-network-second".to_string(), second_command),
-    ];
-    expected_triggers.sort_unstable();
-    assert_eq!(actual_triggers, expected_triggers);
+    assert_eq!(
+        actual_triggers,
+        vec![
+            ("exec-network-first".to_string(), first_command),
+            ("exec-network-second".to_string(), second_command),
+        ]
+    );
 
     Ok(())
 }
@@ -190,7 +175,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
     };
 
     let server = start_mock_server().await;
-    let test = managed_network_unified_exec_test(&server).await?;
+    let test = managed_network_unified_exec_test(&server, /*allow_local_binding*/ true).await?;
     let local_cwd = TempDir::new()?;
     let remote_cwd = PathBuf::from(format!(
         "/tmp/codex-network-approval-{}",
@@ -225,6 +210,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         "fetch from the local environment",
         environments.clone(),
         ApprovalsReviewer::User,
+        AskForApproval::OnFailure,
     )
     .await?;
     let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
@@ -249,6 +235,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         "fetch from the remote environment",
         environments.clone(),
         ApprovalsReviewer::User,
+        AskForApproval::OnFailure,
     )
     .await?;
     let approval = expect_network_approval(&test, REMOTE_ENVIRONMENT_ID).await?;
@@ -275,7 +262,10 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
     Ok(())
 }
 
-async fn managed_network_unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
+async fn managed_network_unified_exec_test(
+    server: &wiremock::MockServer,
+    allow_local_binding: bool,
+) -> Result<TestCodex> {
     let home = Arc::new(TempDir::new()?);
     fs::write(
         home.path().join("config.toml"),
@@ -287,7 +277,6 @@ async fn managed_network_unified_exec_test(server: &wiremock::MockServer) -> Res
 [permissions.workspace.network]
 enabled = true
 mode = "limited"
-allow_local_binding = true
 "#,
     )?;
     let approval_policy = AskForApproval::OnFailure;
@@ -300,7 +289,11 @@ allow_local_binding = true
     let permission_profile_for_config = permission_profile.clone();
     let mut builder = test_codex()
         .with_home(home)
-        .with_cloud_config_bundle(managed_network_requirements_loader())
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+                "[experimental_network]\nenabled = true\nallow_local_binding = {allow_local_binding}"
+            )),
+        )
         .with_config(move |config| {
             config.use_experimental_unified_exec_tool = true;
             config
@@ -355,16 +348,15 @@ fn network_fetch_args(environment_id: &str) -> Value {
     let command = format!(
         "python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://{NETWORK_TEST_HOST}', timeout=2).read().decode(errors='replace'))\""
     );
-    network_exec_args(environment_id, &command)
+    let mut args = network_exec_args(&command);
+    args["environment_id"] = json!(environment_id);
+    args
 }
 
-fn network_exec_args(environment_id: &str, command: &str) -> Value {
+fn network_exec_args(command: &str) -> Value {
     json!({
-        "shell": "/bin/sh",
         "cmd": command,
-        "login": false,
         "yield_time_ms": 1_000,
-        "environment_id": environment_id,
     })
 }
 
@@ -373,6 +365,7 @@ async fn submit_managed_network_turn(
     prompt: &str,
     environments: Vec<TurnEnvironmentSelection>,
     approvals_reviewer: ApprovalsReviewer,
+    approval_policy: AskForApproval,
 ) -> Result<()> {
     let permission_profile = PermissionProfile::workspace_write_with(
         &[],
@@ -396,7 +389,7 @@ async fn submit_managed_network_turn(
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(turn_environment_selections),
-                approval_policy: Some(AskForApproval::OnFailure),
+                approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(approvals_reviewer),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
