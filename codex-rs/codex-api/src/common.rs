@@ -118,6 +118,24 @@ pub enum ResponseEvent {
 pub struct SafetyBuffering {
     pub use_cases: Vec<String>,
     pub reasons: Vec<String>,
+    #[serde(skip)]
+    pub show_buffering_ui: bool,
+    #[serde(skip)]
+    pub faster_model: Option<String>,
+}
+
+impl SafetyBuffering {
+    pub(crate) fn with_treatment(mut self, treatment: &SafetyBufferingTreatment) -> Self {
+        self.show_buffering_ui = treatment.show_buffering_ui;
+        self.faster_model.clone_from(&treatment.faster_model);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SafetyBufferingTreatment {
+    pub show_buffering_ui: bool,
+    pub faster_model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]

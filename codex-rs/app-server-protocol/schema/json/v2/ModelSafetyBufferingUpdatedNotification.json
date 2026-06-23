@@ -1,6 +1,12 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
+    "fasterModel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "model": {
       "type": "string"
     },
@@ -9,6 +15,9 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "showBufferingUi": {
+      "type": "boolean"
     },
     "threadId": {
       "type": "string"
@@ -26,6 +35,7 @@
   "required": [
     "model",
     "reasons",
+    "showBufferingUi",
     "threadId",
     "turnId",
     "useCases"
