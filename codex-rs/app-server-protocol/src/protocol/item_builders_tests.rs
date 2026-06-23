@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::ExecCommandSource;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
@@ -59,17 +60,35 @@ fn raw_file_uri_cwd_is_converted_for_command_actions() {
         name: "file.txt".to_string(),
         path: PathBuf::from("file.txt"),
     }];
+    let payload = ExecCommandBeginEvent {
+        call_id: "call-1".to_string(),
+        process_id: None,
+        turn_id: "turn-1".to_string(),
+        started_at_ms: 0,
+        command: vec!["cat".to_string(), "file.txt".to_string()],
+        cwd,
+        parsed_cmd,
+        source: ExecCommandSource::Agent,
+        interaction_input: None,
+    };
 
     assert_eq!(
-        cwd.with_serialized_file_uri_rendered_as_path(),
-        LegacyAppPathString::from(cwd_uri)
-    );
-    assert_eq!(
-        command_actions_for_legacy_cwd(&parsed_cmd, &cwd),
-        vec![CommandAction::Read {
+        build_command_execution_begin_item(&payload),
+        ThreadItem::CommandExecution {
+            id: "call-1".to_string(),
             command: "cat file.txt".to_string(),
-            name: "file.txt".to_string(),
-            path: expected_path,
-        }],
+            cwd: LegacyAppPathString::from(cwd_uri),
+            process_id: None,
+            source: CommandExecutionSource::Agent,
+            status: CommandExecutionStatus::InProgress,
+            command_actions: vec![CommandAction::Read {
+                command: "cat file.txt".to_string(),
+                name: "file.txt".to_string(),
+                path: expected_path,
+            }],
+            aggregated_output: None,
+            exit_code: None,
+            duration_ms: None,
+        }
     );
 }

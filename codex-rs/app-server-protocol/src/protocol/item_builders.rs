@@ -91,10 +91,18 @@ pub fn build_command_execution_approval_request_item(
 
 pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> ThreadItem {
     let command_actions = command_actions_for_legacy_cwd(&payload.parsed_cmd, &payload.cwd);
+    let cwd = payload
+        .cwd
+        .as_str()
+        .get(..7)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("file://"))
+        .and_then(|_| payload.cwd.to_inferred_path_uri())
+        .map(LegacyAppPathString::from)
+        .unwrap_or_else(|| payload.cwd.clone());
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.with_serialized_file_uri_rendered_as_path(),
+        cwd,
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: CommandExecutionStatus::InProgress,
@@ -113,11 +121,19 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     };
     let duration_ms = i64::try_from(payload.duration.as_millis()).unwrap_or(i64::MAX);
     let command_actions = command_actions_for_legacy_cwd(&payload.parsed_cmd, &payload.cwd);
+    let cwd = payload
+        .cwd
+        .as_str()
+        .get(..7)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("file://"))
+        .and_then(|_| payload.cwd.to_inferred_path_uri())
+        .map(LegacyAppPathString::from)
+        .unwrap_or_else(|| payload.cwd.clone());
 
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.with_serialized_file_uri_rendered_as_path(),
+        cwd,
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: (&payload.status).into(),

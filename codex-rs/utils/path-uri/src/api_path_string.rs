@@ -81,31 +81,15 @@ impl LegacyAppPathString {
         })
     }
 
-    /// Parses this API string as a serialized file URI.
-    fn parse_serialized_file_uri(&self) -> Option<PathUri> {
-        // Check the original spelling before parsing because URL parsing
-        // canonicalizes relative aliases such as `file:repo`, losing the
-        // distinction from serialized absolute file URI spellings.
-        let scheme = self.0.get(..7)?;
-        if !scheme.eq_ignore_ascii_case("file://") {
-            return None;
-        }
-        PathUri::parse(&self.0).ok()
-    }
-
-    /// Converts a serialized file URI spelling to its inferred native path spelling.
-    ///
-    /// Non-URI path strings are returned unchanged.
-    pub fn with_serialized_file_uri_rendered_as_path(&self) -> Self {
-        self.parse_serialized_file_uri()
-            .map(Self::from)
-            .unwrap_or_else(|| self.clone())
+    fn has_serialized_file_uri_prefix(&self) -> bool {
+        self.0
+            .get(..7)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"))
     }
 
     /// Parses this API string as a file URI or as an absolute path using its inferred convention.
     pub fn to_inferred_path_uri(&self) -> Option<PathUri> {
-        self.parse_serialized_file_uri()
-            .or_else(|| PathUri::try_from(self.clone()).ok())
+        PathUri::try_from(self.clone()).ok()
     }
 
     /// Parses this API string as a host-native absolute path.
@@ -159,6 +143,18 @@ impl TryFrom<LegacyAppPathString> for PathUri {
     type Error = LegacyAppPathStringError;
 
     fn try_from(path: LegacyAppPathString) -> Result<Self, Self::Error> {
+        // Check the original spelling before parsing because URL parsing
+        // canonicalizes relative aliases such as `file:repo`, losing the
+        // distinction from serialized absolute file URI spellings.
+        if path.has_serialized_file_uri_prefix() {
+            return PathUri::parse(path.as_str()).map_err(|_| {
+                LegacyAppPathStringError::InvalidNativePath {
+                    path: path.0,
+                    convention: None,
+                }
+            });
+        }
+
         let Some(convention) = path.infer_absolute_path_convention() else {
             return Err(LegacyAppPathStringError::InvalidNativePath {
                 path: path.0,

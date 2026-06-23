@@ -183,7 +183,12 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
             started_at_ms: *started_at_ms,
             command,
             cwd: cwd
-                .with_serialized_file_uri_rendered_as_path()
+                .as_str()
+                .get(..7)
+                .filter(|scheme| scheme.eq_ignore_ascii_case("file://"))
+                .and_then(|_| cwd.to_inferred_path_uri())
+                .map(Into::into)
+                .unwrap_or_else(|| cwd.clone())
                 .into_string(),
             parsed_cmd,
             source: *source,
@@ -244,7 +249,12 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
             completed_at_ms: *completed_at_ms,
             command,
             cwd: cwd
-                .with_serialized_file_uri_rendered_as_path()
+                .as_str()
+                .get(..7)
+                .filter(|scheme| scheme.eq_ignore_ascii_case("file://"))
+                .and_then(|_| cwd.to_inferred_path_uri())
+                .map(Into::into)
+                .unwrap_or_else(|| cwd.clone())
                 .into_string(),
             parsed_cmd,
             source: *source,

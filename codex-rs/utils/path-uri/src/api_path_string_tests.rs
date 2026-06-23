@@ -477,20 +477,15 @@ fn converts_raw_file_uris_to_inferred_path_uris() {
         let expected_path =
             serde_json::from_value::<LegacyAppPathString>(serde_json::json!(expected_path))
                 .expect("expected native path should deserialize as API text");
+        let expected_uri = PathUri::parse(raw_uri).expect("raw file URI should parse");
 
         assert_eq!(
             path.to_inferred_path_uri(),
-            Some(PathUri::parse(raw_uri).expect("raw file URI should parse")),
+            Some(expected_uri.clone()),
             "round-tripping {raw_uri:?}",
         );
-        assert_eq!(
-            path.parse_serialized_file_uri(),
-            path.to_inferred_path_uri()
-        );
-        assert_eq!(
-            path.with_serialized_file_uri_rendered_as_path(),
-            expected_path
-        );
+        assert_eq!(PathUri::try_from(path), Ok(expected_uri.clone()));
+        assert_eq!(LegacyAppPathString::from(expected_uri), expected_path);
     }
 }
 
