@@ -2050,6 +2050,55 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
     );
 }
 
+#[test]
+fn managed_new_thread_model_only_overrides_root_new_threads() {
+    let cases = [
+        (
+            InitialHistory::New,
+            SessionSource::VSCode,
+            Some("managed-model"),
+            "managed-model",
+        ),
+        (
+            InitialHistory::New,
+            SessionSource::VSCode,
+            None,
+            "local-model",
+        ),
+        (
+            InitialHistory::Cleared,
+            SessionSource::VSCode,
+            Some("managed-model"),
+            "managed-model",
+        ),
+        (
+            InitialHistory::Forked(Vec::new()),
+            SessionSource::VSCode,
+            Some("managed-model"),
+            "local-model",
+        ),
+        (
+            InitialHistory::New,
+            SessionSource::SubAgent(SubAgentSource::Review),
+            Some("managed-model"),
+            "local-model",
+        ),
+    ];
+
+    for (history, source, managed_model, expected) in cases {
+        assert_eq!(
+            resolve_initial_model(
+                Some("local-model".to_string()),
+                managed_model.map(str::to_string),
+                &history,
+                &source,
+            )
+            .as_deref(),
+            Some(expected)
+        );
+    }
+}
+
 #[tokio::test]
 async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     let (session, _turn_context) = make_session_and_context().await;
