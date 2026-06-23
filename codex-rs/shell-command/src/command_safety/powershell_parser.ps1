@@ -42,6 +42,21 @@ function Invoke-ParseRequest {
         return @{ id = $RequestId; status = 'parse_errors' }
     }
 
+    # Top-level AST regions and collections outside the end-block statement list
+    # can execute code that the command lowering below does not inspect.
+    $cleanBlock = $ast.PSObject.Properties['CleanBlock']
+    if (
+        $ast.ParamBlock -ne $null -or
+        $ast.DynamicParamBlock -ne $null -or
+        $ast.BeginBlock -ne $null -or
+        $ast.ProcessBlock -ne $null -or
+        ($cleanBlock -ne $null -and $cleanBlock.Value -ne $null) -or
+        $ast.UsingStatements.Count -gt 0 -or
+        $ast.EndBlock.Traps.Count -gt 0
+    ) {
+        return @{ id = $RequestId; status = 'unsupported' }
+    }
+
     # PowerShell's stop-parsing marker hands the remaining source text to native
     # commands with runtime argument handling that does not match the AST shape we
     # flatten below. Keep that form out of the argv-like lowering path entirely.
