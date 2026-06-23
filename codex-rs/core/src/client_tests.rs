@@ -505,7 +505,7 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
         &mut auth_recovery,
         &test_session_telemetry(),
         &provider,
-        /*rejected_auth*/ None,
+        /*rejected_auth_fingerprint*/ None,
     )
     .await
     .expect_err("expired Bedrock signature should fail");
