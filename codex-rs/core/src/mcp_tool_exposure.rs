@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::AppToolPolicyInput;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
-use codex_mcp::is_codex_apps_mcp;
 use codex_mcp::tool_is_model_visible;
 use tracing::instrument;
 
@@ -47,7 +47,9 @@ pub(crate) fn build_mcp_tool_exposure(
 fn filter_non_codex_apps_mcp_tools_only(mcp_tools: &[McpToolInfo]) -> Vec<McpToolInfo> {
     mcp_tools
         .iter()
-        .filter(|tool| !is_codex_apps_mcp(&tool.server_name) && tool_is_model_visible(tool))
+        .filter(|tool| {
+            tool.server_name != CODEX_APPS_MCP_SERVER_NAME && tool_is_model_visible(tool)
+        })
         .cloned()
         .collect()
 }
@@ -66,7 +68,7 @@ fn filter_codex_apps_mcp_tools(
     mcp_tools
         .iter()
         .filter(|tool| {
-            if !is_codex_apps_mcp(&tool.server_name) {
+            if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
                 return false;
             }
             if !tool_is_model_visible(tool) {

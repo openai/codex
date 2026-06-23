@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -19,6 +20,7 @@ use std::time::Instant;
 
 use crate::codex_apps::CachedCodexAppsToolsLoad;
 use crate::codex_apps::CodexAppsToolsCacheContext;
+use crate::codex_apps::CodexAppsToolsCacheKey;
 use crate::codex_apps::load_cached_codex_apps_tools;
 use crate::codex_apps::load_startup_cached_codex_apps_server_info;
 use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
@@ -27,8 +29,8 @@ use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
-use crate::mcp::is_codex_apps_mcp;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
@@ -134,6 +136,7 @@ pub(crate) struct AsyncManagedClient {
     pub(crate) startup_complete: Arc<AtomicBool>,
     pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
     pub(crate) cancel_token: CancellationToken,
+    pub(crate) server_name: String,
 }
 
 impl AsyncManagedClient {
@@ -148,31 +151,49 @@ impl AsyncManagedClient {
         cancel_token: CancellationToken,
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
-        codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+        codex_home: PathBuf,
+        codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
         runtime_context: McpRuntimeContext,
-        runtime_auth_provider: Option<SharedAuthProvider>,
+        codex_apps_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
     ) -> Self {
+        let is_codex_apps_mcp = server_name == CODEX_APPS_MCP_SERVER_NAME;
+        let codex_apps_tools_cache_context =
+            is_codex_apps_mcp.then_some(CodexAppsToolsCacheContext {
+                codex_home,
+                user_key: codex_apps_tools_cache_key,
+            });
+        let uses_env_bearer_token = server
+            .configured_config()
+            .is_some_and(|config| match &config.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    ..
+                } => bearer_token_env_var.is_some(),
+                McpServerTransportConfig::Stdio { .. } => false,
+            });
+        let runtime_auth_provider = if is_codex_apps_mcp && !uses_env_bearer_token {
+            codex_apps_auth_provider
+        } else {
+            None
+        };
         let tool_filter = server
             .configured_config()
             .map(ToolFilter::from_config)
             .unwrap_or_default();
-        let cached_tool_info_snapshot = load_startup_cached_codex_apps_tools_snapshot(
-            &server_name,
-            codex_apps_tools_cache_context.as_ref(),
-        );
+        let cached_tool_info_snapshot =
+            load_startup_cached_codex_apps_tools_snapshot(codex_apps_tools_cache_context.as_ref());
         let cached_tool_info_snapshot =
             cached_tool_info_snapshot.map(|tools| filter_tools(tools, &tool_filter));
-        let cached_server_info = load_startup_cached_codex_apps_server_info(
-            &server_name,
-            codex_apps_tools_cache_context.as_ref(),
-        );
+        let cached_server_info =
+            load_startup_cached_codex_apps_server_info(codex_apps_tools_cache_context.as_ref());
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
         let cancel_token_for_fut = cancel_token.clone();
+        let client_server_name = server_name.clone();
         let fut = async move {
             let outcome = match async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
@@ -206,6 +227,7 @@ impl AsyncManagedClient {
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
+                        is_codex_apps_mcp,
                         client_elicitation_capability,
                         supports_openai_form_elicitation,
                     },
@@ -237,7 +259,12 @@ impl AsyncManagedClient {
             startup_complete,
             tool_plugin_provenance,
             cancel_token,
+            server_name: client_server_name,
         }
+    }
+
+    pub(crate) fn is_codex_apps_mcp(&self) -> bool {
+        self.server_name == CODEX_APPS_MCP_SERVER_NAME
     }
 
     pub(crate) async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
@@ -266,7 +293,7 @@ impl AsyncManagedClient {
         let annotate_tools = |tools: Vec<ToolInfo>| {
             let mut tools = tools;
             for tool in &mut tools {
-                if is_codex_apps_mcp(&tool.server_name) {
+                if self.is_codex_apps_mcp() {
                     tool.tool = tool_with_model_visible_input_schema(&tool.tool);
                 }
 
@@ -348,6 +375,7 @@ impl From<anyhow::Error> for StartupOutcomeError {
 
 pub(crate) async fn list_tools_for_client_uncached(
     server_name: &str,
+    is_codex_apps_mcp: bool,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
     server_instructions: Option<&str>,
@@ -362,23 +390,29 @@ pub(crate) async fn list_tools_for_client_uncached(
             let mut tool_def = tool.tool;
             let (connector_id, connector_name, connector_description) =
                 sanitize_tool_connector_metadata(
-                    server_name,
+                    is_codex_apps_mcp,
                     &mut tool_def,
                     tool.connector_id,
                     tool.connector_name,
                     tool.connector_description,
                 );
             let callable_name = normalize_codex_apps_callable_name(
-                server_name,
+                is_codex_apps_mcp,
                 &tool_def.name,
                 connector_id.as_deref(),
                 connector_name.as_deref(),
             );
-            let callable_namespace =
-                normalize_codex_apps_callable_namespace(server_name, connector_name.as_deref());
+            let callable_namespace = normalize_codex_apps_callable_namespace(
+                is_codex_apps_mcp,
+                server_name,
+                connector_name.as_deref(),
+            );
             if let Some(title) = tool_def.title.as_deref() {
-                let normalized_title =
-                    normalize_codex_apps_tool_title(server_name, connector_name.as_deref(), title);
+                let normalized_title = normalize_codex_apps_tool_title(
+                    is_codex_apps_mcp,
+                    connector_name.as_deref(),
+                    title,
+                );
                 if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
                     tool_def.title = Some(normalized_title);
                 }
@@ -409,13 +443,13 @@ pub(crate) async fn list_tools_for_client_uncached(
 }
 
 fn sanitize_tool_connector_metadata(
-    server_name: &str,
+    is_codex_apps_mcp: bool,
     tool: &mut RmcpTool,
     connector_id: Option<String>,
     connector_name: Option<String>,
     connector_description: Option<String>,
 ) -> (Option<String>, Option<String>, Option<String>) {
-    if is_codex_apps_mcp(server_name) {
+    if is_codex_apps_mcp {
         return (connector_id, connector_name, connector_description);
     }
 
@@ -483,6 +517,7 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
+        is_codex_apps_mcp,
         client_elicitation_capability,
         supports_openai_form_elicitation,
     } = params;
@@ -508,6 +543,7 @@ async fn start_server_task(
     let fetch_start = Instant::now();
     let tools = list_tools_for_client_uncached(
         &server_name,
+        is_codex_apps_mcp,
         &client,
         startup_timeout,
         initialize_result.instructions.as_deref(),
@@ -521,12 +557,11 @@ async fn start_server_task(
     );
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
     write_cached_codex_apps_tools_if_needed(
-        &server_name,
         codex_apps_tools_cache_context.as_ref(),
         &server_info,
         &tools,
     );
-    if is_codex_apps_mcp(&server_name) {
+    if is_codex_apps_mcp {
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             list_start.elapsed(),
@@ -591,6 +626,7 @@ struct StartServerTaskParams {
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    is_codex_apps_mcp: bool,
     client_elicitation_capability: ElicitationCapability,
     supports_openai_form_elicitation: bool,
 }
@@ -738,7 +774,7 @@ mod tests {
 
         let (connector_id, connector_name, connector_description) =
             sanitize_tool_connector_metadata(
-                "minimaltest",
+                /*is_codex_apps_mcp*/ false,
                 &mut tool,
                 Some("connector_gmail".to_string()),
                 Some("Gmail".to_string()),
@@ -774,7 +810,7 @@ mod tests {
 
         let (connector_id, connector_name, connector_description) =
             sanitize_tool_connector_metadata(
-                CODEX_APPS_MCP_SERVER_NAME,
+                /*is_codex_apps_mcp*/ true,
                 &mut tool,
                 Some("connector_gmail".to_string()),
                 Some("Gmail".to_string()),

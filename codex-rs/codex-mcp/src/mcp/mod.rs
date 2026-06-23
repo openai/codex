@@ -50,11 +50,6 @@ const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
-/// Returns whether `server_name` identifies the reserved Codex Apps MCP server.
-pub fn is_codex_apps_mcp(server_name: &str) -> bool {
-    server_name == CODEX_APPS_MCP_SERVER_NAME
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum McpSnapshotDetail {
     #[default]

@@ -14,14 +14,12 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::McpAuthStatusEntry;
-use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::CodexAppsToolsCacheKey;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
-use crate::mcp::is_codex_apps_mcp;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
 use crate::rmcp_client::MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC;
@@ -172,30 +170,6 @@ impl McpConnectionManager {
                 },
             )
             .await;
-            let codex_apps_tools_cache_context = if is_codex_apps_mcp(&server_name) {
-                Some(CodexAppsToolsCacheContext {
-                    codex_home: codex_home.clone(),
-                    user_key: codex_apps_tools_cache_key.clone(),
-                })
-            } else {
-                None
-            };
-            let uses_env_bearer_token =
-                server
-                    .configured_config()
-                    .is_some_and(|config| match &config.transport {
-                        McpServerTransportConfig::StreamableHttp {
-                            bearer_token_env_var,
-                            ..
-                        } => bearer_token_env_var.is_some(),
-                        McpServerTransportConfig::Stdio { .. } => false,
-                    });
-            let runtime_auth_provider = if is_codex_apps_mcp(&server_name) && !uses_env_bearer_token
-            {
-                codex_apps_auth_provider.clone()
-            } else {
-                None
-            };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 server,
@@ -204,10 +178,11 @@ impl McpConnectionManager {
                 cancel_token.clone(),
                 tx_event.clone(),
                 elicitation_requests.clone(),
-                codex_apps_tools_cache_context,
+                codex_home.clone(),
+                codex_apps_tools_cache_key.clone(),
                 Arc::clone(&tool_plugin_provenance),
                 runtime_context.clone(),
-                runtime_auth_provider,
+                codex_apps_auth_provider.clone(),
                 client_elicitation_capability.clone(),
                 supports_openai_form_elicitation,
             );
@@ -354,6 +329,13 @@ impl McpConnectionManager {
         self.clients.contains_key(server_name)
     }
 
+    /// Returns whether the named registered client is the Codex Apps MCP server.
+    pub fn is_codex_apps_mcp(&self, server_name: &str) -> bool {
+        self.clients
+            .get(server_name)
+            .is_some_and(AsyncManagedClient::is_codex_apps_mcp)
+    }
+
     /// Stop all MCP clients owned by this manager and terminate stdio server processes.
     pub async fn shutdown(&self) {
         self.startup_cancellation_token.cancel();
@@ -491,10 +473,11 @@ impl McpConnectionManager {
     /// latest filtered tools are returned directly to the caller. On
     /// failure, the existing cache remains unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
-        let managed_client = self
+        let async_managed_client = self
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
-            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
+        let managed_client = async_managed_client
             .client()
             .await
             .context("failed to get client")?;
@@ -503,6 +486,7 @@ impl McpConnectionManager {
         let fetch_start = Instant::now();
         let tools = list_tools_for_client_uncached(
             CODEX_APPS_MCP_SERVER_NAME,
+            async_managed_client.is_codex_apps_mcp(),
             &managed_client.client,
             managed_client.tool_timeout,
             managed_client.server_instructions.as_deref(),
@@ -518,7 +502,6 @@ impl McpConnectionManager {
         );
 
         write_cached_codex_apps_tools_if_needed(
-            CODEX_APPS_MCP_SERVER_NAME,
             managed_client.codex_apps_tools_cache_context.as_ref(),
             &managed_client.server_info,
             &tools,

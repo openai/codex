@@ -15,7 +15,7 @@ use tracing::warn;
 
 use crate::server::EffectiveMcpServer;
 
-use super::is_codex_apps_mcp;
+use super::CODEX_APPS_MCP_SERVER_NAME;
 
 #[derive(Debug, Clone)]
 pub struct McpOAuthLoginConfig {
@@ -140,7 +140,7 @@ where
     let futures = servers.into_iter().map(|(name, server)| {
         let name = name.clone();
         let config = server.configured_config().cloned();
-        let has_runtime_auth = is_codex_apps_mcp(&name)
+        let has_runtime_auth = name == CODEX_APPS_MCP_SERVER_NAME
             && auth.is_some_and(CodexAuth::uses_codex_backend)
             && config.as_ref().is_some_and(|config| {
                 matches!(

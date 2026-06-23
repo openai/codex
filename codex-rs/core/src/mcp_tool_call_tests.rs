@@ -48,6 +48,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -1161,7 +1162,10 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
     metadata.link_id = Some("link_fedcba9876543210fedcba9876543210".to_string());
 
     assert_eq!(
-        McpToolCallItemMetadata::from_tool_metadata(CODEX_APPS_MCP_SERVER_NAME, Some(&metadata),),
+        McpToolCallItemMetadata::from_tool_metadata(
+            /*is_codex_apps_mcp*/ true,
+            Some(&metadata),
+        ),
         McpToolCallItemMetadata {
             connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
             link_id: Some("link_fedcba9876543210fedcba9876543210".to_string()),
@@ -1170,7 +1174,10 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
         }
     );
     assert_eq!(
-        McpToolCallItemMetadata::from_tool_metadata("custom_server", Some(&metadata)),
+        McpToolCallItemMetadata::from_tool_metadata(
+            /*is_codex_apps_mcp*/ false,
+            Some(&metadata),
+        ),
         McpToolCallItemMetadata {
             connector_id: None,
             link_id: None,
@@ -1332,9 +1339,56 @@ fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
     )
 }
 
+async fn install_codex_apps_manager(session: &Session, turn_context: &TurnContext) {
+    let auth = session.services.auth_manager.auth().await;
+    let mcp_servers = HashMap::from([(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        codex_mcp::EffectiveMcpServer::configured(codex_mcp::codex_apps_mcp_server_config(
+            "http://127.0.0.1:9",
+            /*apps_mcp_product_sku*/ None,
+        )),
+    )]);
+    let (tx_event, rx_event) = async_channel::unbounded();
+    drop(rx_event);
+    let startup_cancellation_token = CancellationToken::new();
+    startup_cancellation_token.cancel();
+    let manager = codex_mcp::McpConnectionManager::new(
+        &mcp_servers,
+        turn_context.config.mcp_oauth_credentials_store_mode,
+        turn_context.config.auth_keyring_backend_kind(),
+        HashMap::new(),
+        &turn_context.approval_policy,
+        turn_context.sub_id.clone(),
+        tx_event,
+        startup_cancellation_token,
+        turn_context.permission_profile(),
+        codex_mcp::McpRuntimeContext::new(
+            session.services.turn_environments.environment_manager(),
+            {
+                #[allow(deprecated)]
+                turn_context.cwd.to_path_buf()
+            },
+        ),
+        turn_context.config.codex_home.to_path_buf(),
+        codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
+        turn_context.config.prefix_mcp_tool_names(),
+        rmcp::model::ElicitationCapability::default(),
+        /*supports_openai_form_elicitation*/ false,
+        codex_mcp::ToolPluginProvenance::default(),
+        auth.as_ref(),
+        /*elicitation_reviewer*/ None,
+    )
+    .await;
+    session
+        .services
+        .mcp_connection_manager
+        .store(Arc::new(manager));
+}
+
 #[tokio::test]
 async fn codex_apps_auth_elicitation_feature_disabled_returns_original_result() {
     let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
+    install_codex_apps_manager(&session, &turn_context).await;
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
 
@@ -1379,6 +1433,7 @@ async fn codex_apps_auth_elicitation_other_server_returns_original_result() {
 #[tokio::test]
 async fn codex_apps_auth_elicitation_disallowed_by_policy_returns_original_result() {
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    install_codex_apps_manager(&session, &turn_context).await;
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
@@ -1407,6 +1462,7 @@ async fn codex_apps_auth_elicitation_disallowed_by_policy_returns_original_resul
 #[tokio::test]
 async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_result() {
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    install_codex_apps_manager(&session, &turn_context).await;
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
@@ -1441,6 +1497,7 @@ async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_resu
 #[tokio::test]
 async fn codex_apps_auth_elicitation_feature_enabled_requests_elicitation() {
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    install_codex_apps_manager(&session, &turn_context).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);

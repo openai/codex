@@ -704,22 +704,11 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
         "calendar_search",
     )];
     let server_info = create_test_server_info("Codex Apps");
-    write_cached_codex_apps_tools_if_needed(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-        &server_info,
-        &cached_tools,
-    );
+    write_cached_codex_apps_tools_if_needed(Some(&cache_context), &server_info, &cached_tools);
 
-    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-    )
-    .expect("expected startup snapshot to load from cache");
-    let cached_server_info = load_startup_cached_codex_apps_server_info(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-    );
+    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(Some(&cache_context))
+        .expect("expected startup snapshot to load from cache");
+    let cached_server_info = load_startup_cached_codex_apps_server_info(Some(&cache_context));
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].server_name, CODEX_APPS_MCP_SERVER_NAME);
@@ -746,15 +735,9 @@ fn startup_cached_codex_apps_tools_loads_without_server_info_cache() {
     .expect("serialize");
     std::fs::write(cache_path, bytes).expect("write");
 
-    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-    )
-    .expect("legacy startup snapshot should remain available");
-    let cached_server_info = load_startup_cached_codex_apps_server_info(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-    );
+    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(Some(&cache_context))
+        .expect("legacy startup snapshot should remain available");
+    let cached_server_info = load_startup_cached_codex_apps_server_info(Some(&cache_context));
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].callable_name, "calendar_search");
@@ -771,7 +754,6 @@ fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
     );
     let server_info = create_test_server_info("Codex Apps");
     write_cached_codex_apps_tools_if_needed(
-        CODEX_APPS_MCP_SERVER_NAME,
         Some(&cache_context),
         &server_info,
         &[create_test_tool(
@@ -792,19 +774,10 @@ fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
     std::fs::write(cache_path, bytes).expect("write legacy tools cache");
 
     assert_eq!(
-        load_startup_cached_codex_apps_server_info(
-            CODEX_APPS_MCP_SERVER_NAME,
-            Some(&cache_context),
-        ),
+        load_startup_cached_codex_apps_server_info(Some(&cache_context)),
         Some(server_info)
     );
-    assert!(
-        load_startup_cached_codex_apps_tools_snapshot(
-            CODEX_APPS_MCP_SERVER_NAME,
-            Some(&cache_context),
-        )
-        .is_none()
-    );
+    assert!(load_startup_cached_codex_apps_tools_snapshot(Some(&cache_context)).is_none());
 }
 
 #[tokio::test]
@@ -832,6 +805,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         },
     );
 
@@ -869,6 +843,7 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         },
     );
 
@@ -906,6 +881,7 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            server_name: "rmcp".to_string(),
         },
     );
 
@@ -949,6 +925,7 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            server_name: "rmcp".to_string(),
         },
     );
 
@@ -991,6 +968,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         },
     );
 
@@ -1027,6 +1005,7 @@ async fn shutdown_cancels_pending_tool_listing() {
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token,
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         },
     );
     let manager = Arc::new(manager);
@@ -1062,6 +1041,7 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         },
     );
 
@@ -1102,6 +1082,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
             startup_complete,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         },
     );
 
@@ -1160,6 +1141,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            server_name: server_name.to_string(),
         },
     );
 

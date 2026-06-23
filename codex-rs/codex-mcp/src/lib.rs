@@ -42,7 +42,6 @@ pub use mcp::configured_mcp_servers;
 pub use mcp::effective_mcp_servers;
 pub use mcp::effective_mcp_servers_from_configured;
 pub use mcp::hosted_plugin_runtime_mcp_server_config;
-pub use mcp::is_codex_apps_mcp;
 pub use mcp::tool_plugin_provenance;
 pub use plugin_config::PluginMcpConfigParseOutcome;
 pub use plugin_config::PluginMcpServerParseError;
