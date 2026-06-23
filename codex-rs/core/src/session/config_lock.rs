@@ -357,7 +357,7 @@ mod tests {
             features.current_time_reminder,
             Some(FeatureToml::Config(CurrentTimeReminderConfigToml {
                 enabled: Some(true),
-                reminder_interval_model_requests: Some(1),
+                reminder_interval_seconds: Some(1),
                 clock_source: Some(codex_features::CurrentTimeSource::System),
             }))
         );
