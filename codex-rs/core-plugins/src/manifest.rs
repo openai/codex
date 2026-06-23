@@ -164,6 +164,12 @@ pub(crate) fn parse_plugin_manifest_uri(
     parse_plugin_manifest_with_resolver(&resolver, contents)
 }
 
+/// Separates manifest decoding from filesystem-specific resource resolution.
+///
+/// Implementations interpret manifest-relative paths using the convention of
+/// the filesystem that owns the plugin root. They must reject paths that are
+/// invalid for that convention or lexically escape the plugin root, and supply
+/// source-appropriate values for fallback naming and diagnostics.
 trait ManifestResourceResolver {
     type Resource;
 
@@ -485,7 +491,7 @@ fn resolve_default_prompt_str(manifest_path: &str, field: &str, prompt: &str) ->
 }
 
 fn warn_invalid_default_prompt(manifest_path: &str, field: &str, message: &str) {
-    tracing::warn!(path = manifest_path, "ignoring {field}: {message}");
+    tracing::warn!(path = %manifest_path, "ignoring {field}: {message}");
 }
 
 fn json_value_type(value: &JsonValue) -> &'static str {
