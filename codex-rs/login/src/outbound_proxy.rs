@@ -16,7 +16,7 @@ impl AuthRouteConfig {
         }
     }
 
-    pub(crate) fn route_config(&self) -> &OutboundProxyConfig {
+    pub fn route_config(&self) -> &OutboundProxyConfig {
         &self.route_config
     }
 }

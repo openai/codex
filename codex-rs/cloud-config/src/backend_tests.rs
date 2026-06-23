@@ -1,0 +1,30 @@
+use super::*;
+use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AuthKeyringBackendKind;
+use codex_login::AuthRouteConfig;
+use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn cloud_bundle_client_preserves_system_proxy_config() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let auth_manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ Some("https://chatgpt.com/backend-api/".to_string()),
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ Some(AuthRouteConfig::respect_system_proxy()),
+    )
+    .await;
+
+    let client = BackendBundleClient::from_auth_manager(
+        "https://chatgpt.com/backend-api/".to_string(),
+        &auth_manager,
+    );
+
+    assert_eq!(
+        client.auth_route_config,
+        Some(AuthRouteConfig::respect_system_proxy())
+    );
+}
