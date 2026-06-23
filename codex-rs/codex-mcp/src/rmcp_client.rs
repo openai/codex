@@ -288,8 +288,9 @@ impl AsyncManagedClient {
     }
 }
 
-/// Masks Codex Apps file inputs in the model-visible schema and adds plugin names to each tool.
-/// Plugin membership is resolved by connector ID, falling back to the MCP server when absent.
+/// Presents declared Codex Apps file parameters to the model as local-path inputs and adds plugin
+/// names to each tool. Plugin membership is resolved by connector ID, falling back to the MCP
+/// server when absent.
 fn prepare_codex_apps_tools_for_model(
     mut tools: Vec<ToolInfo>,
     tool_plugin_provenance: &ToolPluginProvenance,
