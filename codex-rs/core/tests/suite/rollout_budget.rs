@@ -2,9 +2,9 @@ use anyhow::Result;
 use codex_core::config::RolloutBudgetConfig;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -205,7 +205,7 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exhausted_budget_aborts_current_and_later_turns() -> Result<()> {
+async fn exhausted_budget_fails_current_and_later_turns() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -248,18 +248,18 @@ async fn exhausted_budget_aborts_current_and_later_turns() -> Result<()> {
             })
             .await?;
 
-        let event = wait_for_event(&test.codex, |event| match event {
-            EventMsg::TurnAborted(_) => true,
-            EventMsg::TurnComplete(_) => {
-                panic!("exhausted budget completed the turn instead of aborting")
-            }
-            _ => false,
+        wait_for_event(&test.codex, |event| {
+            matches!(
+                event,
+                EventMsg::Error(error)
+                    if error.codex_error_info == Some(CodexErrorInfo::RolloutBudgetExceeded)
+            )
         })
         .await;
-        let EventMsg::TurnAborted(abort) = event else {
-            unreachable!("event filter only accepts TurnAborted")
-        };
-        assert_eq!(abort.reason, TurnAbortReason::Interrupted);
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
     }
 
     Ok(())
@@ -268,7 +268,7 @@ async fn exhausted_budget_aborts_current_and_later_turns() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(false ; "local")]
 #[test_case(true ; "remote_v2")]
-async fn compaction_budget_exhaustion_aborts_without_error_or_retry(remote_v2: bool) -> Result<()> {
+async fn compaction_budget_exhaustion_fails_without_retry(remote_v2: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -311,19 +311,18 @@ async fn compaction_budget_exhaustion_aborts_without_error_or_retry(remote_v2: b
         .await?;
 
     test.codex.submit(Op::Compact).await?;
-    let event = wait_for_event(&test.codex, |event| match event {
-        EventMsg::TurnAborted(_) => true,
-        EventMsg::Error(error) => panic!("budget exhaustion emitted an error: {}", error.message),
-        EventMsg::TurnComplete(_) => {
-            panic!("budget-exhausting compaction completed instead of aborting")
-        }
-        _ => false,
+    wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::Error(error)
+                if error.codex_error_info == Some(CodexErrorInfo::RolloutBudgetExceeded)
+        )
     })
     .await;
-    let EventMsg::TurnAborted(abort) = event else {
-        unreachable!("event filter only accepts TurnAborted")
-    };
-    assert_eq!(abort.reason, TurnAbortReason::Interrupted);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     assert_eq!(responses.requests().len(), 1, "compaction should not retry");
 
     Ok(())

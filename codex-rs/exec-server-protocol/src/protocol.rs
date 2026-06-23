@@ -4,6 +4,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_shell_command::shell_detect::DetectedShell;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -22,9 +23,9 @@ pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
-pub(crate) const FS_OPEN_METHOD: &str = "fs/open";
-pub(crate) const FS_READ_BLOCK_METHOD: &str = "fs/readBlock";
-pub(crate) const FS_CLOSE_METHOD: &str = "fs/close";
+pub const FS_OPEN_METHOD: &str = "fs/open";
+pub const FS_READ_BLOCK_METHOD: &str = "fs/readBlock";
+pub const FS_CLOSE_METHOD: &str = "fs/close";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
@@ -77,6 +78,18 @@ pub struct EnvironmentInfo {
     pub cwd: Option<PathUri>,
 }
 
+impl EnvironmentInfo {
+    /// Returns information about the current local exec-server process.
+    pub fn local() -> Self {
+        Self {
+            shell: codex_shell_command::shell_detect::default_user_shell().into(),
+            cwd: std::env::current_dir()
+                .ok()
+                .and_then(|cwd| PathUri::from_host_native_path(cwd).ok()),
+        }
+    }
+}
+
 /// Shell detected for an execution/filesystem environment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +99,15 @@ pub struct ShellInfo {
     /// Target-native shell executable path or command name. Fallbacks such as `cmd.exe` need not
     /// be absolute, so this is not a [`PathUri`].
     pub path: String,
+}
+
+impl From<DetectedShell> for ShellInfo {
+    fn from(shell: DetectedShell) -> Self {
+        Self {
+            name: shell.name().to_string(),
+            path: shell.shell_path.to_string_lossy().into_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
