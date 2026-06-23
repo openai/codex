@@ -1555,9 +1555,9 @@
             },
             "method": {
               "enum": [
-                "update/apply"
+                "update/install"
               ],
-              "title": "Update/applyRequestMethod",
+              "title": "Update/installRequestMethod",
               "type": "string"
             },
             "params": {
@@ -1568,7 +1568,7 @@
             "id",
             "method"
           ],
-          "title": "Update/applyRequest",
+          "title": "Update/installRequest",
           "type": "object"
         },
         {
@@ -20224,11 +20224,6 @@
         ],
         "type": "object"
       },
-      "UpdateApplyResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "UpdateApplyResponse",
-        "type": "object"
-      },
       "UpdateCheckResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -20252,6 +20247,11 @@
           "latestVersion"
         ],
         "title": "UpdateCheckResponse",
+        "type": "object"
+      },
+      "UpdateInstallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "UpdateInstallResponse",
         "type": "object"
       },
       "UserInput": {

@@ -1091,7 +1091,7 @@ impl MessageProcessor {
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::UpdateCheck { params: _, .. } => self.update_processor.check().await,
-            ClientRequest::UpdateApply { params: _, .. } => self.update_processor.apply().await,
+            ClientRequest::UpdateInstall { params: _, .. } => self.update_processor.install().await,
             ClientRequest::ThreadStart { params, .. } => {
                 self.thread_processor
                     .thread_start(

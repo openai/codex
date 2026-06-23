@@ -870,10 +870,10 @@ client_request_definitions! {
         serialization: global("update"),
         response: v2::UpdateCheckResponse,
     },
-    UpdateApply => "update/apply" {
+    UpdateInstall => "update/install" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global("update"),
-        response: v2::UpdateApplyResponse,
+        response: v2::UpdateInstallResponse,
     },
     ExperimentalFeatureList => "experimentalFeature/list" {
         params: v2::ExperimentalFeatureListParams,

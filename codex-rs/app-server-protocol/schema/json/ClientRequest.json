@@ -6097,9 +6097,9 @@
         },
         "method": {
           "enum": [
-            "update/apply"
+            "update/install"
           ],
-          "title": "Update/applyRequestMethod",
+          "title": "Update/installRequestMethod",
           "type": "string"
         },
         "params": {
@@ -6110,7 +6110,7 @@
         "id",
         "method"
       ],
-      "title": "Update/applyRequest",
+      "title": "Update/installRequest",
       "type": "object"
     },
     {

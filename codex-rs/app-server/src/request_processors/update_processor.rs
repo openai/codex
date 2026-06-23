@@ -3,8 +3,8 @@ use crate::error_code::invalid_request;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InstallationMethod;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::UpdateApplyResponse;
 use codex_app_server_protocol::UpdateCheckResponse;
+use codex_app_server_protocol::UpdateInstallResponse;
 use codex_install_context::InstallContext;
 use codex_install_context::InstallMethod;
 use codex_install_context::StandalonePlatform;
@@ -35,7 +35,7 @@ impl UpdateRequestProcessor {
         ))
     }
 
-    pub(crate) async fn apply(&self) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    pub(crate) async fn install(&self) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let Some(action) = codex_update::get_update_action() else {
             return Err(invalid_request(
                 "automatic updates are unavailable for this Codex installation",
@@ -79,7 +79,7 @@ impl UpdateRequestProcessor {
             )));
         }
 
-        Ok(Some(UpdateApplyResponse {}.into()))
+        Ok(Some(UpdateInstallResponse {}.into()))
     }
 }
 

@@ -5,7 +5,7 @@ use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::UpdateApplyResponse;
+use codex_app_server_protocol::UpdateInstallResponse;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -16,7 +16,7 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn update_apply_runs_the_detected_npm_updater() -> Result<()> {
+async fn update_install_runs_the_detected_npm_updater() -> Result<()> {
     let codex_home = TempDir::new()?;
     let bin_dir = codex_home.path().join("bin");
     fs::create_dir_all(&bin_dir)?;
@@ -47,15 +47,15 @@ async fn update_apply_runs_the_detected_npm_updater() -> Result<()> {
     .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp.send_update_apply_request().await?;
+    let request_id = mcp.send_update_install_request().await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let response = to_response::<UpdateApplyResponse>(response)?;
+    let response = to_response::<UpdateInstallResponse>(response)?;
 
-    assert_eq!(response, UpdateApplyResponse {});
+    assert_eq!(response, UpdateInstallResponse {});
     assert_eq!(
         fs::read_to_string(invocation_path)?,
         "install\n-g\n@openai/codex\n"
