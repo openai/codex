@@ -349,34 +349,10 @@ async fn active_call_preserves_triggering_command_context() {
 }
 
 #[tokio::test]
-async fn multiple_active_calls_in_the_same_environment_return_all_candidates() {
+async fn active_call_attribution_returns_all_matching_environment_candidates() {
     let service = NetworkApprovalService::default();
     register_call_with_default_shell_trigger(&service, "registration-1").await;
     register_call_with_default_shell_trigger(&service, "registration-2").await;
-
-    match service
-        .resolve_active_call_attribution(ActiveNetworkApprovalCallScope::Environment("local"))
-        .await
-    {
-        ActiveNetworkApprovalAttribution::Ambiguous(calls) => {
-            assert_eq!(
-                calls
-                    .iter()
-                    .map(|call| call.registration_id.as_str())
-                    .collect::<Vec<_>>(),
-                vec!["registration-1", "registration-2"]
-            );
-        }
-        ActiveNetworkApprovalAttribution::None | ActiveNetworkApprovalAttribution::Single(_) => {
-            panic!("multiple active calls should return every candidate")
-        }
-    }
-}
-
-#[tokio::test]
-async fn active_call_attribution_is_filtered_by_environment() {
-    let service = NetworkApprovalService::default();
-    register_call_with_default_shell_trigger(&service, "registration-local").await;
     service
         .register_call(
             "registration-remote".to_string(),
@@ -398,14 +374,20 @@ async fn active_call_attribution_is_filtered_by_environment() {
         .await;
 
     match service
-        .resolve_active_call_attribution(ActiveNetworkApprovalCallScope::Environment("remote"))
+        .resolve_active_call_attribution(ActiveNetworkApprovalCallScope::Environment("local"))
         .await
     {
-        ActiveNetworkApprovalAttribution::Single(call) => {
-            assert_eq!(call.registration_id, "registration-remote");
+        ActiveNetworkApprovalAttribution::Ambiguous(calls) => {
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|call| call.registration_id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["registration-1", "registration-2"]
+            );
         }
-        ActiveNetworkApprovalAttribution::None | ActiveNetworkApprovalAttribution::Ambiguous(_) => {
-            panic!("one matching environment call should resolve exactly")
+        ActiveNetworkApprovalAttribution::None | ActiveNetworkApprovalAttribution::Single(_) => {
+            panic!("multiple matching calls should return every candidate")
         }
     }
 }

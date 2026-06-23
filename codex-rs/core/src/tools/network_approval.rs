@@ -43,7 +43,7 @@ use uuid::Uuid;
 // Keep ambiguous attribution bounded before adding every candidate to model-visible context.
 const MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_CANDIDATES: usize = 16;
 // Leave room in the 10K-token action item for network metadata and JSON formatting.
-const MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_TOKENS: u64 = 8_000;
+const MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_TOKENS: u64 = 6_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NetworkApprovalMode {
@@ -605,22 +605,30 @@ impl NetworkApprovalService {
             }
         }
         let use_guardian = routes_approval_to_guardian(&turn_context);
-        let possible_triggers = possible_trigger_calls
-            .iter()
-            .map(|call| call.trigger.clone())
-            .collect::<Vec<_>>();
-        if use_guardian {
-            let candidates_fit = possible_triggers.len()
-                <= MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_CANDIDATES
-                && serde_json::to_vec_pretty(&possible_triggers).is_ok_and(|encoded| {
-                    approx_tokens_from_byte_count(encoded.len())
-                        <= MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_TOKENS
-                });
-            if !candidates_fit {
-                pending.set_decision(PendingApprovalDecision::Deny).await;
-                self.pending_host_approvals.lock().await.remove(&key);
-                return NetworkDecision::deny(REASON_NOT_ALLOWED);
-            }
+        if use_guardian
+            && possible_trigger_calls.len() > MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_CANDIDATES
+        {
+            pending.set_decision(PendingApprovalDecision::Deny).await;
+            self.pending_host_approvals.lock().await.remove(&key);
+            return NetworkDecision::deny(REASON_NOT_ALLOWED);
+        }
+        let possible_triggers = if use_guardian {
+            possible_trigger_calls
+                .iter()
+                .map(|call| call.trigger.clone())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if use_guardian
+            && !serde_json::to_vec_pretty(&possible_triggers).is_ok_and(|encoded| {
+                approx_tokens_from_byte_count(encoded.len())
+                    <= MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_TOKENS
+            })
+        {
+            pending.set_decision(PendingApprovalDecision::Deny).await;
+            self.pending_host_approvals.lock().await.remove(&key);
+            return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
