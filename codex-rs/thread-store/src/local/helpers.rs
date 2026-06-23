@@ -181,7 +181,6 @@ pub(super) fn permission_profile_to_metadata_value(
 pub(super) enum ThreadMetadataName {
     Explicit(String),
     Legacy(String),
-    Cleared,
 }
 
 pub(super) fn thread_metadata_name(metadata: &ThreadMetadata) -> Option<ThreadMetadataName> {
@@ -189,7 +188,7 @@ pub(super) fn thread_metadata_name(metadata: &ThreadMetadata) -> Option<ThreadMe
         ThreadName::Explicit(name) => {
             return Some(ThreadMetadataName::Explicit(name.clone()));
         }
-        ThreadName::Unnamed => return Some(ThreadMetadataName::Cleared),
+        ThreadName::Unnamed => return None,
         ThreadName::LegacyUnknown => {}
     }
 
@@ -208,7 +207,6 @@ pub(super) fn apply_thread_metadata_name(thread: &mut StoredThread, name: Thread
     match name {
         ThreadMetadataName::Explicit(name) => thread.name = Some(name),
         ThreadMetadataName::Legacy(name) => set_thread_name_from_title(thread, name),
-        ThreadMetadataName::Cleared => thread.name = None,
     }
 }
 
