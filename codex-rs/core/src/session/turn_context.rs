@@ -815,15 +815,8 @@ impl Session {
         else {
             return;
         };
-        let should_emit = self
-            .warned_unsupported_code_mode_models
-            .lock()
-            .await
-            .insert(tc.model_info.slug.clone());
-        if should_emit {
-            self.send_event(tc, EventMsg::Warning(WarningEvent { message }))
-                .await;
-        }
+        self.send_event(tc, EventMsg::Warning(WarningEvent { message }))
+            .await;
     }
 
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {

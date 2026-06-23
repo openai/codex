@@ -229,11 +229,11 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unsupported_code_mode_warning_is_emitted_once_per_model() -> Result<()> {
+async fn unsupported_code_mode_warning_is_emitted_each_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let model_slug = "test-tool-mode-warning-dedupe";
+    let model_slug = "test-tool-mode-warning-each-turn";
     let models_mock = mount_models_once(
         &server,
         ModelsResponse {
@@ -311,7 +311,7 @@ async fn unsupported_code_mode_warning_is_emitted_once_per_model() -> Result<()>
         warning_counts.push(warning_count);
     }
 
-    assert_eq!(warning_counts, vec![1, 0]);
+    assert_eq!(warning_counts, vec![1, 1]);
     assert_eq!(response_mock.requests().len(), 2);
 
     Ok(())
