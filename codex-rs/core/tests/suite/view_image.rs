@@ -29,7 +29,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
-use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::get_remote_test_env;
 use core_test_support::responses;
@@ -42,7 +41,6 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
@@ -59,8 +57,6 @@ use serde_json::json;
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use wiremock::BodyPrintLimit;
@@ -295,6 +291,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let rel_path = "assets/example.png";
     let abs_path = cwd.join(rel_path);
+    let path_uri = PathUri::from_abs_path(&abs_path);
     let original_width = 2304;
     let original_height = 864;
     write_workspace_png(
@@ -369,20 +366,20 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     match item_started.expect("view image item started event emitted") {
         codex_protocol::items::TurnItem::ImageView(item) => {
             assert_eq!(item.id, call_id);
-            assert_eq!(item.path, abs_path);
+            assert_eq!(item.path, path_uri);
         }
         other => panic!("expected ImageView item, got {other:?}"),
     }
     match item_completed.expect("view image item completed event emitted") {
         codex_protocol::items::TurnItem::ImageView(item) => {
             assert_eq!(item.id, call_id);
-            assert_eq!(item.path, abs_path);
+            assert_eq!(item.path, path_uri);
         }
         other => panic!("expected ImageView item, got {other:?}"),
     }
     let legacy_event = legacy_event.expect("legacy view image event emitted");
     assert_eq!(legacy_event.call_id, call_id);
-    assert_eq!(legacy_event.path, abs_path);
+    assert_eq!(legacy_event.path, path_uri);
 
     let req = mock.single_request();
     let body = req.body_json();
@@ -557,8 +554,10 @@ async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<(
         .function_call_output_content_and_success(call_id)
         .and_then(|(content, _)| content)
         .context("sandboxed view_image error text present")?;
-    let expected_locate_prefix = format!("unable to locate image at `{}`:", denied_path.display());
-    let expected_read_prefix = format!("unable to read image at `{}`:", denied_path.display());
+    let denied_path_display =
+        PathUri::from_host_native_path(&denied_path)?.inferred_native_path_string();
+    let expected_locate_prefix = format!("unable to locate image at `{denied_path_display}`:");
+    let expected_read_prefix = format!("unable to read image at `{denied_path_display}`:");
     assert!(
         output_text.starts_with(&expected_locate_prefix)
             || output_text.starts_with(&expected_read_prefix),
@@ -570,8 +569,6 @@ async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()> {
-    // TODO(anp): Remove after remote-cwd fixtures use target-native paths.
-    skip_if_wine_exec!(Ok(()), "hardcodes a POSIX remote cwd");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -583,37 +580,26 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     let local_cwd = TempDir::new()?;
     fs::write(local_cwd.path().join("remote.png"), b"not a remote image")?;
     let local_selection = local(local_cwd.path().abs());
-    let remote_cwd = PathBuf::from(format!(
-        "/tmp/codex-view-image-routing-{}",
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
-    ))
-    .abs();
-    let image_path = remote_cwd.join("remote.png");
-    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
-    test.fs()
-        .create_directory(
-            &remote_cwd_uri,
-            CreateDirectoryOptions { recursive: true },
-            /*sandbox*/ None,
-        )
-        .await?;
+    let remote_cwd_uri = PathUri::from_abs_path(test.executor_environment().cwd());
+    let image_path_uri = remote_cwd_uri.join("remote.png")?;
     let png = png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?;
-    let image_path_uri = PathUri::from_host_native_path(&image_path)?;
     test.fs()
         .write_file(&image_path_uri, png, /*sandbox*/ None)
         .await?;
+    let absolute_image_path = image_path_uri.inferred_native_path_string();
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-        cwd: PathUri::from_abs_path(&remote_cwd),
+        cwd: remote_cwd_uri,
     };
-    let call_id = "call-view-image-multi-env";
+    let relative_call_id = "call-view-image-relative-multi-env";
+    let absolute_call_id = "call-view-image-absolute-multi-env";
     let response_mock = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
                 ev_function_call(
-                    call_id,
+                    relative_call_id,
                     "view_image",
                     &json!({
                         "path": "remote.png",
@@ -625,8 +611,21 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "done"),
+                ev_function_call(
+                    absolute_call_id,
+                    "view_image",
+                    &json!({
+                        "path": absolute_image_path,
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                    })
+                    .to_string(),
+                ),
                 ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-3"),
             ]),
         ],
     )
@@ -638,30 +637,32 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     )
     .await?;
 
-    let output = response_mock
+    let request = response_mock
         .last_request()
         .context("missing request containing view_image output")?
-        .function_call_output(call_id)
         .clone();
-    let output_items = output
-        .get("output")
-        .and_then(Value::as_array)
-        .context("view_image output should be content items")?;
-    assert_eq!(output_items.len(), 1);
-    let image_url = output_items[0]
-        .get("image_url")
-        .and_then(Value::as_str)
-        .context("view_image output should include image_url")?;
-    assert!(
-        image_url.starts_with("data:image/png;base64,"),
-        "unexpected image_url: {image_url}",
-    );
+    for call_id in [relative_call_id, absolute_call_id] {
+        let output = request.function_call_output(call_id);
+        let output_items = output
+            .get("output")
+            .and_then(Value::as_array)
+            .context("view_image output should be content items")?;
+        assert_eq!(output_items.len(), 1);
+        let image_url = output_items[0]
+            .get("image_url")
+            .and_then(Value::as_str)
+            .context("view_image output should include image_url")?;
+        assert!(
+            image_url.starts_with("data:image/png;base64,"),
+            "unexpected image_url: {image_url}",
+        );
+    }
 
     test.fs()
         .remove(
-            &remote_cwd_uri,
+            &image_path_uri,
             RemoveOptions {
-                recursive: true,
+                recursive: false,
                 force: true,
             },
             /*sandbox*/ None,
@@ -1174,7 +1175,8 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         .function_call_output_content_and_success(call_id)
         .and_then(|(content, _)| content)
         .expect("output text present");
-    let expected_message = format!("image path `{}` is not a file", abs_path.display());
+    let expected_path = PathUri::from_host_native_path(&abs_path)?.inferred_native_path_string();
+    let expected_message = format!("image path `{expected_path}` is not a file");
     assert_eq!(output_text, expected_message);
 
     assert!(
@@ -1253,19 +1255,26 @@ async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Resul
 async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let remote_test_env = get_remote_test_env();
+    println!("view_image missing-file test exec-server environment: {remote_test_env:?}");
+
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
     let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
 
     let rel_path = "missing/example.png";
-    let abs_path = config.cwd.join(rel_path);
+    // Under wine-exec, the executor cwd is stored as a host-compatible `/C:/...`
+    // projection. Reconstruct its `PathUri` so the expected error uses the selected
+    // environment's native Windows spelling, matching the handler.
+    let expected_path = PathUri::from_abs_path(test.executor_environment().cwd())
+        .join(rel_path)?
+        .inferred_native_path_string();
 
     let call_id = "view-image-missing";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -1309,7 +1318,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         .function_call_output_content_and_success(call_id)
         .and_then(|(content, _)| content)
         .expect("output text present");
-    let expected_prefix = format!("unable to locate image at `{}`:", abs_path.display());
+    let expected_prefix = format!("unable to locate image at `{expected_path}`:");
     assert!(
         output_text.starts_with(&expected_prefix),
         "expected error to start with `{expected_prefix}` but got `{output_text}`"

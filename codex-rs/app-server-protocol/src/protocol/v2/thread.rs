@@ -1316,9 +1316,11 @@ pub struct ThreadTurnsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadTurnsItemsListParams {
+pub struct ThreadItemsListParams {
     pub thread_id: String,
-    pub turn_id: String,
+    /// Optional turn id to filter by. When omitted, returns items across the thread.
+    #[ts(optional = nullable)]
+    pub turn_id: Option<String>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     #[ts(optional = nullable)]
     pub cursor: Option<String>,
@@ -1333,7 +1335,7 @@ pub struct ThreadTurnsItemsListParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadTurnsItemsListResponse {
+pub struct ThreadItemsListResponse {
     pub data: Vec<ThreadItem>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// if None, there are no more items to return.

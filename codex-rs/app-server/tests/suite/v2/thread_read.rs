@@ -19,6 +19,7 @@ use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemsListParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -32,7 +33,6 @@ use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
-use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnItemsView;
@@ -1137,7 +1137,7 @@ async fn thread_turns_list_rejects_unmaterialized_loaded_thread() -> Result<()> 
 }
 
 #[tokio::test]
-async fn thread_turns_items_list_returns_unsupported() -> Result<()> {
+async fn thread_items_list_returns_unsupported() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -1146,9 +1146,9 @@ async fn thread_turns_items_list_returns_unsupported() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
-        .send_thread_turns_items_list_request(ThreadTurnsItemsListParams {
-            thread_id: "thr_123".to_string(),
-            turn_id: "turn_456".to_string(),
+        .send_thread_items_list_request(ThreadItemsListParams {
+            thread_id: "00000000-0000-4000-8000-000000000123".to_string(),
+            turn_id: None,
             cursor: None,
             limit: None,
             sort_direction: None,
@@ -1163,7 +1163,7 @@ async fn thread_turns_items_list_returns_unsupported() -> Result<()> {
     assert_eq!(read_err.error.code, -32601);
     assert_eq!(
         read_err.error.message,
-        "thread/turns/items/list is not supported yet"
+        "thread/items/list is not supported yet"
     );
 
     Ok(())

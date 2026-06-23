@@ -164,7 +164,9 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
 
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+    // Keep the exact model-visible state used by this turn and its inline compactions.
+    let mut world_state = sess
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
     let Some((injection_items, explicitly_enabled_connectors)) =
@@ -234,6 +236,8 @@ pub(crate) async fn run_turn(
         )
         .await;
 
+        // Capture once so context, advertised tools, and tool calls share one request view.
+        let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
         let sampling_request_result: CodexResult<_> = async {
             super::time_reminder::maybe_record_current_time_reminder(
                 sess.as_ref(),
@@ -247,14 +251,9 @@ pub(crate) async fn run_turn(
                 .features
                 .enabled(Feature::DeferredExecutor)
             {
-                let step_context = StepContext {
-                    environments: sess.services.turn_environments.snapshot().await,
-                };
-                sess.record_step_environment_context_if_changed(
-                    turn_context.as_ref(),
-                    &step_context,
-                )
-                .await;
+                world_state = sess
+                    .record_step_environment_context_if_changed(&world_state, step_context.as_ref())
+                    .await;
             }
 
             // Construct the input that we will send to the model.
@@ -273,7 +272,7 @@ pub(crate) async fn run_turn(
             );
             run_sampling_request(
                 Arc::clone(&sess),
-                Arc::clone(&turn_context),
+                Arc::clone(&step_context),
                 Arc::clone(&turn_extension_data),
                 Arc::clone(&turn_diff_tracker),
                 &mut client_session,
@@ -341,7 +340,7 @@ pub(crate) async fn run_turn(
                 .await;
 
                 let started_new_context_window = sess
-                    .maybe_start_new_context_window(turn_context.as_ref())
+                    .maybe_start_new_context_window(turn_context.as_ref(), Arc::clone(&world_state))
                     .await
                     .is_some();
                 if started_new_context_window && needs_follow_up {
@@ -359,9 +358,9 @@ pub(crate) async fn run_turn(
                 {
                     if let Err(err) = run_auto_compact(
                         &sess,
-                        &turn_context,
+                        Arc::clone(&step_context),
                         &mut client_session,
-                        InitialContextInjection::BeforeLastUserMessage,
+                        InitialContextInjection::BeforeLastUserMessage(Arc::clone(&world_state)),
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )
@@ -882,9 +881,10 @@ async fn run_pre_sampling_compact(
     let token_status = auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
     // Compact if the configured auto-compaction budget or usable context window is exhausted.
     if token_status.token_limit_reached {
+        let step_context = sess.capture_step_context(Arc::clone(turn_context)).await;
         run_auto_compact(
             sess,
-            turn_context,
+            step_context,
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::ContextLimit,
@@ -926,9 +926,12 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     if should_compact_for_comp_hash_change {
+        let step_context = sess
+            .capture_step_context(Arc::clone(&previous_model_turn_context))
+            .await;
         run_auto_compact(
             sess,
-            &previous_model_turn_context,
+            step_context,
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::CompHashChanged,
@@ -963,9 +966,12 @@ async fn maybe_run_previous_model_inline_compact(
         && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if should_run {
+        let step_context = sess
+            .capture_step_context(Arc::clone(&previous_model_turn_context))
+            .await;
         run_auto_compact(
             sess,
-            &previous_model_turn_context,
+            step_context,
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::ModelDownshift,
@@ -983,12 +989,13 @@ async fn maybe_run_previous_model_inline_compact(
 )]
 async fn run_auto_compact(
     sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
+    let turn_context = &step_context.turn;
     if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context
             .config
@@ -1002,7 +1009,7 @@ async fn run_auto_compact(
             );
             run_inline_remote_auto_compact_task_v2(
                 Arc::clone(sess),
-                Arc::clone(turn_context),
+                step_context,
                 client_session,
                 initial_context_injection,
                 reason,
@@ -1018,7 +1025,7 @@ async fn run_auto_compact(
         );
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
-            Arc::clone(turn_context),
+            step_context,
             client_session.turn_state(),
             initial_context_injection,
             reason,
@@ -1118,14 +1125,14 @@ pub(crate) fn build_prompt(
 #[instrument(level = "trace",
     skip_all,
     fields(
-        turn_id = %turn_context.sub_id,
-        model = %turn_context.model_info.slug,
-        cwd = %turn_context.cwd.display()
+        turn_id = %step_context.turn.sub_id,
+        model = %step_context.turn.model_info.slug,
+        cwd = %step_context.turn.cwd.display()
     )
 )]
 async fn run_sampling_request(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
@@ -1133,19 +1140,20 @@ async fn run_sampling_request(
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
-    let router = built_tools(sess.as_ref(), turn_context.as_ref(), &cancellation_token).await?;
+    let turn_context = Arc::clone(&step_context.turn);
+    let router = built_tools(sess.as_ref(), step_context.as_ref(), &cancellation_token).await?;
 
     let base_instructions = sess.get_base_instructions().await;
 
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
-        Arc::clone(&turn_context),
+        Arc::clone(&step_context),
         Arc::clone(&turn_diff_tracker),
     );
     let _code_mode_worker = sess.services.code_mode_service.start_turn_worker(
         &sess,
-        &turn_context,
+        Arc::clone(&step_context),
         Arc::clone(&router),
         Arc::clone(&turn_diff_tracker),
     );
@@ -1222,16 +1230,17 @@ async fn run_sampling_request(
 #[instrument(level = "trace",
     skip_all,
     fields(
-        turn_id = %turn_context.sub_id,
-        model = %turn_context.model_info.slug,
-        apps_enabled = turn_context.apps_enabled()
+        turn_id = %step_context.turn.sub_id,
+        model = %step_context.turn.model_info.slug,
+        apps_enabled = step_context.turn.apps_enabled()
     )
 )]
 pub(crate) async fn built_tools(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
+    let turn_context = step_context.turn.as_ref();
     let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
@@ -1347,8 +1356,8 @@ pub(crate) async fn built_tools(
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    Ok(Arc::new(ToolRouter::from_turn_context(
-        turn_context,
+    Ok(Arc::new(ToolRouter::from_context(
+        step_context,
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,

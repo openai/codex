@@ -10,6 +10,7 @@ use std::ops::Mul;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use strum_macros::EnumIter;
@@ -869,15 +870,8 @@ pub enum AskForApproval {
     #[strum(serialize = "untrusted")]
     UnlessTrusted,
 
-    /// DEPRECATED: *All* commands are auto‑approved, but they are expected to
-    /// run inside a sandbox where network access is disabled and writes are
-    /// confined to a specific set of paths. If the command fails, it will be
-    /// escalated to the user to approve execution without a sandbox.
-    /// Prefer `OnRequest` for interactive runs or `Never` for non-interactive
-    /// runs.
-    OnFailure,
-
     /// The model decides when to ask the user for approval.
+    #[serde(alias = "on-failure")]
     #[default]
     OnRequest,
 
@@ -2460,7 +2454,7 @@ pub struct ConversationPathResponseEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ResumedHistory {
     pub conversation_id: ThreadId,
-    pub history: Vec<RolloutItem>,
+    pub history: Arc<Vec<RolloutItem>>,
     pub rollout_path: Option<PathBuf>,
 }
 
@@ -2505,11 +2499,11 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
+    pub fn get_rollout_items(&self) -> &[RolloutItem] {
         match self {
-            InitialHistory::New | InitialHistory::Cleared => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed.history.clone(),
-            InitialHistory::Forked(items) => items.clone(),
+            InitialHistory::New | InitialHistory::Cleared => &[],
+            InitialHistory::Resumed(resumed) => &resumed.history,
+            InitialHistory::Forked(items) => items,
         }
     }
 
@@ -3405,8 +3399,11 @@ pub struct ExecCommandEndEvent {
 pub struct ViewImageToolCallEvent {
     /// Identifier for the originating tool call.
     pub call_id: String,
-    /// Local filesystem path provided to the tool.
-    pub path: AbsolutePathBuf,
+    /// Filesystem path resolved for the selected environment.
+    ///
+    /// This core event is not exposed directly in the app-server API. App-server
+    /// converts the path to `LegacyAppPathString` when building its public item.
+    pub path: PathUri,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -5435,6 +5432,20 @@ mod tests {
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_deserializes_legacy_on_failure_as_on_request() -> Result<()> {
+        let item: TurnContextItem = serde_json::from_value(json!({
+            "cwd": test_path_buf("/tmp"),
+            "approval_policy": "on-failure",
+            "sandbox_policy": { "type": "danger-full-access" },
+            "model": "gpt-5",
+            "summary": "auto",
+        }))?;
+
+        assert_eq!(item.approval_policy, AskForApproval::OnRequest);
         Ok(())
     }
 

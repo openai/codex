@@ -383,6 +383,7 @@ async fn run_command_under_sandbox(
                 network_sandbox_policy,
                 sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
                 enforce_managed_network,
+                managed_network: None,
                 environment_id: None,
                 network: network.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,
@@ -472,6 +473,7 @@ async fn run_command_under_windows_session(
 ) -> ! {
     use codex_core::windows_sandbox::WindowsSandboxLevelExt;
     use codex_protocol::config_types::WindowsSandboxLevel;
+    use codex_windows_sandbox::WindowsSandboxProxySettingsMode;
     use codex_windows_sandbox::WindowsSandboxSessionRequest;
     use codex_windows_sandbox::spawn_windows_sandbox_session_for_level;
 
@@ -484,6 +486,7 @@ async fn run_command_under_windows_session(
         cwd: cwd.as_path(),
         env_map: env,
         windows_sandbox_level: WindowsSandboxLevel::from_config(config),
+        proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
         proxy_enforced: false,
         timeout_ms: None,
         read_roots_override: None,

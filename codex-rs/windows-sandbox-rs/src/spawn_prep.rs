@@ -357,6 +357,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     deny_read_paths_override: &[PathBuf],
     deny_write_paths_override: &[PathBuf],
     proxy_enforced: bool,
+    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
 ) -> Result<ElevatedSpawnContext> {
     normalize_null_device_env(env_map);
     ensure_non_interactive_pager(env_map);
@@ -412,6 +413,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
             deny_write_paths_override
         },
         proxy_enforced,
+        proxy_settings_mode,
     )?;
     let caps = load_or_create_cap_sids(codex_home)?;
     let (psid_to_use, cap_sids) = if uses_write_capabilities {

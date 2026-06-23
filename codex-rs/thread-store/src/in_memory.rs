@@ -266,7 +266,9 @@ impl InMemoryThreadStore {
         let mut state = self.state.lock().await;
         state.calls.resume_thread += 1;
         if let Some(history) = params.history {
-            state.histories.insert(params.thread_id, history);
+            state
+                .histories
+                .insert(params.thread_id, Arc::unwrap_or_clone(history));
         } else {
             state.histories.entry(params.thread_id).or_default();
         }

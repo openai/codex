@@ -1237,7 +1237,7 @@ impl TurnRequestProcessor {
                 config.clone(),
                 InitialHistory::Resumed(ResumedHistory {
                     conversation_id: parent_thread_id,
-                    history: parent_history.items,
+                    history: Arc::new(parent_history.items),
                     rollout_path: parent_thread.rollout_path(),
                 }),
                 /*thread_source*/ None,
