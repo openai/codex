@@ -286,6 +286,10 @@ jobs:
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
   shard:
     name: Tests shard ${{ matrix.shard }}/4
     needs: archive
@@ -450,6 +454,10 @@ jobs:
         run: |
           echo "Tests failed. See logs for details."
           exit 1
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
 
   result:
     name: Platform result
