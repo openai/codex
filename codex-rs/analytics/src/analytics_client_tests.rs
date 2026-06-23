@@ -3131,6 +3131,7 @@ fn hook_run_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-3",
                 "turn_id": "turn-3",
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
                 "model_slug": "gpt-5",
                 "hook_name": "PreToolUse",
                 "hook_source": "user",

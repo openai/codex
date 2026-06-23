@@ -4123,7 +4123,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
 }
 
 #[tokio::test]
-async fn emit_subagent_session_started_includes_fork_lineage_from_session_configuration() {
+async fn emit_subagent_session_started_includes_fork_lineage_and_originator() {
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -4198,6 +4198,10 @@ async fn emit_subagent_session_started_includes_fork_lineage_from_session_config
     assert_eq!(
         event["event_params"]["forked_from_thread_id"],
         forked_from_thread_id.to_string()
+    );
+    assert_eq!(
+        event["event_params"]["app_server_client"]["product_client_id"],
+        "test_originator"
     );
 }
 

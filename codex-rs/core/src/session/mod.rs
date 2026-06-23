@@ -3881,7 +3881,7 @@ pub(crate) fn emit_subagent_session_started(
         forked_from_thread_id: thread_config
             .forked_from_thread_id
             .map(|thread_id| thread_id.to_string()),
-        product_client_id: client_name.clone(),
+        product_client_id: thread_config.originator.clone(),
         client_name,
         client_version,
         model: thread_config.model,

@@ -772,6 +772,7 @@ pub(crate) struct CodexAppUsedEventRequest {
 pub(crate) struct CodexHookRunMetadata {
     pub(crate) thread_id: Option<String>,
     pub(crate) turn_id: Option<String>,
+    pub(crate) product_client_id: Option<String>,
     pub(crate) model_slug: Option<String>,
     pub(crate) hook_name: Option<String>,
     pub(crate) hook_source: Option<&'static str>,
@@ -1160,6 +1161,7 @@ pub(crate) fn codex_hook_run_metadata(
     CodexHookRunMetadata {
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
+        product_client_id: Some(tracking.product_client_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
         hook_name: Some(analytics_hook_event_name(hook.event_name).to_owned()),
         hook_source: Some(analytics_hook_source(hook.hook_source)),
