@@ -59,13 +59,13 @@ use wiremock::MockServer;
 
 use crate::TempDirExt;
 use crate::TestEnvironment;
-use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cloud_config_bundle;
 use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
+use crate::test_environment;
 use crate::wait_for_event_match;
 use crate::wait_for_event_with_timeout;
 use wiremock::Match;
@@ -163,8 +163,8 @@ impl Drop for TestEnv {
 }
 
 pub async fn test_env() -> Result<TestEnv> {
-    match get_remote_test_env() {
-        Some(remote_env) => {
+    match test_environment() {
+        remote_env @ (TestEnvironment::Docker { .. } | TestEnvironment::WineExec) => {
             let websocket_url = remote_exec_server_url()?;
             let environment =
                 codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
@@ -202,7 +202,7 @@ pub async fn test_env() -> Result<TestEnv> {
                 remote_container_name: remote_env.docker_container_name().map(str::to_owned),
             })
         }
-        None => TestEnv::local().await,
+        TestEnvironment::Local => TestEnv::local().await,
     }
 }
 
