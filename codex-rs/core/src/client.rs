@@ -800,7 +800,7 @@ impl ModelClient {
                         text: prompt.base_instructions.text.clone(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 });
             }
             input.splice(0..0, prefix);
