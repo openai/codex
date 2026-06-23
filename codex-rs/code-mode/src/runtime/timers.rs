@@ -1,5 +1,10 @@
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::Duration;
+use std::time::Instant;
 
 use super::RuntimeCommand;
 use super::RuntimeState;
@@ -7,6 +12,22 @@ use super::value::value_to_error_text;
 
 pub(super) struct ScheduledTimeout {
     callback: v8::Global<v8::Function>,
+    timer: TimerThread,
+}
+
+struct TimerThread {
+    cancelled: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for TimerThread {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            handle.thread().unpark();
+            let _ = handle.join();
+        }
+    }
 }
 
 pub(super) fn schedule_timeout(
@@ -33,13 +54,30 @@ pub(super) fn schedule_timeout(
     let timeout_id = state.next_timeout_id;
     state.next_timeout_id = state.next_timeout_id.saturating_add(1);
     let runtime_command_tx = state.runtime_command_tx.clone();
-    state
-        .pending_timeouts
-        .insert(timeout_id, ScheduledTimeout { callback });
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(delay_ms));
-        let _ = runtime_command_tx.send(RuntimeCommand::TimeoutFired { id: timeout_id });
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let thread_cancelled = Arc::clone(&cancelled);
+    let delay = Duration::from_millis(delay_ms);
+    let handle = thread::spawn(move || {
+        let started_at = Instant::now();
+        while !thread_cancelled.load(Ordering::Acquire) {
+            let remaining = delay.saturating_sub(started_at.elapsed());
+            if remaining.is_zero() {
+                let _ = runtime_command_tx.send(RuntimeCommand::TimeoutFired { id: timeout_id });
+                break;
+            }
+            thread::park_timeout(remaining);
+        }
     });
+    state.pending_timeouts.insert(
+        timeout_id,
+        ScheduledTimeout {
+            callback,
+            timer: TimerThread {
+                cancelled,
+                handle: Some(handle),
+            },
+        },
+    );
 
     Ok(timeout_id)
 }
@@ -69,13 +107,17 @@ pub(super) fn invoke_timeout_callback(
             .ok_or_else(|| "runtime state unavailable".to_string())?;
         state.pending_timeouts.remove(&timeout_id)
     };
-    let Some(callback) = callback else {
+    let Some(ScheduledTimeout {
+        callback,
+        timer: _timer,
+    }) = callback
+    else {
         return Ok(());
     };
 
     let tc = std::pin::pin!(v8::TryCatch::new(scope));
     let mut tc = tc.init();
-    let callback = v8::Local::new(&tc, &callback.callback);
+    let callback = v8::Local::new(&tc, &callback);
     let receiver = v8::undefined(&tc).into();
     let _ = callback.call(&tc, receiver, &[]);
     if tc.has_caught() {

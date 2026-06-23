@@ -5,6 +5,7 @@ mod timers;
 mod value;
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::OnceLock;
 use std::sync::mpsc as std_mpsc;
 use std::thread;
@@ -17,6 +18,7 @@ use codex_code_mode_protocol::enabled_tool_metadata;
 use codex_protocol::ToolName;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
 const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
@@ -31,7 +33,10 @@ pub(crate) enum RuntimeCommand {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum PendingRuntimeMode {
-    #[cfg(test)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the stacked continuing cell actor")
+    )]
     Continue,
     PauseUntilResumed,
 }
@@ -65,6 +70,81 @@ pub(crate) enum RuntimeEvent {
     },
 }
 
+pub(crate) struct RuntimeThread {
+    completion_rx: oneshot::Receiver<()>,
+    join_handle: Option<thread::JoinHandle<()>>,
+}
+
+impl RuntimeThread {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the stacked continuing cell actor")
+    )]
+    pub(crate) async fn wait(&mut self) {
+        let _ = (&mut self.completion_rx).await;
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the stacked continuing cell actor")
+    )]
+    pub(crate) fn join_finished(&mut self) -> Result<(), RuntimeThreadError> {
+        let Some(join_handle) = self.join_handle.take() else {
+            return Ok(());
+        };
+        join_handle.join().map_err(|_| RuntimeThreadError::Panicked)
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the stacked continuing cell actor")
+    )]
+    pub(crate) fn join_pending(&self) -> bool {
+        self.join_handle.is_some()
+    }
+
+    pub(crate) fn detach(mut self) {
+        drop(self.join_handle.take());
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeThreadError {
+    Panicked,
+}
+
+impl fmt::Display for RuntimeThreadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Panicked => formatter.write_str("code mode runtime thread panicked"),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeThreadError {}
+
+struct RuntimeCompletionGuard(Option<oneshot::Sender<()>>);
+
+impl Drop for RuntimeCompletionGuard {
+    fn drop(&mut self) {
+        if let Some(completion_tx) = self.0.take() {
+            let _ = completion_tx.send(());
+        }
+    }
+}
+
+pub(crate) fn spawn_runtime_thread(run: impl FnOnce() + Send + 'static) -> RuntimeThread {
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let join_handle = thread::spawn(move || {
+        let _completion_guard = RuntimeCompletionGuard(Some(completion_tx));
+        run();
+    });
+    RuntimeThread {
+        completion_rx,
+        join_handle: Some(join_handle),
+    }
+}
+
 pub(crate) fn spawn_runtime(
     stored_values: HashMap<String, JsonValue>,
     request: ExecuteRequest,
@@ -75,6 +155,26 @@ pub(crate) fn spawn_runtime(
         std_mpsc::Sender<RuntimeCommand>,
         std_mpsc::Sender<RuntimeControlCommand>,
         v8::IsolateHandle,
+    ),
+    String,
+> {
+    let (command_tx, control_tx, isolate_handle, runtime_thread) =
+        spawn_owned_runtime(stored_values, request, event_tx, pending_mode)?;
+    runtime_thread.detach();
+    Ok((command_tx, control_tx, isolate_handle))
+}
+
+pub(crate) fn spawn_owned_runtime(
+    stored_values: HashMap<String, JsonValue>,
+    request: ExecuteRequest,
+    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    pending_mode: PendingRuntimeMode,
+) -> Result<
+    (
+        std_mpsc::Sender<RuntimeCommand>,
+        std_mpsc::Sender<RuntimeControlCommand>,
+        v8::IsolateHandle,
+        RuntimeThread,
     ),
     String,
 > {
@@ -96,22 +196,24 @@ pub(crate) fn spawn_runtime(
         stored_values,
     };
 
-    thread::spawn(move || {
+    let runtime_thread = spawn_runtime_thread(move || {
         run_runtime(
             config,
-            event_tx,
-            command_rx,
-            control_rx,
+            RuntimeChannels {
+                event_tx,
+                command_rx,
+                control_rx,
+                isolate_handle_tx,
+                runtime_command_tx,
+            },
             pending_mode,
-            isolate_handle_tx,
-            runtime_command_tx,
         );
     });
 
     let isolate_handle = isolate_handle_rx
         .recv()
         .map_err(|_| "failed to initialize code mode runtime".to_string())?;
-    Ok((command_tx, control_tx, isolate_handle))
+    Ok((command_tx, control_tx, isolate_handle, runtime_thread))
 }
 
 #[derive(Clone)]
@@ -120,6 +222,14 @@ struct RuntimeConfig {
     enabled_tools: Vec<EnabledToolMetadata>,
     source: String,
     stored_values: HashMap<String, JsonValue>,
+}
+
+struct RuntimeChannels {
+    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    command_rx: std_mpsc::Receiver<RuntimeCommand>,
+    control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
+    isolate_handle_tx: std_mpsc::SyncSender<v8::IsolateHandle>,
+    runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
 }
 
 pub(super) struct RuntimeState {
@@ -160,15 +270,14 @@ fn initialize_v8() -> Result<(), String> {
     }
 }
 
-fn run_runtime(
-    config: RuntimeConfig,
-    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
-    command_rx: std_mpsc::Receiver<RuntimeCommand>,
-    control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
-    pending_mode: PendingRuntimeMode,
-    isolate_handle_tx: std_mpsc::SyncSender<v8::IsolateHandle>,
-    runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
-) {
+fn run_runtime(config: RuntimeConfig, channels: RuntimeChannels, pending_mode: PendingRuntimeMode) {
+    let RuntimeChannels {
+        event_tx,
+        command_rx,
+        control_rx,
+        isolate_handle_tx,
+        runtime_command_tx,
+    } = channels;
     let isolate = &mut v8::Isolate::new(v8::CreateParams::default());
     let isolate_handle = isolate.thread_safe_handle();
     if isolate_handle_tx.send(isolate_handle).is_err() {
@@ -287,7 +396,6 @@ fn next_runtime_command(
 
         let _ = event_tx.send(RuntimeEvent::Pending);
         match pending_mode {
-            #[cfg(test)]
             PendingRuntimeMode::Continue => return command_rx.recv().ok(),
             PendingRuntimeMode::PauseUntilResumed => match control_rx.recv().ok()? {
                 RuntimeControlCommand::Continue => return command_rx.recv().ok(),
@@ -335,6 +443,7 @@ mod tests {
     use super::RuntimeCommand;
     use super::RuntimeControlCommand;
     use super::RuntimeEvent;
+    use super::spawn_owned_runtime;
     use super::spawn_runtime;
     use crate::FunctionCallOutputContentItem;
 
@@ -346,6 +455,37 @@ mod tests {
             yield_time_ms: Some(1),
             max_output_tokens: None,
         }
+    }
+
+    #[tokio::test]
+    async fn owned_runtime_joins_after_completion() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (_runtime_tx, _runtime_control_tx, _runtime_terminate_handle, mut runtime_thread) =
+            spawn_owned_runtime(
+                HashMap::new(),
+                execute_request(r#"text("runtime output");"#),
+                event_tx,
+                PendingRuntimeMode::Continue,
+            )
+            .unwrap();
+
+        assert!(matches!(event_rx.recv().await, Some(RuntimeEvent::Started)));
+        assert!(runtime_thread.join_pending());
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(RuntimeEvent::ContentItem(
+                FunctionCallOutputContentItem::InputText { .. }
+            ))
+        ));
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(RuntimeEvent::Result { .. })
+        ));
+        assert!(event_rx.recv().await.is_none());
+
+        runtime_thread.wait().await;
+        assert_eq!(runtime_thread.join_finished(), Ok(()));
+        assert!(!runtime_thread.join_pending());
     }
 
     #[tokio::test]
