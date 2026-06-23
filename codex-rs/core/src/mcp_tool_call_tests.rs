@@ -8,6 +8,7 @@ use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::hook_names::HookToolName;
 use crate::turn_metadata::McpTurnMetadataContext;
+use async_channel::unbounded;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::AppConfig;
@@ -20,6 +21,9 @@ use codex_config::types::McpServerToolConfig;
 use codex_features::Features;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+use codex_login::CodexAuth;
+use codex_mcp::codex_apps_mcp_server_config;
+use codex_mcp::effective_mcp_servers_from_configured;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -1333,17 +1337,37 @@ fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
     )
 }
 
-async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: &TurnContext) {
-    let auth = session.services.auth_manager.auth().await;
+async fn install_connector_auth_repair_manager(session: &Session, turn_context: &TurnContext) {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let mut mcp_config = turn_context
+        .config
+        .to_mcp_config(session.services.plugins_manager.as_ref())
+        .await;
+    mcp_config.apps_enabled = true;
+    let mcp_servers = effective_mcp_servers_from_configured(
+        HashMap::from([(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            codex_apps_mcp_server_config(
+                &turn_context.config.chatgpt_base_url,
+                /*apps_mcp_product_sku*/ None,
+            ),
+        )]),
+        &mcp_config,
+        Some(&auth),
+    );
+    let (tx_event, rx_event) = unbounded();
+    drop(rx_event);
+    let startup_cancellation_token = CancellationToken::new();
+    startup_cancellation_token.cancel();
     let manager = codex_mcp::McpConnectionManager::new(
-        &HashMap::new(),
+        &mcp_servers,
         turn_context.config.mcp_oauth_credentials_store_mode,
         turn_context.config.auth_keyring_backend_kind(),
         HashMap::new(),
         &turn_context.approval_policy,
         turn_context.sub_id.clone(),
-        session.get_tx_event(),
-        CancellationToken::new(),
+        tx_event,
+        startup_cancellation_token,
         turn_context.permission_profile(),
         codex_mcp::McpRuntimeContext::new(
             session.services.turn_environments.environment_manager(),
@@ -1353,13 +1377,12 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
             },
         ),
         turn_context.config.codex_home.to_path_buf(),
-        codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
-        /*host_owned_codex_apps_enabled*/ true,
+        codex_mcp::codex_apps_tools_cache_key(Some(&auth)),
         turn_context.config.prefix_mcp_tool_names(),
         rmcp::model::ElicitationCapability::default(),
         /*supports_openai_form_elicitation*/ false,
         codex_mcp::ToolPluginProvenance::default(),
-        auth.as_ref(),
+        Some(&auth),
         /*elicitation_reviewer*/ None,
     )
     .await;
@@ -1372,7 +1395,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
 #[tokio::test]
 async fn codex_apps_auth_elicitation_feature_disabled_returns_original_result() {
     let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
-    install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    install_connector_auth_repair_manager(&session, &turn_context).await;
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
 
@@ -1391,7 +1414,7 @@ async fn codex_apps_auth_elicitation_feature_disabled_returns_original_result() 
 }
 
 #[tokio::test]
-async fn codex_apps_auth_elicitation_non_host_owned_server_returns_original_result() {
+async fn codex_apps_auth_elicitation_server_without_repair_capability_returns_original_result() {
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
@@ -1417,7 +1440,7 @@ async fn codex_apps_auth_elicitation_non_host_owned_server_returns_original_resu
 #[tokio::test]
 async fn codex_apps_auth_elicitation_disallowed_by_policy_returns_original_result() {
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
-    install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    install_connector_auth_repair_manager(&session, &turn_context).await;
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
@@ -1446,7 +1469,7 @@ async fn codex_apps_auth_elicitation_disallowed_by_policy_returns_original_resul
 #[tokio::test]
 async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_result() {
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
-    install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    install_connector_auth_repair_manager(&session, &turn_context).await;
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
@@ -1481,7 +1504,7 @@ async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_resu
 #[tokio::test]
 async fn codex_apps_auth_elicitation_feature_enabled_requests_elicitation() {
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
-    install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    install_connector_auth_repair_manager(&session, &turn_context).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);

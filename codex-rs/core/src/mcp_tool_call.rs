@@ -635,7 +635,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
         .services
         .mcp_connection_manager
         .load_full()
-        .is_host_owned_codex_apps_server(server)
+        .server_supports_connector_auth_repair(server)
     {
         return result;
     }

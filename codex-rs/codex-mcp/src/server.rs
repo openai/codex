@@ -14,13 +14,20 @@ pub(crate) enum McpServerLaunch {
 #[derive(Debug, Clone)]
 pub struct EffectiveMcpServer {
     launch: McpServerLaunch,
+    connector_auth_repair: bool,
 }
 
 impl EffectiveMcpServer {
     pub fn configured(config: McpServerConfig) -> Self {
         Self {
             launch: McpServerLaunch::Configured(Box::new(config)),
+            connector_auth_repair: false,
         }
+    }
+
+    pub(crate) fn with_connector_auth_repair(mut self) -> Self {
+        self.connector_auth_repair = true;
+        self
     }
 
     pub(crate) fn launch(&self) -> &McpServerLaunch {
@@ -43,6 +50,10 @@ impl EffectiveMcpServer {
         match &self.launch {
             McpServerLaunch::Configured(config) => config.required,
         }
+    }
+
+    fn supports_connector_auth_repair(&self) -> bool {
+        self.connector_auth_repair
     }
 }
 
@@ -79,11 +90,16 @@ pub(crate) struct McpServerMetadata {
     pub pollutes_memory: bool,
     pub origin: Option<McpServerOrigin>,
     pub supports_parallel_tool_calls: bool,
+    pub supports_connector_auth_repair: bool,
     pub default_tools_approval_mode: Option<AppToolApproval>,
     pub tool_approval_modes: HashMap<String, AppToolApproval>,
 }
 
 impl McpServerMetadata {
+    pub fn supports_connector_auth_repair(&self) -> bool {
+        self.supports_connector_auth_repair
+    }
+
     pub fn tool_approval_mode(&self, tool_name: &str) -> AppToolApproval {
         self.tool_approval_modes
             .get(tool_name)
@@ -101,6 +117,7 @@ impl From<&EffectiveMcpServer> for McpServerMetadata {
                 pollutes_memory: true,
                 origin: McpServerOrigin::from_transport(&config.transport),
                 supports_parallel_tool_calls: config.supports_parallel_tool_calls,
+                supports_connector_auth_repair: server.supports_connector_auth_repair(),
                 default_tools_approval_mode: config.default_tools_approval_mode,
                 tool_approval_modes: config
                     .tools
