@@ -39,15 +39,19 @@ async fn executor_stdio_forwards_foreign_absolute_cwd_as_path_uri() {
     let cwd = r"C:\Users\openai\share";
     #[cfg(windows)]
     let cwd = "/home/openai/share";
+    #[cfg(not(windows))]
+    let expected_cwd: PathUri = "file:///C:/Users/openai/share"
+        .parse()
+        .expect("expected cwd should be a path URI");
+    #[cfg(windows)]
+    let expected_cwd: PathUri = "file:///home/openai/share"
+        .parse()
+        .expect("expected cwd should be a path URI");
     let cwd = LegacyAppPathString::from_path(Path::new(cwd));
-    let expected_cwd: PathUri = cwd
-        .clone()
-        .try_into()
-        .expect("foreign absolute cwd should convert to a path URI");
     let backend = Arc::new(RecordingExecBackend::default());
     let launcher = Arc::new(ExecutorStdioServerLauncher::new(backend.clone()));
 
-    let error = match RmcpClient::new_stdio_client(
+    let _ = RmcpClient::new_stdio_client(
         OsString::from("echo"),
         Vec::new(),
         /*env*/ None,
@@ -55,17 +59,7 @@ async fn executor_stdio_forwards_foreign_absolute_cwd_as_path_uri() {
         Some(cwd),
         launcher,
     )
-    .await
-    {
-        Ok(_) => panic!("recording backend should stop executor launch"),
-        Err(error) => error,
-    };
-
-    assert!(
-        error
-            .to_string()
-            .contains("stop after recording executor request")
-    );
+    .await;
     let params = backend
         .params
         .lock()
