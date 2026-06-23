@@ -887,6 +887,15 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     parent_thread
         .inject_user_message_without_turn("parent seed context".to_string())
         .await;
+    let expected_parent_seed = parent_thread
+        .codex
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .first()
+        .cloned()
+        .expect("parent seed should be recorded");
     let turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-history".to_string();
     let trigger_message = InterAgentCommunication::new(
@@ -988,17 +997,12 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     );
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
+    let mut expected_final_answer =
+        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer));
+    expected_final_answer.set_turn_id_if_missing(&turn_context.sub_id);
     let expected_history = [
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "parent seed context".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
+        expected_parent_seed,
+        expected_final_answer,
         ResponseItem::Message {
             id: None,
             role: "developer".to_string(),

@@ -463,6 +463,7 @@ struct RemotePluginReleaseInterfaceResponse {
     default_prompts: Option<Vec<String>>,
     composer_icon_url: Option<String>,
     logo_url: Option<String>,
+    logo_url_dark: Option<String>,
     #[serde(default)]
     screenshot_urls: Vec<String>,
 }
@@ -1529,7 +1530,9 @@ fn remote_plugin_interface_to_info(plugin: &RemotePluginDirectoryItem) -> Option
         composer_icon: None,
         composer_icon_url: interface.composer_icon_url.clone(),
         logo: None,
+        logo_dark: None,
         logo_url: interface.logo_url.clone(),
+        logo_url_dark: interface.logo_url_dark.clone(),
         screenshots: Vec::new(),
         screenshot_urls: interface.screenshot_urls.clone(),
     };
@@ -1546,6 +1549,7 @@ fn remote_plugin_interface_to_info(plugin: &RemotePluginDirectoryItem) -> Option
         || result.brand_color.is_some()
         || result.composer_icon_url.is_some()
         || result.logo_url.is_some()
+        || result.logo_url_dark.is_some()
         || !result.screenshot_urls.is_empty();
     has_fields.then_some(result)
 }
