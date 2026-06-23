@@ -1539,6 +1539,16 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
                             "{name}: stdio command {command:?} is not resolvable ({err})"
                         ));
                     }
+                } else {
+                    match cwd {
+                        Some(cwd) if cwd.to_inferred_path_uri().is_none() => {
+                            missing_env
+                                .push(format!("{name}: remote stdio cwd is not absolute ({cwd})"));
+                        }
+                        None => missing_env
+                            .push(format!("{name}: remote stdio requires an explicit cwd")),
+                        Some(_) => {}
+                    }
                 }
                 if let Some(env) = env {
                     for key in env.keys().filter(|key| key.trim().is_empty()) {
@@ -3891,6 +3901,45 @@ mod tests {
 
         assert_eq!(check.status, CheckStatus::Ok);
         assert_eq!(check.summary, "MCP configuration is locally consistent");
+    }
+
+    #[tokio::test]
+    async fn mcp_check_validates_remote_stdio_cwd() {
+        let missing_cwd: McpServerConfig = toml::from_str(
+            r#"
+                command = "echo"
+                environment_id = "remote"
+                required = true
+            "#,
+        )
+        .expect("should deserialize remote MCP config without cwd");
+        let relative_cwd: McpServerConfig = toml::from_str(
+            r#"
+                command = "echo"
+                environment_id = "remote"
+                cwd = "relative"
+                required = true
+            "#,
+        )
+        .expect("should deserialize remote MCP config with relative cwd");
+        let servers = HashMap::from([
+            ("missing".to_string(), missing_cwd),
+            ("relative".to_string(), relative_cwd),
+        ]);
+
+        let check = mcp_check_from_servers(&servers).await;
+
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert!(
+            check
+                .details
+                .contains(&"missing: remote stdio requires an explicit cwd".to_string())
+        );
+        assert!(
+            check
+                .details
+                .contains(&"relative: remote stdio cwd is not absolute (relative)".to_string())
+        );
     }
 
     #[cfg(unix)]
