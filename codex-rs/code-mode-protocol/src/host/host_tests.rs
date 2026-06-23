@@ -141,14 +141,14 @@ fn session_lifecycle_wire_contract_is_explicit_and_round_trips() {
 fn invalid_protocol_states_cannot_be_constructed_or_decoded() {
     assert!(SessionId::new("").is_err());
     assert!(Capability::new("   ").is_err());
-    assert!(ProtocolVersion::new(0).is_none());
+    assert!(ProtocolVersion::new(/*value*/ 0).is_none());
     assert!(SupportedProtocolVersions::try_new([]).is_err());
     assert!(
         SupportedProtocolVersions::try_new([ProtocolVersion::V1, ProtocolVersion::V1]).is_err()
     );
     assert!(CapabilitySet::try_new([capability("same"), capability("same")]).is_err());
 
-    let version_two = ProtocolVersion::new(2).expect("valid protocol version");
+    let version_two = ProtocolVersion::new(/*value*/ 2).expect("valid protocol version");
     let versions = SupportedProtocolVersions::try_new([ProtocolVersion::V1, version_two])
         .expect("valid versions");
     assert!(versions.contains(ProtocolVersion::V1));
