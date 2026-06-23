@@ -1,0 +1,95 @@
+use super::*;
+use pretty_assertions::assert_eq;
+
+#[test]
+fn preserves_valid_custom_title_unchanged() {
+    let custom_title = "<system-reminder>Keep this custom title</system-reminder>";
+
+    assert_eq!(
+        SessionTitleCandidates {
+            custom_title: Some(custom_title.to_string()),
+            ai_title: Some("AI title".to_string()),
+            fallback_title: Some("fallback title".to_string()),
+        }
+        .select(),
+        Some(custom_title.to_string())
+    );
+}
+
+#[test]
+fn preserves_valid_ai_title_unchanged_without_custom_title() {
+    let ai_title = "<command-message>Keep this AI title</command-message>";
+
+    assert_eq!(
+        SessionTitleCandidates {
+            custom_title: None,
+            ai_title: Some(ai_title.to_string()),
+            fallback_title: Some("fallback title".to_string()),
+        }
+        .select(),
+        Some(ai_title.to_string())
+    );
+}
+
+#[test]
+fn strips_nested_repeated_and_multiline_leading_control_wrappers() {
+    let message = "\
+        <system-reminder>\n\
+        outer context\n\
+        <command-message>\n\
+        nested context\n\
+        </command-message>\n\
+        </system-reminder>\n\
+        <ide_opened_file>\n\
+        src/auth.rs\n\
+        </ide_opened_file>\n\
+        \n\
+        Fix auth flow\n\
+        Additional details";
+
+    assert_eq!(fallback_title_from_user_message(message), "Fix auth flow");
+}
+
+#[test]
+fn uses_safe_fallback_for_empty_or_control_only_messages() {
+    assert_eq!(
+        fallback_title_from_user_message(""),
+        IMPORTED_SESSION_FALLBACK_TITLE
+    );
+    assert_eq!(
+        fallback_title_from_user_message(
+            "<command-message>review</command-message>\n\
+             <system-reminder>context</system-reminder>"
+        ),
+        IMPORTED_SESSION_FALLBACK_TITLE
+    );
+}
+
+#[test]
+fn uses_first_meaningful_line_from_ordinary_messages() {
+    assert_eq!(
+        fallback_title_from_user_message("\n  \n  Fix auth flow  \nAdditional details"),
+        "Fix auth flow"
+    );
+}
+
+#[test]
+fn preserves_unknown_and_user_authored_angle_bracket_text() {
+    assert_eq!(
+        fallback_title_from_user_message("<user-note>Keep this text</user-note> Fix auth flow"),
+        "<user-note>Keep this text</user-note> Fix auth flow"
+    );
+    assert_eq!(
+        fallback_title_from_user_message("Explain <system-reminder> tags"),
+        "Explain <system-reminder> tags"
+    );
+}
+
+#[test]
+fn bounds_fallback_titles_to_120_characters() {
+    let message = "x".repeat(121);
+    let title = fallback_title_from_user_message(&message);
+
+    assert_eq!(title.chars().count(), SESSION_TITLE_MAX_LEN);
+    assert_eq!(title, format!("{}...", "x".repeat(117)));
+}
