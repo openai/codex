@@ -1,4 +1,6 @@
 use std::io::Write;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
@@ -11,6 +13,7 @@ use crate::policy::is_persisted_rollout_item;
 
 const ITEM_BYTES_METRIC: &str = "codex.rollout.persistence.item_bytes";
 const APPEND_METRIC: &str = "codex.rollout.persistence.append";
+const TURN_BYTES_METRIC: &str = "codex.rollout.persistence.turn_bytes";
 const MEASUREMENT_ERROR_METRIC: &str = "codex.rollout.persistence.measurement_error";
 const SAMPLE_DENOMINATOR: u64 = 100;
 const SAMPLE_RATE_LABEL: &str = "0.01";
@@ -50,6 +53,45 @@ pub struct RolloutPersistenceBatchMeasurement {
     pub items: Vec<RolloutItemMeasurement>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct TurnSizeTotals {
+    pre_filter: RolloutSizeTotals,
+    post_filter: RolloutSizeTotals,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnOutcome {
+    Completed,
+    Aborted,
+}
+
+impl TurnOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Aborted => "aborted",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompletedTurnMeasurement {
+    totals: TurnSizeTotals,
+    outcome: TurnOutcome,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TurnMeasurementState {
+    pending: TurnSizeTotals,
+    active: Option<TurnSizeTotals>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TurnMeasurementUpdate {
+    completed: Vec<CompletedTurnMeasurement>,
+    boundary_errors: Vec<&'static str>,
+}
+
 /// Measures logical JSON sizes while applying the shared rollout persistence policy once.
 pub fn measure_and_filter_rollout_items(
     items: &[RolloutItem],
@@ -87,6 +129,74 @@ fn add_to_totals(totals: &mut RolloutSizeTotals, payload_bytes: Option<u64>) {
     totals.items = totals.items.saturating_add(1);
     if let Some(payload_bytes) = payload_bytes {
         totals.payload_bytes = totals.payload_bytes.saturating_add(payload_bytes);
+    }
+}
+
+fn update_turn_measurements(
+    state: &mut TurnMeasurementState,
+    items: &[RolloutItem],
+    measurement: &RolloutPersistenceBatchMeasurement,
+) -> TurnMeasurementUpdate {
+    let mut update = TurnMeasurementUpdate::default();
+    for (item, item_measurement) in items.iter().zip(&measurement.items) {
+        match item {
+            RolloutItem::EventMsg(EventMsg::TurnStarted(_)) => {
+                if state.active.take().is_some() {
+                    update.boundary_errors.push("event.turn_started");
+                }
+                let mut totals = std::mem::take(&mut state.pending);
+                add_item_to_turn(&mut totals, item_measurement);
+                state.active = Some(totals);
+            }
+            RolloutItem::EventMsg(EventMsg::TurnComplete(_)) => {
+                finish_turn(
+                    state,
+                    item_measurement,
+                    TurnOutcome::Completed,
+                    "event.turn_complete",
+                    &mut update,
+                );
+            }
+            RolloutItem::EventMsg(EventMsg::TurnAborted(_)) => {
+                finish_turn(
+                    state,
+                    item_measurement,
+                    TurnOutcome::Aborted,
+                    "event.turn_aborted",
+                    &mut update,
+                );
+            }
+            _ => match state.active.as_mut() {
+                Some(totals) => add_item_to_turn(totals, item_measurement),
+                None => add_item_to_turn(&mut state.pending, item_measurement),
+            },
+        }
+    }
+    update
+}
+
+fn finish_turn(
+    state: &mut TurnMeasurementState,
+    item: &RolloutItemMeasurement,
+    outcome: TurnOutcome,
+    boundary_type: &'static str,
+    update: &mut TurnMeasurementUpdate,
+) {
+    let Some(mut totals) = state.active.take() else {
+        state.pending = TurnSizeTotals::default();
+        update.boundary_errors.push(boundary_type);
+        return;
+    };
+    add_item_to_turn(&mut totals, item);
+    update
+        .completed
+        .push(CompletedTurnMeasurement { totals, outcome });
+}
+
+fn add_item_to_turn(totals: &mut TurnSizeTotals, item: &RolloutItemMeasurement) {
+    add_to_totals(&mut totals.pre_filter, item.payload_bytes);
+    if item.decision == PersistenceDecision::Kept {
+        add_to_totals(&mut totals.post_filter, item.payload_bytes);
     }
 }
 
@@ -168,20 +278,29 @@ fn response_item_type(item: &ResponseItem) -> &'static str {
 pub struct RolloutPersistenceTelemetry {
     metrics: Option<MetricsClient>,
     sampled: bool,
+    turn_state: Option<Arc<Mutex<TurnMeasurementState>>>,
 }
 
 impl RolloutPersistenceTelemetry {
     pub fn new(thread_id: ThreadId) -> Self {
         let metrics = codex_otel::global();
         let sampled = metrics.is_some() && is_thread_sampled(thread_id);
-        Self { metrics, sampled }
+        Self {
+            metrics,
+            sampled,
+            turn_state: sampled.then(|| Arc::new(Mutex::new(TurnMeasurementState::default()))),
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
         self.enabled_metrics().is_some()
     }
 
-    pub fn record_batch(&self, measurement: &RolloutPersistenceBatchMeasurement) {
+    pub fn record_batch(
+        &self,
+        items: &[RolloutItem],
+        measurement: &RolloutPersistenceBatchMeasurement,
+    ) {
         let Some(metrics) = self.enabled_metrics() else {
             return;
         };
@@ -222,6 +341,44 @@ impl RolloutPersistenceTelemetry {
                 /*inc*/ 1,
                 &[("stage", "post_filter"), ("sample_rate", SAMPLE_RATE_LABEL)],
             );
+        }
+
+        let Some(turn_state) = self.turn_state.as_ref() else {
+            return;
+        };
+        let turn_update = update_turn_measurements(
+            &mut turn_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            items,
+            measurement,
+        );
+        for boundary_type in turn_update.boundary_errors {
+            let _ = metrics.counter(
+                MEASUREMENT_ERROR_METRIC,
+                /*inc*/ 1,
+                &[
+                    ("rollout_item_type", boundary_type),
+                    ("phase", "turn_boundary"),
+                ],
+            );
+        }
+        for turn in turn_update.completed {
+            for (stage, totals) in [
+                ("pre_filter", turn.totals.pre_filter),
+                ("post_filter", turn.totals.post_filter),
+            ] {
+                let _ = metrics.histogram(
+                    TURN_BYTES_METRIC,
+                    saturating_i64(totals.payload_bytes),
+                    &[
+                        ("stage", stage),
+                        ("outcome", turn.outcome.as_str()),
+                        ("encoding", "rollout_item_json_v1"),
+                        ("sample_rate", SAMPLE_RATE_LABEL),
+                    ],
+                );
+            }
         }
     }
 

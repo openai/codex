@@ -6,10 +6,19 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use pretty_assertions::assert_eq;
 
+use super::CompletedTurnMeasurement;
+use super::TurnMeasurementState;
+use super::TurnOutcome;
+use super::TurnSizeTotals;
 use super::is_thread_sampled;
 use super::measure_and_filter_rollout_items;
+use super::update_turn_measurements;
 
 fn retained_message(text: &str) -> RolloutItem {
     RolloutItem::ResponseItem(ResponseItem::Message {
@@ -21,6 +30,43 @@ fn retained_message(text: &str) -> RolloutItem {
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     })
+}
+
+fn turn_started(turn_id: &str) -> RolloutItem {
+    RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_id.to_string(),
+        trace_id: None,
+        started_at: None,
+        model_context_window: None,
+        collaboration_mode_kind: Default::default(),
+    }))
+}
+
+fn turn_complete(turn_id: &str) -> RolloutItem {
+    RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+        turn_id: turn_id.to_string(),
+        last_agent_message: None,
+        completed_at: None,
+        duration_ms: None,
+        time_to_first_token_ms: None,
+    }))
+}
+
+fn turn_aborted(turn_id: &str) -> RolloutItem {
+    RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+        turn_id: Some(turn_id.to_string()),
+        reason: TurnAbortReason::Interrupted,
+        completed_at: None,
+        duration_ms: None,
+    }))
+}
+
+fn update_for_batch(
+    state: &mut TurnMeasurementState,
+    items: &[RolloutItem],
+) -> super::TurnMeasurementUpdate {
+    let (_, measurement) = measure_and_filter_rollout_items(items);
+    update_turn_measurements(state, items, &measurement)
 }
 
 #[test]
@@ -92,6 +138,100 @@ fn retained_items_are_byte_identical() {
         measurement.post_filter.payload_bytes,
         measurement.items[0].payload_bytes.expect("payload bytes")
     );
+}
+
+#[test]
+fn turn_measurements_span_batches_and_include_items_before_start() {
+    let first_turn = vec![
+        retained_message("first prompt"),
+        turn_started("turn-1"),
+        retained_message("first response"),
+        RolloutItem::ResponseItem(ResponseItem::Other),
+        turn_complete("turn-1"),
+    ];
+    let second_turn = vec![
+        retained_message("second prompt"),
+        turn_started("turn-2"),
+        retained_message("second response"),
+        turn_aborted("turn-2"),
+    ];
+    let (_, first_expected) = measure_and_filter_rollout_items(&first_turn);
+    let (_, second_expected) = measure_and_filter_rollout_items(&second_turn);
+    let batches = [
+        first_turn[..1].to_vec(),
+        first_turn[1..3].to_vec(),
+        vec![
+            first_turn[3].clone(),
+            first_turn[4].clone(),
+            second_turn[0].clone(),
+        ],
+        second_turn[1..].to_vec(),
+    ];
+
+    let mut state = TurnMeasurementState::default();
+    let mut completed = Vec::new();
+    let mut boundary_errors = Vec::new();
+    for batch in batches {
+        let update = update_for_batch(&mut state, &batch);
+        completed.extend(update.completed);
+        boundary_errors.extend(update.boundary_errors);
+    }
+
+    assert_eq!(
+        completed,
+        vec![
+            CompletedTurnMeasurement {
+                totals: TurnSizeTotals {
+                    pre_filter: first_expected.pre_filter,
+                    post_filter: first_expected.post_filter,
+                },
+                outcome: TurnOutcome::Completed,
+            },
+            CompletedTurnMeasurement {
+                totals: TurnSizeTotals {
+                    pre_filter: second_expected.pre_filter,
+                    post_filter: second_expected.post_filter,
+                },
+                outcome: TurnOutcome::Aborted,
+            },
+        ]
+    );
+    assert_eq!(boundary_errors, Vec::<&str>::new());
+    assert_eq!(state, TurnMeasurementState::default());
+}
+
+#[test]
+fn invalid_turn_boundaries_reset_partial_measurements() {
+    let mut state = TurnMeasurementState::default();
+    let unmatched_completion = vec![retained_message("orphan"), turn_complete("turn-1")];
+    let update = update_for_batch(&mut state, &unmatched_completion);
+
+    assert_eq!(update.completed, Vec::new());
+    assert_eq!(update.boundary_errors, vec!["event.turn_complete"]);
+    assert_eq!(state, TurnMeasurementState::default());
+
+    let replacement = vec![
+        turn_started("turn-1"),
+        retained_message("discarded partial turn"),
+        turn_started("turn-2"),
+        retained_message("retained turn"),
+        turn_complete("turn-2"),
+    ];
+    let (_, expected) = measure_and_filter_rollout_items(&replacement[2..]);
+    let update = update_for_batch(&mut state, &replacement);
+
+    assert_eq!(
+        update.completed,
+        vec![CompletedTurnMeasurement {
+            totals: TurnSizeTotals {
+                pre_filter: expected.pre_filter,
+                post_filter: expected.post_filter,
+            },
+            outcome: TurnOutcome::Completed,
+        }]
+    );
+    assert_eq!(update.boundary_errors, vec!["event.turn_started"]);
+    assert_eq!(state, TurnMeasurementState::default());
 }
 
 #[test]

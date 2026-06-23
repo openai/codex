@@ -161,7 +161,7 @@ impl LiveThread {
             })
             .await?;
         if let Some(measurement) = measurement.as_ref() {
-            self.persistence_telemetry.record_batch(measurement);
+            self.persistence_telemetry.record_batch(items, measurement);
         }
         if canonical_items.is_empty() {
             return Ok(());
