@@ -16,6 +16,8 @@
 //!
 //! If the keyring is not available or fails, we fall back to CODEX_HOME/.credentials.json which is consistent with other coding CLI agents.
 
+mod refresh_lock;
+
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
@@ -41,8 +43,6 @@ use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::fs;
-use std::fs::File;
-use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -58,17 +58,14 @@ use rmcp::transport::auth::CredentialStore as _;
 use rmcp::transport::auth::InMemoryCredentialStore;
 use rmcp::transport::auth::StoredCredentials;
 use tokio::sync::Mutex;
-use tokio::time::sleep;
 use tokio::time::timeout;
 
+use self::refresh_lock::RefreshCredentialLock;
 use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
-const REFRESH_LOCK_DIR: &str = "mcp-oauth-refresh-locks";
-const REFRESH_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(60);
-const REFRESH_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(50);
 const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -832,61 +829,6 @@ impl OAuthPersistor {
     }
 }
 
-struct RefreshCredentialLock {
-    _file: File,
-}
-
-impl RefreshCredentialLock {
-    async fn acquire(store_key: &str) -> Result<Self> {
-        Self::acquire_with_timeout(store_key, REFRESH_LOCK_ACQUIRE_TIMEOUT).await
-    }
-
-    async fn acquire_with_timeout(store_key: &str, acquire_timeout: Duration) -> Result<Self> {
-        let path = refresh_lock_path(store_key)?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .with_context(|| format!("failed to open OAuth refresh lock {}", path.display()))?;
-
-        // Bound every contender, but keep the acquired lock for the full provider request and
-        // persistence transaction. Releasing it while awaiting the provider would allow concurrent
-        // use of a rotating refresh token.
-        match timeout(acquire_timeout, async {
-            loop {
-                match file.try_lock() {
-                    Ok(()) => return Ok(()),
-                    Err(std::fs::TryLockError::WouldBlock) => {
-                        sleep(REFRESH_LOCK_RETRY_SLEEP).await;
-                    }
-                    Err(error) => return Err(std::io::Error::from(error)),
-                }
-            }
-        })
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                return Err(error).with_context(|| {
-                    format!("failed to lock OAuth refresh lock {}", path.display())
-                });
-            }
-            Err(_) => anyhow::bail!(
-                "timed out after {acquire_timeout:?} waiting for OAuth refresh lock {}",
-                path.display()
-            ),
-        }
-
-        Ok(Self { _file: file })
-    }
-}
-
 #[expect(
     clippy::await_holding_invalid_type,
     reason = "AuthorizationManager async access must be serialized through its mutex"
@@ -1109,21 +1051,6 @@ fn compute_secret_name(server_name: &str, server_url: &str) -> Result<SecretName
 
 fn fallback_file_path() -> Result<PathBuf> {
     Ok(find_codex_home()?.join(FALLBACK_FILENAME).to_path_buf())
-}
-
-fn refresh_lock_path(store_key: &str) -> Result<PathBuf> {
-    // Credential coordination is deliberately scoped to the active CODEX_HOME, alongside File
-    // and Secrets state. Coordinating the process-global Direct keyring across distinct homes
-    // would require a separately defined global lock namespace and is outside this transaction.
-    // TODO(stevenlee): define a safe per-user, cross-platform rendezvous before extending Direct
-    // keyring coordination across distinct CODEX_HOME values.
-    let mut hasher = Sha256::new();
-    hasher.update(store_key.as_bytes());
-    let digest = hasher.finalize();
-    Ok(find_codex_home()?
-        .join(REFRESH_LOCK_DIR)
-        .join(format!("{digest:x}.lock"))
-        .to_path_buf())
 }
 
 fn read_fallback_file() -> Result<Option<FallbackFile>> {
@@ -1476,35 +1403,6 @@ mod tests {
         )?;
 
         assert!(loaded.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn refresh_lock_acquisition_times_out_without_stealing() -> Result<()> {
-        let _env = TempCodexHome::new();
-        let store_key = "test-store-key";
-        let held_lock =
-            RefreshCredentialLock::acquire_with_timeout(store_key, Duration::from_millis(100))
-                .await?;
-
-        let error =
-            match RefreshCredentialLock::acquire_with_timeout(store_key, Duration::from_millis(50))
-                .await
-            {
-                Ok(_) => panic!("contending lock acquisition should time out"),
-                Err(error) => error,
-            };
-        assert!(
-            error
-                .to_string()
-                .contains("timed out after 50ms waiting for OAuth refresh lock"),
-            "unexpected error: {error:#}"
-        );
-
-        drop(held_lock);
-        let _reacquired =
-            RefreshCredentialLock::acquire_with_timeout(store_key, Duration::from_millis(100))
-                .await?;
         Ok(())
     }
 

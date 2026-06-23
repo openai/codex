@@ -1,11 +1,19 @@
 mod streamable_http_test_support;
 
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use axum::Json;
+use axum::Router;
+use axum::extract::State;
+use axum::routing::post;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
@@ -24,7 +32,18 @@ use rmcp::transport::auth::VendorExtraTokenFields;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::net::TcpListener;
 use tokio::process::Command;
+use tokio::sync::Notify;
+use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
+use tracing::Event;
+use tracing::Id;
+use tracing::Metadata;
+use tracing::Subscriber;
+use tracing::span::Attributes;
+use tracing::span::Record;
+use tracing::subscriber::Interest;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -42,12 +61,169 @@ const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
 const REFRESH_TOKEN: &str = "valid-refresh-token";
 const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
 const ROTATED_REFRESH_TOKEN: &str = "rotated-refresh-token";
+const CHILD_CONTENTION_FILE_ENV: &str = "MCP_TEST_OAUTH_STARTUP_CONTENTION_FILE";
 const CHILD_READY_FILE_ENV: &str = "MCP_TEST_OAUTH_STARTUP_READY_FILE";
 const CHILD_RELEASE_FILE_ENV: &str = "MCP_TEST_OAUTH_STARTUP_RELEASE_FILE";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
+// This mirrors the private event target in oauth::refresh_lock without exposing test-only crate API.
+const LOCK_CONTENTION_EVENT_TARGET: &str = "codex_rmcp_client::oauth::refresh_lock::contention";
 const UNREFRESHABLE_SERVER_URL: &str = "https://unrefreshable.example/mcp";
 const UNEXPIRED_SERVER_URL: &str = "https://unexpired.example/mcp";
 const REFRESHABLE_SERVER_URL: &str = "https://refreshable.example/mcp";
+
+#[derive(Clone)]
+struct GatedRefreshState {
+    request_count: Arc<AtomicUsize>,
+    request_started: Arc<Notify>,
+    response_release: Arc<Semaphore>,
+}
+
+struct GatedRefreshServer {
+    token_endpoint: String,
+    state: GatedRefreshState,
+    task: JoinHandle<()>,
+}
+
+impl GatedRefreshServer {
+    async fn start() -> anyhow::Result<Self> {
+        let state = GatedRefreshState {
+            request_count: Arc::new(AtomicUsize::new(/*v*/ 0)),
+            request_started: Arc::new(Notify::new()),
+            response_release: Arc::new(Semaphore::new(/*permits*/ 0)),
+        };
+        let router = Router::new()
+            .route("/oauth/token", post(gated_refresh_response))
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let task = tokio::spawn(async move {
+            if let Err(error) = axum::serve(listener, router).await {
+                panic!("gated refresh server failed: {error}");
+            }
+        });
+        Ok(Self {
+            token_endpoint: format!("http://{address}/oauth/token"),
+            state,
+            task,
+        })
+    }
+
+    async fn wait_until_request_started(&self) -> anyhow::Result<()> {
+        let notified = self.state.request_started.notified();
+        if self.request_count() == 0 {
+            tokio::time::timeout(Duration::from_secs(/*secs*/ 10), notified)
+                .await
+                .map_err(|_| anyhow::anyhow!("provider refresh request did not start"))?;
+        }
+        Ok(())
+    }
+
+    fn release_responses(&self) {
+        // Two permits also let the no-lock negative control exit cleanly after issuing two refresh
+        // requests. The passing path consumes one permit because only the lock owner calls out.
+        self.state.response_release.add_permits(/*n*/ 2);
+    }
+
+    fn request_count(&self) -> usize {
+        self.state.request_count.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for GatedRefreshServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn gated_refresh_response(
+    State(state): State<GatedRefreshState>,
+    body: String,
+) -> Json<Value> {
+    assert!(body.contains("grant_type=refresh_token"));
+    assert!(body.contains(&format!("refresh_token={REFRESH_TOKEN}")));
+    state.request_count.fetch_add(/*val*/ 1, Ordering::SeqCst);
+    state.request_started.notify_one();
+    let Ok(permit) = state.response_release.acquire().await else {
+        panic!("gated refresh server closed its response semaphore");
+    };
+    permit.forget();
+    Json(json!({
+        "access_token": REFRESHED_ACCESS_TOKEN,
+        "token_type": "Bearer",
+        "expires_in": 7200,
+        "refresh_token": ROTATED_REFRESH_TOKEN,
+    }))
+}
+
+struct LockContentionMarkerSubscriber {
+    marker_file: PathBuf,
+}
+
+impl Subscriber for LockContentionMarkerSubscriber {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.target() == LOCK_CONTENTION_EVENT_TARGET
+    }
+
+    fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
+        if self.enabled(metadata) {
+            Interest::always()
+        } else {
+            Interest::never()
+        }
+    }
+
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::DEBUG)
+    }
+
+    fn new_span(&self, _span: &Attributes<'_>) -> Id {
+        // This subscriber enables only the contention event callsite, so it never observes spans.
+        Id::from_u64(/*u*/ 1)
+    }
+
+    fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    fn event(&self, event: &Event<'_>) {
+        if event.metadata().target() == LOCK_CONTENTION_EVENT_TARGET
+            && let Err(error) = fs::write(&self.marker_file, b"contended")
+        {
+            panic!("failed to write refresh-lock contention marker: {error}");
+        }
+    }
+
+    fn enter(&self, _span: &Id) {}
+
+    fn exit(&self, _span: &Id) {}
+}
+
+async fn wait_for_marker(path: &Path, timeout_message: &str) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+        while !path.exists() {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("{timeout_message}"))
+}
+
+fn oauth_concurrency_child_command(
+    codex_home: &Path,
+    server_url: &str,
+    ready_file: &Path,
+    release_file: &Path,
+) -> anyhow::Result<Command> {
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args(["oauth_concurrency_client_child", "--exact", "--ignored"])
+        .env("CODEX_HOME", codex_home)
+        .env(CHILD_SERVER_URL_ENV, server_url)
+        .env(CHILD_READY_FILE_ENV, ready_file)
+        .env(CHILD_RELEASE_FILE_ENV, release_file)
+        .kill_on_drop(true);
+    Ok(command)
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn startup_refresh_does_not_consume_handshake_timeout() -> anyhow::Result<()> {
@@ -133,37 +309,19 @@ async fn startup_refresh_does_not_consume_handshake_timeout() -> anyhow::Result<
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_file_mode_startup_refreshes_once() -> anyhow::Result<()> {
     let server = MockServer::start().await;
+    let refresh_server = GatedRefreshServer::start().await?;
+    let codex_home = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
-            "token_endpoint": format!("{}/oauth/token", server.uri()),
+            "token_endpoint": refresh_server.token_endpoint.clone(),
             "scopes_supported": [""],
         })))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .and(body_string_contains("grant_type=refresh_token"))
-        .and(body_string_contains(format!(
-            "refresh_token={REFRESH_TOKEN}"
-        )))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_millis(250))
-                .set_body_json(json!({
-                    "access_token": REFRESHED_ACCESS_TOKEN,
-                    "token_type": "Bearer",
-                    "expires_in": 7200,
-                    "refresh_token": ROTATED_REFRESH_TOKEN,
-                })),
-        )
-        // This exact expectation proves that the two child processes issue one serialized provider
-        // refresh rather than both replaying the same rotating refresh token.
-        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -199,8 +357,6 @@ async fn concurrent_file_mode_startup_refreshes_once() -> anyhow::Result<()> {
         .mount(&server)
         .await;
 
-    let codex_home = TempDir::new()?;
-    let server_url = format!("{}/mcp", server.uri());
     let seed_status = Command::new(std::env::current_exe()?)
         .args(["oauth_concurrency_seed_child", "--exact", "--ignored"])
         .env("CODEX_HOME", codex_home.path())
@@ -212,34 +368,51 @@ async fn concurrent_file_mode_startup_refreshes_once() -> anyhow::Result<()> {
         "OAuth concurrency seed child failed: {seed_status}"
     );
 
-    let release_file = codex_home.path().join("oauth-clients.release");
     let first_ready_file = codex_home.path().join("oauth-client-first.ready");
+    let first_release_file = codex_home.path().join("oauth-client-first.release");
     let second_ready_file = codex_home.path().join("oauth-client-second.ready");
-    let mut first_child = Command::new(std::env::current_exe()?)
-        .args(["oauth_concurrency_client_child", "--exact", "--ignored"])
-        .env("CODEX_HOME", codex_home.path())
-        .env(CHILD_SERVER_URL_ENV, &server_url)
-        .env(CHILD_READY_FILE_ENV, &first_ready_file)
-        .env(CHILD_RELEASE_FILE_ENV, &release_file)
-        .kill_on_drop(true)
-        .spawn()?;
-    let mut second_child = Command::new(std::env::current_exe()?)
-        .args(["oauth_concurrency_client_child", "--exact", "--ignored"])
-        .env("CODEX_HOME", codex_home.path())
-        .env(CHILD_SERVER_URL_ENV, &server_url)
-        .env(CHILD_READY_FILE_ENV, &second_ready_file)
-        .env(CHILD_RELEASE_FILE_ENV, &release_file)
-        .kill_on_drop(true)
-        .spawn()?;
+    let second_release_file = codex_home.path().join("oauth-client-second.release");
+    let contention_file = codex_home.path().join("oauth-client-second.contended");
+    let mut first_child = oauth_concurrency_child_command(
+        codex_home.path(),
+        &server_url,
+        &first_ready_file,
+        &first_release_file,
+    )?
+    .spawn()?;
+    let mut second_command = oauth_concurrency_child_command(
+        codex_home.path(),
+        &server_url,
+        &second_ready_file,
+        &second_release_file,
+    )?;
+    second_command.env(CHILD_CONTENTION_FILE_ENV, &contention_file);
+    let mut second_child = second_command.spawn()?;
 
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !first_ready_file.exists() || !second_ready_file.exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("OAuth concurrency children did not become ready"))?;
-    fs::write(&release_file, b"release")?;
+    wait_for_marker(
+        &first_ready_file,
+        "first OAuth concurrency child did not become ready",
+    )
+    .await?;
+    wait_for_marker(
+        &second_ready_file,
+        "second OAuth concurrency child did not become ready",
+    )
+    .await?;
+
+    fs::write(&first_release_file, b"release")?;
+    refresh_server.wait_until_request_started().await?;
+
+    // The first child is now inside the provider request while retaining the credential lock.
+    // Releasing the second child must make its first try_lock call observe WouldBlock. Keep the
+    // provider response gated until that exact branch emits the contention marker.
+    fs::write(&second_release_file, b"release")?;
+    let contention_result = wait_for_marker(
+        &contention_file,
+        "second OAuth concurrency child did not observe refresh-lock contention",
+    )
+    .await;
+    refresh_server.release_responses();
 
     let (first_status, second_status) = tokio::try_join!(first_child.wait(), second_child.wait())?;
     assert!(
@@ -252,6 +425,8 @@ async fn concurrent_file_mode_startup_refreshes_once() -> anyhow::Result<()> {
     );
 
     server.verify().await;
+    contention_result?;
+    assert_eq!(refresh_server.request_count(), 1);
     Ok(())
 }
 
@@ -428,6 +603,12 @@ async fn oauth_concurrency_client_child() -> anyhow::Result<()> {
     let server_url = std::env::var(CHILD_SERVER_URL_ENV)?;
     let ready_file = PathBuf::from(std::env::var(CHILD_READY_FILE_ENV)?);
     let release_file = PathBuf::from(std::env::var(CHILD_RELEASE_FILE_ENV)?);
+    if let Ok(marker_file) = std::env::var(CHILD_CONTENTION_FILE_ENV) {
+        tracing::subscriber::set_global_default(LockContentionMarkerSubscriber {
+            marker_file: PathBuf::from(marker_file),
+        })
+        .map_err(|error| anyhow::anyhow!("failed to install contention subscriber: {error}"))?;
+    }
     let client = RmcpClient::new_streamable_http_client(
         SERVER_NAME,
         &server_url,
@@ -441,11 +622,11 @@ async fn oauth_concurrency_client_child() -> anyhow::Result<()> {
     )
     .await?;
 
-    // Both processes must construct their OAuth client from the same expired snapshot before
-    // either begins refresh. This removes process scheduling from the contention setup.
+    // Both processes must construct their OAuth client from the same expired snapshot before the
+    // parent releases either one. The parent then gates them separately to force lock contention.
     fs::write(ready_file, b"ready")?;
     while !release_file.exists() {
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
     }
     initialize_client(&client).await?;
     Ok(())
