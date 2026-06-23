@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::is_codex_apps_mcp;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
@@ -35,7 +35,7 @@ pub use list_mcp_resources::ListMcpResourcesHandler;
 pub use read_mcp_resource::ReadMcpResourceHandler;
 
 fn model_can_access_mcp_server(turn: &TurnContext, server: &str) -> bool {
-    turn.config.orchestrator_mcp_enabled || server != CODEX_APPS_MCP_SERVER_NAME
+    turn.config.orchestrator_mcp_enabled || !is_codex_apps_mcp(server)
 }
 
 fn ensure_model_can_access_mcp_server(

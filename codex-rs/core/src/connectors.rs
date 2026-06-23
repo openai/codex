@@ -40,7 +40,7 @@ use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::effective_mcp_servers;
-use codex_mcp::host_owned_codex_apps_enabled;
+use codex_mcp::is_codex_apps_mcp;
 use codex_mcp::tool_plugin_provenance;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
@@ -239,8 +239,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     }
 
     let mut mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
-    mcp_servers.retain(|name, _| name == CODEX_APPS_MCP_SERVER_NAME);
-    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
+    mcp_servers.retain(|name, _| is_codex_apps_mcp(name));
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
@@ -275,7 +274,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
-        host_owned_codex_apps_enabled,
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
         /*supports_openai_form_elicitation*/ false,
@@ -479,7 +477,7 @@ fn collect_accessible_connectors_from_mcp_tools<'a>(
     // ToolInfo already carries plugin provenance, so app-level plugin sources
     // can be derived here instead of requiring a separate enrichment pass.
     let tools = mcp_tools.filter_map(|tool| {
-        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+        if !is_codex_apps_mcp(&tool.server_name) {
             return None;
         }
         let connector_id = tool.connector_id.as_deref()?;
@@ -550,7 +548,7 @@ pub(crate) fn mcp_approvals_reviewer(
     server_name: &str,
     connector_id: Option<&str>,
 ) -> ApprovalsReviewer {
-    let app_reviewer = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+    let app_reviewer = if is_codex_apps_mcp(server_name) {
         apps_config_from_layer_stack(&config.config_layer_stack).and_then(|apps_config| {
             connector_id
                 .and_then(|connector_id| apps_config.apps.get(connector_id))

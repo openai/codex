@@ -45,6 +45,7 @@ use codex_mcp::SandboxState;
 use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
 use codex_mcp::declared_openai_file_input_param_names;
+use codex_mcp::is_codex_apps_mcp;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::items::McpToolCallError;
@@ -144,7 +145,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
     let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, metadata.as_ref());
-    let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
+    let app_tool_policy = if is_codex_apps_mcp(&server) {
         let annotations = metadata
             .as_ref()
             .and_then(|metadata| metadata.annotations.as_ref());
@@ -164,7 +165,7 @@ pub(crate) async fn handle_mcp_tool_call(
     } else {
         AppToolPolicy::default()
     };
-    let approval_mode = if server == CODEX_APPS_MCP_SERVER_NAME {
+    let approval_mode = if is_codex_apps_mcp(&server) {
         app_tool_policy.approval
     } else if let Some(approval_mode) = {
         // Selected-plugin registrations are absent from config.toml and the legacy plugin manager,
@@ -180,7 +181,7 @@ pub(crate) async fn handle_mcp_tool_call(
             .await
     };
 
-    if server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled {
+    if is_codex_apps_mcp(&server) && !app_tool_policy.enabled {
         let result = notify_mcp_tool_call_skip(
             sess.as_ref(),
             turn_context.as_ref(),
@@ -315,7 +316,7 @@ struct McpToolCallItemMetadata {
 
 impl McpToolCallItemMetadata {
     fn from_tool_metadata(server: &str, metadata: Option<&McpToolApprovalMetadata>) -> Self {
-        let trusted_mcp_app_metadata = if server == CODEX_APPS_MCP_SERVER_NAME {
+        let trusted_mcp_app_metadata = if is_codex_apps_mcp(server) {
             metadata
         } else {
             None
@@ -631,12 +632,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
     metadata: Option<&McpToolApprovalMetadata>,
     result: CallToolResult,
 ) -> CallToolResult {
-    if !sess
-        .services
-        .mcp_connection_manager
-        .load_full()
-        .is_host_owned_codex_apps_server(server)
-    {
+    if !is_codex_apps_mcp(server) {
         return result;
     }
 
@@ -970,7 +966,7 @@ async fn maybe_track_codex_app_used(
     server: &str,
     tool_name: &str,
 ) {
-    if server != CODEX_APPS_MCP_SERVER_NAME {
+    if !is_codex_apps_mcp(server) {
         return;
     }
     let metadata = lookup_mcp_app_usage_metadata(sess, server, tool_name).await;
@@ -1102,7 +1098,7 @@ fn build_mcp_tool_call_request_meta(
         );
     }
 
-    if server == CODEX_APPS_MCP_SERVER_NAME {
+    if is_codex_apps_mcp(server) {
         let mut codex_apps_meta = metadata
             .and_then(|metadata| metadata.codex_apps_meta.clone())
             .unwrap_or_default();
@@ -1407,7 +1403,7 @@ fn session_mcp_tool_approval_key(
     }
 
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.clone());
-    if invocation.server == CODEX_APPS_MCP_SERVER_NAME && connector_id.is_none() {
+    if is_codex_apps_mcp(&invocation.server) && connector_id.is_none() {
         return None;
     }
 
@@ -1485,7 +1481,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     let tool_info = tools
         .into_iter()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
-    let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
+    let connector_description = if is_codex_apps_mcp(server) {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
         )
@@ -1544,7 +1540,7 @@ fn openai_file_input_params_for_server(
     server: &str,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<Vec<String>> {
-    (server == CODEX_APPS_MCP_SERVER_NAME)
+    is_codex_apps_mcp(server)
         .then_some(declared_openai_file_input_param_names(meta))
         .filter(|params| !params.is_empty())
 }
@@ -1649,7 +1645,7 @@ fn build_mcp_tool_approval_fallback_message(
         .filter(|name| !name.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| {
-            if server == CODEX_APPS_MCP_SERVER_NAME {
+            if is_codex_apps_mcp(server) {
                 "this app".to_string()
             } else {
                 format!("the {server} MCP server")
@@ -1743,7 +1739,7 @@ fn build_mcp_tool_approval_elicitation_meta(
                 serde_json::Value::String(tool_description.clone()),
             );
         }
-        if server == CODEX_APPS_MCP_SERVER_NAME
+        if is_codex_apps_mcp(server)
             && (metadata.connector_id.is_some()
                 || metadata.connector_name.is_some()
                 || metadata.connector_description.is_some())
@@ -1970,7 +1966,7 @@ async fn maybe_persist_mcp_tool_approval(
 ) {
     let tool_name = key.tool_name.clone();
 
-    let persist_result = if key.server == CODEX_APPS_MCP_SERVER_NAME {
+    let persist_result = if is_codex_apps_mcp(&key.server) {
         let Some(connector_id) = key.connector_id.clone() else {
             remember_mcp_tool_approval(sess, key).await;
             return;

@@ -27,8 +27,8 @@ use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
+use crate::mcp::is_codex_apps_mcp;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
@@ -266,7 +266,7 @@ impl AsyncManagedClient {
         let annotate_tools = |tools: Vec<ToolInfo>| {
             let mut tools = tools;
             for tool in &mut tools {
-                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                if is_codex_apps_mcp(&tool.server_name) {
                     tool.tool = tool_with_model_visible_input_schema(&tool.tool);
                 }
 
@@ -415,7 +415,7 @@ fn sanitize_tool_connector_metadata(
     connector_name: Option<String>,
     connector_description: Option<String>,
 ) -> (Option<String>, Option<String>, Option<String>) {
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+    if is_codex_apps_mcp(server_name) {
         return (connector_id, connector_name, connector_description);
     }
 
@@ -526,7 +526,7 @@ async fn start_server_task(
         &server_info,
         &tools,
     );
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+    if is_codex_apps_mcp(&server_name) {
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             list_start.elapsed(),

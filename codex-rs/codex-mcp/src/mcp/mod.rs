@@ -50,6 +50,11 @@ const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
+/// Returns whether `server_name` identifies the reserved Codex Apps MCP server.
+pub fn is_codex_apps_mcp(server_name: &str) -> bool {
+    server_name == CODEX_APPS_MCP_SERVER_NAME
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum McpSnapshotDetail {
     #[default]
@@ -231,10 +236,6 @@ impl ToolPluginProvenance {
     }
 }
 
-pub fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth>) -> bool {
-    config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend)
-}
-
 pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
     config.mcp_server_catalog.configured_servers()
 }
@@ -259,7 +260,7 @@ pub fn effective_mcp_servers_from_configured(
         .into_iter()
         .map(|(name, server)| (name, EffectiveMcpServer::configured(server)))
         .collect::<HashMap<_, _>>();
-    if !host_owned_codex_apps_enabled(config, auth) {
+    if !config.apps_enabled || !auth.is_some_and(CodexAuth::uses_codex_backend) {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
     }
     servers
@@ -277,7 +278,6 @@ pub async fn read_mcp_resource(
     uri: &str,
 ) -> anyhow::Result<ReadResourceResult> {
     let mut mcp_servers = effective_mcp_servers(config, auth);
-    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
     mcp_servers.retain(|name, _| name == server);
     let auth_statuses = compute_auth_statuses(
         mcp_servers.iter(),
@@ -302,7 +302,6 @@ pub async fn read_mcp_resource(
         runtime_context,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
-        host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         /*supports_openai_form_elicitation*/ false,
@@ -337,7 +336,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
-    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
     let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
         return McpServerStatusSnapshot {
@@ -377,7 +375,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         runtime_context,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
-        host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         /*supports_openai_form_elicitation*/ false,

@@ -21,6 +21,7 @@ use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
+use crate::mcp::is_codex_apps_mcp;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
 use crate::rmcp_client::MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC;
@@ -109,7 +110,6 @@ pub struct McpConnectionManager {
     server_metadata: HashMap<String, McpServerMetadata>,
     required_servers: Vec<String>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
-    host_owned_codex_apps_enabled: bool,
     prefix_mcp_tool_names: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
@@ -130,7 +130,6 @@ impl McpConnectionManager {
         runtime_context: McpRuntimeContext,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
-        host_owned_codex_apps_enabled: bool,
         prefix_mcp_tool_names: bool,
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
@@ -173,7 +172,7 @@ impl McpConnectionManager {
                 },
             )
             .await;
-            let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+            let codex_apps_tools_cache_context = if is_codex_apps_mcp(&server_name) {
                 Some(CodexAppsToolsCacheContext {
                     codex_home: codex_home.clone(),
                     user_key: codex_apps_tools_cache_key.clone(),
@@ -191,12 +190,12 @@ impl McpConnectionManager {
                         } => bearer_token_env_var.is_some(),
                         McpServerTransportConfig::Stdio { .. } => false,
                     });
-            let runtime_auth_provider =
-                if server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token {
-                    codex_apps_auth_provider.clone()
-                } else {
-                    None
-                };
+            let runtime_auth_provider = if is_codex_apps_mcp(&server_name) && !uses_env_bearer_token
+            {
+                codex_apps_auth_provider.clone()
+            } else {
+                None
+            };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 server,
@@ -252,7 +251,6 @@ impl McpConnectionManager {
             server_metadata,
             required_servers,
             tool_plugin_provenance,
-            host_owned_codex_apps_enabled,
             prefix_mcp_tool_names,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: startup_cancellation_token.clone(),
@@ -338,7 +336,6 @@ impl McpConnectionManager {
             server_metadata: HashMap::new(),
             required_servers: Vec::new(),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            host_owned_codex_apps_enabled: false,
             prefix_mcp_tool_names,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
@@ -403,10 +400,6 @@ impl McpConnectionManager {
             .get(server_name)
             .map(|metadata| metadata.tool_approval_mode(tool_name))
             .unwrap_or_default()
-    }
-
-    pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
-        self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
     }
 
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {

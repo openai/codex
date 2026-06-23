@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::is_codex_apps_mcp;
 use crate::runtime::emit_duration;
 use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
 use crate::tools::ToolInfo;
@@ -71,7 +71,7 @@ pub(crate) fn normalize_codex_apps_tool_title(
     connector_name: Option<&str>,
     value: &str,
 ) -> String {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+    if !is_codex_apps_mcp(server_name) {
         return value.to_string();
     }
 
@@ -98,7 +98,7 @@ pub(crate) fn normalize_codex_apps_callable_name(
     connector_id: Option<&str>,
     connector_name: Option<&str>,
 ) -> String {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+    if !is_codex_apps_mcp(server_name) {
         return tool_name.to_string();
     }
 
@@ -131,7 +131,7 @@ pub(crate) fn normalize_codex_apps_callable_namespace(
     server_name: &str,
     connector_name: Option<&str>,
 ) -> String {
-    if server_name == CODEX_APPS_MCP_SERVER_NAME
+    if is_codex_apps_mcp(server_name)
         && let Some(connector_name) = connector_name
     {
         format!("{}__{}", server_name, sanitize_name(connector_name))
@@ -146,7 +146,7 @@ pub(crate) fn write_cached_codex_apps_tools_if_needed(
     server_info: &McpServerInfo,
     tools: &[ToolInfo],
 ) {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+    if !is_codex_apps_mcp(server_name) {
         return;
     }
 
@@ -168,7 +168,7 @@ pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
     server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
 ) -> Option<Vec<ToolInfo>> {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+    if !is_codex_apps_mcp(server_name) {
         return None;
     }
 
@@ -184,7 +184,7 @@ pub(crate) fn load_startup_cached_codex_apps_server_info(
     server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
 ) -> Option<McpServerInfo> {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+    if !is_codex_apps_mcp(server_name) {
         return None;
     }
 
