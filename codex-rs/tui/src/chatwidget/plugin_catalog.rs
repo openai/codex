@@ -1031,7 +1031,16 @@ impl ChatWidget {
         }];
 
         if plugin.summary.installed {
-            if let Some(plugin_id) = plugin_uninstall_id(&plugin.summary) {
+            if plugin.summary.install_policy == PluginInstallPolicy::InstalledByDefault {
+                items.push(SelectionItem {
+                    name: "Installed by admin".to_string(),
+                    description: Some(
+                        "This plugin is installed by your workspace admin.".to_string(),
+                    ),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+            } else if let Some(plugin_id) = plugin_uninstall_id(&plugin.summary) {
                 let uninstall_cwd = self.config.cwd.to_path_buf();
                 let plugin_display_name = display_name;
                 items.push(SelectionItem {
@@ -1064,13 +1073,6 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: "Install plugin".to_string(),
                 description: Some("This plugin is disabled by your workspace admin.".to_string()),
-                is_disabled: true,
-                ..Default::default()
-            });
-        } else if plugin.summary.install_policy == PluginInstallPolicy::InstalledByDefault {
-            items.push(SelectionItem {
-                name: "Installed by admin".to_string(),
-                description: Some("This plugin is installed by your workspace admin.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             });
@@ -1179,7 +1181,9 @@ impl ChatWidget {
             let can_view_details = plugin_detail_request.is_some();
             let disabled_by_admin = plugin.availability == PluginAvailability::DisabledByAdmin;
             let shows_as_installed = plugin_shows_as_installed(plugin);
-            let can_toggle_plugin = shows_as_installed && !disabled_by_admin;
+            let can_toggle_plugin = plugin.installed
+                && plugin.install_policy != PluginInstallPolicy::InstalledByDefault
+                && !disabled_by_admin;
             let selected_status_label = format!("{status_label:<status_label_width$}");
             let selected_description = if can_toggle_plugin {
                 let toggle_action = if plugin.enabled { "disable" } else { "enable" };

@@ -665,7 +665,7 @@ async fn plugin_detail_popup_snapshot_labels_personal_marketplace_as_local() {
 }
 
 #[tokio::test]
-async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
+async fn plugin_detail_popup_installed_by_admin_hides_disclosure_and_uninstall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
@@ -676,7 +676,7 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
         Some("Design handoff."),
         /*installed*/ true,
         /*enabled*/ true,
-        PluginInstallPolicy::Available,
+        PluginInstallPolicy::InstalledByDefault,
     );
     let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
         summary.clone(),
@@ -703,8 +703,10 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert!(
-        !popup.contains("Data shared with this app is subject to the app's"),
-        "expected installed plugin details to hide the disclosure line, got:\n{popup}"
+        popup.contains("Installed by admin")
+            && !popup.contains("Uninstall plugin")
+            && !popup.contains("Data shared with this app is subject to the app's"),
+        "expected admin-installed plugin details to block uninstall and hide the disclosure line, got:\n{popup}"
     );
     assert_chatwidget_snapshot!(
         "plugin_detail_popup_installed",
@@ -769,17 +771,20 @@ async fn plugins_popup_remote_row_opens_remote_detail() {
 }
 
 #[tokio::test]
-async fn plugin_detail_remote_install_uses_remote_location() {
+async fn plugin_detail_unmaterialized_default_uses_remote_install_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
-    let summary = plugins_test_remote_summary(
-        "plugins~Plugin_linear",
-        "linear",
-        Some("Linear"),
-        Some("Issue tracking."),
-        /*installed*/ false,
-    );
+    let summary = PluginSummary {
+        install_policy: PluginInstallPolicy::InstalledByDefault,
+        ..plugins_test_remote_summary(
+            "plugins~Plugin_linear",
+            "linear",
+            Some("Linear"),
+            Some("Issue tracking."),
+            /*installed*/ false,
+        )
+    };
     let cwd = chat.config.cwd.clone();
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
@@ -1075,6 +1080,7 @@ async fn plugins_popup_admin_disabled_installed_plugin_has_no_toggle_hint() {
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert_chatwidget_snapshot!("plugins_popup_admin_disabled_installed", popup);
     assert!(
         popup.contains("[!] Admin Blocked")
             && popup.contains("Disabled")
