@@ -484,14 +484,12 @@ impl SandboxManager {
         codex_home: &Path,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
         let workspace_roots = request.workspace_roots;
-        let enforce_managed_network = request.transform.enforce_managed_network;
         let mut request = self.transform(request.transform)?;
         if request.sandbox == SandboxType::WindowsRestrictedToken {
             wrap_windows_sandbox_exec_request_for_direct_spawn(
                 &mut request,
                 workspace_roots,
                 codex_home,
-                enforce_managed_network,
             )?;
         }
         Ok(request)
@@ -503,7 +501,6 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     request: &mut SandboxExecRequest,
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
-    enforce_managed_network: bool,
 ) -> Result<(), SandboxTransformError> {
     // TODO(anp): Keep PathUri through the Windows sandbox wrapper boundary.
     let native_cwd =
@@ -530,7 +527,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     *program = helper.to_string_lossy().into_owned();
 
     let inner_command = std::mem::take(&mut request.command);
-    let proxy_enforced = enforce_managed_network || request.network.is_some();
+    let proxy_enforced = request.network.is_some();
     let use_elevated =
         windows_sandbox_uses_elevated_backend(request.windows_sandbox_level, proxy_enforced);
     let overrides = if use_elevated {

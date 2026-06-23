@@ -513,7 +513,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                     },
                     permissions: &permissions,
                     sandbox: SandboxType::WindowsRestrictedToken,
-                    enforce_managed_network: true,
+                    enforce_managed_network: false,
                     environment_id: None,
                     network: None,
                     sandbox_policy_cwd: &cwd_uri,
@@ -543,12 +543,6 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
             .command
             .iter()
             .any(|arg| arg == "--run-as-windows-sandbox")
-    );
-    assert!(
-        exec_request
-            .command
-            .iter()
-            .any(|arg| arg == "--proxy-enforced")
     );
     assert!(
         exec_request

@@ -93,6 +93,10 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
                 "http://127.0.0.1:43123".to_string(),
             ),
             ("CODEX_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
+            (
+                "SSL_CERT_FILE".to_string(),
+                "/client/custom-ca.pem".to_string(),
+            ),
         ]),
         exec_server_env_config: Some(ExecServerEnvConfig {
             policy: codex_exec_server::ExecEnvPolicy {
@@ -110,6 +114,10 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
                     "http://127.0.0.1:43123".to_string(),
                 ),
                 ("CODEX_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
+                (
+                    "SSL_CERT_FILE".to_string(),
+                    "/client/custom-ca.pem".to_string(),
+                ),
             ]),
         }),
         network: None,

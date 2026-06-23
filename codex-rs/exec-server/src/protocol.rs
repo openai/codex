@@ -524,8 +524,9 @@ mod tests {
 
     #[test]
     fn exec_params_managed_network_context_round_trips_and_defaults_for_legacy_peers() {
-        let cwd = PathUri::from_path(std::env::current_dir().expect("current directory"))
-            .expect("cwd URI");
+        let cwd =
+            PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                .expect("cwd URI");
         let params = ExecParams {
             process_id: ProcessId::from("managed-network"),
             argv: vec!["true".to_string()],

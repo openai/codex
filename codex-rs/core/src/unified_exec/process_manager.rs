@@ -26,6 +26,7 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::is_managed_proxy_env_var;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -53,11 +54,7 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
-use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::NetworkProxy;
-use codex_network_proxy::PROXY_ENV_KEYS;
-#[cfg(target_os = "macos")]
-use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -150,14 +147,10 @@ fn exec_server_env_for_request(
         let mut env =
             env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env);
         if request.exec_server_managed_network.is_some() {
-            for key in PROXY_ENV_KEYS.iter().chain(CUSTOM_CA_ENV_KEYS.iter()) {
-                if let Some(value) = request.env.get(*key) {
-                    env.insert((*key).to_string(), value.clone());
+            for (key, value) in &request.env {
+                if is_managed_proxy_env_var(key, value) {
+                    env.insert(key.clone(), value.clone());
                 }
-            }
-            #[cfg(target_os = "macos")]
-            if let Some(value) = request.env.get(PROXY_GIT_SSH_COMMAND_ENV_KEY) {
-                env.insert(PROXY_GIT_SSH_COMMAND_ENV_KEY.to_string(), value.clone());
             }
         }
         (Some(exec_server_env_config.policy.clone()), env)

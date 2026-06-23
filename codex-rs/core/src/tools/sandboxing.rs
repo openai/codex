@@ -493,6 +493,7 @@ impl<'a> SandboxAttempt<'a> {
             options,
             self.workspace_roots.to_vec(),
         );
+        exec_request.exec_server_managed_network = managed_network;
         if self.sandbox_requested {
             exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {
                 permissions: exec_server_permissions.into(),
@@ -503,7 +504,6 @@ impl<'a> SandboxAttempt<'a> {
                 use_legacy_landlock: self.use_legacy_landlock,
             });
             exec_request.exec_server_enforce_managed_network = self.enforce_managed_network;
-            exec_request.exec_server_managed_network = managed_network;
         }
         Ok(exec_request)
     }
