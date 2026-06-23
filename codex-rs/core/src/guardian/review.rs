@@ -24,6 +24,8 @@ use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
 
+use crate::context::ContextualUserFragment;
+use crate::context::GuardianNetworkAccessDenied;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -80,10 +82,17 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
             rationale: "Auto-reviewer denied the action without a specific rationale.".to_string(),
             source: GuardianAssessmentDecisionSource::Agent,
         });
-    match rejection.source {
+    format_guardian_rejection_message(&rejection.rationale, rejection.source)
+}
+
+fn format_guardian_rejection_message(
+    rationale: &str,
+    source: GuardianAssessmentDecisionSource,
+) -> String {
+    match source {
         GuardianAssessmentDecisionSource::Agent => format!(
             "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
-            rejection.rationale.trim(),
+            rationale.trim(),
             GUARDIAN_REJECTION_INSTRUCTIONS
         ),
     }
@@ -281,6 +290,23 @@ async fn run_guardian_review(
     approval_request_source: GuardianApprovalRequestSource,
     external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
+    let unattributed_network_target = match &request {
+        GuardianApprovalRequest::NetworkAccess {
+            target,
+            trigger: None,
+            ..
+        } => Some(target.clone()),
+        GuardianApprovalRequest::Shell { .. }
+        | GuardianApprovalRequest::ExecCommand { .. }
+        | GuardianApprovalRequest::ApplyPatch { .. }
+        | GuardianApprovalRequest::NetworkAccess {
+            trigger: Some(_), ..
+        }
+        | GuardianApprovalRequest::McpToolCall { .. }
+        | GuardianApprovalRequest::RequestPermissions { .. } => None,
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve { .. } => None,
+    };
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
@@ -576,6 +602,18 @@ async fn run_guardian_review(
             }),
         )
         .await;
+
+    if !approved && let Some(target) = unattributed_network_target {
+        let rejection = format_guardian_rejection_message(
+            &assessment.rationale,
+            GuardianAssessmentDecisionSource::Agent,
+        );
+        let denial: codex_protocol::models::ResponseItem =
+            ContextualUserFragment::into(GuardianNetworkAccessDenied::new(&target, &rejection));
+        session
+            .record_conversation_items(turn.as_ref(), std::slice::from_ref(&denial))
+            .await;
+    }
 
     if count_denial_for_circuit_breaker {
         record_guardian_denial(&session, &turn, &assessment_turn_id).await;
