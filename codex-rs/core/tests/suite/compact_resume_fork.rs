@@ -939,7 +939,7 @@ async fn compacted_resume_history_slice_from_rollout(
     history.extend(items[suffix_start_index..].iter().cloned());
     Ok(InitialHistory::Resumed(ResumedHistory {
         conversation_id,
-        history,
+        history: history.into(),
         rollout_path: Some(path.to_path_buf()),
     }))
 }

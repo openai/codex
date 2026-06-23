@@ -3294,10 +3294,6 @@ impl ThreadRequestProcessor {
         mut stored_thread: StoredThread,
         prefer_compacted_history: bool,
     ) -> Result<(InitialHistory, StoredThread, ResumeHistoryExtent), JSONRPCErrorError> {
-        let mut response_thread = self
-            .read_stored_thread_for_resume(thread_id, path, /*include_history*/ false)
-            .await?;
-        response_thread.history = None;
         let history_extent = if stored_thread.history.is_some() {
             ResumeHistoryExtent::Full
         } else if prefer_compacted_history {
@@ -3341,6 +3337,8 @@ impl ThreadRequestProcessor {
                 .await?;
             ResumeHistoryExtent::Full
         };
+        let mut response_thread = stored_thread.clone();
+        response_thread.history = None;
         let history = self.take_stored_thread_initial_history(&mut stored_thread)?;
         Ok((history, response_thread, history_extent))
     }
@@ -4261,8 +4259,7 @@ fn read_compacted_resume_prefix_items(
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file.take(byte_len));
     let mut prefix_items = Vec::with_capacity(3);
-    let mut latest_metadata_candidates = Vec::new();
-    let mut latest_metadata_before_checkpoint = Vec::new();
+    let mut prefix_items_at_latest_checkpoint = Vec::new();
     let mut saw_session_meta = false;
     let mut saw_user_event = false;
     let mut saw_user_response_item = false;
@@ -4310,25 +4307,24 @@ fn read_compacted_resume_prefix_items(
             }
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => return Ok(None),
             RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_)) => {
-                latest_metadata_candidates.retain(|item| {
+                prefix_items.retain(|item| {
                     !matches!(item, RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_)))
                 });
-                latest_metadata_candidates.push(rollout_line.item.clone());
+                prefix_items.push(rollout_line.item.clone());
             }
             RolloutItem::EventMsg(EventMsg::TokenCount(_)) => {
-                latest_metadata_candidates
+                prefix_items
                     .retain(|item| !matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))));
-                latest_metadata_candidates.push(rollout_line.item.clone());
+                prefix_items.push(rollout_line.item.clone());
             }
             _ => {}
         }
         if is_reconstruction_checkpoint {
-            latest_metadata_before_checkpoint = latest_metadata_candidates.clone();
+            prefix_items_at_latest_checkpoint = prefix_items.clone();
         }
     }
     if saw_session_meta {
-        prefix_items.extend(latest_metadata_before_checkpoint);
-        Ok(Some(prefix_items))
+        Ok(Some(prefix_items_at_latest_checkpoint))
     } else {
         Ok(None)
     }

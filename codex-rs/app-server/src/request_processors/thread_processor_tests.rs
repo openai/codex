@@ -530,10 +530,10 @@ mod thread_processor_behavior_tests {
         let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
         let contents = compacted_resume_test_rollout_contents(vec![
             compacted_resume_test_session(thread_id),
+            compacted_resume_test_goal_update(thread_id),
             compacted_resume_test_user_event("first user event"),
             RolloutItem::ResponseItem(compacted_resume_test_message("user", "first user response")),
             compacted_resume_test_token_count(),
-            compacted_resume_test_goal_update(thread_id),
             compacted_resume_test_user_event("middle user event"),
             compacted_resume_test_turn_context(),
             compacted_resume_test_compaction("latest checkpoint", /*window_id*/ 2),
@@ -555,6 +555,15 @@ mod thread_processor_behavior_tests {
                 .iter()
                 .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_))))
         );
+        let goal_position = items
+            .iter()
+            .position(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_))))
+            .expect("goal event");
+        let user_position = items
+            .iter()
+            .position(|item| matches!(item, RolloutItem::EventMsg(EventMsg::UserMessage(_))))
+            .expect("user event");
+        assert!(goal_position < user_position);
         Ok(())
     }
 
