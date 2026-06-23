@@ -4,6 +4,7 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core::config::TokenBudgetConfig;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
@@ -77,6 +78,22 @@ fn tool_names(request: &ResponsesRequest) -> Vec<String> {
         .flatten()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
         .collect()
+}
+
+fn ev_completed_with_usage(id: &str, input_tokens: i64, output_tokens: i64) -> Value {
+    json!({
+        "type": "response.completed",
+        "response": {
+            "id": id,
+            "usage": {
+                "input_tokens": input_tokens,
+                "input_tokens_details": null,
+                "output_tokens": output_tokens,
+                "output_tokens_details": null,
+                "total_tokens": input_tokens + output_tokens
+            }
+        }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -265,6 +282,70 @@ async fn token_budget_reminder_emits_after_crossing_compaction_threshold() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_reminder_uses_body_after_prefix_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 8_000),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_completed_with_tokens("resp-2", /*total_tokens*/ 8_600),
+            ]),
+            sse(vec![ev_response_created("resp-3"), ev_completed("resp-3")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_context_window = Some(10_000);
+            config.model_auto_compact_token_limit = Some(1_000);
+            config.model_auto_compact_token_limit_scope =
+                AutoCompactTokenLimitScope::BodyAfterPrefix;
+            config.token_budget = Some(TokenBudgetConfig {
+                reminder_threshold_tokens: Some(600),
+                ..TokenBudgetConfig::default()
+            });
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("establish prefix").await?;
+    test.submit_turn("grow body").await?;
+    test.submit_turn("observe reminder").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    let reminder = "Your context window is nearly exhausted (only 400 tokens remaining) and will be automatically reset for you soon. Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows.";
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .into_iter()
+            .all(|text| text != reminder),
+        "first-window prefix should not count against the body-after-prefix reminder threshold"
+    );
+    assert_eq!(
+        requests[2]
+            .message_input_texts("developer")
+            .into_iter()
+            .filter(|text| text == reminder)
+            .count(),
+        1
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_context_remaining_returns_token_budget_remaining_fragment() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -315,7 +396,7 @@ async fn get_context_remaining_returns_token_budget_remaining_fragment() -> Resu
     );
 
     let thread_id = test.session_configured.thread_id;
-    let remaining_context = "You have 7000 tokens left in this context window.".to_string();
+    let remaining_context = "You have 6500 tokens left in this context window.".to_string();
     let token_budgets = token_budget_contexts(&requests[1]);
     assert_eq!(token_budgets.len(), 1);
     token_budget_window_ids(&token_budgets[0], thread_id);
@@ -328,7 +409,71 @@ async fn get_context_remaining_returns_token_budget_remaining_fragment() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn get_context_remaining_returns_unknown_when_window_is_unavailable() -> Result<()> {
+async fn get_context_remaining_uses_body_after_prefix_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "remaining-call";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "noted"),
+                ev_completed_with_usage(
+                    "resp-1", /*input_tokens*/ 2_000, /*output_tokens*/ 500,
+                ),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call(call_id, "get_context_remaining", "{}"),
+                ev_completed_with_tokens("resp-2", /*total_tokens*/ 2_500),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_context_window = Some(10_000);
+            config.model_auto_compact_token_limit = Some(7_000);
+            config.model_auto_compact_token_limit_scope =
+                AutoCompactTokenLimitScope::BodyAfterPrefix;
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("spend some tokens").await?;
+    test.submit_turn("check remaining context").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        tool_names(&requests[1])
+            .iter()
+            .any(|name| name == "get_context_remaining"),
+        "get_context_remaining should be exposed when token budget is enabled"
+    );
+
+    let remaining_context = "You have 6500 tokens left in this context window.".to_string();
+    assert_eq!(
+        requests[2].function_call_output_content_and_success(call_id),
+        Some((Some(remaining_context), None))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_context_remaining_returns_unknown_when_threshold_is_unbounded() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

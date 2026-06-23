@@ -312,7 +312,7 @@ pub(crate) async fn run_turn(
                     total_usage_tokens = token_status.active_context_tokens,
                     auto_compact_scope_tokens = token_status.auto_compact_scope_tokens,
                     estimated_token_count = ?estimated_token_count,
-                    auto_compact_scope_limit = token_status.auto_compact_scope_limit,
+                    auto_compact_scope_limit = ?token_status.auto_compact_scope_limit,
                     auto_compact_limit_scope = ?turn_context.config.model_auto_compact_token_limit_scope,
                     auto_compact_window_prefill_tokens = ?token_status.auto_compact_window_prefill_tokens,
                     full_context_window_limit = ?token_status.full_context_window_limit,
@@ -324,11 +324,10 @@ pub(crate) async fn run_turn(
                     "post sampling token usage"
                 );
 
-                let tokens_until_compaction = token_status.tokens_until_compaction();
                 super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    tokens_until_compaction,
+                    token_status.tokens_until_compaction,
                 )
                 .await;
 
