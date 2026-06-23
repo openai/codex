@@ -33,6 +33,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::net::lookup_host;
@@ -96,6 +97,8 @@ pub struct BlockedRequest {
     pub method: Option<String>,
     pub mode: Option<NetworkMode>,
     pub protocol: String,
+    #[serde(skip)]
+    pub execution_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,6 +140,7 @@ impl BlockedRequest {
             method,
             mode,
             protocol,
+            execution_id: None,
             decision,
             source,
             port,
@@ -211,6 +215,9 @@ pub struct NetworkProxyState {
     blocked_request_observer: Arc<RwLock<Option<Arc<dyn BlockedRequestObserver>>>>,
     credential_broker: CredentialBroker,
     audit_metadata: NetworkProxyAuditMetadata,
+    execution_attributions: Arc<Mutex<HashMap<String, String>>>,
+    environment_id: Option<Arc<str>>,
+    execution_id: Option<Arc<str>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -236,6 +243,9 @@ impl Clone for NetworkProxyState {
             blocked_request_observer: self.blocked_request_observer.clone(),
             credential_broker: self.credential_broker.clone(),
             audit_metadata: self.audit_metadata.clone(),
+            execution_attributions: self.execution_attributions.clone(),
+            environment_id: self.environment_id.clone(),
+            execution_id: self.execution_id.clone(),
         }
     }
 }
@@ -287,7 +297,47 @@ impl NetworkProxyState {
             reloader,
             blocked_request_observer: Arc::new(RwLock::new(blocked_request_observer)),
             audit_metadata,
+            execution_attributions: Arc::new(Mutex::new(HashMap::new())),
+            environment_id: None,
+            execution_id: None,
         }
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn register_execution(&self, environment_id: &str, execution_id: &str) {
+        self.execution_attributions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(execution_id.to_string(), environment_id.to_string());
+    }
+
+    pub(crate) fn unregister_execution(&self, execution_id: &str) {
+        self.execution_attributions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(execution_id);
+    }
+
+    pub(crate) fn for_execution_token(&self, token: &str) -> Option<Self> {
+        let environment_id = self
+            .execution_attributions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(token)?
+            .clone();
+        Some(Self {
+            environment_id: Some(environment_id.into()),
+            execution_id: Some(token.to_string().into()),
+            ..self.clone()
+        })
+    }
+
+    pub(crate) fn environment_id(&self) -> Option<&str> {
+        self.environment_id.as_deref()
+    }
+
+    pub(crate) fn execution_id(&self) -> Option<String> {
+        self.execution_id.as_deref().map(str::to_string)
     }
 
     pub async fn set_blocked_request_observer(
@@ -460,8 +510,9 @@ impl NetworkProxyState {
         }
     }
 
-    pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
+    pub async fn record_blocked(&self, mut entry: BlockedRequest) -> Result<()> {
         self.reload_if_needed().await?;
+        entry.execution_id = self.execution_id();
         let blocked_for_observer = entry.clone();
         let blocked_request_observer = self.blocked_request_observer.read().await.clone();
         let violation_line = blocked_request_violation_log_line(&entry);
@@ -1306,6 +1357,7 @@ mod tests {
             method: Some("GET".to_string()),
             mode: Some(NetworkMode::Full),
             protocol: "http".to_string(),
+            execution_id: None,
             decision: Some("ask".to_string()),
             source: Some("decider".to_string()),
             port: Some(80),

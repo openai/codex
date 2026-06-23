@@ -1,3 +1,5 @@
+use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
+use codex_network_proxy::write_attribution_frame;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -71,7 +73,13 @@ struct ProxyRoutePlan {
 }
 
 pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
-    let env: HashMap<String, String> = std::env::vars().collect();
+    let mut env: HashMap<String, String> = std::env::vars().collect();
+    let attribution_token = env.remove(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
+    // SAFETY: the sandbox helper is single-threaded here, before it forks bridge workers or
+    // executes the user command.
+    unsafe {
+        std::env::remove_var(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
+    }
     let plan = plan_proxy_routes(&env);
 
     if plan.routes.is_empty() {
@@ -100,7 +108,11 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
 
     let mut host_bridge_pids = Vec::with_capacity(socket_by_endpoint.len());
     for (endpoint, socket_path) in &socket_by_endpoint {
-        host_bridge_pids.push(spawn_host_bridge(*endpoint, socket_path)?);
+        host_bridge_pids.push(spawn_host_bridge(
+            *endpoint,
+            socket_path,
+            attribution_token.as_deref(),
+        )?);
     }
     spawn_proxy_socket_dir_cleanup_worker(socket_dir, host_bridge_pids)?;
 
@@ -438,7 +450,11 @@ fn cleanup_proxy_socket_dir(socket_dir: &Path) -> io::Result<()> {
     }
 }
 
-fn spawn_host_bridge(endpoint: SocketAddr, uds_path: &Path) -> io::Result<libc::pid_t> {
+fn spawn_host_bridge(
+    endpoint: SocketAddr,
+    uds_path: &Path,
+    attribution_token: Option<&str>,
+) -> io::Result<libc::pid_t> {
     let (read_fd, write_fd) = create_ready_pipe()?;
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -452,7 +468,7 @@ fn spawn_host_bridge(endpoint: SocketAddr, uds_path: &Path) -> io::Result<libc::
         if close_fd(read_fd).is_err() {
             unsafe { libc::_exit(1) };
         }
-        let result = run_host_bridge(endpoint, uds_path, write_fd);
+        let result = run_host_bridge(endpoint, uds_path, write_fd, attribution_token);
         if result.is_err() {
             unsafe { libc::_exit(1) };
         }
@@ -471,7 +487,12 @@ fn spawn_host_bridge(endpoint: SocketAddr, uds_path: &Path) -> io::Result<libc::
     Ok(pid)
 }
 
-fn run_host_bridge(endpoint: SocketAddr, uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
+fn run_host_bridge(
+    endpoint: SocketAddr,
+    uds_path: &Path,
+    ready_fd: libc::c_int,
+    attribution_token: Option<&str>,
+) -> io::Result<()> {
     harden_bridge_process()?;
     if uds_path.exists() {
         std::fs::remove_file(uds_path)?;
@@ -482,13 +503,20 @@ fn run_host_bridge(endpoint: SocketAddr, uds_path: &Path, ready_fd: libc::c_int)
     ready_file.write_all(&[HOST_BRIDGE_READY])?;
     drop(ready_file);
 
+    let attribution_token = attribution_token.map(str::to_owned);
     loop {
         let (unix_stream, _) = listener.accept()?;
+        let attribution_token = attribution_token.clone();
         std::thread::spawn(move || {
-            let tcp_stream = match TcpStream::connect(endpoint) {
+            let mut tcp_stream = match TcpStream::connect(endpoint) {
                 Ok(stream) => stream,
                 Err(_) => return,
             };
+            if let Some(attribution_token) = attribution_token
+                && write_attribution_frame(&mut tcp_stream, &attribution_token).is_err()
+            {
+                return;
+            }
             let _ = proxy_bidirectional(tcp_stream, unix_stream);
         });
     }

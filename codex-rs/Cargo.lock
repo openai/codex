@@ -3244,6 +3244,7 @@ dependencies = [
  "clap",
  "codex-core",
  "codex-install-context",
+ "codex-network-proxy",
  "codex-process-hardening",
  "codex-protocol",
  "codex-sandboxing",

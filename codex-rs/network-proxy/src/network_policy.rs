@@ -84,6 +84,7 @@ pub struct NetworkPolicyRequest {
     pub method: Option<String>,
     pub command: Option<String>,
     pub exec_policy_hint: Option<String>,
+    pub execution_id: Option<String>,
 }
 
 pub struct NetworkPolicyRequestArgs {
@@ -118,6 +119,7 @@ impl NetworkPolicyRequest {
             method,
             command,
             exec_policy_hint,
+            execution_id: None,
         }
     }
 }
@@ -300,7 +302,14 @@ pub(crate) async fn evaluate_host_policy(
         HostBlockDecision::Allowed => (NetworkDecision::Allow, false),
         HostBlockDecision::Blocked(HostBlockReason::NotAllowed) => {
             if let Some(decider) = decider {
-                let decider_decision = map_decider_decision(decider.decide(request.clone()).await);
+                let mut request = request.clone();
+                if request.environment_id.is_none()
+                    && let Some(environment_id) = state.environment_id()
+                {
+                    request.environment_id = Some(environment_id.to_string());
+                }
+                request.execution_id = state.execution_id();
+                let decider_decision = map_decider_decision(decider.decide(request).await);
                 let policy_override = matches!(decider_decision, NetworkDecision::Allow);
                 (decider_decision, policy_override)
             } else {

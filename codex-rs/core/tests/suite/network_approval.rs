@@ -57,6 +57,118 @@ const NETWORK_TEST_HOST: &str = "codex-network-test.invalid";
 const NETWORK_TEST_TARGET: &str = "http://codex-network-test.invalid:80";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "requires the trusted Linux proxy bridge"
+)]
+async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = managed_network_unified_exec_test(&server).await?;
+    let barrier_dir = TempDir::new_in(test.cwd.path())?;
+    let first_marker = barrier_dir.path().join("first");
+    let second_marker = barrier_dir.path().join("second");
+    let network_command = |marker: &PathBuf, peer_marker: &PathBuf, host: &str| {
+        format!(
+            "touch '{}' && while [ ! -e '{}' ]; do sleep 0.01; done && python3 -c \"import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler()).open('http://{host}', timeout=10).read()\"",
+            marker.display(),
+            peer_marker.display(),
+        )
+    };
+    let first_command = network_command(&first_marker, &second_marker, "1.1.1.1");
+    let second_command = network_command(&second_marker, &first_marker, "8.8.8.8");
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-network-concurrent"),
+                ev_function_call(
+                    "exec-network-first",
+                    "exec_command",
+                    &serde_json::to_string(&network_exec_args(&first_command))?,
+                ),
+                ev_function_call(
+                    "exec-network-second",
+                    "exec_command",
+                    &serde_json::to_string(&network_exec_args(&second_command))?,
+                ),
+                ev_completed("resp-network-concurrent"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-network-guardian-1"),
+                ev_assistant_message("msg-network-guardian-1", r#"{"outcome":"deny"}"#),
+                ev_completed("resp-network-guardian-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-network-guardian-2"),
+                ev_assistant_message("msg-network-guardian-2", r#"{"outcome":"deny"}"#),
+                ev_completed("resp-network-guardian-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-network-done"),
+                ev_assistant_message("msg-network-done", "done"),
+                ev_completed("resp-network-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_managed_network_turn(
+        &test,
+        "run both network requests",
+        vec![local(test.config.cwd.clone())],
+        ApprovalsReviewer::AutoReview,
+        AskForApproval::OnRequest,
+    )
+    .await?;
+    wait_for_turn_complete(&test).await;
+
+    let mut actual_triggers = responses
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .map(|request| {
+            let user_texts = request.message_input_texts("user");
+            let action: Value = serde_json::from_str(
+                user_texts
+                    .iter()
+                    .find(|text| text.contains("\"tool\": \"network_access\""))
+                    .context("expected network access JSON in Guardian request")?
+                    .trim(),
+            )?;
+            Ok((
+                action
+                    .pointer("/trigger/callId")
+                    .and_then(Value::as_str)
+                    .context("expected exact trigger call id")?
+                    .to_string(),
+                action
+                    .pointer("/trigger/command/2")
+                    .and_then(Value::as_str)
+                    .context("expected exact trigger command")?
+                    .to_string(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    actual_triggers.sort_unstable();
+    assert_eq!(
+        actual_triggers,
+        vec![
+            ("exec-network-first".to_string(), first_command),
+            ("exec-network-second".to_string(), second_command),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approved_network_host_for_one_environment_still_prompts_in_another() -> Result<()> {
     skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
     skip_if_host_windows!(Ok(()));
@@ -99,6 +211,8 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         &test,
         "fetch from the local environment",
         environments.clone(),
+        ApprovalsReviewer::User,
+        AskForApproval::OnFailure,
     )
     .await?;
     let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
@@ -122,6 +236,8 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         &test,
         "fetch from the remote environment",
         environments.clone(),
+        ApprovalsReviewer::User,
+        AskForApproval::OnFailure,
     )
     .await?;
     let approval = expect_network_approval(&test, REMOTE_ENVIRONMENT_ID).await?;
@@ -225,12 +341,20 @@ async fn mount_exec_network_turn(
 }
 
 fn network_fetch_args(environment_id: &str) -> Value {
+    let command = format!(
+        "python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://{NETWORK_TEST_HOST}', timeout=2).read().decode(errors='replace'))\""
+    );
+    let mut args = network_exec_args(&command);
+    args["environment_id"] = json!(environment_id);
+    args
+}
+
+fn network_exec_args(command: &str) -> Value {
     json!({
         "shell": "/bin/sh",
-        "cmd": format!("python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://{NETWORK_TEST_HOST}', timeout=2).read().decode(errors='replace'))\""),
+        "cmd": command,
         "login": false,
         "yield_time_ms": 1_000,
-        "environment_id": environment_id,
     })
 }
 
@@ -238,6 +362,8 @@ async fn submit_managed_network_turn(
     test: &TestCodex,
     prompt: &str,
     environments: Vec<TurnEnvironmentSelection>,
+    approvals_reviewer: ApprovalsReviewer,
+    approval_policy: AskForApproval,
 ) -> Result<()> {
     let permission_profile = PermissionProfile::workspace_write_with(
         &[],
@@ -261,8 +387,8 @@ async fn submit_managed_network_turn(
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(turn_environment_selections),
-                approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(ApprovalsReviewer::User),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(approvals_reviewer),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
