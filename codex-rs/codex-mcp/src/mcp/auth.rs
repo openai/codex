@@ -10,6 +10,7 @@ use codex_protocol::protocol::McpAuthStatus;
 use codex_rmcp_client::OAuthProviderError;
 use codex_rmcp_client::determine_streamable_http_auth_status;
 use codex_rmcp_client::discover_streamable_http_oauth;
+use futures::FutureExt;
 use futures::future::join_all;
 use tracing::warn;
 
@@ -217,6 +218,7 @@ async fn compute_auth_status(
                 store_mode,
                 keyring_backend_kind,
             )
+            .boxed()
             .await
         }
     }
