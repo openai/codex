@@ -1388,7 +1388,9 @@ impl Session {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
             if let Some(world_state) = world_state_baseline {
-                state.history.set_world_state_baseline(world_state);
+                state
+                    .history
+                    .set_world_state_baseline(Arc::new(world_state));
             }
             let fallback_ids = state.auto_compact_window_ids();
             let window_id = window_id.unwrap_or(fallback_ids.window_id);

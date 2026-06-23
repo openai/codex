@@ -86,9 +86,8 @@ impl ContextManager {
 
     pub(crate) fn update_world_state(
         &mut self,
-        world_state: impl Into<Arc<WorldState>>,
+        world_state: Arc<WorldState>,
     ) -> Vec<Box<dyn ContextualUserFragment>> {
-        let world_state = world_state.into();
         let fragments = self.world_state_baseline.as_deref().map_or_else(
             || world_state.render_full(),
             |previous| world_state.render_diff(previous),
@@ -97,8 +96,8 @@ impl ContextManager {
         fragments
     }
 
-    pub(crate) fn set_world_state_baseline(&mut self, world_state: impl Into<Arc<WorldState>>) {
-        self.world_state_baseline = Some(world_state.into());
+    pub(crate) fn set_world_state_baseline(&mut self, world_state: Arc<WorldState>) {
+        self.world_state_baseline = Some(world_state);
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {

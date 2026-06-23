@@ -7853,7 +7853,7 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
         });
     let mut previous_context_item = turn_context.to_turn_context_item();
     previous_context_item.turn_id = Some("previous-turn-id".to_string());
-    let world_state = session.build_world_state(&turn_context).await;
+    let world_state = Arc::new(session.build_world_state(&turn_context).await);
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item));
@@ -8527,7 +8527,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         .with_model(next_model.to_string(), &session.services.models_manager)
         .await;
     let previous_context_item = previous_context.to_turn_context_item();
-    let world_state = session.build_world_state(&previous_context).await;
+    let world_state = Arc::new(session.build_world_state(&previous_context).await);
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item.clone()));
