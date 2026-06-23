@@ -536,6 +536,54 @@ fn trusted_constraints_use_only_the_final_selected_profile_network() {
 }
 
 #[test]
+fn project_override_is_user_controlled_and_watched_for_reload() {
+    let dot_codex_folder =
+        AbsolutePathBuf::try_from(std::path::PathBuf::from("/tmp/project/.codex"))
+            .expect("project config folder should be absolute");
+    let layers = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: dot_codex_folder.clone(),
+                },
+                toml::Value::Table(toml::map::Map::new()),
+            ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::ProjectOverride {
+                    dot_codex_folder: dot_codex_folder.clone(),
+                },
+                toml::toml! {
+                    default_permissions = "dev"
+
+                    [permissions.dev.network]
+                    enabled = true
+                }
+                .into(),
+            ),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("project config stack should be valid");
+
+    assert_eq!(
+        network_constraints_from_trusted_layers(&layers)
+            .expect("project override should not become a trusted constraint"),
+        NetworkProxyConstraints::default()
+    );
+    assert_eq!(
+        collect_layer_mtimes(&layers)
+            .into_iter()
+            .map(|layer| layer.path)
+            .collect::<Vec<_>>(),
+        vec![
+            dot_codex_folder.join(CONFIG_TOML_FILE),
+            dot_codex_folder.join(CONFIG_OVERRIDE_TOML_FILE),
+        ]
+    );
+}
+
+#[test]
 fn trusted_constraints_normalize_profile_network_domains_before_merging_layers() {
     let lower_layer = ConfigLayerEntry::new(
         ConfigLayerSource::System {

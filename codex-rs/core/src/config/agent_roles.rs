@@ -1,4 +1,5 @@
 use super::AgentRoleConfig;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::config_toml::AgentRoleToml;
@@ -71,7 +72,9 @@ pub(crate) async fn load_agent_roles(
             }
         }
 
-        if let Some(config_folder) = layer.config_folder() {
+        if let Some(config_folder) = config_folder
+            && !matches!(layer.name, ConfigLayerSource::ProjectOverride { .. })
+        {
             for (role_name, role) in discover_agent_roles_in_dir(
                 fs,
                 &config_folder.join("agents"),

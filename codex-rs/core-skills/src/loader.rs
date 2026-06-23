@@ -334,6 +334,7 @@ fn skill_roots_from_layer_stack_inner(
             }
             ConfigLayerSource::Mdm { .. }
             | ConfigLayerSource::EnterpriseManaged { .. }
+            | ConfigLayerSource::ProjectOverride { .. }
             | ConfigLayerSource::SessionFlags
             | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
             | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {}
@@ -386,7 +387,10 @@ fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
     ) {
-        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+        if matches!(
+            layer.name,
+            ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. }
+        ) {
             continue;
         }
         merge_toml_values(&mut merged, &layer.config);

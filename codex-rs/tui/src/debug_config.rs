@@ -313,6 +313,7 @@ fn render_non_file_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>>
         ConfigLayerSource::System { .. }
         | ConfigLayerSource::User { .. }
         | ConfigLayerSource::Project { .. }
+        | ConfigLayerSource::ProjectOverride { .. }
         | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => Vec::new(),
     }
 }
@@ -377,6 +378,7 @@ fn non_file_layer_value_label(source: &ConfigLayerSource) -> &'static str {
         | ConfigLayerSource::System { .. }
         | ConfigLayerSource::User { .. }
         | ConfigLayerSource::Project { .. }
+        | ConfigLayerSource::ProjectOverride { .. }
         | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => "Layer value",
     }
 }

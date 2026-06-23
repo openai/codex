@@ -139,3 +139,39 @@ fn with_user_config_updates_matching_user_layer_without_replacing_active_profile
         Some("on-failure")
     );
 }
+
+#[test]
+fn project_override_layer_must_immediately_follow_its_project_layer() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path().join(".codex"))
+        .expect("project config folder should be absolute");
+    let empty_config = || toml::Value::Table(toml::map::Map::new());
+    let project_override = || {
+        ConfigLayerEntry::new(
+            ConfigLayerSource::ProjectOverride {
+                dot_codex_folder: dot_codex_folder.clone(),
+            },
+            empty_config(),
+        )
+    };
+    let err = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: dot_codex_folder.clone(),
+                },
+                empty_config(),
+            ),
+            project_override(),
+            project_override(),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect_err("duplicate project override layer should be rejected");
+
+    assert_eq!(
+        err.to_string(),
+        "project override layer must follow its project layer"
+    );
+}

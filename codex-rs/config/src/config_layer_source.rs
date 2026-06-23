@@ -20,6 +20,13 @@ pub fn format_config_layer_source(source: &ConfigLayerSource, config_toml_file: 
                 dot_codex_folder.as_path().display()
             )
         }
+        ConfigLayerSource::ProjectOverride { dot_codex_folder } => {
+            format!(
+                "project override ({}/{})",
+                dot_codex_folder.as_path().display(),
+                crate::CONFIG_OVERRIDE_TOML_FILE
+            )
+        }
         ConfigLayerSource::SessionFlags => "session-flags".to_string(),
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
             format!("legacy managed_config.toml ({})", file.as_path().display())

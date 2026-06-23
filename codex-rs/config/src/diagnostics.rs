@@ -253,6 +253,11 @@ fn config_path_for_layer(layer: &ConfigLayerEntry, config_toml_file: &str) -> Op
         ConfigLayerSource::Project { dot_codex_folder } => {
             Some(dot_codex_folder.as_path().join(config_toml_file))
         }
+        ConfigLayerSource::ProjectOverride { dot_codex_folder } => Some(
+            dot_codex_folder
+                .as_path()
+                .join(crate::CONFIG_OVERRIDE_TOML_FILE),
+        ),
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => Some(file.to_path_buf()),
         ConfigLayerSource::Mdm { .. }
         | ConfigLayerSource::EnterpriseManaged { .. }
