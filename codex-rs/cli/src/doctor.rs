@@ -1520,20 +1520,25 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
                 if disabled_server {
                     continue;
                 }
-                let host_native_cwd = cwd.as_ref().map(|cwd| Path::new(cwd.as_str()));
-                if let Some(cwd) = host_native_cwd
-                    && !cwd.exists()
-                {
-                    missing_env.push(format!("{name}: cwd does not exist ({})", cwd.display()));
-                }
-                if command.trim().is_empty() {
+                let command_is_empty = command.trim().is_empty();
+                if command_is_empty {
                     missing_env.push(format!("{name}: stdio command is empty"));
-                } else if let Err(err) =
-                    stdio_command_resolves(command, host_native_cwd, env.as_ref())
-                {
-                    missing_env.push(format!(
-                        "{name}: stdio command {command:?} is not resolvable ({err})"
-                    ));
+                }
+                if server.is_local_environment() {
+                    let host_native_cwd = cwd.as_ref().map(|cwd| Path::new(cwd.as_str()));
+                    if let Some(cwd) = host_native_cwd
+                        && !cwd.exists()
+                    {
+                        missing_env.push(format!("{name}: cwd does not exist ({})", cwd.display()));
+                    }
+                    if !command_is_empty
+                        && let Err(err) =
+                            stdio_command_resolves(command, host_native_cwd, env.as_ref())
+                    {
+                        missing_env.push(format!(
+                            "{name}: stdio command {command:?} is not resolvable ({err})"
+                        ));
+                    }
                 }
                 if let Some(env) = env {
                     for key in env.keys().filter(|key| key.trim().is_empty()) {
@@ -3862,6 +3867,30 @@ mod tests {
                 "required: stdio command \"definitely-missing-codex-doctor-mcp\" is not resolvable",
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn mcp_check_skips_host_path_checks_for_remote_stdio() {
+        #[cfg(not(windows))]
+        let cwd = r"C:\Users\openai\share";
+        #[cfg(windows)]
+        let cwd = "/home/openai/share";
+        let cwd = toml::Value::String(cwd.to_string());
+        let remote_server: McpServerConfig = toml::from_str(&format!(
+            r#"
+                command = "definitely-missing-codex-doctor-mcp"
+                environment_id = "remote"
+                cwd = {cwd}
+                required = true
+            "#,
+        ))
+        .expect("should deserialize remote MCP config");
+        let servers = HashMap::from([("remote".to_string(), remote_server)]);
+
+        let check = mcp_check_from_servers(&servers).await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(check.summary, "MCP configuration is locally consistent");
     }
 
     #[cfg(unix)]
