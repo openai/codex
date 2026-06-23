@@ -1035,6 +1035,12 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
 #[tokio::test]
 async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminates_process()
 -> Result<()> {
+    // TODO(anp): Support raw WebSocket command/exec lifecycle tests in cross-OS configurations.
+    skip_if_wine_exec!(
+        Ok(()),
+        "raw WebSocket setup runs command/exec in the local environment"
+    );
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;

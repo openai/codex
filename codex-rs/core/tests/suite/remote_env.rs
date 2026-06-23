@@ -249,11 +249,11 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
     let (shell, command) = match core_test_support::test_environment() {
         TestEnvironment::Docker { .. } => (
             "bash",
-            r#"case "$PWD" in /tmp/codex-core-test-cwd-*) ;; *) echo "unexpected cwd: $PWD" >&2; exit 1 ;; esac"#,
+            r#"case "$PWD" in /tmp/codex-test-cwd-*) ;; *) echo "unexpected cwd: $PWD" >&2; exit 1 ;; esac"#,
         ),
         TestEnvironment::WineExec => (
             "powershell",
-            r#"$cwd = (Get-Location).Path; if ($cwd -notlike 'C:\codex-core-test-cwd-*') { Write-Error "unexpected cwd: $cwd"; exit 1 }"#,
+            r#"$cwd = (Get-Location).Path; if ($cwd -notlike 'C:\codex-test-cwd-*') { Write-Error "unexpected cwd: $cwd"; exit 1 }"#,
         ),
         TestEnvironment::Local => return Ok(()),
     };

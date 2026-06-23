@@ -24,18 +24,18 @@ async fn selected_execution_environment_runs_target_native_command() -> Result<(
             "cmd.exe".to_string(),
             "/d".to_string(),
             "/c".to_string(),
-            format!("echo {EXPECTED_EXEC_OUTPUT}"),
+            format!("echo {EXPECTED_EXEC_OUTPUT}& cd"),
         ],
         TestEnvironment::Local if cfg!(windows) => vec![
             "cmd.exe".to_string(),
             "/d".to_string(),
             "/c".to_string(),
-            format!("echo {EXPECTED_EXEC_OUTPUT}"),
+            format!("echo {EXPECTED_EXEC_OUTPUT}& cd"),
         ],
         TestEnvironment::Local | TestEnvironment::Docker { .. } => vec![
             shell.path,
             "-lc".to_string(),
-            format!("printf '{EXPECTED_EXEC_OUTPUT}'"),
+            format!("printf '{EXPECTED_EXEC_OUTPUT}\\n'; pwd"),
         ],
     };
     let cwd = execution
@@ -81,7 +81,9 @@ async fn selected_execution_environment_runs_target_native_command() -> Result<(
     }
 
     let output = String::from_utf8(output)?;
-    assert_eq!(output.trim_end_matches(['\r', '\n']), EXPECTED_EXEC_OUTPUT);
+    let output = output.replace("\r\n", "\n");
+    let expected_output = format!("{EXPECTED_EXEC_OUTPUT}\n{}", execution.environment_cwd());
+    assert_eq!(output.trim_end(), expected_output);
     assert_eq!(exit_code, Some(0));
     Ok(())
 }
