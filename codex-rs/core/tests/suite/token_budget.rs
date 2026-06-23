@@ -775,9 +775,11 @@ async fn token_budget_mid_turn_auto_compaction_resets_before_active_follow_up() 
         2,
         "token-budget auto-compaction should reset locally before the continuation"
     );
-    assert_eq!(
-        requests[1].function_call_output_content_and_success(call_id),
-        None,
+    assert!(
+        !requests[1].input().iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        }),
         "fresh token-budget windows should drop active tool output with the prior history"
     );
 
