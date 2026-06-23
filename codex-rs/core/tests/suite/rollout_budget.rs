@@ -9,7 +9,6 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
@@ -46,6 +45,22 @@ fn rollout_budget_message(remaining_tokens: i64) -> String {
     format!(
         "<rollout_budget>\nYou have {remaining_tokens} weighted tokens left in the shared session token budget.\n</rollout_budget>"
     )
+}
+
+fn ev_completed_with_output_tokens(id: &str, output_tokens: i64) -> serde_json::Value {
+    json!({
+        "type": "response.completed",
+        "response": {
+            "id": id,
+            "usage": {
+                "input_tokens": 0,
+                "input_tokens_details": null,
+                "output_tokens": output_tokens,
+                "output_tokens_details": null,
+                "total_tokens": output_tokens
+            }
+        }
+    })
 }
 
 fn wire_request_contains(request: &wiremock::Request, text: &str) -> bool {
@@ -156,7 +171,7 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
         sse(vec![
             ev_response_created("root-1"),
             ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
-            ev_completed_with_tokens("root-1", /*total_tokens*/ 10),
+            ev_completed_with_output_tokens("root-1", /*output_tokens*/ 10),
         ]),
     )
     .await;
@@ -165,7 +180,7 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
         |request: &wiremock::Request| wire_request_contains(request, "\"type\":\"agent_message\""),
         sse(vec![
             ev_response_created("child-1"),
-            ev_completed_with_tokens("child-1", /*total_tokens*/ 30),
+            ev_completed_with_output_tokens("child-1", /*output_tokens*/ 30),
         ]),
     )
     .await;
@@ -177,7 +192,7 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
         },
         sse(vec![
             ev_response_created("root-2"),
-            ev_completed_with_tokens("root-2", /*total_tokens*/ 10),
+            ev_completed_with_output_tokens("root-2", /*output_tokens*/ 10),
         ]),
     )
     .await;
@@ -232,11 +247,11 @@ async fn exhausted_budget_aborts_current_and_later_turns() -> Result<()> {
         vec![
             sse(vec![
                 ev_response_created("exhaust-budget"),
-                ev_completed_with_tokens("exhaust-budget", /*total_tokens*/ 30),
+                ev_completed_with_output_tokens("exhaust-budget", /*output_tokens*/ 30),
             ]),
             sse(vec![
                 ev_response_created("already-exhausted"),
-                ev_completed_with_tokens("already-exhausted", /*total_tokens*/ 1),
+                ev_completed_with_output_tokens("already-exhausted", /*output_tokens*/ 1),
             ]),
         ],
     )
@@ -299,13 +314,13 @@ async fn compaction_budget_exhaustion_aborts_without_error_or_retry(remote_v2: b
                     "encrypted_content": "encrypted-summary",
                 }
             }),
-            ev_completed_with_tokens("compact", /*total_tokens*/ 10),
+            ev_completed_with_output_tokens("compact", /*output_tokens*/ 10),
         ])
     } else {
         sse(vec![
             ev_response_created("compact"),
             ev_assistant_message("compact-summary", "compact summary"),
-            ev_completed_with_tokens("compact", /*total_tokens*/ 10),
+            ev_completed_with_output_tokens("compact", /*output_tokens*/ 10),
         ])
     };
     let responses = mount_sse_sequence(&server, vec![compact_response]).await;
@@ -362,12 +377,12 @@ async fn restates_the_current_remainder_after_compaction() -> Result<()> {
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_completed_with_tokens("resp-1", /*total_tokens*/ 20),
+                ev_completed_with_output_tokens("resp-1", /*output_tokens*/ 20),
             ]),
             sse(vec![
                 ev_response_created("resp-compact"),
                 ev_assistant_message("msg-compact", "compact summary"),
-                ev_completed_with_tokens("resp-compact", /*total_tokens*/ 10),
+                ev_completed_with_output_tokens("resp-compact", /*output_tokens*/ 10),
             ]),
             sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
         ],
@@ -427,7 +442,7 @@ async fn restates_the_current_remainder_after_rollback() -> Result<()> {
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_completed_with_tokens("resp-1", /*total_tokens*/ 30),
+                ev_completed_with_output_tokens("resp-1", /*output_tokens*/ 30),
             ]),
             sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
         ],
