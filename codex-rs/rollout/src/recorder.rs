@@ -57,6 +57,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -91,6 +92,7 @@ pub enum RolloutRecorderParams {
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         multi_agent_version: Option<MultiAgentVersion>,
+        context_window: Option<Box<SessionContextWindow>>,
     },
     Resume {
         path: PathBuf,
@@ -178,6 +180,7 @@ impl RolloutRecorderParams {
             base_instructions,
             dynamic_tools,
             multi_agent_version: None,
+            context_window: None,
         }
     }
 
@@ -198,6 +201,17 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *version = multi_agent_version;
+        }
+        self
+    }
+
+    pub fn with_context_window(mut self, context_window: Option<SessionContextWindow>) -> Self {
+        if let Self::Create {
+            context_window: window,
+            ..
+        } = &mut self
+        {
+            *window = context_window.map(Box::new);
         }
         self
     }
@@ -715,6 +729,7 @@ impl RolloutRecorder {
                 base_instructions,
                 dynamic_tools,
                 multi_agent_version,
+                context_window,
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
@@ -752,6 +767,7 @@ impl RolloutRecorder {
                     },
                     memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
                     multi_agent_version,
+                    context_window: context_window.map(|context_window| *context_window),
                 };
 
                 (None, Some(log_file_info), path, Some(session_meta))
