@@ -283,9 +283,16 @@ fn structurally_valid_bad_path_uri_with_invalid_native_payload_fails_conversion(
 fn bad_path_uris_are_opaque_to_lexical_operations() {
     let uri = PathUri::parse("file:///%00/bad/path/YQ")
         .expect("canonical base64 fallback URI should parse");
+    let other = PathUri::parse("file:///%00/bad/path/Yg")
+        .expect("canonical base64 fallback URI should parse");
+    let root = PathUri::parse("file:///").expect("valid root URI");
 
     assert_eq!(uri.basename(), None);
     assert_eq!(uri.parent(), None);
+    assert!(uri.starts_with(&uri));
+    assert!(!uri.starts_with(&root));
+    assert!(!uri.starts_with(&other));
+    assert!(!other.starts_with(&uri));
     assert_eq!(uri.join(""), Ok(uri.clone()));
     assert_eq!(
         uri.join("child"),
@@ -695,6 +702,58 @@ fn join_uses_the_base_uri_path_convention() {
         let base = PathUri::parse(base).expect("valid base URI");
         let expected = PathUri::parse(expected).expect("valid expected URI");
         assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn starts_with_uses_uri_segment_boundaries() {
+    for (path, base, expected) in [
+        ("file:///workspace/plugin", "file:///", true),
+        ("file:///workspace/plugin", "file:///workspace/plugin", true),
+        (
+            "file:///workspace/plugin/assets/icon.svg",
+            "file:///workspace/plugin",
+            true,
+        ),
+        (
+            "file:///workspace/plugin-other/icon.svg",
+            "file:///workspace/plugin",
+            false,
+        ),
+        (
+            "file:///C:/plugins/foo/assets/icon.svg",
+            "file:///C:/plugins/foo",
+            true,
+        ),
+        (
+            "file:///C:/plugins/foo2/assets/icon.svg",
+            "file:///C:/plugins/foo",
+            false,
+        ),
+        (
+            "file://server/share/plugins/foo/icon.svg",
+            "file://server/share/plugins/foo",
+            true,
+        ),
+        (
+            "file://other/share/plugins/foo/icon.svg",
+            "file://server/share/plugins/foo",
+            false,
+        ),
+        (
+            "file:///workspace/plugin/%2F..%2Foutside",
+            "file:///workspace/plugin",
+            false,
+        ),
+        (
+            "file:///workspace/plugin/%5C..%5Coutside",
+            "file:///workspace/plugin",
+            false,
+        ),
+    ] {
+        let path = PathUri::parse(path).expect("valid path URI");
+        let base = PathUri::parse(base).expect("valid base URI");
+        assert_eq!(path.starts_with(&base), expected);
     }
 }
 
