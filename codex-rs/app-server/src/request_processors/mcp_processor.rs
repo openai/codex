@@ -113,19 +113,37 @@ impl McpRequestProcessor {
         &self,
         params: McpServerOauthLoginParams,
     ) -> Result<McpServerOauthLoginResponse, JSONRPCErrorError> {
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let McpServerOauthLoginParams {
             name,
+            thread_id,
             scopes,
             timeout_secs,
         } = params;
 
         let auth = self.auth_manager.auth().await;
-        let effective_servers = self
-            .thread_manager
-            .mcp_manager()
-            .effective_servers(&config, auth.as_ref())
-            .await;
+        let (config, mcp_config) = match thread_id.as_deref() {
+            Some(thread_id) => {
+                let (_, thread) = self.load_thread(thread_id).await?;
+                let thread_config = thread.config().await;
+                let config = self
+                    .config_manager
+                    .load_latest_config_for_thread(thread_config.as_ref())
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                let mcp_config = thread.runtime_mcp_config(&config).await;
+                (config, mcp_config)
+            }
+            None => {
+                let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+                let mcp_config = self
+                    .thread_manager
+                    .mcp_manager()
+                    .runtime_config(&config)
+                    .await;
+                (config, mcp_config)
+            }
+        };
+        let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
         let Some(server) = effective_servers
             .get(&name)
             .and_then(codex_mcp::EffectiveMcpServer::configured_config)
@@ -149,15 +167,26 @@ impl McpRequestProcessor {
             }
         };
 
+        let runtime_context = McpRuntimeContext::new(
+            self.thread_manager.environment_manager(),
+            config.cwd.to_path_buf(),
+        );
+        let http_client = runtime_context
+            .resolve_http_client(&name, server)
+            .map_err(|err| {
+                internal_error(format!("failed to resolve MCP server runtime: {err}"))
+            })?;
+
         let discovered_scopes = if scopes.is_none() && server.scopes.is_none() {
-            discover_supported_scopes(&server.transport).await
+            discover_supported_scopes_with_http_client(&server.transport, Arc::clone(&http_client))
+                .await
         } else {
             None
         };
         let resolved_scopes =
             resolve_oauth_scopes(scopes, server.scopes.clone(), discovered_scopes);
 
-        let handle = perform_oauth_login_return_url(
+        let handle = perform_oauth_login_return_url_with_http_client(
             &name,
             &url,
             config.mcp_oauth_credentials_store_mode,
@@ -170,11 +199,13 @@ impl McpRequestProcessor {
             timeout_secs,
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),
+            http_client,
         )
         .await
         .map_err(|err| internal_error(format!("failed to login to MCP server '{name}': {err}")))?;
         let authorization_url = handle.authorization_url().to_string();
         let notification_name = name.clone();
+        let notification_thread_id = thread_id;
         let outgoing = Arc::clone(&self.outgoing);
 
         tokio::spawn(async move {
@@ -186,6 +217,7 @@ impl McpRequestProcessor {
             let notification = ServerNotification::McpServerOauthLoginCompleted(
                 McpServerOauthLoginCompletedNotification {
                     name: notification_name,
+                    thread_id: notification_thread_id,
                     success,
                     error,
                 },

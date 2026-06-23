@@ -648,6 +648,10 @@ impl Session {
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
+        let mcp_runtime_context_for_auth = McpRuntimeContext::new(
+            Arc::clone(&environment_manager),
+            session_configuration.cwd().to_path_buf(),
+        );
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
             let mcp_config = mcp_manager_for_mcp
@@ -660,6 +664,7 @@ impl Session {
                 config_for_mcp.mcp_oauth_credentials_store_mode,
                 config_for_mcp.auth_keyring_backend_kind(),
                 auth.as_ref(),
+                &mcp_runtime_context_for_auth,
             )
             .await;
             (auth, mcp_servers, auth_statuses, tool_plugin_provenance)

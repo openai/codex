@@ -2,10 +2,14 @@ use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
+use axum::Json;
 use axum::Router;
+use axum::routing::get;
 use codex_app_server_protocol::CapabilityRootLocation;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
+use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
+use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::RequestId;
@@ -45,6 +49,8 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(20);
 const EXECUTOR_HTTP_MCP_URL: &str = "http://executor-only.invalid/mcp";
 const HTTP_MCP_SERVER_NAME: &str = "executor_http";
 const MCP_SERVER_NAME: &str = "executor_demo";
+const OAUTH_MCP_SERVER_NAME: &str = "executor_oauth";
+const EXECUTOR_OAUTH_MCP_URL: &str = "http://oauth-only.invalid/oauth-mcp";
 const EXECUTOR_ENV_NAME: &str = "MCP_EXECUTOR_MARKER";
 const EXECUTOR_ENV_VALUE: &str = "executor-only";
 const EXECUTOR_ID: &str = "executor-1";
@@ -56,12 +62,35 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
     let responses_server = responses::start_mock_server().await;
     let http_listener = TcpListener::bind("127.0.0.1:0").await?;
     let http_addr = http_listener.local_addr()?;
+    let http_server_config = StreamableHttpServerConfig::default()
+        .with_allowed_hosts(["executor-only.invalid", "oauth-only.invalid"]);
     let http_mcp_service = StreamableHttpService::new(
         || Ok(ExecutorHttpMcpServer),
         Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default().with_allowed_hosts(["executor-only.invalid"]),
+        http_server_config.clone(),
     );
-    let http_router = Router::new().nest_service("/mcp", http_mcp_service);
+    let oauth_mcp_service = StreamableHttpService::new(
+        || Ok(ExecutorHttpMcpServer),
+        Arc::new(LocalSessionManager::default()),
+        http_server_config,
+    );
+    let oauth_metadata = json!({
+        "authorization_endpoint": "https://oauth-only.invalid/authorize",
+        "token_endpoint": "https://oauth-only.invalid/token",
+        "scopes_supported": ["read", "write"],
+        "response_types_supported": ["code"],
+        "code_challenge_methods_supported": ["S256"],
+    });
+    let http_router = Router::new()
+        .route(
+            "/.well-known/oauth-authorization-server/oauth-mcp",
+            get(move || {
+                let metadata = oauth_metadata.clone();
+                async move { Json(metadata) }
+            }),
+        )
+        .nest_service("/mcp", http_mcp_service)
+        .nest_service("/oauth-mcp", oauth_mcp_service);
     let http_server_handle = tokio::spawn(async move {
         let _ = axum::serve(http_listener, http_router).await;
     });
@@ -117,6 +146,12 @@ HTTP_PROXY = {http_proxy}
                     "url": EXECUTOR_HTTP_MCP_URL,
                     "environment_id": "local",
                     "startup_timeout_sec": 10,
+                },
+                (OAUTH_MCP_SERVER_NAME): {
+                    "url": EXECUTOR_OAUTH_MCP_URL,
+                    "environment_id": "local",
+                    "oauth": {"clientId": "executor-oauth-client"},
+                    "startup_timeout_sec": 10,
                 }
             }
         }))?,
@@ -157,6 +192,44 @@ startup_timeout_sec = 10
         app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
+
+    let request_id = app_server
+        .send_raw_request(
+            "mcpServer/oauth/login",
+            Some(json!({
+                "name": OAUTH_MCP_SERVER_NAME,
+                "threadId": selected_thread.clone(),
+                "timeoutSecs": 1,
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: McpServerOauthLoginResponse = to_response(response)?;
+    assert!(
+        response
+            .authorization_url
+            .starts_with("https://oauth-only.invalid/authorize?")
+    );
+    assert!(
+        response
+            .authorization_url
+            .contains("client_id=executor-oauth-client")
+    );
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("mcpServer/oauthLogin/completed"),
+    )
+    .await??;
+    let completed: McpServerOauthLoginCompletedNotification =
+        serde_json::from_value(notification.params.expect("notification params"))?;
+    assert_eq!(
+        completed.thread_id.as_deref(),
+        Some(selected_thread.as_str())
+    );
 
     let namespace = format!("mcp__{MCP_SERVER_NAME}");
     let response_mock = responses::mount_sse_sequence(
@@ -269,15 +342,18 @@ startup_timeout_sec = 10
             .iter()
             .any(|name| name == HTTP_MCP_SERVER_NAME)
     );
+    assert!(
+        selected_server_names
+            .iter()
+            .any(|name| name == OAUTH_MCP_SERVER_NAME)
+    );
 
     let unselected_thread =
         start_thread(&mut app_server, /*selected_capability_roots*/ None).await?;
     let unselected_server_names = mcp_server_names(&mut app_server, unselected_thread).await?;
-    assert!(
-        unselected_server_names
-            .iter()
-            .all(|name| { name != MCP_SERVER_NAME && name != HTTP_MCP_SERVER_NAME })
-    );
+    assert!(unselected_server_names.iter().all(|name| {
+        name != MCP_SERVER_NAME && name != HTTP_MCP_SERVER_NAME && name != OAUTH_MCP_SERVER_NAME
+    }));
 
     http_server_handle.abort();
     let _ = http_server_handle.await;
