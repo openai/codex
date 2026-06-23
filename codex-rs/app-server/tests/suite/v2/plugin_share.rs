@@ -716,6 +716,7 @@ async fn plugin_share_checkout_adds_personal_marketplace_entry() -> Result<()> {
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
+            thread_id: None,
             marketplace_kinds: Some(vec![
                 codex_app_server_protocol::PluginListMarketplaceKind::Local,
             ]),

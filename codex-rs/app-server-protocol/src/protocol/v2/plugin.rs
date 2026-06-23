@@ -19,9 +19,15 @@ use ts_rs::TS;
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListParams {
-    /// When empty, defaults to the current session working directory.
+    /// Working directories used to list skills. Must be empty when `threadId` is provided. When
+    /// empty, defaults to the loaded thread's cwd or the app-server default cwd.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
+
+    /// Optional loaded thread id used to evaluate skills from that thread's cwd and config. Cannot
+    /// be combined with `cwds`.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
 
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -128,9 +134,14 @@ pub struct MarketplaceUpgradeErrorInfo {
 #[ts(export_to = "v2/")]
 pub struct PluginListParams {
     /// Optional working directories used to discover repo marketplaces. When omitted,
-    /// only home-scoped marketplaces and the official curated marketplace are considered.
+    /// only home-scoped marketplaces and the official curated marketplace are considered. Cannot
+    /// be combined with `threadId`.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<AbsolutePathBuf>>,
+    /// Optional loaded thread id used to evaluate plugins from that thread's cwd and config. Cannot
+    /// be combined with `cwds`.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     /// Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus
     /// the default remote catalog when enabled by feature flag.
     #[ts(optional = nullable)]

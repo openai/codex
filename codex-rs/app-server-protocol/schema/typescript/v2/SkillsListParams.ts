@@ -4,9 +4,15 @@
 
 export type SkillsListParams = {
 /**
- * When empty, defaults to the current session working directory.
+ * Working directories used to list skills. Must be empty when `threadId` is provided. When
+ * empty, defaults to the loaded thread's cwd or the app-server default cwd.
  */
 cwds?: Array<string>,
+/**
+ * Optional loaded thread id used to evaluate skills from that thread's cwd and config. Cannot
+ * be combined with `cwds`.
+ */
+threadId?: string | null,
 /**
  * When true, bypass the skills cache and re-scan skills from disk.
  */

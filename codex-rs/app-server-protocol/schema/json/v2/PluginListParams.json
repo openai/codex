@@ -18,7 +18,7 @@
   },
   "properties": {
     "cwds": {
-      "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
+      "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered. Cannot be combined with `threadId`.",
       "items": {
         "$ref": "#/definitions/AbsolutePathBuf"
       },
@@ -34,6 +34,13 @@
       },
       "type": [
         "array",
+        "null"
+      ]
+    },
+    "threadId": {
+      "description": "Optional loaded thread id used to evaluate plugins from that thread's cwd and config. Cannot be combined with `cwds`.",
+      "type": [
+        "string",
         "null"
       ]
     }

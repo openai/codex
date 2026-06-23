@@ -1851,6 +1851,7 @@ mod tests {
             request_id: request_id(),
             params: v2::SkillsListParams {
                 cwds: Vec::new(),
+                thread_id: None,
                 force_reload: false,
             },
         };
@@ -1874,6 +1875,7 @@ mod tests {
             request_id: request_id(),
             params: v2::PluginListParams {
                 cwds: None,
+                thread_id: None,
                 marketplace_kinds: None,
             },
         };
