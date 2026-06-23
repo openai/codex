@@ -1147,7 +1147,6 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
                 "https://docs.example".to_string(),
             )),
             supports_parallel_tool_calls: true,
-            supports_connector_auth_repair: false,
             default_tools_approval_mode: None,
             tool_approval_modes: HashMap::new(),
         },

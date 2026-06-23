@@ -253,22 +253,14 @@ pub fn effective_mcp_servers_from_configured(
 ) -> HashMap<String, EffectiveMcpServer> {
     let codex_apps_available =
         config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend);
-    configured_servers
+    let mut servers = configured_servers
         .into_iter()
-        .filter_map(|(name, server)| {
-            if name == CODEX_APPS_MCP_SERVER_NAME && !codex_apps_available {
-                return None;
-            }
-
-            let server = EffectiveMcpServer::configured(server);
-            let server = if name == CODEX_APPS_MCP_SERVER_NAME {
-                server.with_connector_auth_repair()
-            } else {
-                server
-            };
-            Some((name, server))
-        })
-        .collect()
+        .map(|(name, server)| (name, EffectiveMcpServer::configured(server)))
+        .collect::<HashMap<_, _>>();
+    if !codex_apps_available {
+        servers.remove(CODEX_APPS_MCP_SERVER_NAME);
+    }
+    servers
 }
 
 pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {

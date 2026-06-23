@@ -631,12 +631,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
     metadata: Option<&McpToolApprovalMetadata>,
     result: CallToolResult,
 ) -> CallToolResult {
-    if !sess
-        .services
-        .mcp_connection_manager
-        .load_full()
-        .server_supports_connector_auth_repair(server)
-    {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
         return result;
     }
 

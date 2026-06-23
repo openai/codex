@@ -401,12 +401,6 @@ impl McpConnectionManager {
             .unwrap_or_default()
     }
 
-    pub fn server_supports_connector_auth_repair(&self, server_name: &str) -> bool {
-        self.server_metadata
-            .get(server_name)
-            .is_some_and(McpServerMetadata::supports_connector_auth_repair)
-    }
-
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
         if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
             *policy = approval_policy.value();
