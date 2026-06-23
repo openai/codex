@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::config::Config;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -111,8 +112,9 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         .load_full()
         .list_all_tools()
         .await;
-    let router = ToolRouter::from_turn_context(
+    let router = ToolRouter::from_contexts(
         &turn,
+        Arc::new(StepContext::from_turn_context(&turn)),
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
@@ -179,8 +181,9 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 #[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let router = ToolRouter::from_turn_context(
+    let router = ToolRouter::from_contexts(
         &turn,
+        Arc::new(StepContext::from_turn_context(&turn)),
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
@@ -228,8 +231,9 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 #[tokio::test]
 async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let router = ToolRouter::from_turn_context(
+    let router = ToolRouter::from_contexts(
         &turn,
+        Arc::new(StepContext::from_turn_context(&turn)),
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
@@ -283,8 +287,9 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         ],
     })];
 
-    let router = ToolRouter::from_turn_context(
+    let router = ToolRouter::from_contexts(
         &turn,
+        Arc::new(StepContext::from_turn_context(&turn)),
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
@@ -348,8 +353,9 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     let mut expected_history_item = history_item.clone();
     expected_history_item.set_turn_id_if_missing(&turn.sub_id);
 
-    let router = ToolRouter::from_turn_context(
+    let router = ToolRouter::from_contexts(
         &turn,
+        Arc::new(StepContext::from_turn_context(&turn)),
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,

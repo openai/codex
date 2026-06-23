@@ -402,7 +402,7 @@ async fn serve_environment_info(listener: TcpListener) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
+async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let server = start_mock_server().await;
     let user_input_call_id = "wait-for-startup";
@@ -435,11 +435,13 @@ async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
             sse(vec![
                 ev_response_created("resp-2"),
                 ev_function_call(
-                    "update-plan",
-                    "update_plan",
+                    "request-permissions",
+                    "request_permissions",
                     &json!({
-                        "explanation": "Continue after startup.",
-                        "plan": [{"step": "Finish", "status": "completed"}]
+                        "reason": "Verify that the ready environment is used.",
+                        "permissions": {
+                            "network": { "enabled": true }
+                        }
                     })
                     .to_string(),
                 ),
@@ -456,7 +458,17 @@ async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
     let mut builder = test_codex()
         .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
         .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::User;
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+            assert!(
+                config
+                    .features
+                    .enable(Feature::RequestPermissionsTool)
+                    .is_ok()
+            );
             assert!(
                 config
                     .features
@@ -500,6 +512,30 @@ async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
             },
         })
         .await?;
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::RequestPermissions(permission_request) = event else {
+        panic!("ready environment should be available to request_permissions: {event:?}");
+    };
+    assert_eq!(
+        permission_request.environment_id.as_deref(),
+        Some(REMOTE_ENVIRONMENT_ID)
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: permission_request.call_id,
+            response: RequestPermissionsResponse {
+                permissions: RequestPermissionProfile::default(),
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            },
+        })
+        .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -507,6 +543,16 @@ async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
+    let tool_names = |request_index: usize| {
+        requests[request_index].body_json()["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    assert!(!tool_names(0).contains(&"exec_command".to_string()));
+    assert!(tool_names(1).contains(&"exec_command".to_string()));
     assert!(
         requests[0]
             .message_input_texts("user")

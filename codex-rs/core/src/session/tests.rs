@@ -8,6 +8,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
 use crate::environment_selection::ThreadEnvironments;
 use crate::function_tool::FunctionCallError;
+use crate::session::step_context::StepContext;
 use crate::shell::default_user_shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillRenderSideEffects;
@@ -608,8 +609,9 @@ async fn preview_session_start_hooks(
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
-    let router = Arc::new(ToolRouter::from_turn_context(
+    let router = Arc::new(ToolRouter::from_contexts(
         &turn_context,
+        Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
         crate::tools::router::ToolRouterParams {
             tool_suggest_candidates: None,
             mcp_tools: None,
@@ -5912,6 +5914,7 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
             handler
                 .handle(ToolInvocation {
                     session,
+                    step_context: Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
                     turn: turn_context,
                     cancellation_token: CancellationToken::new(),
                     tracker,
@@ -5986,6 +5989,7 @@ async fn request_permissions_tool_rejects_unknown_environment_id() {
     let result = RequestPermissionsHandler
         .handle(ToolInvocation {
             session: Arc::new(session),
+            step_context: Arc::new(StepContext::from_turn_context(&turn_context)),
             turn: Arc::new(turn_context),
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
@@ -9911,8 +9915,9 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             .await
     };
     let deferred_mcp_tools = Some(tools.clone());
-    let router = ToolRouter::from_turn_context(
+    let router = ToolRouter::from_contexts(
         &turn_context,
+        Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
         crate::tools::router::ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools,
@@ -10168,6 +10173,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step_context: Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
             cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&turn_diff_tracker),
             call_id,
@@ -10321,6 +10327,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step_context: Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
             cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),

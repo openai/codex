@@ -244,14 +244,12 @@ pub(crate) async fn run_turn(
             )
             .await?;
 
+            let step_context = sess.capture_step_context(turn_context.as_ref()).await;
             if turn_context
                 .config
                 .features
                 .enabled(Feature::DeferredExecutor)
             {
-                let step_context = StepContext {
-                    environments: sess.services.turn_environments.snapshot().await,
-                };
                 world_state = sess
                     .record_step_environment_context_if_changed(
                         turn_context.as_ref(),
@@ -278,6 +276,7 @@ pub(crate) async fn run_turn(
             run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&turn_context),
+                step_context,
                 Arc::clone(&turn_extension_data),
                 Arc::clone(&turn_diff_tracker),
                 &mut client_session,
@@ -1130,6 +1129,7 @@ pub(crate) fn build_prompt(
 async fn run_sampling_request(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
@@ -1137,7 +1137,13 @@ async fn run_sampling_request(
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
-    let router = built_tools(sess.as_ref(), turn_context.as_ref(), &cancellation_token).await?;
+    let router = built_tools(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        step_context,
+        &cancellation_token,
+    )
+    .await?;
 
     let base_instructions = sess.get_base_instructions().await;
 
@@ -1234,6 +1240,7 @@ async fn run_sampling_request(
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
+    step_context: Arc<StepContext>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
@@ -1351,8 +1358,9 @@ pub(crate) async fn built_tools(
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    Ok(Arc::new(ToolRouter::from_turn_context(
+    Ok(Arc::new(ToolRouter::from_contexts(
         turn_context,
+        step_context,
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,

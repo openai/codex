@@ -112,8 +112,9 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
-    let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
-    for environment in &invocation.turn.environments.turn_environments {
+    let mut environments =
+        Vec::with_capacity(invocation.step_context.environments.turn_environments.len());
+    for environment in &invocation.step_context.environments.turn_environments {
         // TODO(anp): Migrate extension ToolEnvironment and granted-permission lookup to PathUri
         // so extensions can receive foreign environment cwd values.
         let Ok(native_cwd) = environment.cwd().to_abs_path() else {
@@ -175,6 +176,7 @@ mod tests {
 
     use super::CoreTurnItemEmitter;
     use super::ExtensionToolAdapter;
+    use crate::session::step_context::StepContext;
     use crate::tools::context::ToolCallSource;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolPayload;
@@ -274,6 +276,7 @@ mod tests {
         let (session, turn) = crate::session::tests::make_session_and_context().await;
         let invocation = ToolInvocation {
             session: session.into(),
+            step_context: Arc::new(StepContext::from_turn_context(&turn)),
             turn: turn.into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
@@ -343,6 +346,7 @@ mod tests {
         assert_eq!(raw_history_item.item, expected_history_item);
         let invocation = ToolInvocation {
             session,
+            step_context: Arc::new(StepContext::from_turn_context(turn.as_ref())),
             turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
@@ -544,6 +548,7 @@ mod tests {
         );
         let invocation = ToolInvocation {
             session,
+            step_context: Arc::new(StepContext::from_turn_context(turn.as_ref())),
             turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),

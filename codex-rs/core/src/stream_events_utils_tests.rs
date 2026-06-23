@@ -8,6 +8,7 @@ use super::image_generation_artifact_path;
 use super::last_assistant_message_from_item;
 use super::response_item_may_include_external_context;
 use super::save_image_generation_result;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::ToolRouter;
 use crate::tools::parallel::ToolCallRuntime;
@@ -279,8 +280,9 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     session.services.extensions = Arc::new(builder.build());
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
-    let router = Arc::new(ToolRouter::from_turn_context(
+    let router = Arc::new(ToolRouter::from_contexts(
         &turn_context,
+        Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
         crate::tools::router::ToolRouterParams {
             tool_suggest_candidates: None,
             mcp_tools: None,

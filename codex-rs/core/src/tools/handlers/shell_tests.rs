@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 
 use crate::exec_env::create_env;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -201,6 +202,7 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
+            step_context: Arc::new(StepContext::from_turn_context(&turn)),
             turn: turn.into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
@@ -230,6 +232,7 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let (session, turn) = make_session_and_context().await;
     let invocation = ToolInvocation {
         session: session.into(),
+        step_context: Arc::new(StepContext::from_turn_context(&turn)),
         turn: turn.into(),
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),

@@ -3,6 +3,7 @@ use crate::compact::InitialContextInjection;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::step_context::StepContext;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolOutput;
@@ -333,6 +334,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step_context: Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
@@ -437,6 +439,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step_context: Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "strict-shell-command-call".to_string(),
@@ -484,6 +487,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step_context: Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
             cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
@@ -612,6 +616,7 @@ async fn shell_command_allows_sticky_turn_permissions_without_inline_request_per
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step_context: Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "sticky-turn-grant".to_string(),
