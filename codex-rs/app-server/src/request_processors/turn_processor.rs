@@ -58,6 +58,7 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
         | ResponseItem::Compaction { .. }
         | ResponseItem::CompactionTrigger { .. }
         | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::AdditionalTools { .. }
         | ResponseItem::Other => false,
     }) {
         return Err(invalid_request(REMOTE_IMAGE_URL_ERROR));
