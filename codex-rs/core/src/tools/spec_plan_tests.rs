@@ -289,7 +289,7 @@ fn use_provider_auth(
     update_config(turn, |config| {
         config.model_provider = provider_info.clone();
     });
-    turn.provider = create_model_provider(provider_info, None);
+    turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
 }
 
 struct WebRunExtensionTool;
@@ -1455,7 +1455,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
 
     let provider_without_actor_auth = probe(|turn| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
-        use_provider_auth(turn, /*requires_openai_auth*/ false, None);
+        use_provider_auth(turn, /*requires_openai_auth*/ false, /*actor_header*/ None);
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
@@ -1522,7 +1522,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         update_config(turn, |config| {
             config.model_provider = provider_info.clone();
         });
-        turn.provider = create_model_provider(provider_info, None);
+        turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
