@@ -7,6 +7,7 @@
 //! `codex-core`.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -40,6 +41,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
+use codex_api::SharedAuthProvider;
 use codex_config::Constrained;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
@@ -114,6 +116,11 @@ pub struct McpConnectionManager {
     startup_cancellation_token: CancellationToken,
 }
 
+struct McpClientServerSetup {
+    codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    runtime_auth_provider: Option<SharedAuthProvider>,
+}
+
 impl McpConnectionManager {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
@@ -171,33 +178,19 @@ impl McpConnectionManager {
                 },
             )
             .await;
-            let (codex_apps_tools_cache_context, runtime_auth_provider) =
-                if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    let uses_env_bearer_token =
-                        server
-                            .configured_config()
-                            .is_some_and(|config| match &config.transport {
-                                McpServerTransportConfig::StreamableHttp {
-                                    bearer_token_env_var,
-                                    ..
-                                } => bearer_token_env_var.is_some(),
-                                McpServerTransportConfig::Stdio { .. } => false,
-                            });
-                    let runtime_auth_provider = if uses_env_bearer_token {
-                        None
-                    } else {
-                        codex_apps_auth_provider.clone()
-                    };
-                    (
-                        Some(CodexAppsToolsCacheContext {
-                            codex_home: codex_home.clone(),
-                            user_key: codex_apps_tools_cache_key.clone(),
-                        }),
-                        runtime_auth_provider,
-                    )
-                } else {
-                    (None, None)
-                };
+            let McpClientServerSetup {
+                codex_apps_tools_cache_context,
+                runtime_auth_provider,
+            } = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                codex_apps_client_setup(
+                    &server,
+                    &codex_home,
+                    &codex_apps_tools_cache_key,
+                    codex_apps_auth_provider.clone(),
+                )
+            } else {
+                regular_mcp_client_setup()
+            };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 server,
@@ -856,6 +849,47 @@ impl Drop for McpConnectionManager {
     fn drop(&mut self) {
         self.startup_cancellation_token.cancel();
         self.clients.clear();
+    }
+}
+
+/// Creates the host-owned state used only by the Codex Apps server.
+///
+/// The tools cache is scoped to the authenticated user. Runtime authentication is supplied only
+/// when the server is not already configured to read a bearer token from the environment.
+fn codex_apps_client_setup(
+    server: &EffectiveMcpServer,
+    codex_home: &Path,
+    codex_apps_tools_cache_key: &CodexAppsToolsCacheKey,
+    codex_apps_auth_provider: Option<SharedAuthProvider>,
+) -> McpClientServerSetup {
+    let uses_env_bearer_token =
+        server
+            .configured_config()
+            .is_some_and(|config| match &config.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    ..
+                } => bearer_token_env_var.is_some(),
+                McpServerTransportConfig::Stdio { .. } => false,
+            });
+    McpClientServerSetup {
+        codex_apps_tools_cache_context: Some(CodexAppsToolsCacheContext {
+            codex_home: codex_home.to_path_buf(),
+            user_key: codex_apps_tools_cache_key.clone(),
+        }),
+        runtime_auth_provider: if uses_env_bearer_token {
+            None
+        } else {
+            codex_apps_auth_provider
+        },
+    }
+}
+
+/// Keeps regular MCP servers isolated from the host-owned Codex Apps cache and auth provider.
+fn regular_mcp_client_setup() -> McpClientServerSetup {
+    McpClientServerSetup {
+        codex_apps_tools_cache_context: None,
+        runtime_auth_provider: None,
     }
 }
 
