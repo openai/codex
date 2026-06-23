@@ -59,13 +59,13 @@ use wiremock::MockServer;
 
 use crate::TempDirExt;
 use crate::TestEnvironment;
-use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cloud_config_bundle;
 use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
+use crate::test_environment;
 use crate::wait_for_event_match;
 use crate::wait_for_event_with_timeout;
 use wiremock::Match;
@@ -163,8 +163,8 @@ impl Drop for TestEnv {
 }
 
 pub async fn test_env() -> Result<TestEnv> {
-    match get_remote_test_env() {
-        Some(remote_env) => {
+    match test_environment() {
+        remote_env @ (TestEnvironment::Docker { .. } | TestEnvironment::WineExec) => {
             let websocket_url = remote_exec_server_url()?;
             let environment =
                 codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
@@ -202,7 +202,7 @@ pub async fn test_env() -> Result<TestEnv> {
                 remote_container_name: remote_env.docker_container_name().map(str::to_owned),
             })
         }
-        None => TestEnv::local().await,
+        TestEnvironment::Local => TestEnv::local().await,
     }
 }
 
@@ -405,7 +405,16 @@ impl TestCodexBuilder {
         .await
     }
 
-    pub async fn build_with_remote_env(
+    /// Builds a test runtime using the execution environment selected by the test process.
+    ///
+    /// With no remote test configuration, or with `CODEX_TEST_ENVIRONMENT=local`, this uses a
+    /// temporary local environment just like [`Self::build`]. `CODEX_TEST_ENVIRONMENT=docker` or
+    /// `CODEX_TEST_ENVIRONMENT=wine-exec` selects the remote exec server configured by
+    /// `CODEX_TEST_REMOTE_EXEC_SERVER_URL`; the legacy `CODEX_TEST_REMOTE_ENV` Docker-container
+    /// configuration does the same. Only the automatically selected environment is registered.
+    /// Use [`Self::build_with_remote_and_local_env`] when a remote test also needs the local
+    /// environment to be selectable explicitly.
+    pub async fn build_with_auto_env(
         &mut self,
         server: &wiremock::MockServer,
     ) -> anyhow::Result<TestCodex> {
@@ -961,9 +970,9 @@ impl TestCodexHarness {
         Ok(Self { server, test })
     }
 
-    pub async fn with_remote_env_builder(mut builder: TestCodexBuilder) -> Result<Self> {
+    pub async fn with_auto_env_builder(mut builder: TestCodexBuilder) -> Result<Self> {
         let server = start_mock_server().await;
-        let test = builder.build_with_remote_env(&server).await?;
+        let test = builder.build_with_auto_env(&server).await?;
         Ok(Self { server, test })
     }
 

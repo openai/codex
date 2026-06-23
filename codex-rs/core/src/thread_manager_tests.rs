@@ -453,7 +453,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             id: id.to_string(),
             location: CapabilityRootLocation::Environment {
                 environment_id: environment_id.to_string(),
-                path: format!("/plugins/{id}"),
+                path: PathUri::parse(&format!("file:///plugins/{id}")).expect("plugin root URI"),
             },
         }]);
         init

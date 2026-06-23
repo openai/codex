@@ -7042,9 +7042,10 @@
               "environmentId": {
                 "type": "string"
               },
-              "path": {
-                "type": "string"
-              },
+                "path": {
+                  "description": "Absolute path for the root in the selected environment.",
+                  "type": "string"
+                },
               "type": {
                 "enum": [
                   "environment"

@@ -514,6 +514,11 @@ mod tests {
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_plugin::PluginProvider;
     use codex_plugin::ResolvedPlugin;
+    use codex_plugin::manifest::PluginManifest as GenericPluginManifest;
+    use codex_plugin::manifest::PluginManifestHooks;
+    use codex_plugin::manifest::PluginManifestInterface;
+    use codex_plugin::manifest::PluginManifestMcpServers;
+    use codex_plugin::manifest::PluginManifestPaths;
     use codex_protocol::capabilities::CapabilityRootLocation;
     use codex_protocol::capabilities::SelectedCapabilityRoot;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -779,14 +784,16 @@ mod tests {
     "composerIcon": "./assets/icon.svg"
   }"#,
         );
-        let host_manifest = load_plugin_manifest(&plugin_root).expect("host manifest");
+        let plugin_root =
+            AbsolutePathBuf::from_absolute_path_checked(plugin_root).expect("absolute plugin root");
+        let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
         let provider =
             ExecutorPluginProvider::new(Arc::new(EnvironmentManager::default_for_tests()));
         let selected_root = SelectedCapabilityRoot {
             id: "selected-demo".to_string(),
             location: CapabilityRootLocation::Environment {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                path: plugin_root.to_string_lossy().into_owned(),
+                path: plugin_root_uri.clone(),
             },
         };
 
@@ -795,17 +802,77 @@ mod tests {
             .await
             .expect("resolve executor plugin")
             .expect("plugin descriptor");
-        let plugin_root =
-            AbsolutePathBuf::from_absolute_path_checked(plugin_root).expect("absolute plugin root");
+        let manifest_path = plugin_root_uri
+            .join(".codex-plugin/plugin.json")
+            .expect("manifest URI");
+        let manifest_contents =
+            fs::read_to_string(plugin_root.join(".codex-plugin/plugin.json")).expect("manifest");
+        let expected_manifest =
+            super::parse_plugin_manifest_uri(&plugin_root_uri, &manifest_path, &manifest_contents)
+                .expect("URI manifest");
         let expected_plugin = ResolvedPlugin::from_environment(
             "selected-demo".to_string(),
             LOCAL_ENVIRONMENT_ID.to_string(),
-            plugin_root.clone(),
-            plugin_root.join(".codex-plugin/plugin.json"),
-            host_manifest,
+            plugin_root_uri,
+            manifest_path,
+            expected_manifest,
         )
         .expect("valid expected descriptor");
 
         assert_eq!(executor_plugin, expected_plugin);
+    }
+
+    #[test]
+    fn uri_manifest_resolves_resources_below_foreign_root() {
+        let plugin_root =
+            PathUri::parse("file:///C:/plugins/demo-plugin").expect("plugin root URI");
+        let manifest_path = plugin_root
+            .join(".codex-plugin/plugin.json")
+            .expect("manifest URI");
+        let manifest = super::parse_plugin_manifest_uri(
+            &plugin_root,
+            &manifest_path,
+            r#"{
+  "name": "demo-plugin",
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "apps": "./apps",
+  "hooks": "./hooks.json",
+  "interface": {
+    "displayName": "Demo Plugin",
+    "composerIcon": "./assets/icon.svg"
+  }
+}"#,
+        )
+        .expect("URI manifest");
+
+        assert_eq!(
+            manifest,
+            GenericPluginManifest {
+                name: "demo-plugin".to_string(),
+                version: None,
+                description: None,
+                keywords: Vec::new(),
+                paths: PluginManifestPaths {
+                    skills: vec![plugin_root.join("skills").expect("skills URI")],
+                    mcp_servers: Some(PluginManifestMcpServers::Path(
+                        plugin_root.join(".mcp.json").expect("MCP URI"),
+                    )),
+                    apps: Some(plugin_root.join("apps").expect("apps URI")),
+                    hooks: Some(PluginManifestHooks::Paths(vec![
+                        plugin_root.join("hooks.json").expect("hooks URI"),
+                    ])),
+                },
+                interface: Some(PluginManifestInterface {
+                    display_name: Some("Demo Plugin".to_string()),
+                    composer_icon: Some(
+                        plugin_root
+                            .join("assets/icon.svg")
+                            .expect("composer icon URI"),
+                    ),
+                    ..PluginManifestInterface::default()
+                }),
+            }
+        );
     }
 }

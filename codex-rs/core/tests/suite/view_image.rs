@@ -30,7 +30,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathExt;
-use core_test_support::get_remote_test_env;
+use core_test_support::is_remote_test_environment;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -41,10 +41,12 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_no_remote_env;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::test_target_os;
 use core_test_support::wait_for_event_with_timeout;
 use image::DynamicImage;
 use image::GenericImageView;
@@ -180,7 +182,7 @@ async fn assert_user_turn_local_image_resizes_to(
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -280,7 +282,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex();
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -570,9 +572,7 @@ async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
     let mut builder = test_codex();
@@ -679,7 +679,7 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.3-codex");
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -770,7 +770,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.3-codex");
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -848,7 +848,7 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.3-codex");
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -938,7 +938,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.2");
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1032,7 +1032,7 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.3-codex");
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1123,7 +1123,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1193,7 +1193,7 @@ async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Resul
 
     let server = start_mock_server().await;
     let mut builder = test_codex();
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1255,13 +1255,16 @@ async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Resul
 async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let remote_test_env = get_remote_test_env();
-    println!("view_image missing-file test exec-server environment: {remote_test_env:?}");
+    println!(
+        "view_image missing-file test target: {:?}, remote: {}",
+        test_target_os(),
+        is_remote_test_environment()
+    );
 
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1401,7 +1404,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         .with_config(|config| {
             config.model = Some(model_slug.to_string());
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex { codex, .. } = &test;
 
     let rel_path = "assets/example.png";
@@ -1488,7 +1491,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
     let completion_mock = responses::mount_sse_once(&server, success_response).await;
 
     let mut builder = test_codex();
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,

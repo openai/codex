@@ -211,6 +211,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod code_mode_warning;
 mod config_lock;
+pub(crate) mod context_window;
 mod handlers;
 mod inject;
 mod input_queue;
