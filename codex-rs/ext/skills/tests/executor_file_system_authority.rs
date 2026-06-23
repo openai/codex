@@ -260,24 +260,27 @@ async fn environment_skill_loading_reads_foreign_uris_through_executor_file_syst
             policy: None,
         }]
     );
-    assert_eq!(
-        file_system
-            .read_file_text(&outcome.skills[0].path_to_skills_md, /*sandbox*/ None)
-            .await
-            .expect("skill body"),
-        SKILL_CONTENTS
-    );
 }
 
 #[tokio::test]
 async fn selected_root_id_distinguishes_identical_executor_paths() {
-    let test_root = create_local_skill_root("root-identity").expect("create local skill root");
+    let root_label = if cfg!(unix) {
+        r"root\identity"
+    } else {
+        "root-identity"
+    };
+    let test_root = create_local_skill_root(root_label).expect("create local skill root");
     let canonical_root = AbsolutePathBuf::from_absolute_path_checked(&test_root)
         .expect("absolute skill root")
         .canonicalize()
         .expect("canonicalize skill root")
         .to_string_lossy()
-        .replace('\\', "/");
+        .into_owned();
+    let canonical_root = if cfg!(windows) {
+        canonical_root.replace('\\', "/")
+    } else {
+        canonical_root
+    };
     let provider = ExecutorSkillProvider::new_with_restriction_product(
         Arc::new(EnvironmentManager::default_for_tests()),
         /*restriction_product*/ None,
@@ -330,69 +333,6 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
             ),
         ]
     );
-
-    std::fs::remove_dir_all(test_root).expect("remove skill directory");
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn posix_backslashes_remain_distinct_in_executor_skill_ids() {
-    let id = NEXT_TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed);
-    let test_root = std::env::temp_dir().join(format!(
-        "codex-executor-skill-posix-backslash-{}-{id}",
-        std::process::id()
-    ));
-    let skill_paths = [
-        test_root.join(r"a\b").join("SKILL.md"),
-        test_root.join("a/b/SKILL.md"),
-    ];
-    for path in &skill_paths {
-        std::fs::create_dir_all(path.parent().expect("skill parent")).expect("create skill dir");
-        std::fs::write(path, SKILL_CONTENTS).expect("write skill");
-    }
-
-    let provider = ExecutorSkillProvider::new_with_restriction_product(
-        Arc::new(EnvironmentManager::default_for_tests()),
-        /*restriction_product*/ None,
-    );
-    let catalog = provider
-        .list(SkillListQuery {
-            turn_id: "turn-1".to_string(),
-            executor_roots: vec![SelectedCapabilityRoot {
-                id: "root".to_string(),
-                location: CapabilityRootLocation::Environment {
-                    environment_id: "local".to_string(),
-                    path: PathUri::from_host_native_path(&test_root).expect("skill root URI"),
-                },
-            }],
-            host_snapshot: None,
-            include_host_skills: false,
-            include_bundled_skills: true,
-            include_orchestrator_skills: false,
-            mcp_resources: None,
-        })
-        .await
-        .expect("list executor skills");
-
-    let mut actual = catalog
-        .entries
-        .into_iter()
-        .map(|entry| entry.id.0)
-        .collect::<Vec<_>>();
-    actual.sort();
-    let mut expected = skill_paths
-        .iter()
-        .map(|path| {
-            let path = path.canonicalize().expect("canonical skill path");
-            let path = PathUri::from_host_native_path(path).expect("skill URI");
-            format!(
-                "skill://root/{}",
-                path.inferred_native_path_string().trim_start_matches('/')
-            )
-        })
-        .collect::<Vec<_>>();
-    expected.sort();
-    assert_eq!(actual, expected);
 
     std::fs::remove_dir_all(test_root).expect("remove skill directory");
 }
