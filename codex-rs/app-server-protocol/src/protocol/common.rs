@@ -679,6 +679,11 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::MarketplaceRemoveResponse,
     },
+    MarketplaceCheckUpdates => "marketplace/checkUpdates" {
+        params: v2::MarketplaceCheckUpdatesParams,
+        serialization: global("config"),
+        response: v2::MarketplaceCheckUpdatesResponse,
+    },
     MarketplaceUpgrade => "marketplace/upgrade" {
         params: v2::MarketplaceUpgradeParams,
         serialization: global("config"),

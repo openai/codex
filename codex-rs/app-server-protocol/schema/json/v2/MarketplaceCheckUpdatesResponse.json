@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "MarketplaceUpdateCheckResult": {
+      "oneOf": [
+        {
+          "properties": {
+            "marketplaceName": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "upToDate"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "marketplaceName",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "marketplaceName": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "updateAvailable"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "marketplaceName",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "marketplaceName": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "error"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "marketplaceName",
+            "message",
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "results": {
+      "items": {
+        "$ref": "#/definitions/MarketplaceUpdateCheckResult"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "results"
+  ],
+  "title": "MarketplaceCheckUpdatesResponse",
+  "type": "object"
+}
