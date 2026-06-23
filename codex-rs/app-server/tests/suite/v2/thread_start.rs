@@ -359,6 +359,39 @@ async fn thread_start_history_mode_accepts_legacy_and_rejects_paginated() -> Res
 }
 
 #[tokio::test]
+async fn thread_start_uses_managed_new_thread_model() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"
+[models.new_thread]
+model = "gpt-managed"
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-requested".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ThreadStartResponse = to_response(response)?;
+
+    assert_eq!(response.model, "gpt-managed");
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

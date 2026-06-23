@@ -4654,6 +4654,16 @@
             "object",
             "null"
           ]
+        },
+        "models": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelsRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -9238,6 +9248,21 @@
       "title": "ModelVerificationNotification",
       "type": "object"
     },
+    "ModelsRequirements": {
+      "properties": {
+        "newThread": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NewThreadModelDefaults"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "MultiAgentMode": {
       "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
       "enum": [
@@ -9384,6 +9409,17 @@
         "deny"
       ],
       "type": "string"
+    },
+    "NewThreadModelDefaults": {
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "NonSteerableTurnKind": {
       "enum": [

@@ -1753,6 +1753,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             hooks: None,
             enforce_residency: None,
             network: None,
+            models: None,
         });
 
     assert_eq!(reason, Some("askForApproval.granular"));
