@@ -87,7 +87,6 @@ use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::CreditsSnapshot;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
