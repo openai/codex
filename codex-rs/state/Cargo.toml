@@ -25,7 +25,6 @@ uuid = { workspace = true }
 [dev-dependencies]
 codex-git-utils = { workspace = true }
 pretty_assertions = { workspace = true }
-tracing-log = { workspace = true }
 
 [lints]
 workspace = true
