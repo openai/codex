@@ -4,6 +4,8 @@ use std::sync::Arc;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_rollout::RolloutPersistenceTelemetry;
+use codex_rollout::measure_and_filter_rollout_items;
 use codex_rollout::persisted_rollout_items;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -32,6 +34,7 @@ pub struct LiveThread {
     thread_id: ThreadId,
     thread_store: Arc<dyn ThreadStore>,
     metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
+    persistence_telemetry: RolloutPersistenceTelemetry,
 }
 
 /// Owns a live thread while session initialization is still fallible.
@@ -95,6 +98,7 @@ impl LiveThread {
             thread_id,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
         })
     }
 
@@ -130,6 +134,7 @@ impl LiveThread {
             thread_id,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
         })
     }
 
@@ -139,16 +144,25 @@ impl LiveThread {
         fields(item_count = items.len())
     )]
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
-        let canonical_items = persisted_rollout_items(items);
+        // Empty appends are intentionally ignored rather than represented as zero-sized batches.
         if items.is_empty() {
             return Ok(());
         }
+        let (canonical_items, measurement) = if self.persistence_telemetry.is_enabled() {
+            let (canonical_items, measurement) = measure_and_filter_rollout_items(items);
+            (canonical_items, Some(measurement))
+        } else {
+            (persisted_rollout_items(items), None)
+        };
         self.thread_store
             .append_items(AppendThreadItemsParams {
                 thread_id: self.thread_id,
                 items: items.to_vec(),
             })
             .await?;
+        if let Some(measurement) = measurement.as_ref() {
+            self.persistence_telemetry.record_batch(items, measurement);
+        }
         if canonical_items.is_empty() {
             return Ok(());
         }
