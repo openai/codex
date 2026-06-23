@@ -262,13 +262,6 @@ impl AsyncManagedClient {
         }
     }
 
-    fn cached_tool_info_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
-        if !self.startup_complete.load(Ordering::Acquire) {
-            return self.cached_tool_info_snapshot.clone();
-        }
-        None
-    }
-
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
         let tools = if let Some(startup_tools) = self.cached_tool_info_snapshot_while_initializing()
@@ -286,6 +279,56 @@ impl AsyncManagedClient {
             prepare_regular_mcp_tools_for_model(tools, &self.tool_plugin_provenance)
         })
     }
+
+    fn cached_tool_info_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
+        if !self.startup_complete.load(Ordering::Acquire) {
+            return self.cached_tool_info_snapshot.clone();
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub(crate) enum StartupOutcomeError {
+    #[error("MCP startup cancelled")]
+    Cancelled,
+    // We can't store the original error here because anyhow::Error doesn't implement
+    // `Clone`.
+    #[error("MCP startup failed: {error}")]
+    Failed { error: String },
+}
+
+impl From<anyhow::Error> for StartupOutcomeError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed {
+            error: error.to_string(),
+        }
+    }
+}
+
+pub(crate) async fn list_tools_for_client_uncached(
+    server_name: &str,
+    is_codex_apps_mcp_server: bool,
+    client: &Arc<RmcpClient>,
+    timeout: Option<Duration>,
+    server_instructions: Option<&str>,
+) -> Result<Vec<ToolInfo>> {
+    let resp = client
+        .list_tools_with_connector_ids(/*params*/ None, timeout)
+        .await?;
+    let tools = resp
+        .tools
+        .into_iter()
+        .map(|tool| {
+            tool_info_from_listed_tool(
+                server_name,
+                is_codex_apps_mcp_server,
+                server_instructions,
+                tool,
+            )
+        })
+        .collect();
+    Ok(tools)
 }
 
 /// Presents declared Codex Apps file parameters to the model as local-path inputs and adds plugin
@@ -355,49 +398,6 @@ fn prepare_regular_mcp_tools_for_model(
         add_plugin_provenance_to_tool(tool, plugin_names);
     }
     tools
-}
-
-#[derive(Debug, Clone, thiserror::Error)]
-pub(crate) enum StartupOutcomeError {
-    #[error("MCP startup cancelled")]
-    Cancelled,
-    // We can't store the original error here because anyhow::Error doesn't implement
-    // `Clone`.
-    #[error("MCP startup failed: {error}")]
-    Failed { error: String },
-}
-
-impl From<anyhow::Error> for StartupOutcomeError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::Failed {
-            error: error.to_string(),
-        }
-    }
-}
-
-pub(crate) async fn list_tools_for_client_uncached(
-    server_name: &str,
-    is_codex_apps_mcp_server: bool,
-    client: &Arc<RmcpClient>,
-    timeout: Option<Duration>,
-    server_instructions: Option<&str>,
-) -> Result<Vec<ToolInfo>> {
-    let resp = client
-        .list_tools_with_connector_ids(/*params*/ None, timeout)
-        .await?;
-    let tools = resp
-        .tools
-        .into_iter()
-        .map(|tool| {
-            tool_info_from_listed_tool(
-                server_name,
-                is_codex_apps_mcp_server,
-                server_instructions,
-                tool,
-            )
-        })
-        .collect();
-    Ok(tools)
 }
 
 fn tool_info_from_listed_tool(
