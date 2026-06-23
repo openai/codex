@@ -55,6 +55,7 @@ use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StdioServerLauncher;
+use codex_rmcp_client::ToolWithConnectorId;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
@@ -376,71 +377,80 @@ pub(crate) async fn list_tools_for_client_uncached(
         .tools
         .into_iter()
         .map(|tool| {
-            let mut tool_def = tool.tool;
-            let (
-                callable_name,
-                callable_namespace,
-                connector_id,
-                connector_name,
-                namespace_description,
-            ) = if is_codex_apps_mcp_server {
-                let connector_id = tool.connector_id;
-                let connector_name = tool.connector_name;
-                let connector_description = tool.connector_description;
-                let callable_name = normalize_codex_apps_callable_name(
-                    &tool_def.name,
-                    connector_id.as_deref(),
-                    connector_name.as_deref(),
-                );
-                let callable_namespace =
-                    normalize_codex_apps_callable_namespace(server_name, connector_name.as_deref());
-                if let Some(title) = tool_def.title.as_deref() {
-                    let normalized_title =
-                        normalize_codex_apps_tool_title(connector_name.as_deref(), title);
-                    if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
-                        tool_def.title = Some(normalized_title);
-                    }
-                }
-                let has_connector_metadata = connector_id.is_some()
-                    || connector_name.is_some()
-                    || connector_description.is_some();
-                let namespace_description = if has_connector_metadata {
-                    connector_description
-                } else {
-                    server_instructions.map(str::to_string)
-                };
-                (
-                    callable_name,
-                    callable_namespace,
-                    connector_id,
-                    connector_name,
-                    namespace_description,
-                )
-            } else {
-                strip_untrusted_connector_meta(&mut tool_def);
-                (
-                    tool_def.name.to_string(),
-                    server_name.to_string(),
-                    None,
-                    None,
-                    server_instructions.map(str::to_string),
-                )
-            };
-            ToolInfo {
-                server_name: server_name.to_owned(),
-                supports_parallel_tool_calls: false,
-                server_origin: None,
-                callable_name,
-                callable_namespace,
-                namespace_description,
-                tool: tool_def,
-                connector_id,
-                connector_name,
-                plugin_display_names: Vec::new(),
-            }
+            tool_info_from_listed_tool(
+                server_name,
+                is_codex_apps_mcp_server,
+                server_instructions,
+                tool,
+            )
         })
         .collect();
     Ok(tools)
+}
+
+fn tool_info_from_listed_tool(
+    server_name: &str,
+    is_codex_apps_mcp_server: bool,
+    server_instructions: Option<&str>,
+    tool: ToolWithConnectorId,
+) -> ToolInfo {
+    let mut tool_def = tool.tool;
+    let (callable_name, callable_namespace, connector_id, connector_name, namespace_description) =
+        if is_codex_apps_mcp_server {
+            let connector_id = tool.connector_id;
+            let connector_name = tool.connector_name;
+            let connector_description = tool.connector_description;
+            let callable_name = normalize_codex_apps_callable_name(
+                &tool_def.name,
+                connector_id.as_deref(),
+                connector_name.as_deref(),
+            );
+            let callable_namespace =
+                normalize_codex_apps_callable_namespace(server_name, connector_name.as_deref());
+            if let Some(title) = tool_def.title.as_deref() {
+                let normalized_title =
+                    normalize_codex_apps_tool_title(connector_name.as_deref(), title);
+                if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
+                    tool_def.title = Some(normalized_title);
+                }
+            }
+            let has_connector_metadata = connector_id.is_some()
+                || connector_name.is_some()
+                || connector_description.is_some();
+            let namespace_description = if has_connector_metadata {
+                connector_description
+            } else {
+                server_instructions.map(str::to_string)
+            };
+            (
+                callable_name,
+                callable_namespace,
+                connector_id,
+                connector_name,
+                namespace_description,
+            )
+        } else {
+            strip_untrusted_connector_meta(&mut tool_def);
+            (
+                tool_def.name.to_string(),
+                server_name.to_string(),
+                None,
+                None,
+                server_instructions.map(str::to_string),
+            )
+        };
+    ToolInfo {
+        server_name: server_name.to_owned(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
+        callable_name,
+        callable_namespace,
+        namespace_description,
+        tool: tool_def,
+        connector_id,
+        connector_name,
+        plugin_display_names: Vec::new(),
+    }
 }
 
 fn strip_untrusted_connector_meta(tool: &mut RmcpTool) {
@@ -710,6 +720,7 @@ async fn make_rmcp_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::Meta;
 
@@ -780,6 +791,40 @@ mod tests {
         assert_eq!(
             meta.0.get("custom").and_then(|value| value.as_str()),
             Some("kept")
+        );
+    }
+
+    #[test]
+    fn codex_apps_connector_metadata_is_preserved() {
+        let tool = tool_with_connector_meta();
+        let expected_tool = tool.clone();
+
+        let tool_info = tool_info_from_listed_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            /*is_codex_apps_mcp_server*/ true,
+            /*server_instructions*/ None,
+            ToolWithConnectorId {
+                tool,
+                connector_id: Some("connector_gmail".to_string()),
+                connector_name: Some("Gmail".to_string()),
+                connector_description: Some("Mail connector".to_string()),
+            },
+        );
+
+        assert_eq!(
+            tool_info,
+            ToolInfo {
+                server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                supports_parallel_tool_calls: false,
+                server_origin: None,
+                callable_name: "capture_file_upload".to_string(),
+                callable_namespace: "codex_apps__Gmail".to_string(),
+                namespace_description: Some("Mail connector".to_string()),
+                tool: expected_tool,
+                connector_id: Some("connector_gmail".to_string()),
+                connector_name: Some("Gmail".to_string()),
+                plugin_display_names: Vec::new(),
+            }
         );
     }
 }
