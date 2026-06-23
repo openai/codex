@@ -45,6 +45,7 @@ pub fn write_mock_responses_config_toml(
 name = "{provider_name}"
 base_url = "{server_uri}/v1"
 wire_api = "responses"
+namespace_tools = true
 request_max_retries = 0
 stream_max_retries = 0
 supports_websockets = false

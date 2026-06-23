@@ -6,9 +6,11 @@ use crate::AdditionalProperties;
 use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
+use crate::NamespaceToolSpecMode;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::create_tools_json_for_responses_api;
+use crate::serialize_tool_specs;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
 use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
@@ -192,6 +194,37 @@ fn namespace_tool_spec_serializes_expected_wire_shape() {
                 },
             ],
         })
+    );
+}
+
+#[test]
+fn namespace_tool_specs_flatten_to_canonical_function_names() {
+    let specs = serialize_tool_specs(
+        [ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "mcp__demo__".to_string(),
+            description: "Demo tools".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                name: "__lookup_order".to_string(),
+                description: "Look up an order".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: JsonSchema::default(),
+                output_schema: None,
+            })],
+        })],
+        NamespaceToolSpecMode::Flatten,
+    );
+
+    assert_eq!(
+        specs,
+        vec![ToolSpec::Function(ResponsesApiTool {
+            name: "mcp__demo__lookup_order".to_string(),
+            description: "Look up an order".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::default(),
+            output_schema: None,
+        })]
     );
 }
 

@@ -295,6 +295,15 @@ fn use_actor_authorized_provider(turn: &mut TurnContext) {
     turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
 }
 
+fn disable_namespace_tools(turn: &mut TurnContext) {
+    let mut provider_info = turn.config.model_provider.clone();
+    provider_info.namespace_tools = Some(false);
+    update_config(turn, |config| {
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
 struct WebRunExtensionTool;
 
 impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
@@ -769,6 +778,17 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         &["lookup".to_string()]
     );
 
+    let flattened_direct_mcp = probe_with(
+        disable_namespace_tools,
+        ToolPlanInputs {
+            mcp_tools: Some(vec![mcp_tool("direct", "mcp__direct", "lookup")]),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    flattened_direct_mcp.assert_visible_contains(&["mcp__direct__lookup"]);
+    flattened_direct_mcp.assert_visible_lacks(&["mcp__direct"]);
+
     let searchable_mcp = ToolPlanInputs {
         deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable", "lookup")]),
         ..ToolPlanInputs::default()
@@ -823,6 +843,19 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "tool_search",
         &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
     ]);
+
+    let flattened_searchable_mcp = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = true;
+            disable_namespace_tools(turn);
+        },
+        ToolPlanInputs {
+            deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable", "lookup")]),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    flattened_searchable_mcp.assert_visible_contains(&["tool_search"]);
 }
 
 #[tokio::test]

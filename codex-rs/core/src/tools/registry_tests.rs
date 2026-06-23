@@ -179,6 +179,31 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     );
 }
 
+#[test]
+fn handler_resolves_flat_aliases_when_namespace_specs_are_flattened() {
+    let namespaced_name = codex_tools::ToolName::namespaced("mcp__calendar", "create_event");
+    let handler = Arc::new(TestHandler {
+        tool_name: namespaced_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let registry = ToolRegistry::from_tools_with_namespace_tool_spec_mode(
+        [handler.clone()],
+        codex_tools::NamespaceToolSpecMode::Flatten,
+    );
+
+    let flat_name = codex_tools::ToolName::plain("mcp__calendar__create_event");
+    let flat = registry.tool(&flat_name);
+    let resolved = registry.resolved_tool(&flat_name);
+
+    assert!(
+        flat.as_ref()
+            .is_some_and(|flat| Arc::ptr_eq(flat, &handler))
+    );
+    assert_eq!(
+        resolved.map(|(tool_name, _)| tool_name),
+        Some(namespaced_name)
+    );
+}
+
 #[tokio::test]
 async fn function_tools_expose_default_hook_payloads_and_rewrites() -> anyhow::Result<()> {
     let (session, turn) = crate::session::tests::make_session_and_context().await;

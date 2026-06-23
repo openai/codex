@@ -1665,6 +1665,11 @@
           "description": "Friendly display name.",
           "type": "string"
         },
+        "namespace_tools": {
+          "default": null,
+          "description": "Whether this provider accepts Codex's `type: \"namespace\"` tool wrapper.",
+          "type": "boolean"
+        },
         "query_params": {
           "additionalProperties": {
             "type": "string"

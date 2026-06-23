@@ -29,6 +29,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db;
+use codex_tools::NamespaceToolSpecMode;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
@@ -321,15 +322,28 @@ impl CoreToolRuntime for ExposureOverride {
 
 pub struct ToolRegistry {
     tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>,
+    flat_tool_aliases: HashMap<ToolName, Arc<dyn CoreToolRuntime>>,
 }
 
 impl ToolRegistry {
     fn new(tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>) -> Self {
-        Self { tools }
+        Self {
+            tools,
+            flat_tool_aliases: HashMap::new(),
+        }
+    }
+
+    #[cfg(test)]
+    #[instrument(level = "trace", skip_all)]
+    pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
+        Self::from_tools_with_namespace_tool_spec_mode(tools, NamespaceToolSpecMode::Preserve)
     }
 
     #[instrument(level = "trace", skip_all)]
-    pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
+    pub(crate) fn from_tools_with_namespace_tool_spec_mode(
+        tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>,
+        namespace_tool_spec_mode: NamespaceToolSpecMode,
+    ) -> Self {
         let mut tools_by_name = HashMap::new();
         for tool in tools {
             let name = tool.tool_name();
@@ -339,7 +353,12 @@ impl ToolRegistry {
             }
             tools_by_name.insert(name, tool);
         }
-        Self::new(tools_by_name)
+
+        let mut registry = Self::new(tools_by_name);
+        if namespace_tool_spec_mode == NamespaceToolSpecMode::Flatten {
+            registry.add_flat_tool_aliases();
+        }
+        registry
     }
 
     #[cfg(test)]
@@ -357,7 +376,34 @@ impl ToolRegistry {
     }
 
     fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.tools.get(name).map(Arc::clone)
+        self.resolved_tool(name).map(|(_, tool)| tool)
+    }
+
+    fn resolved_tool(&self, name: &ToolName) -> Option<(ToolName, Arc<dyn CoreToolRuntime>)> {
+        self.tools
+            .get(name)
+            .map(|tool| (name.clone(), Arc::clone(tool)))
+            .or_else(|| {
+                self.flat_tool_aliases
+                    .get(name)
+                    .map(|tool| (tool.tool_name(), Arc::clone(tool)))
+            })
+    }
+
+    fn add_flat_tool_aliases(&mut self) {
+        for (name, tool) in &self.tools {
+            if name.namespace.is_none() {
+                continue;
+            }
+            let flat_alias = ToolName::plain(name.canonical_flat_name().into_owned());
+            if self.tools.contains_key(&flat_alias)
+                || self.flat_tool_aliases.contains_key(&flat_alias)
+            {
+                error_or_panic(format!("tool {flat_alias} already registered"));
+                continue;
+            }
+            self.flat_tool_aliases.insert(flat_alias, Arc::clone(tool));
+        }
     }
 
     #[cfg(test)]
@@ -439,8 +485,11 @@ impl ToolRegistry {
         }
 
         let dispatch_trace = ToolDispatchTrace::start(&invocation);
-        let tool = match self.tool(&tool_name) {
-            Some(tool) => tool,
+        let tool = match self.resolved_tool(&tool_name) {
+            Some((resolved_tool_name, tool)) => {
+                invocation.tool_name = resolved_tool_name;
+                tool
+            }
             None => {
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
                 let log_payload = invocation.payload.log_payload();

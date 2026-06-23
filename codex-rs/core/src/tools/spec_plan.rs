@@ -60,6 +60,7 @@ use crate::tools::registry::ToolRegistry;
 use crate::tools::registry::override_tool_exposure;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
+use crate::util::error_or_panic;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_mcp::ToolInfo;
@@ -72,6 +73,7 @@ use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_tools::NamespaceToolSpecMode;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -87,6 +89,7 @@ use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
 use codex_tools::request_user_input_available_modes;
+use codex_tools::serialize_tool_specs;
 use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
 use std::collections::BTreeMap;
@@ -261,13 +264,13 @@ fn build_model_visible_specs_and_registry(
     }
     specs.extend(hosted_specs);
 
-    let registry = ToolRegistry::from_tools(runtimes);
-    let model_visible_specs = merge_into_namespaces(specs)
-        .into_iter()
-        .filter(|spec| {
-            namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
-        })
-        .collect();
+    let namespace_tool_spec_mode = namespace_tool_spec_mode(turn_context);
+    let registry =
+        ToolRegistry::from_tools_with_namespace_tool_spec_mode(runtimes, namespace_tool_spec_mode);
+    let model_visible_specs = dedupe_model_visible_function_names(serialize_tool_specs(
+        merge_into_namespaces(specs),
+        namespace_tool_spec_mode,
+    ));
 
     (model_visible_specs, registry)
 }
@@ -288,6 +291,23 @@ fn spec_for_model_request(
     } else {
         spec
     }
+}
+
+fn dedupe_model_visible_function_names(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
+    let mut seen_function_names = HashSet::new();
+    specs
+        .into_iter()
+        .filter(|spec| {
+            let ToolSpec::Function(tool) = spec else {
+                return true;
+            };
+            if seen_function_names.insert(tool.name.clone()) {
+                return true;
+            }
+            error_or_panic(format!("tool {} already exposed to the model", tool.name));
+            false
+        })
+        .collect()
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -329,7 +349,7 @@ fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
 }
 
 pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.model_info.supports_search_tool && namespace_tools_enabled(turn_context)
+    turn_context.model_info.supports_search_tool
 }
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
@@ -341,6 +361,14 @@ pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
 
 fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.provider.capabilities().namespace_tools
+}
+
+fn namespace_tool_spec_mode(turn_context: &TurnContext) -> NamespaceToolSpecMode {
+    if namespace_tools_enabled(turn_context) {
+        NamespaceToolSpecMode::Preserve
+    } else {
+        NamespaceToolSpecMode::Flatten
+    }
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
@@ -403,7 +431,7 @@ fn image_generation_runtime_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn standalone_image_generation_model_visible(turn_context: &TurnContext) -> bool {
-    if !image_generation_runtime_enabled(turn_context) || !namespace_tools_enabled(turn_context) {
+    if !image_generation_runtime_enabled(turn_context) {
         return false;
     }
 
@@ -624,13 +652,12 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
 }
 
 fn standalone_web_search_enabled(turn_context: &TurnContext) -> bool {
-    namespace_tools_enabled(turn_context)
-        && (turn_context.model_info.use_responses_lite
-            || turn_context
-                .config
-                .features
-                .get()
-                .enabled(Feature::StandaloneWebSearch))
+    turn_context.model_info.use_responses_lite
+        || turn_context
+            .config
+            .features
+            .get()
+            .enabled(Feature::StandaloneWebSearch)
 }
 
 fn tool_environment_mode(step_context: &StepContext) -> ToolEnvironmentMode {
@@ -798,9 +825,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
             } else {
                 ToolExposure::Direct
             };
-            let tool_namespace = namespace_tools_enabled(turn_context)
-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
-                .flatten();
+            let tool_namespace = turn_context.config.multi_agent_v2.tool_namespace.as_deref();
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             planned_tools.add_arc(override_tool_exposure(
@@ -980,7 +1005,9 @@ fn append_tool_search_executor(
         return;
     }
 
-    let handler: PlannedRuntime = context.tool_search_handler_cache.get_or_build(search_infos);
+    let handler: PlannedRuntime = context
+        .tool_search_handler_cache
+        .get_or_build(search_infos, namespace_tool_spec_mode(turn_context));
     planned_tools.add_arc(handler);
 }
 

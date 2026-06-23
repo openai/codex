@@ -376,8 +376,8 @@ fn unique_callable_parts(
     used_names: &mut HashSet<String>,
     reserved_len: usize,
 ) -> (String, String) {
-    let model_name = format!("{namespace}{tool_name}");
-    if model_name.len() + reserved_len <= MAX_TOOL_NAME_LENGTH && used_names.insert(model_name) {
+    let model_name = canonical_flat_tool_name(namespace, tool_name);
+    if model_name.len() <= MAX_TOOL_NAME_LENGTH && used_names.insert(model_name) {
         return (namespace.to_string(), tool_name.to_string());
     }
 
@@ -390,10 +390,16 @@ fn unique_callable_parts(
         };
         let (namespace, tool_name) =
             fit_callable_parts_with_hash(namespace, tool_name, &hash_input, reserved_len);
-        let model_name = format!("{namespace}{tool_name}");
+        let model_name = canonical_flat_tool_name(&namespace, &tool_name);
         if used_names.insert(model_name) {
             return (namespace, tool_name);
         }
         attempt = attempt.saturating_add(1);
     }
+}
+
+fn canonical_flat_tool_name(namespace: &str, tool_name: &str) -> String {
+    ToolName::namespaced(namespace, tool_name)
+        .canonical_flat_name()
+        .into_owned()
 }

@@ -1,8 +1,10 @@
 use crate::FreeformTool;
 use crate::JsonSchema;
 use crate::LoadableToolSpec;
+use crate::NamespaceToolSpecMode;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiTool;
+use crate::flatten_responses_api_namespace;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
 use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
@@ -71,6 +73,25 @@ impl From<LoadableToolSpec> for ToolSpec {
             LoadableToolSpec::Function(tool) => ToolSpec::Function(tool),
             LoadableToolSpec::Namespace(namespace) => ToolSpec::Namespace(namespace),
         }
+    }
+}
+
+pub fn serialize_tool_specs(
+    specs: impl IntoIterator<Item = ToolSpec>,
+    namespace_tool_spec_mode: NamespaceToolSpecMode,
+) -> Vec<ToolSpec> {
+    match namespace_tool_spec_mode {
+        NamespaceToolSpecMode::Preserve => specs.into_iter().collect(),
+        NamespaceToolSpecMode::Flatten => specs
+            .into_iter()
+            .flat_map(|spec| match spec {
+                ToolSpec::Namespace(namespace) => flatten_responses_api_namespace(namespace)
+                    .into_iter()
+                    .map(ToolSpec::Function)
+                    .collect(),
+                spec => vec![spec],
+            })
+            .collect(),
     }
 }
 
