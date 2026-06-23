@@ -314,6 +314,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
+            use_chatgpt_auth: false,
             environment_id: options.environment_id,
             enabled: true,
             required: false,
