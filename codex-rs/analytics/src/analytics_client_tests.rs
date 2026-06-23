@@ -177,6 +177,7 @@ fn sample_thread_with_metadata(
 ) -> Thread {
     Thread {
         id: thread_id.to_string(),
+        extra: None,
         session_id: format!("session-{thread_id}"),
         forked_from_id: None,
         parent_thread_id,

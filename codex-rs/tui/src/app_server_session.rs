@@ -2320,6 +2320,7 @@ mod tests {
         let response = ThreadResumeResponse {
             thread: codex_app_server_protocol::Thread {
                 id: thread_id.to_string(),
+                extra: None,
                 session_id: ThreadId::new().to_string(),
                 forked_from_id: Some(forked_from_id.to_string()),
                 parent_thread_id: None,

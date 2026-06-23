@@ -314,6 +314,7 @@ pub(crate) fn summary_to_thread(
     let thread_id = conversation_id.to_string();
     Thread {
         id: thread_id.clone(),
+        extra: None,
         session_id: thread_id,
         forked_from_id: None,
         parent_thread_id: None,

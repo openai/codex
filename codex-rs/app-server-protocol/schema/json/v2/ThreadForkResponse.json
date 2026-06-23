@@ -1165,6 +1165,10 @@
       ],
       "type": "string"
     },
+    "ThreadExtra": {
+      "description": "Extra app-server data for a thread.",
+      "type": "object"
+    },
     "ThreadId": {
       "type": "string"
     },

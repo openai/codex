@@ -5720,6 +5720,7 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
@@ -5756,6 +5757,7 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
@@ -5826,6 +5828,7 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
@@ -5885,6 +5888,7 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
