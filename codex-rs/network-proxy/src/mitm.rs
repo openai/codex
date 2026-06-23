@@ -104,7 +104,7 @@ impl MitmState {
 
         // MITM exists when HTTPS policy depends on the inner request: limited-mode method clamps
         // and host-specific hooks both need visibility after CONNECT is established. We
-        // generate/load a local CA and issue per-host leaf certs so we can terminate TLS and
+        // load the managed CA and issue per-host leaf certs so we can terminate TLS and
         // apply policy.
         let ca = ManagedMitmCa::load_or_create()?;
         let upstream_tls_root_store =
