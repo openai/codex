@@ -1335,15 +1335,25 @@ fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
 
 async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: &TurnContext) {
     let auth = session.services.auth_manager.auth().await;
+    let startup_cancellation_token = CancellationToken::new();
+    startup_cancellation_token.cancel();
+    let (tx_event, _rx_event) = async_channel::unbounded();
+    let mcp_servers = HashMap::from([(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        codex_mcp::EffectiveMcpServer::configured(codex_mcp::codex_apps_mcp_server_config(
+            "https://chatgpt.com",
+            /*apps_mcp_product_sku*/ None,
+        )),
+    )]);
     let manager = codex_mcp::McpConnectionManager::new(
-        &HashMap::new(),
+        &mcp_servers,
         turn_context.config.mcp_oauth_credentials_store_mode,
         turn_context.config.auth_keyring_backend_kind(),
         HashMap::new(),
         &turn_context.approval_policy,
         turn_context.sub_id.clone(),
-        session.get_tx_event(),
-        CancellationToken::new(),
+        tx_event,
+        startup_cancellation_token,
         turn_context.permission_profile(),
         codex_mcp::McpRuntimeContext::new(
             session.services.turn_environments.environment_manager(),
