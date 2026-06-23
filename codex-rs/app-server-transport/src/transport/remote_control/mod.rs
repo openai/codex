@@ -98,7 +98,7 @@ pub(super) struct QueuedServerEnvelope {
     pub(super) event: ServerEvent,
     pub(super) client_id: ClientId,
     pub(super) stream_id: StreamId,
-    pub(super) write_complete_tx: Option<oneshot::Sender<()>>,
+    pub(super) write_complete_tx: Option<oneshot::Sender<crate::OutgoingWriteComplete>>,
 }
 
 #[derive(Clone)]

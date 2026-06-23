@@ -42,10 +42,17 @@ pub struct OutgoingError {
     pub id: RequestId,
 }
 
+/// Details available after an outgoing message has been written by a transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutgoingWriteComplete {
+    /// Length of the JSON text written by the transport, when serialization occurred.
+    pub serialized_bytes: Option<usize>,
+}
+
 #[derive(Debug)]
 pub struct QueuedOutgoingMessage {
     pub message: OutgoingMessage,
-    pub write_complete_tx: Option<oneshot::Sender<()>>,
+    pub write_complete_tx: Option<oneshot::Sender<OutgoingWriteComplete>>,
 }
 
 impl QueuedOutgoingMessage {

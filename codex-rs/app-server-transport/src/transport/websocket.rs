@@ -8,6 +8,7 @@ use super::forward_incoming_message;
 use super::next_connection_id;
 use super::serialize_outgoing_message;
 use crate::outgoing_message::ConnectionId;
+use crate::outgoing_message::OutgoingWriteComplete;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use axum::Router;
 use axum::body::Body;
@@ -316,11 +317,14 @@ async fn run_websocket_outbound_loop<M, SinkError>(
                 let Some(json) = serialize_outgoing_message(queued_message.message) else {
                     continue;
                 };
+                let serialized_bytes = json.len();
                 if websocket_writer.send(M::text(json)).await.is_err() {
                     break;
                 }
                 if let Some(write_complete_tx) = queued_message.write_complete_tx {
-                    let _ = write_complete_tx.send(());
+                    let _ = write_complete_tx.send(OutgoingWriteComplete {
+                        serialized_bytes: Some(serialized_bytes),
+                    });
                 }
             }
         }

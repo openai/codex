@@ -31,6 +31,7 @@ pub(crate) use codex_app_server_transport::ConnectionId;
 pub(crate) use codex_app_server_transport::OutgoingError;
 pub(crate) use codex_app_server_transport::OutgoingMessage;
 pub(crate) use codex_app_server_transport::OutgoingResponse;
+pub(crate) use codex_app_server_transport::OutgoingWriteComplete;
 pub(crate) use codex_app_server_transport::QueuedOutgoingMessage;
 
 #[cfg(test)]
@@ -85,7 +86,7 @@ pub(crate) enum OutgoingEnvelope {
     ToConnection {
         connection_id: ConnectionId,
         message: OutgoingMessage,
-        write_complete_tx: Option<oneshot::Sender<()>>,
+        write_complete_tx: Option<oneshot::Sender<OutgoingWriteComplete>>,
     },
     Broadcast {
         message: OutgoingMessage,
@@ -507,10 +508,34 @@ impl OutgoingMessageSender {
         self.send_response_as(request_id, response.into()).await;
     }
 
+    pub(crate) async fn send_response_with_write_complete<T>(
+        &self,
+        request_id: ConnectionRequestId,
+        response: T,
+    ) -> oneshot::Receiver<OutgoingWriteComplete>
+    where
+        T: Into<ClientResponsePayload>,
+    {
+        let (write_complete_tx, write_complete_rx) = oneshot::channel();
+        self.send_response_as_inner(request_id, response.into(), Some(write_complete_tx))
+            .await;
+        write_complete_rx
+    }
+
     pub(crate) async fn send_response_as(
         &self,
         request_id: ConnectionRequestId,
         response: ClientResponsePayload,
+    ) {
+        self.send_response_as_inner(request_id, response, None)
+            .await;
+    }
+
+    async fn send_response_as_inner(
+        &self,
+        request_id: ConnectionRequestId,
+        response: ClientResponsePayload,
+        write_complete_tx: Option<oneshot::Sender<OutgoingWriteComplete>>,
     ) {
         let connection_id = request_id.connection_id;
         let request_id_for_analytics = request_id.request_id.clone();
@@ -536,6 +561,7 @@ impl OutgoingMessageSender {
                     connection_id,
                     outgoing_message,
                     "response",
+                    write_complete_tx,
                 )
                 .await;
             }
@@ -655,6 +681,7 @@ impl OutgoingMessageSender {
             request_id.connection_id,
             outgoing_message,
             "error",
+            None,
         )
         .await;
     }
@@ -665,11 +692,12 @@ impl OutgoingMessageSender {
         connection_id: ConnectionId,
         message: OutgoingMessage,
         message_kind: &'static str,
+        write_complete_tx: Option<oneshot::Sender<OutgoingWriteComplete>>,
     ) {
         let send_fut = self.sender.send(OutgoingEnvelope::ToConnection {
             connection_id,
             message,
-            write_complete_tx: None,
+            write_complete_tx,
         });
         let send_result = if let Some(request_context) = request_context {
             send_fut.instrument(request_context.span()).await
@@ -1051,6 +1079,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_response_with_write_complete_returns_serialized_size() {
+        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing =
+            OutgoingMessageSender::new(tx, codex_analytics::AnalyticsEventsClient::disabled());
+        let request_id = ConnectionRequestId {
+            connection_id: ConnectionId(42),
+            request_id: RequestId::Integer(7),
+        };
+
+        let write_complete_rx = outgoing
+            .send_response_with_write_complete(
+                request_id,
+                ClientResponsePayload::ThreadArchive(
+                    codex_app_server_protocol::ThreadArchiveResponse {},
+                ),
+            )
+            .await;
+        let envelope = rx.recv().await.expect("response envelope");
+        let OutgoingEnvelope::ToConnection {
+            write_complete_tx: Some(write_complete_tx),
+            ..
+        } = envelope
+        else {
+            panic!("expected targeted response with write completion sender");
+        };
+        let expected = OutgoingWriteComplete {
+            serialized_bytes: Some(321),
+        };
+        write_complete_tx
+            .send(expected)
+            .expect("write completion receiver");
+
+        assert_eq!(write_complete_rx.await, Ok(expected));
+    }
+
+    #[tokio::test]
     async fn send_response_clears_registered_request_context() {
         let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(4);
         let outgoing =
@@ -1152,7 +1216,9 @@ mod tests {
         assert!(matches!(message, OutgoingMessage::AppServerNotification(_)));
         write_complete_tx
             .expect("write completion sender should be attached")
-            .send(())
+            .send(OutgoingWriteComplete {
+                serialized_bytes: Some(123),
+            })
             .expect("receiver should still be waiting");
 
         timeout(Duration::from_secs(1), send_task)

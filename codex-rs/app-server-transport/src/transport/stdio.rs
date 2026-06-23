@@ -4,6 +4,7 @@ use super::TransportEvent;
 use super::forward_incoming_message;
 use super::next_connection_id;
 use super::serialize_outgoing_message;
+use crate::outgoing_message::OutgoingWriteComplete;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -85,13 +86,16 @@ pub async fn start_stdio_connection(
             let Some(mut json) = serialize_outgoing_message(queued_message.message) else {
                 continue;
             };
+            let serialized_bytes = json.len();
             json.push('\n');
             if let Err(err) = stdout.write_all(json.as_bytes()).await {
                 error!("Failed to write to stdout: {err}");
                 break;
             }
             if let Some(write_complete_tx) = queued_message.write_complete_tx {
-                let _ = write_complete_tx.send(());
+                let _ = write_complete_tx.send(OutgoingWriteComplete {
+                    serialized_bytes: Some(serialized_bytes),
+                });
             }
         }
         info!("stdout writer exited (channel closed)");

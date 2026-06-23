@@ -1047,6 +1047,8 @@ impl RemoteControlWebsocket {
                 (payloads, queued_server_envelope.write_complete_tx)
             };
 
+            let serialized_bytes =
+                (!payloads.is_empty()).then(|| payloads.iter().map(String::len).sum::<usize>());
             for payload in payloads {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => return Ok(()),
@@ -1058,7 +1060,7 @@ impl RemoteControlWebsocket {
                 }
             }
             if let Some(write_complete_tx) = write_complete_tx {
-                let _ = write_complete_tx.send(());
+                let _ = write_complete_tx.send(crate::OutgoingWriteComplete { serialized_bytes });
             }
         }
     }

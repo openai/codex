@@ -21,17 +21,22 @@ const LOAD_THREAD_BYTES_METRIC: &str = "codex.rollout.persistence.load_thread_by
 const LOAD_THREAD_ITEMS_METRIC: &str = "codex.rollout.persistence.load_thread_items";
 const LOAD_TURN_BYTES_METRIC: &str = "codex.rollout.persistence.load_turn_bytes";
 const LOAD_TURN_ITEMS_METRIC: &str = "codex.rollout.persistence.load_turn_items";
-const PROJECTION_THREAD_BYTES_METRIC: &str = "codex.rollout.persistence.projection_thread_bytes";
+const THREAD_READ_RESPONSE_BYTES_METRIC: &str =
+    "codex.rollout.persistence.thread_read_response_bytes";
 const PROJECTION_THREAD_ITEMS_METRIC: &str = "codex.rollout.persistence.projection_thread_items";
 const PROJECTION_THREAD_TURNS_METRIC: &str = "codex.rollout.persistence.projection_thread_turns";
-const PROJECTION_TURN_BYTES_METRIC: &str = "codex.rollout.persistence.projection_turn_bytes";
-const PROJECTION_TURN_ITEMS_METRIC: &str = "codex.rollout.persistence.projection_turn_items";
+const PROJECTION_COMPLETED_TURNS_METRIC: &str =
+    "codex.rollout.persistence.projection_completed_turns";
+const PROJECTION_COMPLETED_TURN_ITEMS_METRIC: &str =
+    "codex.rollout.persistence.projection_completed_turn_items";
 const MEASUREMENT_ERROR_METRIC: &str = "codex.rollout.persistence.measurement_error";
 const SAMPLE_DENOMINATOR: u64 = 100;
 const SAMPLE_RATE_LABEL: &str = "0.01";
 static MEASURED_ROLLOUT_LOAD_THREADS: LazyLock<Mutex<HashSet<ThreadId>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 static MEASURED_PROJECTED_THREADS: LazyLock<Mutex<HashSet<ThreadId>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+static IN_FLIGHT_PROJECTED_THREADS: LazyLock<Mutex<HashSet<ThreadId>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -462,7 +467,7 @@ impl RolloutLoadTelemetry {
     }
 }
 
-/// Records detached size proxies for app-server ThreadItem projection reads.
+/// Prepares detached size proxies for app-server ThreadItem projection reads.
 pub struct RolloutProjectionTelemetry {
     metrics: Option<MetricsClient>,
     sampled: bool,
@@ -480,104 +485,105 @@ impl RolloutProjectionTelemetry {
         }
     }
 
-    /// Records compact JSON bytes for the final materialized app-server turns.
-    pub fn record_projected_turns<'a, T, U>(
+    /// Prepares counts to record with the existing serialized `thread/read` response.
+    pub fn prepare_response_measurement(
         &self,
-        turns: &T,
         turn_count: u64,
         item_count: u64,
-        forecast_turn_items: impl IntoIterator<Item = (&'a U, u64)>,
-    ) where
-        T: Serialize + ?Sized,
-        U: Serialize + 'a,
-    {
-        let Some(metrics) = self.enabled_metrics() else {
-            return;
-        };
+        completed_turn_item_counts: Vec<u64>,
+    ) -> Option<RolloutProjectionMeasurement> {
+        let metrics = self.enabled_metrics()?.clone();
         if MEASURED_PROJECTED_THREADS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(&self.thread_id)
         {
-            return;
+            return None;
         }
-        let payload_bytes = match serialized_len(turns) {
-            Ok(payload_bytes) => payload_bytes,
-            Err(_) => {
-                let _ = metrics.counter(
-                    MEASUREMENT_ERROR_METRIC,
-                    /*inc*/ 1,
-                    &[
-                        ("phase", "projection_serialize"),
-                        ("representation", "thread_turns"),
-                        ("source", "app_server_thread_read"),
-                    ],
-                );
-                return;
-            }
-        };
-        let turn_totals = match forecast_turn_items
-            .into_iter()
-            .map(|(items, item_count)| {
-                serialized_len(items).map(|payload_bytes| RolloutSizeTotals {
-                    items: item_count,
-                    payload_bytes,
-                })
-            })
-            .collect::<serde_json::Result<Vec<_>>>()
+        if !IN_FLIGHT_PROJECTED_THREADS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(self.thread_id)
         {
-            Ok(turn_totals) => turn_totals,
-            Err(_) => {
-                let _ = metrics.counter(
-                    MEASUREMENT_ERROR_METRIC,
-                    /*inc*/ 1,
-                    &[
-                        ("phase", "projection_turn_serialize"),
-                        ("representation", "thread_turns"),
-                        ("source", "app_server_thread_read"),
-                    ],
-                );
-                return;
-            }
-        };
-        if !mark_thread_measured(&MEASURED_PROJECTED_THREADS, self.thread_id) {
-            return;
+            return None;
         }
-        record_size_totals(
+        Some(RolloutProjectionMeasurement {
             metrics,
-            RolloutSizeTotals {
-                items: item_count,
-                payload_bytes,
-            },
-            PROJECTION_THREAD_BYTES_METRIC,
-            PROJECTION_THREAD_ITEMS_METRIC,
-            "thread_turns",
-            "app_server_turns_json_v2",
-            "app_server_thread_read",
-        );
-        record_turn_size_totals(
-            metrics,
-            &turn_totals,
-            PROJECTION_TURN_BYTES_METRIC,
-            PROJECTION_TURN_ITEMS_METRIC,
-            "thread_turns",
-            "app_server_turn_items_json_v2",
-            "app_server_thread_read",
-        );
-        let _ = metrics.histogram(
-            PROJECTION_THREAD_TURNS_METRIC,
-            saturating_i64(turn_count),
-            &[
-                ("representation", "thread_turns"),
-                ("encoding", "app_server_turns_json_v2"),
-                ("sample_rate", SAMPLE_RATE_LABEL),
-                ("source", "app_server_thread_read"),
-            ],
-        );
+            thread_id: self.thread_id,
+            turn_count,
+            item_count,
+            completed_turn_item_counts,
+        })
     }
 
     fn enabled_metrics(&self) -> Option<&MetricsClient> {
         self.sampled.then_some(self.metrics.as_ref()).flatten()
+    }
+}
+
+/// Counts associated with one sampled, cold `thread/read` response.
+pub struct RolloutProjectionMeasurement {
+    metrics: MetricsClient,
+    thread_id: ThreadId,
+    turn_count: u64,
+    item_count: u64,
+    completed_turn_item_counts: Vec<u64>,
+}
+
+impl RolloutProjectionMeasurement {
+    /// Records bytes already produced by the app-server transport serializer.
+    pub fn record_serialized_response(self, response_bytes: usize) {
+        if !mark_thread_measured(&MEASURED_PROJECTED_THREADS, self.thread_id) {
+            return;
+        }
+        let response_tags = [
+            ("representation", "thread_read_response"),
+            ("encoding", "app_server_transport_json"),
+            ("sample_rate", SAMPLE_RATE_LABEL),
+            ("source", "app_server_thread_read"),
+        ];
+        let _ = self.metrics.histogram(
+            THREAD_READ_RESPONSE_BYTES_METRIC,
+            saturating_i64(response_bytes as u64),
+            &response_tags,
+        );
+        let projection_tags = [
+            ("representation", "thread_items"),
+            ("encoding", "app_server_protocol_v2"),
+            ("sample_rate", SAMPLE_RATE_LABEL),
+            ("source", "app_server_thread_read"),
+        ];
+        let _ = self.metrics.histogram(
+            PROJECTION_THREAD_ITEMS_METRIC,
+            saturating_i64(self.item_count),
+            &projection_tags,
+        );
+        let _ = self.metrics.histogram(
+            PROJECTION_THREAD_TURNS_METRIC,
+            saturating_i64(self.turn_count),
+            &projection_tags,
+        );
+        let _ = self.metrics.histogram(
+            PROJECTION_COMPLETED_TURNS_METRIC,
+            saturating_i64(self.completed_turn_item_counts.len() as u64),
+            &projection_tags,
+        );
+        for item_count in &self.completed_turn_item_counts {
+            let _ = self.metrics.histogram(
+                PROJECTION_COMPLETED_TURN_ITEMS_METRIC,
+                saturating_i64(*item_count),
+                &projection_tags,
+            );
+        }
+    }
+}
+
+impl Drop for RolloutProjectionMeasurement {
+    fn drop(&mut self) {
+        IN_FLIGHT_PROJECTED_THREADS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.thread_id);
     }
 }
 

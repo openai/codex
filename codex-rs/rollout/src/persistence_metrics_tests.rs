@@ -1,7 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -17,7 +13,6 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
-use serde::Serialize;
 
 use super::CompletedTurnMeasurement;
 use super::RolloutProjectionTelemetry;
@@ -28,7 +23,6 @@ use super::TurnOutcome;
 use super::TurnSizeTotals;
 use super::is_thread_sampled;
 use super::measure_and_filter_rollout_items;
-use super::serialized_len;
 use super::update_turn_measurements;
 
 fn retained_message(text: &str) -> RolloutItem {
@@ -271,21 +265,6 @@ fn filtered_item_completion_includes_its_nested_item_type() {
 }
 
 #[test]
-fn projected_turn_size_matches_compact_json() {
-    let turns = vec![
-        serde_json::json!({"id": "turn-1", "items": [{"type": "userMessage"}]}),
-        serde_json::json!({"id": "turn-2", "items": []}),
-    ];
-
-    assert_eq!(
-        serialized_len(&turns).expect("measure projected turns"),
-        serde_json::to_vec(&turns)
-            .expect("serialize projected turns")
-            .len() as u64
-    );
-}
-
-#[test]
 fn rollout_turn_sizes_use_loaded_line_bytes_for_completed_user_turns() {
     let items = [
         RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
@@ -401,24 +380,8 @@ fn rollout_turn_sizes_exclude_incomplete_and_commentary_only_turns() {
     assert_eq!(tracker.finish(), Vec::<RolloutSizeTotals>::new());
 }
 
-struct FailingSerialize {
-    serialization_attempted: Arc<AtomicBool>,
-}
-
-impl Serialize for FailingSerialize {
-    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.serialization_attempted.store(true, Ordering::Relaxed);
-        Err(serde::ser::Error::custom(
-            "intentional serialization failure",
-        ))
-    }
-}
-
 #[test]
-fn exporter_disabled_path_does_not_serialize_projected_turns() {
+fn exporter_disabled_path_does_not_prepare_projection_measurement() {
     let sampled_thread_id = (0..10_000_u128)
         .find_map(|value| {
             let thread_id = ThreadId::from_string(&format!("00000000-0000-0000-0000-{value:012x}"))
@@ -426,17 +389,8 @@ fn exporter_disabled_path_does_not_serialize_projected_turns() {
             is_thread_sampled(thread_id).then_some(thread_id)
         })
         .expect("sampled thread id");
-    let serialization_attempted = Arc::new(AtomicBool::new(false));
-    let turns = FailingSerialize {
-        serialization_attempted: Arc::clone(&serialization_attempted),
-    };
+    let measurement = RolloutProjectionTelemetry::new(sampled_thread_id)
+        .prepare_response_measurement(/*turn_count*/ 1, /*item_count*/ 1, vec![1]);
 
-    RolloutProjectionTelemetry::new(sampled_thread_id).record_projected_turns(
-        &turns,
-        /*turn_count*/ 1,
-        /*item_count*/ 1,
-        std::iter::empty::<(&serde_json::Value, u64)>(),
-    );
-
-    assert!(!serialization_attempted.load(Ordering::Relaxed));
+    assert!(measurement.is_none());
 }

@@ -19,6 +19,11 @@ struct ThreadListFilters {
     parent_thread_id: Option<ThreadId>,
 }
 
+struct ThreadReadView {
+    thread: Thread,
+    projection_measurement: Option<RolloutProjectionMeasurement>,
+}
+
 fn collect_resume_override_mismatches(
     request: &ThreadResumeParams,
     config_snapshot: &ThreadConfigSnapshot,
@@ -667,11 +672,31 @@ impl ThreadRequestProcessor {
 
     pub(crate) async fn thread_read(
         &self,
+        request_id: &ConnectionRequestId,
         params: ThreadReadParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_read_response_inner(params)
-            .await
-            .map(|response| Some(response.into()))
+        let view = self.thread_read_response_inner(params).await?;
+        let response = ThreadReadResponse {
+            thread: view.thread,
+        };
+        if let Some(measurement) = view.projection_measurement {
+            let write_complete_rx = self
+                .outgoing
+                .send_response_with_write_complete(request_id.clone(), response)
+                .await;
+            tokio::spawn(async move {
+                if let Ok(write_complete) = write_complete_rx.await
+                    && let Some(serialized_bytes) = write_complete.serialized_bytes
+                {
+                    measurement.record_serialized_response(serialized_bytes);
+                }
+            });
+        } else {
+            self.outgoing
+                .send_response(request_id.clone(), response)
+                .await;
+        }
+        Ok(None)
     }
 
     pub(crate) async fn thread_turns_list(
@@ -2153,7 +2178,7 @@ impl ThreadRequestProcessor {
     async fn thread_read_response_inner(
         &self,
         params: ThreadReadParams,
-    ) -> Result<ThreadReadResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadReadView, JSONRPCErrorError> {
         let ThreadReadParams {
             thread_id,
             include_turns,
@@ -2162,11 +2187,9 @@ impl ThreadRequestProcessor {
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        let thread = self
-            .read_thread_view(thread_uuid, include_turns)
+        self.read_thread_view(thread_uuid, include_turns)
             .await
-            .map_err(thread_read_view_error)?;
-        Ok(ThreadReadResponse { thread })
+            .map_err(thread_read_view_error)
     }
 
     /// Builds the API view for `thread/read` from persisted metadata plus optional live state.
@@ -2174,50 +2197,59 @@ impl ThreadRequestProcessor {
         &self,
         thread_id: ThreadId,
         include_turns: bool,
-    ) -> Result<Thread, ThreadReadViewError> {
+    ) -> Result<ThreadReadView, ThreadReadViewError> {
         let loaded_thread = self.thread_manager.get_thread(thread_id).await.ok();
-        let mut thread = if include_turns {
+        let mut view = if include_turns {
             if let Some(loaded_thread) = loaded_thread.as_ref() {
                 // Loaded thread with turns: use persisted metadata when it exists,
                 // but reconstruct turns from the live ThreadStore history.
                 let persisted_thread = self
                     .load_persisted_thread_for_read(thread_id, /*include_turns*/ false)
-                    .await?;
-                self.load_live_thread_view(
-                    thread_id,
-                    include_turns,
-                    loaded_thread,
-                    persisted_thread,
-                )
-                .await?
-            } else if let Some(thread) = self
+                    .await?
+                    .map(|view| view.thread);
+                ThreadReadView {
+                    thread: self
+                        .load_live_thread_view(
+                            thread_id,
+                            include_turns,
+                            loaded_thread,
+                            persisted_thread,
+                        )
+                        .await?,
+                    projection_measurement: None,
+                }
+            } else if let Some(view) = self
                 .load_persisted_thread_for_read(thread_id, include_turns)
                 .await?
             {
                 // Unloaded thread with turns: load metadata and history together
                 // from the ThreadStore.
-                thread
+                view
             } else {
                 return Err(ThreadReadViewError::InvalidRequest(format!(
                     "thread not loaded: {thread_id}"
                 )));
             }
-        } else if let Some(thread) = self
+        } else if let Some(view) = self
             .load_persisted_thread_for_read(thread_id, include_turns)
             .await?
         {
             // Persisted metadata-only read: no live thread state is needed.
-            thread
+            view
         } else if let Some(loaded_thread) = loaded_thread.as_ref() {
             // Loaded metadata-only read before persistence is materialized: build
             // the response from the live thread snapshot.
-            self.load_live_thread_view(
-                thread_id,
-                include_turns,
-                loaded_thread,
-                /*persisted_thread*/ None,
-            )
-            .await?
+            ThreadReadView {
+                thread: self
+                    .load_live_thread_view(
+                        thread_id,
+                        include_turns,
+                        loaded_thread,
+                        /*persisted_thread*/ None,
+                    )
+                    .await?,
+                projection_measurement: None,
+            }
         } else {
             return Err(ThreadReadViewError::InvalidRequest(format!(
                 "thread not loaded: {thread_id}"
@@ -2232,22 +2264,22 @@ impl ThreadRequestProcessor {
 
         let thread_status = self
             .thread_watch_manager
-            .loaded_status_for_thread(&thread.id)
+            .loaded_status_for_thread(&view.thread.id)
             .await;
 
         set_thread_status_and_interrupt_stale_turns(
-            &mut thread,
+            &mut view.thread,
             thread_status,
             has_live_in_progress_turn,
         );
-        Ok(thread)
+        Ok(view)
     }
 
     async fn load_persisted_thread_for_read(
         &self,
         thread_id: ThreadId,
         include_turns: bool,
-    ) -> Result<Option<Thread>, ThreadReadViewError> {
+    ) -> Result<Option<ThreadReadView>, ThreadReadViewError> {
         let fallback_provider = self.config.model_provider_id.as_str();
         match self
             .thread_store
@@ -2261,11 +2293,16 @@ impl ThreadRequestProcessor {
             Ok(stored_thread) => {
                 let (mut thread, history) =
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                let mut projection_measurement = None;
                 if include_turns && let Some(history) = history {
                     thread.turns = build_api_turns_from_rollout_items(&history.items);
-                    record_rollout_projection(thread_id, &thread.turns);
+                    projection_measurement =
+                        prepare_rollout_projection_measurement(thread_id, &thread.turns);
                 }
-                Ok(Some(thread))
+                Ok(Some(ThreadReadView {
+                    thread,
+                    projection_measurement,
+                }))
             }
             Err(ThreadStoreError::InvalidRequest { message })
                 if message == format!("no rollout found for thread id {thread_id}") =>

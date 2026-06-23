@@ -681,7 +681,11 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                         }
                     }
                     if let Some(write_complete_tx) = queued_message.write_complete_tx {
-                        let _ = write_complete_tx.send(());
+                        let _ = write_complete_tx.send(
+                            codex_app_server_transport::OutgoingWriteComplete {
+                                serialized_bytes: None,
+                            },
+                        );
                     }
                 }
             }
