@@ -1345,6 +1345,177 @@ async fn concurrent_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_cutoff_keeps_partial_summary_and_runs_tool() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config.model_reasoning_summary = Some(ReasoningSummary::Auto);
+            let _ = config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries);
+        })
+        .build(&server)
+        .await?;
+
+    let partial_summary = "**Checking**\n\npartial";
+    let call_id = "call-1";
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_reasoning_item_added("reasoning-1", &[""]),
+        serde_json::json!({
+            "type": "response.reasoning_summary_part.added",
+            "item_id": "reasoning-1",
+            "output_index": 0,
+            "summary_index": 0,
+            "part": {"type": "summary_text", "text": ""},
+        }),
+        ev_reasoning_summary_text_delta("**Checking"),
+        serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "function-1",
+                "call_id": call_id,
+                "name": "test_sync_tool",
+                "arguments": "",
+            },
+        }),
+        serde_json::json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function-1",
+            "output_index": 1,
+            "delta": "{}",
+        }),
+        serde_json::json!({
+            "type": "response.function_call_arguments.done",
+            "item_id": "function-1",
+            "output_index": 1,
+            "arguments": "{}",
+        }),
+        serde_json::json!({
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "function-1",
+                "call_id": call_id,
+                "name": "test_sync_tool",
+                "arguments": "{}",
+            },
+        }),
+        ev_reasoning_summary_text_done_for_item(
+            "reasoning-1",
+            /*summary_index*/ 0,
+            partial_summary,
+        ),
+        serde_json::json!({
+            "type": "response.reasoning_summary_part.done",
+            "item_id": "reasoning-1",
+            "output_index": 0,
+            "summary_index": 0,
+            "status": "incomplete",
+            "part": {"type": "summary_text", "text": partial_summary},
+        }),
+        ev_output_item_done_with_index(
+            ev_reasoning_item("reasoning-1", &[partial_summary], &[]),
+            /*output_index*/ 0,
+        ),
+        ev_completed("resp-1"),
+    ]);
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            stream,
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("message-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "use the test tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let mut completed_reasoning = None;
+    let mut summary_deltas = Vec::new();
+    loop {
+        let event = codex.next_event().await?;
+        match event.msg {
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::Reasoning(item),
+                ..
+            }) => completed_reasoning = Some(item),
+            EventMsg::ReasoningContentDelta(event) => summary_deltas.push(event),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        summary_deltas
+            .iter()
+            .map(|event| (
+                event.item_id.as_str(),
+                event.summary_index,
+                event.delta.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [("reasoning-1", 0, partial_summary)]
+    );
+    assert_eq!(
+        completed_reasoning
+            .expect("completed reasoning item")
+            .summary_text,
+        [partial_summary]
+    );
+    assert_eq!(
+        response_mock.function_call_output_text(call_id).as_deref(),
+        Some("ok")
+    );
+
+    let requests = response_mock.requests();
+    let follow_up = requests.get(1).expect("follow-up request");
+    let output_types = follow_up
+        .input()
+        .iter()
+        .filter_map(
+            |item| match item.get("type").and_then(serde_json::Value::as_str) {
+                Some("reasoning") => Some("reasoning"),
+                Some("function_call") => Some("function_call"),
+                Some("function_call_output") => Some("function_call_output"),
+                _ => None,
+            },
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(
+        output_types,
+        ["reasoning", "function_call", "function_call_output"]
+    );
+    assert_eq!(
+        follow_up.inputs_of_type("reasoning")[0]["summary"][0]["text"],
+        partial_summary
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
