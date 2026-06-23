@@ -14,7 +14,6 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
-use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
 use codex_config::ProfileV2Name;
@@ -40,7 +39,6 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
-use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
@@ -1878,7 +1876,7 @@ fn filter_mcp_servers_by_requirements(
         let allowed = allowlist
             .value
             .get(name)
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+            .is_some_and(|requirement| requirement.matches(server));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -1907,7 +1905,7 @@ fn filter_plugin_mcp_servers_by_requirements(
     for (name, server) in mcp_servers.iter_mut() {
         let allowed = plugin_mcp_requirements
             .and_then(|mcp_requirements| mcp_requirements.get(name))
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+            .is_some_and(|requirement| requirement.matches(server));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -1968,28 +1966,6 @@ where
     }
 
     Ok(false)
-}
-
-fn mcp_server_matches_requirement(
-    requirement: &McpServerRequirement,
-    server: &McpServerConfig,
-) -> bool {
-    match requirement {
-        McpServerRequirement::Identity { identity } => match identity {
-            McpServerIdentity::Command {
-                command: want_command,
-            } => matches!(
-                &server.transport,
-                McpServerTransportConfig::Stdio { command: got_command, .. }
-                    if got_command == want_command
-            ),
-            McpServerIdentity::Url { url: want_url } => matches!(
-                &server.transport,
-                McpServerTransportConfig::StreamableHttp { url: got_url, .. }
-                    if got_url == want_url
-            ),
-        },
-    }
 }
 
 pub async fn load_global_mcp_servers(
