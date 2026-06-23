@@ -31,7 +31,7 @@ fn stdio_server(command: &str, args: &[&str]) -> McpServerConfig {
 
 #[test]
 fn command_matcher_matches_exact_positional_arguments() {
-    let matcher = McpServerMatcher::Command(McpServerCommandMatcher {
+    let requirement = McpServerRequirement::Command(McpServerCommandMatcher {
         command: "company-cli".to_string(),
         args: vec![
             McpServerValueMatcher::Exact {
@@ -43,19 +43,19 @@ fn command_matcher_matches_exact_positional_arguments() {
         ],
     });
 
-    assert!(matcher.matches(&stdio_server(
+    assert!(requirement.matches(&stdio_server(
         "company-cli",
         &["mcp", "https://pricing.example.com"]
     )));
-    assert!(!matcher.matches(&stdio_server(
+    assert!(!requirement.matches(&stdio_server(
         "company-cli",
         &["https://pricing.example.com", "mcp"]
     )));
-    assert!(!matcher.matches(&stdio_server(
+    assert!(!requirement.matches(&stdio_server(
         "company-cli",
         &["mcp", "https://pricing.example.com", "--verbose"]
     )));
-    assert!(!matcher.matches(&stdio_server(
+    assert!(!requirement.matches(&stdio_server(
         "/usr/local/bin/company-cli",
         &["mcp", "https://pricing.example.com"]
     )));
@@ -82,8 +82,25 @@ fn regex_matcher_allows_a_later_alternative_to_match_the_full_value() {
 }
 
 #[test]
-fn matcher_deserializes_command_and_url_shapes() {
-    let command: McpServerMatcher = toml::from_str(
+fn legacy_command_identity_keeps_ignoring_arguments() {
+    let requirement: McpServerRequirement = toml::from_str(
+        r#"
+[identity]
+command = "company-cli"
+"#,
+    )
+    .expect("legacy command identity");
+
+    assert!(requirement.matches(&stdio_server(
+        "company-cli",
+        &["any", "arguments", "remain", "allowed"]
+    )));
+    assert!(!requirement.matches(&stdio_server("different-cli", &[])));
+}
+
+#[test]
+fn requirement_deserializes_command_and_url_matcher_shapes() {
+    let command: McpServerRequirement = toml::from_str(
         r#"
 command = "company-cli"
 args = [
@@ -93,7 +110,7 @@ args = [
 "#,
     )
     .expect("command matcher");
-    let url: McpServerMatcher = toml::from_str(
+    let url: McpServerRequirement = toml::from_str(
         r#"
 url = { match = "prefix", value = "https://mcp.example.com/" }
 "#,
@@ -102,7 +119,7 @@ url = { match = "prefix", value = "https://mcp.example.com/" }
 
     assert_eq!(
         command,
-        McpServerMatcher::Command(McpServerCommandMatcher {
+        McpServerRequirement::Command(McpServerCommandMatcher {
             command: "company-cli".to_string(),
             args: vec![
                 McpServerValueMatcher::Exact {
@@ -116,7 +133,7 @@ url = { match = "prefix", value = "https://mcp.example.com/" }
     );
     assert_eq!(
         url,
-        McpServerMatcher::Url(McpServerUrlMatcher {
+        McpServerRequirement::Url(McpServerUrlMatcher {
             url: McpServerValueMatcher::Prefix {
                 value: "https://mcp.example.com/".to_string(),
             },

@@ -699,7 +699,7 @@ mod tests {
             mcp_servers: Some(Sourced::new(
                 BTreeMap::from([(
                     "docs".to_string(),
-                    McpServerRequirement {
+                    McpServerRequirement::Identity {
                         identity: McpServerIdentity::Command {
                             command: "codex-mcp".to_string(),
                         },
@@ -778,13 +778,12 @@ mod tests {
             hooks: None,
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
-                McpServerRequirement {
+                McpServerRequirement::Identity {
                     identity: McpServerIdentity::Command {
                         command: "codex-mcp".to_string(),
                     },
                 },
             )])),
-            mcp_server_matchers: None,
             plugins: None,
             apps: None,
             rules: None,
@@ -1142,7 +1141,6 @@ approval_policy = "never"
             feature_requirements: None,
             hooks: None,
             mcp_servers: None,
-            mcp_server_matchers: None,
             plugins: None,
             apps: None,
             rules: None,

@@ -1,3 +1,5 @@
+use crate::McpServerIdentity;
+use crate::McpServerRequirement;
 use crate::mcp_types::McpServerConfig;
 use crate::mcp_types::McpServerTransportConfig;
 use regex_lite::Regex;
@@ -49,17 +51,10 @@ pub struct McpServerUrlMatcher {
     pub url: McpServerValueMatcher,
 }
 
-/// A managed matcher for either a stdio command invocation or a direct MCP URL.
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum McpServerMatcher {
-    Command(McpServerCommandMatcher),
-    Url(McpServerUrlMatcher),
-}
-
-impl McpServerMatcher {
+impl McpServerRequirement {
     pub(crate) fn validate(&self) -> Result<(), String> {
         match self {
+            Self::Identity { .. } => Ok(()),
             Self::Command(matcher) => {
                 for (index, arg) in matcher.args.iter().enumerate() {
                     arg.validate().map_err(|err| {
@@ -74,6 +69,24 @@ impl McpServerMatcher {
 
     pub fn matches(&self, server: &McpServerConfig) -> bool {
         match (self, &server.transport) {
+            (
+                Self::Identity {
+                    identity:
+                        McpServerIdentity::Command {
+                            command: want_command,
+                        },
+                },
+                McpServerTransportConfig::Stdio {
+                    command: got_command,
+                    ..
+                },
+            ) => got_command == want_command,
+            (
+                Self::Identity {
+                    identity: McpServerIdentity::Url { url: want_url },
+                },
+                McpServerTransportConfig::StreamableHttp { url: got_url, .. },
+            ) => got_url == want_url,
             (Self::Command(matcher), McpServerTransportConfig::Stdio { command, args, .. }) => {
                 matcher.command == *command
                     && matcher.args.len() == args.len()
@@ -86,8 +99,7 @@ impl McpServerMatcher {
             (Self::Url(matcher), McpServerTransportConfig::StreamableHttp { url, .. }) => {
                 matcher.url.matches(url)
             }
-            (Self::Command(_), McpServerTransportConfig::StreamableHttp { .. })
-            | (Self::Url(_), McpServerTransportConfig::Stdio { .. }) => false,
+            _ => false,
         }
     }
 }

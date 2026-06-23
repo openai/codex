@@ -26,9 +26,9 @@ pub enum ConstraintError {
     },
 
     #[error(
-        "invalid matcher for MCP server `{server_name}` in requirements (set by {requirement_source}): {reason}"
+        "invalid requirement for MCP server `{server_name}` (set by {requirement_source}): {reason}"
     )]
-    McpServerMatcherParse {
+    McpServerRequirementParse {
         server_name: String,
         requirement_source: RequirementSource,
         reason: String,

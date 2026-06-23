@@ -10,6 +10,8 @@
 //! - `rules.prefix_rules` append high-priority rules first.
 //! - `hooks` append high-priority event groups first while failing closed on
 //!   active managed-dir conflicts.
+//! - Incompatible definitions of the same named MCP server fail composition
+//!   instead of silently combining legacy identities with matcher rules.
 //! - `permissions.filesystem.deny_read` is a high-priority-first union across
 //!   layers.
 
@@ -19,6 +21,7 @@ use crate::RequirementSource;
 use crate::Sourced;
 use crate::merge::merge_toml_values;
 use std::cell::OnceCell;
+use std::collections::BTreeMap;
 use std::io;
 use thiserror::Error;
 use toml::Value as TomlValue;
@@ -148,6 +151,7 @@ impl RequirementsLayerStack {
             hook_directory_field,
         } = self;
 
+        validate_mcp_server_requirement_shapes(&layers)?;
         let mut merged_toml = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
             merge_toml_values(&mut merged_toml, &layer.regular_toml);
@@ -187,6 +191,122 @@ impl RequirementsLayerStack {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpServerRequirementShape {
+    LegacyCommandIdentity,
+    LegacyUrlIdentity,
+    CommandMatcher,
+    ExactUrlMatcher,
+    PrefixUrlMatcher,
+    RegexUrlMatcher,
+}
+
+impl std::fmt::Display for McpServerRequirementShape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LegacyCommandIdentity => f.write_str("legacy command identity"),
+            Self::LegacyUrlIdentity => f.write_str("legacy URL identity"),
+            Self::CommandMatcher => f.write_str("command matcher"),
+            Self::ExactUrlMatcher => f.write_str("exact URL matcher"),
+            Self::PrefixUrlMatcher => f.write_str("prefix URL matcher"),
+            Self::RegexUrlMatcher => f.write_str("regex URL matcher"),
+        }
+    }
+}
+
+fn validate_mcp_server_requirement_shapes(
+    layers: &[ComposableRequirementsLayer],
+) -> Result<(), RequirementsCompositionError> {
+    let mut seen = BTreeMap::<String, (McpServerRequirementShape, RequirementSource)>::new();
+    for layer in layers {
+        if let Some(requirements) = table_at_path(&layer.regular_toml, &["mcp_servers"]) {
+            validate_mcp_server_requirement_table(
+                requirements,
+                "mcp_servers",
+                &layer.source,
+                &mut seen,
+            )?;
+        }
+
+        let Some(plugins) = table_at_path(&layer.regular_toml, &["plugins"]) else {
+            continue;
+        };
+        for plugin_name in plugins.keys() {
+            let Some(requirements) = table_at_path(
+                &layer.regular_toml,
+                &["plugins", plugin_name, "mcp_servers"],
+            ) else {
+                continue;
+            };
+            validate_mcp_server_requirement_table(
+                requirements,
+                &format!("plugins.\"{plugin_name}\".mcp_servers"),
+                &layer.source,
+                &mut seen,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_mcp_server_requirement_table(
+    requirements: &toml::Table,
+    table_path: &str,
+    source: &RequirementSource,
+    seen: &mut BTreeMap<String, (McpServerRequirementShape, RequirementSource)>,
+) -> Result<(), RequirementsCompositionError> {
+    for (server_name, requirement) in requirements {
+        let Some(shape) = mcp_server_requirement_shape(requirement) else {
+            continue;
+        };
+        let field = format!("{table_path}.{server_name}");
+        if let Some((existing_shape, existing_source)) = seen.get(&field)
+            && *existing_shape != shape
+        {
+            return Err(composition_conflict(
+                field,
+                existing_source.clone(),
+                source.clone(),
+                format!(
+                    "cannot combine {existing_shape} with {shape}; define this MCP server using one requirement form"
+                ),
+            ));
+        }
+        seen.insert(field, (shape, source.clone()));
+    }
+    Ok(())
+}
+
+fn mcp_server_requirement_shape(value: &TomlValue) -> Option<McpServerRequirementShape> {
+    let requirement = value.as_table()?;
+    if let Some(identity) = requirement.get("identity").and_then(TomlValue::as_table) {
+        if identity.contains_key("command") {
+            return Some(McpServerRequirementShape::LegacyCommandIdentity);
+        }
+        if identity.contains_key("url") {
+            return Some(McpServerRequirementShape::LegacyUrlIdentity);
+        }
+        return None;
+    }
+    if requirement.contains_key("command") {
+        return Some(McpServerRequirementShape::CommandMatcher);
+    }
+    let matcher = requirement.get("url")?.as_table()?;
+    match matcher.get("match")?.as_str()? {
+        "exact" => Some(McpServerRequirementShape::ExactUrlMatcher),
+        "prefix" => Some(McpServerRequirementShape::PrefixUrlMatcher),
+        "regex" => Some(McpServerRequirementShape::RegexUrlMatcher),
+        _ => None,
+    }
+}
+
+fn table_at_path<'a>(mut value: &'a TomlValue, path: &[&str]) -> Option<&'a toml::Table> {
+    for key in path {
+        value = value.as_table()?.get(*key)?;
+    }
+    value.as_table()
+}
+
 fn populate_merged_regular_fields_with_sources(
     output: &mut ConfigRequirementsWithSources,
     requirements: ConfigRequirementsToml,
@@ -221,7 +341,6 @@ fn populate_merged_regular_fields_with_sources(
         feature_requirements,
         hooks: _,
         mcp_servers,
-        mcp_server_matchers,
         plugins,
         apps,
         rules: _,
@@ -250,7 +369,6 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(windows, &["windows"]);
     set_sourced!(feature_requirements, &["features", "feature_requirements"]);
     set_sourced!(mcp_servers, &["mcp_servers"]);
-    set_sourced!(mcp_server_matchers, &["mcp_server_matchers"]);
     set_sourced!(plugins, &["plugins"]);
     set_sourced!(apps, &["apps"]);
     set_sourced!(enforce_residency, &["enforce_residency"]);

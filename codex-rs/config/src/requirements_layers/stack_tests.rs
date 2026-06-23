@@ -390,43 +390,65 @@ command = "high-mcp"
 }
 
 #[test]
-fn mcp_server_matchers_use_regular_toml_merge() {
-    let composed = compose(vec![
+fn mcp_requirements_reject_mixed_forms_across_layers() {
+    let err = compose(vec![
         layer(
             "req_low",
             "Low",
             r#"
-[mcp_server_matchers.shared]
-url = { match = "prefix", value = "https://low.example.com/" }
-
-[mcp_server_matchers.low]
-url = { match = "exact", value = "https://low.example.com/mcp" }
+[mcp_servers.shared.identity]
+command = "low-mcp"
 "#,
         ),
         layer(
             "req_high",
             "High",
             r#"
-[mcp_server_matchers.shared]
-url = { match = "prefix", value = "https://high.example.com/" }
+[mcp_servers.shared]
+command = "company-cli"
+args = [{ match = "exact", value = "mcp" }]
 "#,
         ),
     ])
-    .expect("compose requirements")
-    .expect("requirements present");
+    .expect_err("mixed MCP requirement forms should fail composition");
 
-    assert_eq!(
-        composed,
-        expected_requirements(
+    assert!(err.to_string().contains("mcp_servers.shared"));
+    assert!(err.to_string().contains("legacy command identity"));
+    assert!(err.to_string().contains("command matcher"));
+    assert!(err.to_string().contains("High (req_high)"));
+    assert!(err.to_string().contains("Low (req_low)"));
+}
+
+#[test]
+fn plugin_mcp_requirements_reject_mixed_forms_across_layers() {
+    let err = compose(vec![
+        layer(
+            "req_low",
+            "Low",
             r#"
-[mcp_server_matchers.low]
-url = { match = "exact", value = "https://low.example.com/mcp" }
+[plugins."sample@test".mcp_servers.shared.identity]
+command = "low-plugin-mcp"
+"#,
+        ),
+        layer(
+            "req_high",
+            "High",
+            r#"
+[plugins."sample@test".mcp_servers.shared]
+url = { match = "regex", expression = '^https://high\.example\.com/mcp$' }
+"#,
+        ),
+    ])
+    .expect_err("mixed plugin MCP requirement forms should fail composition");
 
-[mcp_server_matchers.shared]
-url = { match = "prefix", value = "https://high.example.com/" }
-"#
-        )
+    assert!(
+        err.to_string()
+            .contains("plugins.\"sample@test\".mcp_servers.shared")
     );
+    assert!(err.to_string().contains("legacy command identity"));
+    assert!(err.to_string().contains("regex URL matcher"));
+    assert!(err.to_string().contains("High (req_high)"));
+    assert!(err.to_string().contains("Low (req_low)"));
 }
 
 #[test]
