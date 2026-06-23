@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use codex_app_server_protocol::AuthMode;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginCapabilitySummary;
@@ -10,6 +9,7 @@ use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Product;
 use tokio::sync::Semaphore;
 
