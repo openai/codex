@@ -32,7 +32,7 @@ fn stdio_server(command: &str, args: &[&str]) -> McpServerConfig {
 #[test]
 fn command_matcher_matches_exact_positional_arguments() {
     let matcher = McpServerMatcher::Command(McpServerCommandMatcher {
-        command: "forge".to_string(),
+        command: "company-cli".to_string(),
         args: vec![
             McpServerValueMatcher::Exact {
                 value: "mcp".to_string(),
@@ -44,19 +44,19 @@ fn command_matcher_matches_exact_positional_arguments() {
     });
 
     assert!(matcher.matches(&stdio_server(
-        "forge",
+        "company-cli",
         &["mcp", "https://pricing.example.com"]
     )));
     assert!(!matcher.matches(&stdio_server(
-        "forge",
+        "company-cli",
         &["https://pricing.example.com", "mcp"]
     )));
     assert!(!matcher.matches(&stdio_server(
-        "forge",
+        "company-cli",
         &["mcp", "https://pricing.example.com", "--verbose"]
     )));
     assert!(!matcher.matches(&stdio_server(
-        "/usr/local/bin/forge",
+        "/usr/local/bin/company-cli",
         &["mcp", "https://pricing.example.com"]
     )));
 }
@@ -85,7 +85,7 @@ fn regex_matcher_allows_a_later_alternative_to_match_the_full_value() {
 fn matcher_deserializes_command_and_url_shapes() {
     let command: McpServerMatcher = toml::from_str(
         r#"
-command = "forge"
+command = "company-cli"
 args = [
     { match = "exact", value = "mcp" },
     { match = "regex", expression = '^https://[a-z]+\.example\.com$' },
@@ -103,7 +103,7 @@ url = { match = "prefix", value = "https://mcp.example.com/" }
     assert_eq!(
         command,
         McpServerMatcher::Command(McpServerCommandMatcher {
-            command: "forge".to_string(),
+            command: "company-cli".to_string(),
             args: vec![
                 McpServerValueMatcher::Exact {
                     value: "mcp".to_string(),

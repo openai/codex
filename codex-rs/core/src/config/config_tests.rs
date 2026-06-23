@@ -4239,9 +4239,9 @@ fn filter_mcp_servers_by_allowlist_allows_all_when_unset() {
 fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
     let mut servers = HashMap::from([
         (
-            "bloomberg_forge".to_string(),
+            "internal_mcp_proxy".to_string(),
             stdio_mcp_with_args(
-                "forge",
+                "company-cli",
                 &[
                     "mcp",
                     "proxy",
@@ -4253,7 +4253,7 @@ fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
         (
             "unlisted".to_string(),
             stdio_mcp_with_args(
-                "forge",
+                "company-cli",
                 &[
                     "mcp",
                     "proxy",
@@ -4265,7 +4265,7 @@ fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
         (
             "wrong-order".to_string(),
             stdio_mcp_with_args(
-                "forge",
+                "company-cli",
                 &[
                     "proxy",
                     "mcp",
@@ -4277,7 +4277,7 @@ fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
         (
             "trailing-arg".to_string(),
             stdio_mcp_with_args(
-                "forge",
+                "company-cli",
                 &[
                     "mcp",
                     "proxy",
@@ -4290,14 +4290,14 @@ fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
         (
             "wrong-host".to_string(),
             stdio_mcp_with_args(
-                "forge",
+                "company-cli",
                 &["mcp", "proxy", "--server", "https://mcp.example.com"],
             ),
         ),
     ]);
     let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
     let matcher = McpServerMatcher::Command(McpServerCommandMatcher {
-        command: "forge".to_string(),
+        command: "company-cli".to_string(),
         args: vec![
             McpServerValueMatcher::Exact {
                 value: "mcp".to_string(),
@@ -4317,7 +4317,7 @@ fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
     });
     let matchers = Sourced::new(
         BTreeMap::from([
-            ("bloomberg_forge".to_string(), matcher.clone()),
+            ("internal_mcp_proxy".to_string(), matcher.clone()),
             ("wrong-order".to_string(), matcher.clone()),
             ("trailing-arg".to_string(), matcher.clone()),
             ("wrong-host".to_string(), matcher),
@@ -4341,7 +4341,7 @@ fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
             ))
             .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
         HashMap::from([
-            ("bloomberg_forge".to_string(), (true, None)),
+            ("internal_mcp_proxy".to_string(), (true, None)),
             ("unlisted".to_string(), (false, reason.clone())),
             ("wrong-order".to_string(), (false, reason.clone())),
             ("trailing-arg".to_string(), (false, reason.clone())),
@@ -4359,15 +4359,15 @@ fn filter_mcp_servers_by_requirements_enforces_all_same_name_rules() {
     let mut servers = HashMap::from([
         (
             BOTH_MATCH.to_string(),
-            stdio_mcp_with_args("forge", &["approved"]),
+            stdio_mcp_with_args("company-cli", &["approved"]),
         ),
         (
             EXACT_ONLY_MATCHES.to_string(),
-            stdio_mcp_with_args("forge", &["rejected"]),
+            stdio_mcp_with_args("company-cli", &["rejected"]),
         ),
         (
             MATCHER_ONLY_MATCHES.to_string(),
-            stdio_mcp_with_args("forge", &["approved"]),
+            stdio_mcp_with_args("company-cli", &["approved"]),
         ),
     ]);
     let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
@@ -4377,7 +4377,7 @@ fn filter_mcp_servers_by_requirements_enforces_all_same_name_rules() {
                 BOTH_MATCH.to_string(),
                 McpServerRequirement {
                     identity: McpServerIdentity::Command {
-                        command: "forge".to_string(),
+                        command: "company-cli".to_string(),
                     },
                 },
             ),
@@ -4385,7 +4385,7 @@ fn filter_mcp_servers_by_requirements_enforces_all_same_name_rules() {
                 EXACT_ONLY_MATCHES.to_string(),
                 McpServerRequirement {
                     identity: McpServerIdentity::Command {
-                        command: "forge".to_string(),
+                        command: "company-cli".to_string(),
                     },
                 },
             ),
@@ -4401,7 +4401,7 @@ fn filter_mcp_servers_by_requirements_enforces_all_same_name_rules() {
         source.clone(),
     );
     let matcher = McpServerMatcher::Command(McpServerCommandMatcher {
-        command: "forge".to_string(),
+        command: "company-cli".to_string(),
         args: vec![McpServerValueMatcher::Exact {
             value: "approved".to_string(),
         }],
@@ -4630,20 +4630,20 @@ fn filter_plugin_mcp_servers_by_matchers_enforces_name_and_invocation() {
     let mut servers = HashMap::from([
         (
             MATCHED_SERVER.to_string(),
-            stdio_mcp_with_args("forge", &["approved"]),
+            stdio_mcp_with_args("company-cli", &["approved"]),
         ),
         (
             MISMATCHED_SERVER.to_string(),
-            stdio_mcp_with_args("forge", &["rejected"]),
+            stdio_mcp_with_args("company-cli", &["rejected"]),
         ),
         (
             UNLISTED_SERVER.to_string(),
-            stdio_mcp_with_args("forge", &["approved"]),
+            stdio_mcp_with_args("company-cli", &["approved"]),
         ),
     ]);
     let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
     let matcher = McpServerMatcher::Command(McpServerCommandMatcher {
-        command: "forge".to_string(),
+        command: "company-cli".to_string(),
         args: vec![McpServerValueMatcher::Exact {
             value: "approved".to_string(),
         }],

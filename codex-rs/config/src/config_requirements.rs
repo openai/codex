@@ -3485,8 +3485,8 @@ command = "python3 /enterprise/hooks/pre.py"
     #[test]
     fn deserialize_mcp_server_matchers() -> Result<()> {
         let toml_str = r#"
-            [mcp_server_matchers.bloomberg_forge]
-            command = "forge"
+            [mcp_server_matchers.internal_mcp_proxy]
+            command = "company-cli"
             args = [
                 { match = "exact", value = "mcp" },
                 { match = "exact", value = "proxy" },
@@ -3501,9 +3501,9 @@ command = "python3 /enterprise/hooks/pre.py"
             requirements.mcp_server_matchers,
             Some(Sourced::new(
                 BTreeMap::from([(
-                    "bloomberg_forge".to_string(),
+                    "internal_mcp_proxy".to_string(),
                     McpServerMatcher::Command(McpServerCommandMatcher {
-                        command: "forge".to_string(),
+                        command: "company-cli".to_string(),
                         args: vec![
                             McpServerValueMatcher::Exact {
                                 value: "mcp".to_string(),
