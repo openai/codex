@@ -102,7 +102,7 @@ async fn run_connection(
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
                     if let Some(route) = router.request_route(request.method.as_str()) {
-                        let request_span = request_span(&request);
+                        let request_span = request_span(request.method.as_str(), &request);
                         let message = tokio::select! {
                             message = route(Arc::clone(&handler), request).instrument(request_span.clone()) => message,
                             _ = disconnected_rx.changed() => {
@@ -112,15 +112,15 @@ async fn run_connection(
                             }
                         };
                         let result = request_result(&message);
-                        request_span.record("result", result);
                         if let Some(message) = message
                             && outgoing_tx.send(message).await.is_err()
                         {
+                            request_span.record("result", "disconnected");
                             break;
                         }
+                        request_span.record("result", result);
                     } else {
-                        let request_span = request_span(&request);
-                        request_span.record("result", "error");
+                        let request_span = request_span("unknown", &request);
                         if outgoing_tx
                             .send(RpcServerOutboundMessage::Error {
                                 request_id: request.id,
@@ -132,8 +132,10 @@ async fn run_connection(
                             .await
                             .is_err()
                         {
+                            request_span.record("result", "disconnected");
                             break;
                         }
+                        request_span.record("result", "error");
                     }
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
@@ -193,12 +195,15 @@ async fn run_connection(
     let _ = outbound_task.await;
 }
 
-fn request_span(request: &codex_exec_server_protocol::JSONRPCRequest) -> tracing::Span {
+fn request_span(
+    span_name: &str,
+    request: &codex_exec_server_protocol::JSONRPCRequest,
+) -> tracing::Span {
     let method = request.method.as_str();
     let span = tracing::info_span!(
         "codex.exec_server.request",
         otel.kind = "server",
-        otel.name = method,
+        otel.name = span_name,
         method,
         result = tracing::field::Empty,
     );
@@ -273,7 +278,7 @@ mod tests {
     use crate::server::session_registry::SessionRegistry;
 
     #[test]
-    fn request_span_uses_wire_method_and_inbound_trace_parent() {
+    fn request_span_uses_bounded_name_wire_method_and_inbound_trace_parent() {
         let span_exporter = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()
             .with_simple_exporter(span_exporter.clone())
@@ -300,7 +305,7 @@ mod tests {
                 params: None,
                 trace: Some(trace),
             };
-            let request_span = request_span(&request);
+            let request_span = request_span("unknown", &request);
             request_span.in_scope(|| {});
             drop(request_span);
         });
@@ -309,8 +314,16 @@ mod tests {
         let spans = span_exporter.get_finished_spans().expect("span export");
         let request_span = spans
             .iter()
-            .find(|span| span.name.as_ref() == method)
-            .expect("custom method span");
+            .find(|span| span.name.as_ref() == "unknown")
+            .expect("unknown method span");
+        assert_eq!(
+            request_span
+                .attributes
+                .iter()
+                .find(|attribute| attribute.key.as_str() == "method")
+                .map(|attribute| attribute.value.clone()),
+            Some(opentelemetry::Value::String(method.into()))
+        );
         assert_eq!(request_span.span_context.trace_id(), trace_id);
         assert_eq!(request_span.parent_span_id, parent_span_id);
     }
