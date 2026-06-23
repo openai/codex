@@ -130,6 +130,8 @@ impl FileSystemSandboxRunner {
         sandbox_manager
             .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
                 workspace_roots,
+                windows_sandbox_proxy_settings_mode:
+                    codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,
                 transform: SandboxTransformRequest {
                     command,
                     permissions: permission_profile,
