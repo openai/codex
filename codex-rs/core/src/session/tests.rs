@@ -3461,7 +3461,6 @@ async fn set_rate_limits_retains_previous_credits() {
         multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -3568,7 +3567,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4097,7 +4095,6 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4964,7 +4961,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5054,7 +5050,7 @@ pub(crate) async fn build_world_state_from_turn_context(
     turn_context: &TurnContext,
 ) -> WorldState {
     session
-        .build_world_state_for_environments(turn_context, &turn_context.environments)
+        .build_world_state_for_snapshot(turn_context, &turn_context.environments)
         .await
 }
 
@@ -5093,7 +5089,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5228,6 +5223,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         tool_search_handler_cache: Default::default(),
+        agents_md: crate::agents_md::AgentsMdManager::default(),
         turn_environments: Arc::clone(&turn_environments),
     };
 
@@ -5339,7 +5335,6 @@ async fn make_session_with_config_and_rx(
         multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5446,7 +5441,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -7168,7 +7162,6 @@ where
         multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -7302,6 +7295,7 @@ where
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         tool_search_handler_cache: Default::default(),
+        agents_md: crate::agents_md::AgentsMdManager::default(),
         turn_environments: Arc::clone(&turn_environments),
     };
 

@@ -16,8 +16,6 @@
 //! 3.  We do **not** walk past the project root.
 
 use crate::config::Config;
-use crate::context::ContextualUserFragment;
-use crate::context::UserInstructions as ContextUserInstructions;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
@@ -28,7 +26,9 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_extension_api::UserInstructions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use indexmap::IndexMap;
 use std::io;
+use tokio::sync::Mutex;
 use toml::Value as TomlValue;
 use tracing::error;
 
@@ -39,65 +39,104 @@ pub const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
 
 /// When both user and project AGENTS.md docs are present, they will be
 /// concatenated with the following separator.
-const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
+pub(crate) const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
+
+/// Retains loaded AGENTS.md contents and loads instructions for newly seen
+/// environment IDs.
+#[derive(Debug, Default)]
+pub(crate) struct AgentsMdManager {
+    loaded: Mutex<LoadedAgentsMd>,
+}
+
+impl AgentsMdManager {
+    pub(crate) fn new(user_instructions: Option<UserInstructions>) -> Self {
+        Self {
+            loaded: Mutex::new(LoadedAgentsMd::from_user_instructions(user_instructions)),
+        }
+    }
+
+    pub(crate) async fn snapshot_for_environments(
+        &self,
+        config: &Config,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> LoadedAgentsMd {
+        let loaded = self.loaded.lock().await.clone();
+        let mut additions = Vec::new();
+        for turn_environment in &environments.turn_environments {
+            let environment_id = &turn_environment.environment_id;
+            if loaded.environments.contains_key(environment_id) {
+                continue;
+            }
+            let cwd = turn_environment.cwd();
+            let filesystem = turn_environment.environment.get_filesystem();
+            let environment_instructions =
+                match read_agents_md(config, filesystem.as_ref(), cwd).await {
+                    Ok(instructions) => instructions,
+                    Err(err) => {
+                        error!(
+                            environment_id,
+                            "error trying to find AGENTS.md docs: {err:#}"
+                        );
+                        EnvironmentInstructions::new(cwd.clone())
+                    }
+                };
+            additions.push((environment_id.clone(), environment_instructions));
+        }
+
+        let mut loaded = self.loaded.lock().await;
+        for (environment_id, instructions) in additions {
+            loaded
+                .environments
+                .entry(environment_id)
+                .or_insert(instructions);
+        }
+        loaded.clone()
+    }
+
+    pub(crate) async fn snapshot(&self) -> LoadedAgentsMd {
+        self.loaded.lock().await.clone()
+    }
+}
 
 /// Loads project AGENTS.md content and combines it with host-provided user
 /// instructions.
+#[cfg(test)]
 pub(crate) async fn load_project_instructions(
     config: &Config,
     user_instructions: Option<UserInstructions>,
     environments: &TurnEnvironmentSnapshot,
 ) -> Option<LoadedAgentsMd> {
-    let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
-    for turn_environment in &environments.turn_environments {
-        let filesystem = turn_environment.environment.get_filesystem();
-        match read_agents_md(
-            config,
-            filesystem.as_ref(),
-            &turn_environment.environment_id,
-            turn_environment.cwd(),
-        )
-        .await
-        {
-            Ok(Some(docs)) => loaded.entries.extend(docs.entries),
-            Ok(None) => {}
-            Err(e) => {
-                error!(
-                    environment_id = turn_environment.environment_id,
-                    "error trying to find AGENTS.md docs: {e:#}"
-                );
-            }
-        }
-    }
-
+    let manager = AgentsMdManager::new(user_instructions);
+    let loaded = manager
+        .snapshot_for_environments(config, environments)
+        .await;
     (!loaded.is_empty()).then_some(loaded)
 }
 
 /// Attempt to locate and load AGENTS.md documentation.
 ///
-/// On success returns `Ok(Some(loaded))` where `loaded` contains every
-/// discovered doc. If no documentation file is found the function returns
-/// `Ok(None)`. Unexpected I/O failures bubble up as `Err` so callers can
-/// decide how to handle them.
+/// On success, the returned environment value contains every discovered doc.
+/// Missing docs produce an empty value so the manager can remember that this
+/// environment and cwd have already been scanned. Unexpected I/O failures
+/// bubble up so callers can decide how to handle them.
 async fn read_agents_md(
     config: &Config,
     fs: &dyn ExecutorFileSystem,
-    environment_id: &str,
     cwd: &PathUri,
-) -> io::Result<Option<LoadedAgentsMd>> {
+) -> io::Result<EnvironmentInstructions> {
     let max_total = config.project_doc_max_bytes;
 
     if max_total == 0 {
-        return Ok(None);
+        return Ok(EnvironmentInstructions::new(cwd.clone()));
     }
 
     let paths = agents_md_paths(config, cwd, fs).await?;
     if paths.is_empty() {
-        return Ok(None);
+        return Ok(EnvironmentInstructions::new(cwd.clone()));
     }
 
     let mut remaining: u64 = max_total as u64;
-    let mut loaded = LoadedAgentsMd::default();
+    let mut entries = Vec::with_capacity(paths.len());
 
     for p in paths {
         if remaining == 0 {
@@ -131,23 +170,18 @@ async fn read_agents_md(
 
         let text = String::from_utf8_lossy(&data).to_string();
         if !text.trim().is_empty() {
-            loaded.entries.push(InstructionEntry {
+            entries.push(InstructionEntry {
                 contents: text,
-                provenance: InstructionProvenance::Project {
-                    source_path: p,
-                    environment_id: environment_id.to_string(),
-                    cwd: cwd.clone(),
-                },
+                source_path: p,
             });
             remaining = remaining.saturating_sub(data.len() as u64);
         }
     }
 
-    if loaded.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(loaded))
-    }
+    Ok(EnvironmentInstructions {
+        cwd: cwd.clone(),
+        entries,
+    })
 }
 
 /// Discovers AGENTS.md files from the project root to the current working
@@ -262,10 +296,13 @@ fn candidate_filenames(config: &Config) -> Vec<&str> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LoadedAgentsMd {
     /// Host-provided user instructions.
-    user_instructions: Option<UserInstructions>,
+    pub(crate) user_instructions: Option<UserInstructions>,
 
-    /// Ordered instructions and their provenance.
-    entries: Vec<InstructionEntry>,
+    /// Instructions without a file source, including internally defined guidance.
+    pub(crate) internal_instructions: Vec<String>,
+
+    /// Project instructions keyed and ordered by environment.
+    pub(crate) environments: IndexMap<String, EnvironmentInstructions>,
 }
 
 impl LoadedAgentsMd {
@@ -279,7 +316,8 @@ impl LoadedAgentsMd {
                 text: contents,
                 source: path,
             }),
-            entries: Vec::new(),
+            internal_instructions: Vec::new(),
+            environments: IndexMap::new(),
         }
     }
 
@@ -287,7 +325,8 @@ impl LoadedAgentsMd {
         Self {
             user_instructions: user_instructions
                 .filter(|instructions| !instructions.text.trim().is_empty()),
-            entries: Vec::new(),
+            internal_instructions: Vec::new(),
+            environments: IndexMap::new(),
         }
     }
 
@@ -302,194 +341,32 @@ impl LoadedAgentsMd {
         }
         Self {
             user_instructions: None,
-            entries: vec![InstructionEntry {
-                contents,
-                provenance: InstructionProvenance::Internal,
-            }],
+            internal_instructions: vec![contents],
+            environments: IndexMap::new(),
         }
     }
-
-    fn is_empty(&self) -> bool {
-        self.user_instructions.is_none()
-            && self
-                .entries
-                .iter()
-                .all(|entry| entry.contents.trim().is_empty())
-    }
-
-    /// Returns the concatenated model-visible instruction text.
-    pub fn text(&self) -> String {
-        if self.has_multiple_project_environments() {
-            self.environment_labeled_text()
-        } else {
-            self.legacy_text()
-        }
-    }
-
-    fn legacy_text(&self) -> String {
-        let mut output = String::new();
-        let mut has_previous = false;
-        let mut previous_was_project = false;
-        if let Some(instructions) = &self.user_instructions {
-            output.push_str(&instructions.text);
-            has_previous = true;
-        }
-        for entry in &self.entries {
-            let is_project = matches!(&entry.provenance, InstructionProvenance::Project { .. });
-            if has_previous {
-                // The project-doc marker tells the model where workspace-scoped
-                // instructions begin, so it is only needed on the transition
-                // from user or internal instructions to project instructions.
-                let separator = if is_project && !previous_was_project {
-                    AGENTS_MD_SEPARATOR
-                } else {
-                    "\n\n"
-                };
-                output.push_str(separator);
-            }
-            output.push_str(&entry.contents);
-            has_previous = true;
-            previous_was_project = is_project;
-        }
-        output
-    }
-
-    fn environment_labeled_text(&self) -> String {
-        let mut output = String::new();
-        let mut has_previous = false;
-        let mut previous_environment: Option<(&str, &PathUri)> = None;
-        if let Some(instructions) = &self.user_instructions {
-            output.push_str(&instructions.text);
-            has_previous = true;
-        }
-        for entry in &self.entries {
-            match &entry.provenance {
-                InstructionProvenance::Project {
-                    environment_id,
-                    cwd,
-                    ..
-                } => {
-                    if has_previous {
-                        output.push_str("\n\n");
-                    }
-                    // One environment can contribute several hierarchical AGENTS.md files from
-                    // its project root through its cwd. Label that environment once for the
-                    // complete group rather than repeating the label before every file.
-                    let environment = (environment_id.as_str(), cwd);
-                    if previous_environment != Some(environment) {
-                        output.push_str(&format!(
-                            "for `{}` with root {}\n\n",
-                            environment_id,
-                            cwd.inferred_native_path_string()
-                        ));
-                    }
-                    output.push_str(&entry.contents);
-                    previous_environment = Some(environment);
-                }
-                InstructionProvenance::Internal => {
-                    if has_previous {
-                        output.push_str("\n\n");
-                    }
-                    output.push_str(&entry.contents);
-                    previous_environment = None;
-                }
-            }
-            has_previous = true;
-        }
-        output
-    }
-
-    /// Returns the complete model-visible contextual user fragment.
-    pub(crate) fn render(&self) -> String {
-        // One contributing project environment retains the legacy cwd wrapper. With two or more,
-        // the body labels every contributing environment itself, so the outer cwd is omitted.
-        let directory = if self.has_multiple_project_environments() {
-            None
-        } else {
-            self.single_project_cwd()
-                .map(PathUri::inferred_native_path_string)
-        };
-        ContextUserInstructions {
-            directory,
-            text: self.text(),
-        }
-        .render()
-    }
-
-    /// Returns the host-provided user instructions.
-    pub(crate) fn user_instructions(&self) -> Option<&UserInstructions> {
-        self.user_instructions.as_ref()
-    }
-
-    /// Returns the AGENTS.md files that supplied instruction entries.
-    pub fn sources(&self) -> impl Iterator<Item = PathUri> + '_ {
-        self.user_instructions
-            .iter()
-            .map(|instructions| PathUri::from_abs_path(&instructions.source))
-            .chain(
-                self.entries
-                    .iter()
-                    .filter_map(|entry| entry.provenance.path()),
-            )
-    }
-
-    fn has_multiple_project_environments(&self) -> bool {
-        let mut first_environment_id = None;
-        self.entries.iter().any(|entry| {
-            let InstructionProvenance::Project { environment_id, .. } = &entry.provenance else {
-                return false;
-            };
-            match first_environment_id {
-                Some(first_environment_id) => first_environment_id != environment_id,
-                None => {
-                    first_environment_id = Some(environment_id);
-                    false
-                }
-            }
-        })
-    }
-
-    fn single_project_cwd(&self) -> Option<&PathUri> {
-        self.entries
-            .iter()
-            .find_map(|entry| match &entry.provenance {
-                InstructionProvenance::Project { cwd, .. } => Some(cwd),
-                InstructionProvenance::Internal => None,
-            })
-    }
-}
-
-/// One model-visible instruction and its provenance.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct InstructionEntry {
-    /// Model-visible instruction text.
-    contents: String,
-
-    /// Origin of the instruction.
-    provenance: InstructionProvenance,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum InstructionProvenance {
-    /// Workspace instructions discovered from project AGENTS.md files.
-    Project {
-        /// Exact AGENTS.md file, distinct from the environment's selected cwd.
-        source_path: PathUri,
-        environment_id: String,
-        cwd: PathUri,
-    },
-
-    /// Instructions without a file source, including internally defined guidance.
-    Internal,
+pub(crate) struct EnvironmentInstructions {
+    pub(crate) cwd: PathUri,
+    pub(crate) entries: Vec<InstructionEntry>,
 }
 
-impl InstructionProvenance {
-    fn path(&self) -> Option<PathUri> {
-        match self {
-            Self::Project { source_path, .. } => Some(source_path.clone()),
-            Self::Internal => None,
+impl EnvironmentInstructions {
+    fn new(cwd: PathUri) -> Self {
+        Self {
+            cwd,
+            entries: Vec::new(),
         }
     }
+}
+
+/// One model-visible project instruction and its source file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InstructionEntry {
+    pub(crate) contents: String,
+    pub(crate) source_path: PathUri,
 }
 
 #[cfg(test)]

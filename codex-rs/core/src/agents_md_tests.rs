@@ -281,11 +281,10 @@ fn resolved_local_environments<const N: usize>(
     }
 }
 
-fn project_provenance(path: AbsolutePathBuf, cwd: AbsolutePathBuf) -> InstructionProvenance {
-    InstructionProvenance::Project {
+fn project_entry(path: AbsolutePathBuf, contents: impl Into<String>) -> InstructionEntry {
+    InstructionEntry {
         source_path: PathUri::from_abs_path(&path),
-        environment_id: "local".to_string(),
-        cwd: PathUri::from_abs_path(&cwd),
+        contents: contents.into(),
     }
 }
 
@@ -305,14 +304,19 @@ fn foreign_agents_md_uses_environment_native_paths() {
     let source_path = cwd.join("AGENTS.md").expect("AGENTS.md URI");
     let loaded = LoadedAgentsMd {
         user_instructions: None,
-        entries: vec![InstructionEntry {
-            contents: "remote instructions".to_string(),
-            provenance: InstructionProvenance::Project {
-                source_path: source_path.clone(),
-                environment_id: "remote".to_string(),
+        internal_instructions: Vec::new(),
+        environments: [(
+            "remote".to_string(),
+            EnvironmentInstructions {
                 cwd,
+                entries: vec![InstructionEntry {
+                    contents: "remote instructions".to_string(),
+                    source_path: source_path.clone(),
+                }],
             },
-        }],
+        )]
+        .into_iter()
+        .collect(),
     };
 
     assert_eq!(
@@ -338,24 +342,31 @@ fn multi_environment_agents_md_renders_mixed_path_conventions() {
         .expect("Windows AGENTS.md URI");
     let loaded = LoadedAgentsMd {
         user_instructions: None,
-        entries: vec![
-            InstructionEntry {
-                contents: "POSIX instructions".to_string(),
-                provenance: InstructionProvenance::Project {
-                    source_path: posix_source.clone(),
-                    environment_id: "posix".to_string(),
+        internal_instructions: Vec::new(),
+        environments: [
+            (
+                "posix".to_string(),
+                EnvironmentInstructions {
                     cwd: posix_cwd,
+                    entries: vec![InstructionEntry {
+                        contents: "POSIX instructions".to_string(),
+                        source_path: posix_source.clone(),
+                    }],
                 },
-            },
-            InstructionEntry {
-                contents: "Windows instructions".to_string(),
-                provenance: InstructionProvenance::Project {
-                    source_path: windows_source.clone(),
-                    environment_id: "windows".to_string(),
+            ),
+            (
+                "windows".to_string(),
+                EnvironmentInstructions {
                     cwd: windows_cwd,
+                    entries: vec![InstructionEntry {
+                        contents: "Windows instructions".to_string(),
+                        source_path: windows_source.clone(),
+                    }],
                 },
-            },
-        ],
+            ),
+        ]
+        .into_iter()
+        .collect(),
     };
 
     assert_eq!(
@@ -376,6 +387,75 @@ Windows instructions
         loaded.sources().collect::<Vec<_>>(),
         vec![posix_source, windows_source]
     );
+}
+
+#[tokio::test]
+async fn manager_only_loads_new_environment_ids() {
+    let first = TempDir::new().expect("first cwd");
+    let replacement = TempDir::new().expect("replacement cwd");
+    let added = TempDir::new().expect("added cwd");
+    fs::write(first.path().join(DEFAULT_AGENTS_MD_FILENAME), "first")
+        .expect("write first AGENTS.md");
+    fs::write(
+        replacement.path().join(DEFAULT_AGENTS_MD_FILENAME),
+        "replacement",
+    )
+    .expect("write replacement AGENTS.md");
+    fs::write(added.path().join(DEFAULT_AGENTS_MD_FILENAME), "added")
+        .expect("write added AGENTS.md");
+    let config = make_config(&first, /*limit*/ 4096, /*instructions*/ None).await;
+    let manager = AgentsMdManager::new(/*user_instructions*/ None);
+
+    manager
+        .snapshot_for_environments(
+            &config,
+            &resolved_local_environments([("local", first.abs())]),
+        )
+        .await;
+    let with_added_environment = manager
+        .snapshot_for_environments(
+            &config,
+            &resolved_local_environments([("local", replacement.abs()), ("added", added.abs())]),
+        )
+        .await;
+
+    let expected = LoadedAgentsMd {
+        user_instructions: None,
+        internal_instructions: Vec::new(),
+        environments: [
+            (
+                "local".to_string(),
+                EnvironmentInstructions {
+                    cwd: PathUri::from_abs_path(&first.abs()),
+                    entries: vec![project_entry(
+                        first.path().join(DEFAULT_AGENTS_MD_FILENAME).abs(),
+                        "first",
+                    )],
+                },
+            ),
+            (
+                "added".to_string(),
+                EnvironmentInstructions {
+                    cwd: PathUri::from_abs_path(&added.abs()),
+                    entries: vec![project_entry(
+                        added.path().join(DEFAULT_AGENTS_MD_FILENAME).abs(),
+                        "added",
+                    )],
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    assert_eq!(with_added_environment, expected);
+
+    let after_removal = manager
+        .snapshot_for_environments(
+            &config,
+            &resolved_local_environments([("added", added.abs())]),
+        )
+        .await;
+    assert_eq!(after_removal, expected);
 }
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
@@ -495,17 +575,13 @@ fn empty_loaded_instructions_are_empty() {
 fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
     let empty = LoadedAgentsMd {
         user_instructions: None,
-        entries: vec![InstructionEntry {
-            contents: String::new(),
-            provenance: InstructionProvenance::Internal,
-        }],
+        internal_instructions: vec![String::new()],
+        environments: Default::default(),
     };
     let whitespace = LoadedAgentsMd {
         user_instructions: None,
-        entries: vec![InstructionEntry {
-            contents: " \n\t".to_string(),
-            provenance: InstructionProvenance::Internal,
-        }],
+        internal_instructions: vec![" \n\t".to_string()],
+        environments: Default::default(),
     };
 
     assert!(empty.is_empty());
@@ -573,19 +649,19 @@ async fn total_byte_limit_truncates_later_project_docs() {
     let loaded = load_agents_md(&config).await.expect("project instructions");
     let expected = LoadedAgentsMd {
         user_instructions: None,
-        entries: vec![
-            InstructionEntry {
-                contents: "root".to_string(),
-                provenance: project_provenance(
-                    repo.path().join("AGENTS.md").abs(),
-                    config.cwd.clone(),
-                ),
+        internal_instructions: Vec::new(),
+        environments: [(
+            "local".to_string(),
+            EnvironmentInstructions {
+                cwd: PathUri::from_abs_path(&config.cwd),
+                entries: vec![
+                    project_entry(repo.path().join("AGENTS.md").abs(), "root"),
+                    project_entry(config.cwd.join("AGENTS.md"), "abc"),
+                ],
             },
-            InstructionEntry {
-                contents: "abc".to_string(),
-                provenance: project_provenance(config.cwd.join("AGENTS.md"), config.cwd.clone()),
-            },
-        ],
+        )]
+        .into_iter()
+        .collect(),
     };
 
     assert_eq!(loaded, expected);
@@ -603,7 +679,7 @@ async fn read_agents_md_propagates_metadata_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
+    let err = read_agents_md(&config.config, &fs, &PathUri::from_abs_path(&cwd))
         .await
         .expect_err("metadata error");
 
@@ -621,7 +697,7 @@ async fn read_agents_md_propagates_read_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
+    let err = read_agents_md(&config.config, &fs, &PathUri::from_abs_path(&cwd))
         .await
         .expect_err("read error");
 
@@ -639,11 +715,11 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
     };
 
     let cwd = config.cwd.clone();
-    let loaded = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
+    let loaded = read_agents_md(&config.config, &fs, &PathUri::from_abs_path(&cwd))
         .await
         .expect("removed file is recoverable");
 
-    assert_eq!(loaded, None);
+    assert!(loaded.entries.is_empty());
 }
 
 /// When `cwd` is nested inside a repo, the search should locate AGENTS.md
@@ -874,9 +950,9 @@ async fn multiple_environments_can_exceed_single_environment_project_doc_limit()
     .await
     .expect("instructions expected");
     let project_bytes = loaded
-        .entries
-        .iter()
-        .filter(|entry| matches!(&entry.provenance, InstructionProvenance::Project { .. }))
+        .environments
+        .values()
+        .flat_map(|environment| &environment.entries)
         .map(|entry| entry.contents.len())
         .sum::<usize>();
 
@@ -952,16 +1028,19 @@ async fn concatenates_root_and_cwd_docs() {
     let crate_agents = cfg.cwd.join("AGENTS.md");
     let expected = LoadedAgentsMd {
         user_instructions: None,
-        entries: vec![
-            InstructionEntry {
-                contents: "root doc".to_string(),
-                provenance: project_provenance(root_agents.clone(), cfg.cwd.clone()),
+        internal_instructions: Vec::new(),
+        environments: [(
+            "local".to_string(),
+            EnvironmentInstructions {
+                cwd: PathUri::from_abs_path(&cfg.cwd),
+                entries: vec![
+                    project_entry(root_agents.clone(), "root doc"),
+                    project_entry(crate_agents.clone(), "crate doc"),
+                ],
             },
-            InstructionEntry {
-                contents: "crate doc".to_string(),
-                provenance: project_provenance(crate_agents.clone(), cfg.cwd.clone()),
-            },
-        ],
+        )]
+        .into_iter()
+        .collect(),
     };
 
     assert_eq!(loaded, expected);
@@ -1091,10 +1170,16 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
             text: "global doc".to_string(),
             source: global_agents.clone(),
         }),
-        entries: vec![InstructionEntry {
-            contents: "project doc".to_string(),
-            provenance: project_provenance(project_agents.clone(), cfg.cwd.clone()),
-        }],
+        internal_instructions: Vec::new(),
+        environments: [(
+            "local".to_string(),
+            EnvironmentInstructions {
+                cwd: PathUri::from_abs_path(&cfg.cwd),
+                entries: vec![project_entry(project_agents.clone(), "project doc")],
+            },
+        )]
+        .into_iter()
+        .collect(),
     };
     assert_eq!(loaded, expected);
     assert_eq!(loaded.user_instructions(), cfg.user_instructions.as_ref());
