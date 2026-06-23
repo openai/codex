@@ -297,13 +297,15 @@ async fn run_remote_compact_task_inner_impl(
         sess.as_ref(),
         turn_context.as_ref(),
         compacted_history,
-        initial_context_injection,
+        &initial_context_injection,
     )
     .await;
 
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+        InitialContextInjection::BeforeLastUserMessage(_) => {
+            Some(turn_context.to_turn_context_item())
+        }
     };
     let compacted_item = CompactedItem {
         message: String::new(),

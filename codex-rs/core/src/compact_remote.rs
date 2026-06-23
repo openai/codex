@@ -265,13 +265,15 @@ async fn run_remote_compact_task_inner_impl(
         sess.as_ref(),
         turn_context.as_ref(),
         new_history,
-        initial_context_injection,
+        &initial_context_injection,
     )
     .await;
 
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+        InitialContextInjection::BeforeLastUserMessage(_) => {
+            Some(turn_context.to_turn_context_item())
+        }
     };
     let compacted_item = CompactedItem {
         message: String::new(),
@@ -307,8 +309,8 @@ pub(crate) async fn process_compacted_history(
     sess: &Session,
     turn_context: &TurnContext,
     mut compacted_history: Vec<ResponseItem>,
-    initial_context_injection: InitialContextInjection,
-) -> (Vec<ResponseItem>, Option<WorldState>) {
+    initial_context_injection: &InitialContextInjection,
+) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
     // compaction item, but mid-turn compaction keeps the compaction item last for model training.

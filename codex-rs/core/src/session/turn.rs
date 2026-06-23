@@ -42,6 +42,7 @@ use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
@@ -163,7 +164,9 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
 
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+    // Keep the exact model-visible state used by this turn and its inline compactions.
+    let mut world_state = sess
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
     let Some((injection_items, explicitly_enabled_connectors)) =
@@ -246,12 +249,16 @@ pub(crate) async fn run_turn(
                 .features
                 .enabled(Feature::DeferredExecutor)
             {
-                let step_context = sess.capture_step_context(turn_context.as_ref()).await;
-                sess.record_step_environment_context_if_changed(
-                    turn_context.as_ref(),
-                    &step_context,
-                )
-                .await;
+                let step_context = StepContext {
+                    environments: sess.services.turn_environments.snapshot().await,
+                };
+                world_state = sess
+                    .record_step_environment_context_if_changed(
+                        turn_context.as_ref(),
+                        &world_state,
+                        &step_context,
+                    )
+                    .await;
             }
 
             // Construct the input that we will send to the model.
@@ -338,7 +345,7 @@ pub(crate) async fn run_turn(
                 .await;
 
                 let started_new_context_window = sess
-                    .maybe_start_new_context_window(turn_context.as_ref())
+                    .maybe_start_new_context_window(turn_context.as_ref(), Arc::clone(&world_state))
                     .await
                     .is_some();
                 if started_new_context_window && needs_follow_up {
@@ -358,7 +365,7 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         &mut client_session,
-                        InitialContextInjection::BeforeLastUserMessage,
+                        InitialContextInjection::BeforeLastUserMessage(Arc::clone(&world_state)),
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )

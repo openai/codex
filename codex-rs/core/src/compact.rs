@@ -61,24 +61,24 @@ const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 /// Mid-turn compaction must use `BeforeLastUserMessage` because the model is trained to see the
 /// compaction summary as the last item in history after mid-turn compaction; we therefore inject
 /// initial context into the replacement history just above the last real user message.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum InitialContextInjection {
-    BeforeLastUserMessage,
+    BeforeLastUserMessage(Arc<WorldState>),
     DoNotInject,
 }
 
 pub(crate) async fn build_compaction_initial_context(
     sess: &Session,
     turn_context: &TurnContext,
-    initial_context_injection: InitialContextInjection,
-) -> (Vec<ResponseItem>, Option<WorldState>) {
+    initial_context_injection: &InitialContextInjection,
+) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
     // Return the rendered state with its items so history and its baseline stay identical.
     match initial_context_injection {
-        InitialContextInjection::BeforeLastUserMessage => {
-            let (items, world_state) = sess
-                .build_initial_context_for_current_step(turn_context)
+        InitialContextInjection::BeforeLastUserMessage(world_state) => {
+            let items = sess
+                .build_initial_context_with_world_state(turn_context, world_state.as_ref())
                 .await;
-            (items, Some(world_state))
+            (items, Some(Arc::clone(world_state)))
         }
         InitialContextInjection::DoNotInject => (Vec::new(), None),
     }
@@ -330,7 +330,7 @@ async fn run_compact_task_inner_impl(
     let (initial_context, world_state_baseline) = build_compaction_initial_context(
         sess.as_ref(),
         turn_context.as_ref(),
-        initial_context_injection,
+        &initial_context_injection,
     )
     .await;
     if !initial_context.is_empty() {
@@ -339,7 +339,9 @@ async fn run_compact_task_inner_impl(
     }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+        InitialContextInjection::BeforeLastUserMessage(_) => {
+            Some(turn_context.to_turn_context_item())
+        }
     };
     let compacted_item = CompactedItem {
         message: summary_text.clone(),

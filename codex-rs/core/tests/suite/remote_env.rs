@@ -686,7 +686,7 @@ async fn deferred_executor_updates_model_context_after_startup() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_executor_compaction_reinjects_current_environment_once() -> Result<()> {
+async fn deferred_executor_compaction_preserves_then_updates_environment_once() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let server = start_mock_server().await;
     let response_mock = mount_sse_sequence(
@@ -798,7 +798,7 @@ async fn deferred_executor_compaction_reinjects_current_environment_once() -> Re
             .iter()
             .filter(|text| text.contains("<status>starting</status>"))
             .count(),
-        0
+        1
     );
     assert_eq!(
         post_compaction_context
@@ -807,6 +807,15 @@ async fn deferred_executor_compaction_reinjects_current_environment_once() -> Re
             .count(),
         1
     );
+    let starting_index = post_compaction_context
+        .iter()
+        .position(|text| text.contains("<status>starting</status>"))
+        .expect("compaction should preserve the prior environment state");
+    let ready_index = post_compaction_context
+        .iter()
+        .position(|text| text.contains("<shell>zsh</shell>"))
+        .expect("the next sampling step should report that the environment is ready");
+    assert!(starting_index < ready_index);
 
     Ok(())
 }
