@@ -2681,7 +2681,7 @@ async fn code_mode_can_output_images_via_global_helper() -> Result<()> {
         &server,
         "use exec to return images",
         r#"
-image("data:image/png;base64,AAA");
+image("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
 "#,
     )
     .await?;
@@ -2706,7 +2706,7 @@ image("data:image/png;base64,AAA");
         items[1],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "data:image/png;base64,AAA",
+            "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
             "detail": "high"
         }),
     );
@@ -2715,17 +2715,14 @@ image("data:image/png;base64,AAA");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resize_all_images_replaces_malformed_code_mode_image() -> Result<()> {
+async fn code_mode_replaces_malformed_image() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn_with_config(
+    let (_test, second_mock) = run_code_mode_turn(
         &server,
         "use exec to return an image",
         r#"image("data:image/png;base64,AAA");"#,
-        |config| {
-            let _ = config.features.enable(Feature::ResizeAllImages);
-        },
     )
     .await?;
 
@@ -2746,7 +2743,7 @@ async fn resize_all_images_replaces_malformed_code_mode_image() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resize_all_images_resizes_explicit_original_code_mode_image() -> Result<()> {
+async fn code_mode_resizes_explicit_original_image() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let original_dimensions = (6401, 100);
@@ -2772,12 +2769,7 @@ async fn resize_all_images_resizes_explicit_original_code_mode_image() -> Result
         "use exec to return a large original-detail image",
         &code,
         "gpt-5.3-codex",
-        |config| {
-            config
-                .features
-                .enable(Feature::ResizeAllImages)
-                .expect("resize_all_images should be enabled");
-        },
+        |_| {},
     )
     .await?;
 

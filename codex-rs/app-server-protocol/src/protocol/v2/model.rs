@@ -162,3 +162,16 @@ pub struct TurnModerationMetadataNotification {
     pub turn_id: String,
     pub metadata: JsonValue,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelSafetyBufferingUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub model: String,
+    pub use_cases: Vec<String>,
+    pub reasons: Vec<String>,
+    pub show_buffering_ui: bool,
+    pub faster_model: Option<String>,
+}

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::app_event::AppEvent;
+use crate::chatwidget::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID;
 
 impl ChatWidget {
     /// Set the approval policy in the widget's config copy.
@@ -217,13 +218,27 @@ impl ChatWidget {
         has_chatgpt_account: bool,
         has_codex_backend_auth: bool,
     ) {
-        let account_state_changed = self.status_account_display != status_account_display
-            || self.has_chatgpt_account != has_chatgpt_account
-            || self.has_codex_backend_auth != has_codex_backend_auth;
-        if account_state_changed {
-            self.clear_pending_token_activity_refreshes();
-            self.clear_pending_rate_limit_reset_requests();
+        // Account-update notifications are the identity boundary. The visible account fields can
+        // be identical across two accounts, so always invalidate account-scoped requests and data.
+        self.clear_pending_token_activity_refreshes();
+        self.clear_pending_rate_limit_reset_requests();
+        self.codex_rate_limit_reached_type = None;
+        self.rate_limit_warnings = RateLimitWarningState::default();
+        self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+        self.bottom_pane
+            .dismiss_view_by_id(RATE_LIMIT_SWITCH_PROMPT_VIEW_ID);
+        let had_refreshing_status_outputs = !self.refreshing_status_outputs.is_empty();
+        let now = Local::now();
+        for (_, handle) in self.refreshing_status_outputs.drain(..) {
+            handle.finish_rate_limit_refresh(&[], now);
         }
+        if had_refreshing_status_outputs {
+            self.request_redraw();
+        }
+        self.status_line_workspace_headline = None;
+        self.status_line_workspace_headline_pending_request_id = None;
+        self.status_line_workspace_headline_last_requested_at = None;
+        self.status_line_workspace_messages_disabled = false;
         self.status_account_display = status_account_display;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
@@ -232,6 +247,7 @@ impl ChatWidget {
             .set_connectors_enabled(self.connectors_enabled());
         self.bottom_pane
             .set_token_activity_command_enabled(has_codex_backend_auth);
+        self.refresh_status_surfaces();
     }
 
     /// Set the syntax theme override in the widget's config copy.

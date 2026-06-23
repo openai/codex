@@ -926,6 +926,7 @@ impl SessionState {
             exit_code: None,
             closed: true,
             failure: Some(message),
+            sandbox_denied: false,
         }
     }
 
@@ -1869,6 +1870,7 @@ mod tests {
                         exit_code: None,
                         closed: false,
                         failure: None,
+                        sandbox_denied: false,
                     })
                     .expect("read response should serialize"),
                 }),

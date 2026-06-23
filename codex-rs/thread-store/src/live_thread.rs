@@ -130,7 +130,7 @@ impl LiveThread {
         let include_archived = params.include_archived;
         let metadata = params.metadata.clone();
         let metadata_sync = observed_history
-            .or(params.history.as_deref())
+            .or_else(|| params.history.as_deref().map(Vec::as_slice))
             .map(|history| {
                 ThreadMetadataSync::for_resume_parts(thread_id, &metadata, Some(history))
             });

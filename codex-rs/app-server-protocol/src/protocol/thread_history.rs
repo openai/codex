@@ -3349,6 +3349,8 @@ mod tests {
                 message: String::new(),
                 replacement_history: None,
                 window_number: None,
+                first_window_id: None,
+                previous_window_id: None,
                 window_id: None,
             }),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
@@ -3781,7 +3783,7 @@ mod tests {
                     text: "plain text".into(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),

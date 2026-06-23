@@ -72,7 +72,7 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
             text: text.to_string(),
         }],
         phase,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -92,7 +92,7 @@ fn spawn_agent_call(call_id: &str) -> ResponseItem {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: call_id.to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -850,10 +850,7 @@ async fn spawn_thread_subagent_uses_supplied_initial_multi_agent_mode_without_hi
         .config_snapshot()
         .await;
 
-    assert_eq!(
-        child_snapshot.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
-    );
+    assert_eq!(child_snapshot.multi_agent_mode, MultiAgentMode::Proactive);
 }
 
 #[tokio::test]
@@ -890,6 +887,15 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     parent_thread
         .inject_user_message_without_turn("parent seed context".to_string())
         .await;
+    let expected_parent_seed = parent_thread
+        .codex
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .first()
+        .cloned()
+        .expect("parent seed should be recorded");
     let turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-history".to_string();
     let trigger_message = InterAgentCommunication::new(
@@ -912,7 +918,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                         text: "Parent root guidance.".to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -921,7 +927,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                         text: "Parent subagent guidance.".to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
@@ -931,7 +937,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     summary: Vec::new(),
                     content: None,
                     encrypted_content: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 trigger_message.to_response_input_item().into(),
                 spawn_agent_call(&parent_spawn_call_id),
@@ -987,21 +993,16 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("child thread should be registered");
     assert_eq!(
         child_thread.config_snapshot().await.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
+        MultiAgentMode::Proactive
     );
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
+    let mut expected_final_answer =
+        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer));
+    expected_final_answer.set_turn_id_if_missing(&turn_context.sub_id);
     let expected_history = [
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "parent seed context".to_string(),
-            }],
-            phase: None,
-            metadata: None,
-        },
-        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
+        expected_parent_seed,
+        expected_final_answer,
         ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -1009,7 +1010,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 text: "Child subagent guidance.".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     assert_eq!(
@@ -1025,18 +1026,13 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         "full-history forked child should preserve the parent diff baseline"
     );
 
-    let mut disabled_hint_child_config = harness.config.clone();
-    let _ = disabled_hint_child_config
-        .features
-        .enable(Feature::MultiAgentV2);
-    disabled_hint_child_config.multi_agent_v2.usage_hint_enabled = false;
-    disabled_hint_child_config
-        .multi_agent_v2
-        .subagent_usage_hint_text = Some("Disabled child subagent guidance.".to_string());
-    let disabled_hint_child_thread_id = harness
+    let mut no_hint_child_config = harness.config.clone();
+    let _ = no_hint_child_config.features.enable(Feature::MultiAgentV2);
+    no_hint_child_config.multi_agent_v2.subagent_usage_hint_text = None;
+    let no_hint_child_thread_id = harness
         .control
         .spawn_agent_with_metadata(
-            disabled_hint_child_config,
+            no_hint_child_config,
             text_input("child task without hints"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -1052,24 +1048,17 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             },
         )
         .await
-        .expect("forked spawn should honor disabled usage hints")
+        .expect("forked spawn should honor an empty subagent usage hint")
         .thread_id;
-    let disabled_hint_child_thread = harness
+    let no_hint_child_thread = harness
         .manager
-        .get_thread(disabled_hint_child_thread_id)
+        .get_thread(no_hint_child_thread_id)
         .await
-        .expect("disabled-hint child thread should be registered");
-    let disabled_hint_history = disabled_hint_child_thread
-        .codex
-        .session
-        .clone_history()
-        .await;
+        .expect("no-hint child thread should be registered");
+    let no_hint_history = no_hint_child_thread.codex.session.clone_history().await;
     assert!(
-        !history_contains_text(
-            disabled_hint_history.raw_items(),
-            "Disabled child subagent guidance.",
-        ),
-        "full-history forked child should not add subagent guidance when usage hints are disabled"
+        !history_contains_text(no_hint_history.raw_items(), "Child subagent guidance."),
+        "full-history forked child should not add empty subagent guidance"
     );
 
     let expected = (
@@ -1099,9 +1088,9 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("child shutdown should submit");
     let _ = harness
         .control
-        .shutdown_live_agent(disabled_hint_child_thread_id)
+        .shutdown_live_agent(no_hint_child_thread_id)
         .await
-        .expect("disabled-hint child shutdown should submit");
+        .expect("no-hint child shutdown should submit");
     let _ = parent_thread
         .submit(Op::Shutdown {})
         .await
@@ -1140,7 +1129,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 text: "compacted parent summary".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -1149,7 +1138,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 text: "Parent root guidance.".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     parent_thread
@@ -1160,6 +1149,8 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 message: String::new(),
                 replacement_history: Some(replacement_history),
                 window_number: None,
+                first_window_id: None,
+                previous_window_id: None,
                 window_id: None,
             }),
             RolloutItem::TurnContext(turn_context.to_turn_context_item()),
@@ -1404,7 +1395,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .expect("child thread should be registered");
     assert_eq!(
         child_thread.config_snapshot().await.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
+        MultiAgentMode::Proactive
     );
     let history = child_thread.codex.session.clone_history().await;
 
@@ -1462,7 +1453,7 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
                     text: "parent startup developer context".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
         )
         .await;
@@ -1584,7 +1575,7 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
                         text: "Parent root guidance.".to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 spawn_agent_call(&parent_spawn_call_id),
             ],
@@ -2420,10 +2411,7 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
     assert_eq!(resumed_agent_path, Some(agent_path));
     assert_eq!(resumed_nickname, Some(original_nickname));
     assert_eq!(resumed_role, Some("explorer".to_string()));
-    assert_eq!(
-        resumed_snapshot.multi_agent_mode,
-        Some(MultiAgentMode::Proactive)
-    );
+    assert_eq!(resumed_snapshot.multi_agent_mode, MultiAgentMode::Proactive);
 
     let _ = harness
         .control

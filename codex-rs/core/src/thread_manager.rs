@@ -1010,7 +1010,7 @@ impl ThreadManager {
         };
         let initial_multi_agent_mode = match source_thread_id {
             Some(thread_id) => match self.get_thread(thread_id).await {
-                Ok(thread) => thread.config_snapshot().await.multi_agent_mode,
+                Ok(thread) => Some(thread.config_snapshot().await.multi_agent_mode),
                 Err(_) => history.get_latest_effective_multi_agent_mode(),
             },
             None => history.get_latest_effective_multi_agent_mode(),
@@ -1070,7 +1070,7 @@ impl ThreadManager {
     }
 
     fn agent_control_for_config(&self, config: &Config) -> AgentControl {
-        AgentControl::new(Arc::downgrade(&self.state), config.rollout_budget)
+        AgentControl::new(Arc::downgrade(&self.state), config.rollout_budget.clone())
     }
 
     #[cfg(test)]
@@ -1654,7 +1654,7 @@ fn stored_thread_to_initial_history(
     })?;
     Ok(InitialHistory::Resumed(ResumedHistory {
         conversation_id: thread_id,
-        history: history.items,
+        history: Arc::new(history.items),
         rollout_path: rollout_path.or(stored_thread.rollout_path),
     }))
 }
@@ -1691,7 +1691,7 @@ fn truncate_before_nth_user_message(
     n: usize,
     snapshot_state: &SnapshotTurnState,
 ) -> InitialHistory {
-    let items: Vec<RolloutItem> = history.get_rollout_items();
+    let items = history.get_rollout_items().to_vec();
     let user_positions = truncation::user_message_positions_in_rollout(&items);
     let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {
         if let Some(cut_idx) = snapshot_state
@@ -1723,7 +1723,7 @@ struct SnapshotTurnState {
 fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     let rollout_items = history.get_rollout_items();
     let mut builder = ThreadHistoryBuilder::new();
-    for item in &rollout_items {
+    for item in rollout_items {
         builder.handle_rollout_item(item);
     }
     let active_turn_id = builder.active_turn_id_if_explicit();
@@ -1747,7 +1747,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
         };
     }
 
-    let Some(last_user_position) = truncation::user_message_positions_in_rollout(&rollout_items)
+    let Some(last_user_position) = truncation::user_message_positions_in_rollout(rollout_items)
         .last()
         .copied()
     else {
@@ -1788,7 +1788,9 @@ fn fork_history_from_snapshot(
                 InitialHistory::New => InitialHistory::New,
                 InitialHistory::Cleared => InitialHistory::Cleared,
                 InitialHistory::Forked(history) => InitialHistory::Forked(history),
-                InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+                InitialHistory::Resumed(resumed) => {
+                    InitialHistory::Forked(Arc::unwrap_or_clone(resumed.history))
+                }
             };
             if snapshot_state.ends_mid_turn {
                 append_interrupted_boundary(
@@ -1834,12 +1836,13 @@ fn append_interrupted_boundary(
             history.push(aborted_event);
             InitialHistory::Forked(history)
         }
-        InitialHistory::Resumed(mut resumed) => {
+        InitialHistory::Resumed(resumed) => {
+            let mut history = Arc::unwrap_or_clone(resumed.history);
             if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
-                resumed.history.push(RolloutItem::ResponseItem(marker));
+                history.push(RolloutItem::ResponseItem(marker));
             }
-            resumed.history.push(aborted_event);
-            InitialHistory::Forked(resumed.history)
+            history.push(aborted_event);
+            InitialHistory::Forked(history)
         }
     }
 }

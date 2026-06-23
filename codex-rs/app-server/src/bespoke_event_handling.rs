@@ -40,6 +40,7 @@ use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ModelReroutedNotification;
+use codex_app_server_protocol::ModelSafetyBufferingUpdatedNotification;
 use codex_app_server_protocol::ModelVerificationNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
@@ -349,6 +350,22 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::TurnModerationMetadata(notification))
+                .await;
+        }
+        EventMsg::SafetyBuffering(event) => {
+            let notification = ModelSafetyBufferingUpdatedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                model: event.model,
+                use_cases: event.use_cases,
+                reasons: event.reasons,
+                show_buffering_ui: event.show_buffering_ui,
+                faster_model: event.faster_model,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ModelSafetyBufferingUpdated(
+                    notification,
+                ))
                 .await;
         }
         EventMsg::RealtimeConversationStarted(event) => {

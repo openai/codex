@@ -296,8 +296,10 @@ pub enum Personality {
     Pragmatic,
 }
 
-/// Controls whether the model should only spawn sub-agents after an explicit
-/// user request or may delegate proactively when doing so would help.
+/// Controls whether the model receives multi-agent delegation instructions and,
+/// when it does, whether it should only spawn sub-agents after an explicit user
+/// request or may delegate proactively when doing so would help. `none` leaves
+/// the multi-agent tools available without injecting delegation instructions.
 #[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
 )]
@@ -305,6 +307,7 @@ pub enum Personality {
 #[ts(rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum MultiAgentMode {
+    None,
     #[default]
     ExplicitRequestOnly,
     Proactive,

@@ -28,7 +28,8 @@ pub struct CompactionInput<'a> {
     pub input: &'a [ResponseItem],
     #[serde(skip_serializing_if = "str::is_empty")]
     pub instructions: &'a str,
-    pub tools: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
     pub parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
@@ -72,6 +73,7 @@ pub struct MemorySummarizeOutput {
 #[derive(Debug)]
 pub enum ResponseEvent {
     Created,
+    SafetyBuffering(SafetyBuffering),
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
     /// Emitted when the server includes `OpenAI-Model` on the stream response.
@@ -111,6 +113,30 @@ pub enum ResponseEvent {
     },
     RateLimits(RateLimitSnapshot),
     ModelsEtag(String),
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct SafetyBuffering {
+    pub use_cases: Vec<String>,
+    pub reasons: Vec<String>,
+    #[serde(skip)]
+    pub show_buffering_ui: bool,
+    #[serde(skip)]
+    pub faster_model: Option<String>,
+}
+
+impl SafetyBuffering {
+    pub(crate) fn with_treatment(mut self, treatment: &SafetyBufferingTreatment) -> Self {
+        self.show_buffering_ui = treatment.show_buffering_ui;
+        self.faster_model.clone_from(&treatment.faster_model);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SafetyBufferingTreatment {
+    pub show_buffering_ui: bool,
+    pub faster_model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
@@ -185,7 +211,8 @@ pub struct ResponsesApiRequest {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     pub input: Vec<ResponseItem>,
-    pub tools: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
@@ -233,7 +260,8 @@ pub struct ResponseCreateWsRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
     pub input: Vec<ResponseItem>,
-    pub tools: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,

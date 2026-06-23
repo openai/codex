@@ -42,7 +42,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 fn assistant_msg(text: &str) -> ResponseItem {
@@ -53,7 +53,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -82,7 +82,7 @@ fn truncates_before_requested_user_message() {
             }],
             content: None,
             encrypted_content: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -90,7 +90,7 @@ fn truncates_before_requested_user_message() {
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         assistant_msg("a4"),
     ];
@@ -116,7 +116,7 @@ fn truncates_before_requested_user_message() {
         RolloutItem::ResponseItem(items[2].clone()),
     ];
     assert_eq!(
-        serde_json::to_value(&got_items).unwrap(),
+        serde_json::to_value(got_items).unwrap(),
         serde_json::to_value(&expected_items).unwrap()
     );
 
@@ -256,7 +256,7 @@ async fn ignores_session_prefix_messages_when_truncating() {
     ];
 
     assert_eq!(
-        serde_json::to_value(&got_items).unwrap(),
+        serde_json::to_value(got_items).unwrap(),
         serde_json::to_value(&expected).unwrap()
     );
 }
@@ -963,7 +963,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             config.clone(),
             InitialHistory::Resumed(ResumedHistory {
                 conversation_id: source.thread_id,
-                history: vec![RolloutItem::ResponseItem(user_msg("hello"))],
+                history: Arc::new(vec![RolloutItem::ResponseItem(user_msg("hello"))]),
                 rollout_path: Some(rollout_path.clone()),
             }),
             auth_manager.clone(),
@@ -1315,7 +1315,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     assert!(!snapshot_turn_state(&history).ends_mid_turn);
     let rollout_items: Vec<_> = history
         .get_rollout_items()
-        .into_iter()
+        .iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
     let interrupted_marker_json = serde_json::to_value(RolloutItem::ResponseItem(
@@ -1435,7 +1435,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         .expect("read forked rollout history");
     let rollout_items: Vec<_> = history
         .get_rollout_items()
-        .into_iter()
+        .iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
 
@@ -1522,7 +1522,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
 
     let forked_rollout_items: Vec<_> = history
         .get_rollout_items()
-        .into_iter()
+        .iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
     let interrupted_marker_json = serde_json::to_value(RolloutItem::ResponseItem(
@@ -1560,7 +1560,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         .expect("read re-forked rollout history");
     let reforked_rollout_items: Vec<_> = reforked_history
         .get_rollout_items()
-        .into_iter()
+        .iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
 

@@ -403,7 +403,7 @@ mod thread_processor_behavior_tests {
             role: role.to_string(),
             content,
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }
     }
 
@@ -412,6 +412,8 @@ mod thread_processor_behavior_tests {
             message: message.to_string(),
             replacement_history: Some(vec![compacted_resume_test_message("assistant", message)]),
             window_number: Some(window_id),
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         })
     }
@@ -720,9 +722,7 @@ mod thread_processor_behavior_tests {
                 },
             )),
             compacted_resume_test_user_event("first user event"),
-            RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::CompactionTrigger {
-                metadata: None,
-            }),
+            RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::CompactionTrigger {}),
             compacted_resume_test_agent_event("first agent event"),
         ])?;
         std::fs::write(&path, contents)?;
@@ -1411,6 +1411,7 @@ mod thread_processor_behavior_tests {
         let timestamp = "2025-09-05T16:53:11.850Z".to_string();
 
         let session_meta = SessionMeta {
+            session_id: conversation_id.into(),
             id: conversation_id,
             timestamp: timestamp.clone(),
             model_provider: None,
@@ -1467,6 +1468,7 @@ mod thread_processor_behavior_tests {
         let timestamp = "2025-09-05T16:53:11.850Z".to_string();
 
         let session_meta = SessionMeta {
+            session_id: parent_thread_id.into(),
             id: conversation_id,
             timestamp: timestamp.clone(),
             source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -1517,6 +1519,7 @@ mod thread_processor_behavior_tests {
         let timestamp = "2025-09-05T16:53:11.850Z".to_string();
 
         let session_meta = SessionMeta {
+            session_id: conversation_id.into(),
             id: conversation_id,
             forked_from_id: Some(forked_from_id),
             timestamp: timestamp.clone(),

@@ -2782,17 +2782,18 @@ impl ThreadRequestProcessor {
                 }
             }
         }
-        let response_history_items = (include_turns
-            || (initial_turns_page.is_some() && initial_turns_recent_items.is_none()))
-        .then(|| {
+        let mut response_history_items_storage = if include_turns
+            || (initial_turns_page.is_some() && initial_turns_recent_items.is_none())
+        {
             if matches!(history_extent, ResumeHistoryExtent::CompactedCheckpoint) {
                 None
             } else {
-                Some(thread_history.get_rollout_items())
+                Some(thread_history.get_rollout_items().to_vec())
             }
-        })
-        .flatten();
-        let response_history_items = if response_history_items.is_none()
+        } else {
+            None
+        };
+        if response_history_items_storage.is_none()
             && initial_turns_page.is_some()
             && initial_turns_recent_items.is_none()
         {
@@ -2800,15 +2801,14 @@ impl ThreadRequestProcessor {
                 .load_full_resume_history_items(&thread_id, path.as_ref())
                 .await
             {
-                Ok(items) => Some(items),
+                Ok(items) => response_history_items_storage = Some(items),
                 Err(error) => {
                     self.outgoing.send_error(request_id, error).await;
                     return Ok(());
                 }
             }
-        } else {
-            response_history_items
-        };
+        }
+        let response_history_items = response_history_items_storage.as_deref();
 
         match self
             .thread_manager
@@ -2852,7 +2852,7 @@ impl ThreadRequestProcessor {
                         codex_thread.as_ref(),
                         ResumeResponseSource {
                             history: &response_history,
-                            items: response_history_items.as_deref(),
+                            items: response_history_items,
                         },
                         rollout_path.as_path(),
                         resume_source_thread,
@@ -2897,7 +2897,7 @@ impl ThreadRequestProcessor {
                     config_snapshot.active_permission_profile,
                 );
                 let inline_history_items = if include_turns {
-                    let Some(history_items) = response_history_items.as_deref() else {
+                    let Some(history_items) = response_history_items else {
                         self.outgoing
                             .send_error(
                                 request_id,
@@ -2927,7 +2927,7 @@ impl ThreadRequestProcessor {
                             }
                         }
                     } else {
-                        let Some(history_items) = response_history_items.as_deref() else {
+                        let Some(history_items) = response_history_items else {
                             self.outgoing
                                 .send_error(
                                     request_id,
@@ -3113,7 +3113,7 @@ impl ThreadRequestProcessor {
             }
         };
 
-        if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
+        if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
             let existing_thread_rollout_path = existing_thread.rollout_path();
             let active_path = existing_thread_rollout_path
                 .as_ref()
@@ -3175,8 +3175,8 @@ impl ThreadRequestProcessor {
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
             let history_items = source_thread
                 .history
-                .as_ref()
-                .map(|history| history.items.clone())
+                .take()
+                .map(|history| history.items)
                 .ok_or_else(|| {
                     internal_error(format!(
                         "thread {existing_thread_id} did not include persisted history"
@@ -3200,10 +3200,8 @@ impl ThreadRequestProcessor {
             )
             .await?;
 
-            let mut summary_source_thread = source_thread;
-            summary_source_thread.history = None;
             let mut thread_summary = self.stored_thread_to_api_thread(
-                summary_source_thread,
+                source_thread,
                 config_snapshot.model_provider_id.as_str(),
                 /*include_turns*/ false,
             );
@@ -3451,7 +3449,7 @@ impl ThreadRequestProcessor {
             })?;
         Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
-            history,
+            history: Arc::new(history),
             rollout_path: stored_thread.rollout_path.clone(),
         }))
     }
@@ -3668,7 +3666,7 @@ impl ThreadRequestProcessor {
         let history_items = source_thread
             .history
             .take()
-            .map(|history| history.items)
+            .map(|history| Arc::new(history.items))
             .ok_or_else(|| {
                 internal_error(format!(
                     "thread {source_thread_id} did not include persisted history"

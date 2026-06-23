@@ -157,7 +157,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         namespace: Some("mcp__codex_apps__calendar".to_string()),
         arguments: "{}".to_string(),
         call_id: "call-namespace".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })?
     .expect("function_call should produce a tool call");
 
@@ -340,11 +340,13 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
             text: "extension history".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     session
         .record_conversation_items(&turn, std::slice::from_ref(&history_item))
         .await;
+    let mut expected_history_item = history_item.clone();
+    expected_history_item.set_turn_id_if_missing(&turn.sub_id);
 
     let router = ToolRouter::from_turn_context(
         &turn,
@@ -376,7 +378,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         namespace: Some("extension/".to_string()),
         arguments: json!({ "message": "hello" }).to_string(),
         call_id: "call-extension".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })?
     .expect("function_call should produce a tool call");
     let result = router
@@ -404,7 +406,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
                 json!({
                     "arguments": { "message": "hello" },
                     "callId": "call-extension",
-                    "conversationHistory": [history_item],
+                    "conversationHistory": [expected_history_item],
                     "ok": true,
                 })
             );

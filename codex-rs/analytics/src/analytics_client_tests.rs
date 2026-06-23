@@ -3504,10 +3504,11 @@ async fn reducer_ingests_plugin_install_failed_fact() {
 async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
-    let mut plugin = PluginTelemetryMetadata::from_plugin_id(
-        &PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
-    );
-    plugin.remote_plugin_id = Some("plugins~Plugin_00000000000000000000000000000000".to_string());
+    let plugin = PluginTelemetryMetadata {
+        plugin_id: PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
+        remote_plugin_id: Some("plugins~Plugin_00000000000000000000000000000000".to_string()),
+        capability_summary: None,
+    };
 
     reducer
         .ingest(
