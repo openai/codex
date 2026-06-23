@@ -39,6 +39,7 @@ use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::session::NewContextWindowMode;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -341,7 +342,10 @@ pub(crate) async fn run_turn(
                 .await;
 
                 let started_new_context_window = sess
-                    .maybe_start_new_context_window(turn_context.as_ref())
+                    .start_new_context_window(
+                        turn_context.as_ref(),
+                        NewContextWindowMode::StartIfRequested,
+                    )
                     .await
                     .is_some();
                 if started_new_context_window && needs_follow_up {
@@ -357,6 +361,16 @@ pub(crate) async fn run_turn(
                     && token_limit_reached
                     && needs_follow_up
                 {
+                    if turn_context.config.features.enabled(Feature::TokenBudget)
+                        && model_needs_follow_up
+                    {
+                        // A token-budget reset clears the current-window history. Preserve
+                        // active tool-call continuation state first; pre-turn compaction will
+                        // reset the window before the next user turn if the budget is still
+                        // exhausted.
+                        can_drain_pending_input = false;
+                        continue;
+                    }
                     if let Err(err) = run_auto_compact(
                         &sess,
                         &turn_context,
@@ -989,6 +1003,17 @@ async fn run_auto_compact(
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
+    if turn_context.config.features.enabled(Feature::TokenBudget) {
+        // Compaction is the reset request, so force a new context window
+        // instead of consuming a pending `new_context` tool request.
+        crate::compact_token_budget::run_inline_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+        )
+        .await?;
+        return Ok(());
+    }
+
     if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context
             .config

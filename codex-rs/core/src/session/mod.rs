@@ -251,6 +251,14 @@ use self::world_state::build_world_state_from_turn_context_item;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum NewContextWindowMode {
+    /// Start a fresh context window regardless of whether a new-context request is pending.
+    ForceStart,
+    /// Start a fresh context window only if one was explicitly requested.
+    StartIfRequested,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
@@ -3398,15 +3406,27 @@ impl Session {
         state.request_new_context_window();
     }
 
-    pub(crate) async fn maybe_start_new_context_window(
+    pub(crate) async fn start_new_context_window(
         &self,
         turn_context: &TurnContext,
+        mode: NewContextWindowMode,
     ) -> Option<u64> {
         let window = {
             let mut state = self.state.lock().await;
-            state.start_new_context_window_if_requested()
+            state.start_new_context_window(mode)
         };
         let (window_number, window_ids) = window?;
+        self.install_new_context_window(turn_context, window_number, window_ids)
+            .await;
+        Some(window_number)
+    }
+
+    async fn install_new_context_window(
+        &self,
+        turn_context: &TurnContext,
+        window_number: u64,
+        window_ids: AutoCompactWindowIds,
+    ) {
         let world_state = self.build_world_state(turn_context).await;
         let context_items = self
             .build_initial_context_with_world_state(turn_context, &world_state)
@@ -3435,7 +3455,6 @@ impl Session {
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
         self.recompute_token_usage(turn_context).await;
-        Some(window_number)
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
