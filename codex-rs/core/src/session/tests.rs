@@ -5021,11 +5021,18 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
 }
 
 async fn build_initial_context(session: &Session, turn_context: &TurnContext) -> Vec<ResponseItem> {
-    let world_state = session
-        .build_world_state_for_environments(turn_context, &turn_context.environments)
-        .await;
+    let world_state = build_world_state_from_turn_context(session, turn_context).await;
     session
         .build_initial_context_with_world_state(turn_context, &world_state)
+        .await
+}
+
+pub(crate) async fn build_world_state_from_turn_context(
+    session: &Session,
+    turn_context: &TurnContext,
+) -> WorldState {
+    session
+        .build_world_state_for_environments(turn_context, &turn_context.environments)
         .await
 }
 
@@ -7855,11 +7862,7 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
         });
     let mut previous_context_item = turn_context.to_turn_context_item();
     previous_context_item.turn_id = Some("previous-turn-id".to_string());
-    let world_state = Arc::new(
-        session
-            .build_world_state_for_environments(&turn_context, &turn_context.environments)
-            .await,
-    );
+    let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item));
@@ -8533,11 +8536,8 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         .with_model(next_model.to_string(), &session.services.models_manager)
         .await;
     let previous_context_item = previous_context.to_turn_context_item();
-    let world_state = Arc::new(
-        session
-            .build_world_state_for_environments(&previous_context, &previous_context.environments)
-            .await,
-    );
+    let world_state =
+        Arc::new(build_world_state_from_turn_context(&session, &previous_context).await);
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item.clone()));
