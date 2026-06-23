@@ -430,6 +430,7 @@ async fn deferred_finish_reuses_denial_result_after_first_consumer() {
         registration_id: "registration-1".to_string(),
         cancellation_token,
         finish_outcome: Arc::new(OnceCell::new()),
+        _network: None,
     };
     service
         .record_call_outcome(

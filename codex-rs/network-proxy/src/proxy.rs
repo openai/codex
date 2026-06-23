@@ -1,3 +1,5 @@
+mod request_scope;
+
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
@@ -18,6 +20,8 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::warn;
+
+use self::request_scope::RequestScopedProxy;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "codex-network-proxy", about = "Codex network sandbox proxy")]
@@ -229,6 +233,7 @@ impl NetworkProxyBuilder {
             reserved_listeners,
             policy_decider: self.policy_decider,
             environment_proxies: Arc::new(Mutex::new(HashMap::new())),
+            request_scope: None,
         })
     }
 }
@@ -345,6 +350,7 @@ pub struct NetworkProxy {
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
+    request_scope: Option<Arc<RequestScopedProxy>>,
 }
 
 impl std::fmt::Debug for NetworkProxy {
@@ -706,6 +712,18 @@ impl NetworkProxy {
     }
 
     fn environment_proxy_addrs(&self, environment_id: &str) -> Result<EnvironmentProxyAddrs> {
+        if let Some(request_scope) = self.request_scope.as_ref() {
+            anyhow::ensure!(
+                request_scope.environment_id == environment_id,
+                "request-scoped network proxy belongs to environment `{}`, not `{environment_id}`",
+                request_scope.environment_id
+            );
+            return Ok(EnvironmentProxyAddrs {
+                http_addr: self.http_addr,
+                socks_addr: self.socks_addr,
+            });
+        }
+
         let mut proxies = self
             .environment_proxies
             .lock()
@@ -823,6 +841,10 @@ impl NetworkProxy {
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
+        anyhow::ensure!(
+            self.request_scope.is_none(),
+            "request-scoped network proxy is already running"
+        );
         let current_cfg = self.state.current_cfg().await?;
         if !current_cfg.network.enabled {
             warn!("network.enabled is false; skipping proxy listeners");

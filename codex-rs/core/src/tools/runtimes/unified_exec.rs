@@ -317,10 +317,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             req.sandbox_permissions,
             &file_system_sandbox_policy,
         );
-        let managed_network = managed_network_for_sandbox_permissions(
+        let managed_network = attempt.network_proxy(managed_network_for_sandbox_permissions(
             req.network.as_ref(),
             launch_sandbox_permissions,
-        );
+        ));
         let mut env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
         if let Some(network) = managed_network {
             network
