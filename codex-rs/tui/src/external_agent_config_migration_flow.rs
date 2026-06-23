@@ -2,12 +2,14 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE;
 use crate::external_agent_config_migration::ExternalAgentConfigMigrationOutcome;
 use crate::external_agent_config_migration::run_external_agent_config_migration_prompt;
+use crate::external_agent_config_migration_model::external_agent_config_migration_count_summary;
+use crate::external_agent_config_migration_model::external_agent_config_migration_type_label;
 use crate::legacy_core::config::Config;
 use crate::tui;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
+use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 
-pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_FINISHED_MESSAGE: &str =
-    "Claude Code import finished. Run /import again to check for additional items.";
 pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_NO_ITEMS_MESSAGE: &str =
     "No Claude Code setup was found to import.";
 pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_REMOTE_UNAVAILABLE_MESSAGE: &str = "Import from Claude Code is unavailable in remote sessions. Start Codex locally and run /import.";
@@ -19,12 +21,49 @@ pub(crate) enum ExternalAgentConfigMigrationFlowOutcome {
     Cancelled,
 }
 
-fn external_agent_config_migration_success_message(remaining_item_count: usize) -> String {
-    let message = "Claude Code import started. You can keep working while it finishes. Imported setup will apply to new chats.";
+fn external_agent_config_migration_success_message(
+    selected_items: &[ExternalAgentConfigMigrationItem],
+    remaining_item_count: usize,
+) -> String {
+    let count_summary = external_agent_config_migration_count_summary(selected_items);
+    let message = format!(
+        "Claude Code import started. You can keep working while it finishes. Imported setup will apply to new chats. Importing: {count_summary}."
+    );
     match remaining_items_handoff(remaining_item_count) {
         Some(remaining_items_handoff) => format!("{message} {remaining_items_handoff}"),
-        None => message.to_string(),
+        None => message,
     }
+}
+
+pub(crate) fn external_agent_config_migration_finished_lines(
+    notification: &ExternalAgentConfigImportCompletedNotification,
+) -> Vec<String> {
+    let imported_count = notification
+        .item_type_results
+        .iter()
+        .map(|type_result| type_result.successes.len())
+        .sum::<usize>();
+    let failed_count = notification
+        .item_type_results
+        .iter()
+        .map(|type_result| type_result.failures.len())
+        .sum::<usize>();
+    let mut lines = vec![format!(
+        "Claude Code import finished: {imported_count} imported, {failed_count} failed."
+    )];
+    if !notification.item_type_results.is_empty() {
+        lines.push("Results by type:".to_string());
+        lines.extend(notification.item_type_results.iter().map(|type_result| {
+            format!(
+                "  {}: {} imported, {} failed",
+                external_agent_config_migration_type_label(type_result.item_type),
+                type_result.successes.len(),
+                type_result.failures.len()
+            )
+        }));
+    }
+    lines.push("Run /import again to check for additional items.".to_string());
+    lines
 }
 
 fn remaining_items_handoff(remaining_item_count: usize) -> Option<String> {
@@ -96,8 +135,10 @@ pub(crate) async fn handle_external_agent_config_migration_prompt(
                     Ok(()) => {
                         let remaining_item_count =
                             detected_items.len().saturating_sub(selected_items.len());
-                        let success_message =
-                            external_agent_config_migration_success_message(remaining_item_count);
+                        let success_message = external_agent_config_migration_success_message(
+                            &selected_items,
+                            remaining_item_count,
+                        );
                         return Ok(ExternalAgentConfigMigrationFlowOutcome::Started(
                             success_message,
                         ));
