@@ -14,6 +14,7 @@ use app_test_support::test_absolute_path;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use chrono::Utc;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -27,6 +28,7 @@ use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
@@ -58,6 +60,8 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -112,6 +116,7 @@ use super::analytics::wait_for_goal_event;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const PERMISSIONS_RESUME_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 fn normalized_existing_path(path: impl AsRef<Path>) -> Result<PathBuf> {
@@ -146,6 +151,50 @@ async fn wait_for_responses_request_count(
     })
     .await??;
     Ok(())
+}
+
+async fn start_materialized_workspace_auto_review_thread(
+    mcp: &mut TestAppServer,
+) -> Result<String> {
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            approval_policy: Some(AskForApproval::OnRequest),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        PERMISSIONS_RESUME_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        PERMISSIONS_RESUME_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        PERMISSIONS_RESUME_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(thread.id)
 }
 
 #[tokio::test]
@@ -191,6 +240,90 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
         "unexpected resume error: {}",
         resume_err.error.message
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_preserves_persisted_permissions_without_overrides() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut primary = TestAppServer::new(codex_home.path()).await?;
+    timeout(PERMISSIONS_RESUME_READ_TIMEOUT, primary.initialize()).await??;
+    let thread_id = start_materialized_workspace_auto_review_thread(&mut primary).await?;
+    drop(primary);
+
+    let mut secondary = TestAppServer::new(codex_home.path()).await?;
+    timeout(PERMISSIONS_RESUME_READ_TIMEOUT, secondary.initialize()).await??;
+
+    let resume_id = secondary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        PERMISSIONS_RESUME_READ_TIMEOUT,
+        secondary.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        approval_policy,
+        approvals_reviewer,
+        sandbox,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(approval_policy, AskForApproval::OnRequest);
+    assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert!(
+        matches!(sandbox, SandboxPolicy::WorkspaceWrite { .. }),
+        "expected persisted workspace-write permissions, got {sandbox:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_permission_overrides_win_over_persisted_permissions() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut primary = TestAppServer::new(codex_home.path()).await?;
+    timeout(PERMISSIONS_RESUME_READ_TIMEOUT, primary.initialize()).await??;
+    let thread_id = start_materialized_workspace_auto_review_thread(&mut primary).await?;
+    drop(primary);
+
+    let mut secondary = TestAppServer::new(codex_home.path()).await?;
+    timeout(PERMISSIONS_RESUME_READ_TIMEOUT, secondary.initialize()).await??;
+
+    let resume_id = secondary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            approval_policy: Some(AskForApproval::Never),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            permissions: Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        PERMISSIONS_RESUME_READ_TIMEOUT,
+        secondary.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        approval_policy,
+        approvals_reviewer,
+        sandbox,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(approval_policy, AskForApproval::Never);
+    assert_eq!(approvals_reviewer, ApprovalsReviewer::User);
+    assert_eq!(sandbox, SandboxPolicy::DangerFullAccess);
 
     Ok(())
 }

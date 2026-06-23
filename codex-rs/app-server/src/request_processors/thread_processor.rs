@@ -160,6 +160,111 @@ fn merge_persisted_resume_metadata(
     }
 }
 
+struct PersistedResumeThreadSettings {
+    approval_policy: codex_protocol::protocol::AskForApproval,
+    approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
+    permission_profile: codex_protocol::models::PermissionProfile,
+}
+
+fn merge_persisted_resume_thread_settings(
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+    typesafe_overrides: &mut ConfigOverrides,
+    settings: PersistedResumeThreadSettings,
+) {
+    if !has_config_override(request_overrides, "approval_policy")
+        && typesafe_overrides.approval_policy.is_none()
+    {
+        typesafe_overrides.approval_policy = Some(settings.approval_policy);
+    }
+
+    if let Some(approvals_reviewer) = settings.approvals_reviewer
+        && !has_config_override(request_overrides, "approvals_reviewer")
+        && typesafe_overrides.approvals_reviewer.is_none()
+    {
+        typesafe_overrides.approvals_reviewer = Some(approvals_reviewer);
+    }
+
+    if !has_permission_resume_override(request_overrides, typesafe_overrides) {
+        typesafe_overrides.permission_profile = Some(settings.permission_profile);
+    }
+}
+
+fn has_config_override(
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+    key: &str,
+) -> bool {
+    request_overrides.is_some_and(|overrides| overrides.contains_key(key))
+}
+
+fn has_permission_resume_override(
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+    typesafe_overrides: &ConfigOverrides,
+) -> bool {
+    typesafe_overrides.permission_profile.is_some()
+        || typesafe_overrides.default_permissions.is_some()
+        || typesafe_overrides.sandbox_mode.is_some()
+        || has_config_override(request_overrides, "permission_profile")
+        || has_config_override(request_overrides, "default_permissions")
+        || has_config_override(request_overrides, "sandbox_mode")
+}
+
+async fn latest_persisted_resume_thread_settings(
+    resumed_history: &ResumedHistory,
+) -> Option<PersistedResumeThreadSettings> {
+    if let Some(rollout_path) = resumed_history.rollout_path.as_ref()
+        && let Ok((items, _, _)) =
+            codex_rollout::RolloutRecorder::load_rollout_items(rollout_path).await
+        && let Some(settings) = latest_persisted_resume_thread_settings_from_items(&items)
+    {
+        return Some(settings);
+    }
+
+    latest_persisted_resume_thread_settings_from_items(&resumed_history.history)
+}
+
+fn latest_persisted_resume_thread_settings_from_items(
+    rollout_items: &[RolloutItem],
+) -> Option<PersistedResumeThreadSettings> {
+    let mut settings = None;
+
+    for item in rollout_items {
+        match item {
+            RolloutItem::EventMsg(EventMsg::SessionConfigured(event)) => {
+                settings = Some(PersistedResumeThreadSettings {
+                    approval_policy: event.approval_policy,
+                    approvals_reviewer: Some(event.approvals_reviewer),
+                    permission_profile: event.permission_profile.clone(),
+                });
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                let snapshot = &event.thread_settings;
+                settings = Some(PersistedResumeThreadSettings {
+                    approval_policy: snapshot.approval_policy,
+                    approvals_reviewer: Some(snapshot.approvals_reviewer),
+                    permission_profile: snapshot.permission_profile.clone(),
+                });
+            }
+            RolloutItem::TurnContext(turn_context) => {
+                let approvals_reviewer = settings
+                    .as_ref()
+                    .and_then(|settings| settings.approvals_reviewer);
+                settings = Some(PersistedResumeThreadSettings {
+                    approval_policy: turn_context.approval_policy,
+                    approvals_reviewer,
+                    permission_profile: turn_context.permission_profile(),
+                });
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::EventMsg(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::Compacted(_) => {}
+        }
+    }
+
+    settings
+}
+
 fn normalize_thread_list_cwd_filters(
     cwd: Option<ThreadListCwdFilter>,
 ) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
@@ -2840,6 +2945,13 @@ impl ThreadRequestProcessor {
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
+        if let Some(settings) = latest_persisted_resume_thread_settings(resumed_history).await {
+            merge_persisted_resume_thread_settings(
+                request_overrides.as_ref(),
+                typesafe_overrides,
+                settings,
+            );
+        }
         let state_db_ctx = self.state_db.clone()?;
         let persisted_metadata = state_db_ctx
             .get_thread(resumed_history.conversation_id)
