@@ -4,30 +4,17 @@ use crate::context::world_state::WorldState;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_protocol::protocol::TurnContextItem;
 
-pub(super) fn build_world_state_from_turn_context(
+pub(super) fn build_world_state_from_environment_snapshot(
     turn_context: &TurnContext,
+    environments: &TurnEnvironmentSnapshot,
     environment_subagents: &str,
 ) -> WorldState {
     let mut world_state = WorldState::default();
     if turn_context.config.include_environment_context {
         world_state.add_section(
-            EnvironmentsState::from_turn_context(turn_context)
+            EnvironmentsState::from_turn_context_with_environments(turn_context, environments)
                 .with_subagents(environment_subagents.to_string()),
         );
-    }
-    world_state
-}
-
-pub(super) fn build_world_state_from_environment_snapshot(
-    turn_context: &TurnContext,
-    environments: &TurnEnvironmentSnapshot,
-) -> WorldState {
-    let mut world_state = WorldState::default();
-    if turn_context.config.include_environment_context {
-        world_state.add_section(EnvironmentsState::from_turn_context_with_environments(
-            turn_context,
-            environments,
-        ));
     }
     world_state
 }
