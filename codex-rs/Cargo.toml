@@ -504,7 +504,6 @@ unwrap_used = "deny"
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
 ignored = [
-    "codex-agent-graph-store",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",
