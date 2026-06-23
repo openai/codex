@@ -774,8 +774,7 @@ async fn build_thread_item(
     let mut summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
         .await
         .unwrap_or_default();
-    if summary.saw_session_meta && summary.preview.is_none() && summary.has_fork_parent_rollout_ref
-    {
+    if summary.saw_session_meta && summary.has_fork_parent_rollout_ref {
         if let Ok(expanded_summary) = read_expanded_rollout_summary(&path).await {
             if expanded_summary.preview.is_some() {
                 summary = expanded_summary;

@@ -13,7 +13,6 @@ use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -49,10 +48,6 @@ use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
-
-fn network_disabled() -> bool {
-    std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
-}
 
 fn body_contains_text(body: &str, text: &str) -> bool {
     body.contains(&json_fragment(text))
@@ -132,11 +127,6 @@ fn normalize_compact_prompts(requests: &mut [Value]) {
 /// Scenario: compact an initial conversation, resume it, fork one turn back, and
 /// ensure the model-visible history matches expectations at each request.
 async fn compact_resume_and_fork_preserve_model_history_view() {
-    if network_disabled() {
-        println!("Skipping test because network is disabled in this sandbox");
-        return;
-    }
-
     // 1. Arrange mocked SSE responses for the initial compact/resume/fork flow.
     let server = MockServer::start().await;
     let request_log = mount_initial_flow(&server).await;
@@ -288,11 +278,6 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 /// Scenario: a compacted resume history slice should reconstruct the same
 /// model-visible context when the next user turn runs.
 async fn compacted_resume_history_slice_preserves_next_turn_context() -> Result<()> {
-    if network_disabled() {
-        println!("Skipping test because network is disabled in this sandbox");
-        return Ok(());
-    }
-
     const AFTER_COMPACTED_SLICE_RESUME: &str = "AFTER_COMPACTED_SLICE_RESUME";
 
     let server = MockServer::start().await;
@@ -355,11 +340,6 @@ async fn compacted_resume_history_slice_preserves_next_turn_context() -> Result<
 /// Scenario: after the forked branch is compacted, resuming again should reuse
 /// the compacted history and only append the new user message.
 async fn compact_resume_after_second_compaction_preserves_history() -> Result<()> {
-    if network_disabled() {
-        println!("Skipping test because network is disabled in this sandbox");
-        return Ok(());
-    }
-
     // 1. Arrange mocked SSE responses as a single ordered stream so assertions
     // observe the real request sequence instead of per-mock duplicate captures.
     let server = MockServer::start().await;
@@ -493,11 +473,6 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
 /// append-only history from the rollout file and keep earlier compacted
 /// history visible.
 async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Result<()> {
-    if network_disabled() {
-        println!("Skipping test because network is disabled in this sandbox");
-        return Ok(());
-    }
-
     const EDITED_AFTER_COMPACT: &str = "EDITED_AFTER_COMPACT";
     const SECOND_REPLY: &str = "SECOND_REPLY";
 
@@ -583,11 +558,6 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
 /// diffs should trim those context updates so the next request includes them
 /// only once.
 async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
-    if network_disabled() {
-        println!("Skipping test because network is disabled in this sandbox");
-        return Ok(());
-    }
-
     const MODEL: &str = "gpt-5.4";
     const TURN_ONE_USER: &str = "turn 1 user";
     const TURN_TWO_USER: &str = "turn 2 user";

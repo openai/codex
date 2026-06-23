@@ -1399,7 +1399,16 @@ async fn read_thread_item_from_cow_child_uses_parent_preview() -> Result<()> {
             "fork_parent_rollout_byte_len": parent_byte_len,
         }
     });
-    fs::write(&child_path, format!("{child_meta}\n"))?;
+    let child_user_event = serde_json::json!({
+        "timestamp": child_ts,
+        "type": "event_msg",
+        "payload": {
+            "type": "user_message",
+            "message": "Child suffix user",
+            "kind": "plain"
+        }
+    });
+    fs::write(&child_path, format!("{child_meta}\n{child_user_event}\n"))?;
 
     let item = read_thread_item_from_rollout(child_path.clone())
         .await
