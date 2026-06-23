@@ -27,6 +27,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::WarningEvent;
+use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -38,6 +39,11 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
+
+// Keep ambiguous attribution bounded before adding every candidate to model-visible context.
+const MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_CANDIDATES: usize = 16;
+// Leave room in the 10K-token action item for network metadata and JSON formatting.
+const MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_TOKENS: u64 = 8_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NetworkApprovalMode {
@@ -238,7 +244,12 @@ struct ActiveNetworkApprovalCall {
 enum ActiveNetworkApprovalAttribution {
     None,
     Single(Arc<ActiveNetworkApprovalCall>),
-    Ambiguous,
+    Ambiguous(Vec<Arc<ActiveNetworkApprovalCall>>),
+}
+
+enum ActiveNetworkApprovalCallScope<'a> {
+    AllEnvironments,
+    Environment(&'a str),
 }
 
 #[derive(Default)]
@@ -315,15 +326,29 @@ impl NetworkApprovalService {
         None
     }
 
-    async fn resolve_active_call_attribution(&self) -> ActiveNetworkApprovalAttribution {
+    async fn resolve_active_call_attribution(
+        &self,
+        scope: ActiveNetworkApprovalCallScope<'_>,
+    ) -> ActiveNetworkApprovalAttribution {
         let calls = self.calls.lock().await;
-        match calls.active_calls.len() {
+        let candidates = calls
+            .active_calls
+            .values()
+            .filter(|call| match scope {
+                ActiveNetworkApprovalCallScope::AllEnvironments => true,
+                ActiveNetworkApprovalCallScope::Environment(environment_id) => {
+                    call.environment_id == environment_id
+                }
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        match candidates.len() {
             0 => ActiveNetworkApprovalAttribution::None,
-            1 => calls.active_calls.values().next().cloned().map_or(
+            1 => candidates.into_iter().next().map_or(
                 ActiveNetworkApprovalAttribution::None,
                 ActiveNetworkApprovalAttribution::Single,
             ),
-            _ => ActiveNetworkApprovalAttribution::Ambiguous,
+            _ => ActiveNetworkApprovalAttribution::Ambiguous(candidates),
         }
     }
 
@@ -431,24 +456,37 @@ impl NetworkApprovalService {
             NetworkProtocol::Socks5Tcp => NetworkApprovalProtocol::Socks5Tcp,
             NetworkProtocol::Socks5Udp => NetworkApprovalProtocol::Socks5Udp,
         };
-        let (owner_call, active_environment_id) =
+        let (owner_call, possible_trigger_calls, active_environment_id) =
             if let Some(environment_id) = request.environment_id.clone() {
-                let owner_call = match self.resolve_active_call_attribution().await {
-                    ActiveNetworkApprovalAttribution::Single(call) => {
-                        (call.environment_id == environment_id).then_some(call)
+                match self
+                    .resolve_active_call_attribution(ActiveNetworkApprovalCallScope::Environment(
+                        &environment_id,
+                    ))
+                    .await
+                {
+                    ActiveNetworkApprovalAttribution::None => {
+                        (None, Vec::new(), Some(environment_id))
                     }
-                    ActiveNetworkApprovalAttribution::None
-                    | ActiveNetworkApprovalAttribution::Ambiguous => None,
-                };
-                (owner_call, Some(environment_id))
+                    ActiveNetworkApprovalAttribution::Single(call) => {
+                        (Some(call), Vec::new(), Some(environment_id))
+                    }
+                    ActiveNetworkApprovalAttribution::Ambiguous(calls) => {
+                        (None, calls, Some(environment_id))
+                    }
+                }
             } else {
-                match self.resolve_active_call_attribution().await {
-                    ActiveNetworkApprovalAttribution::None => (None, None),
+                match self
+                    .resolve_active_call_attribution(
+                        ActiveNetworkApprovalCallScope::AllEnvironments,
+                    )
+                    .await
+                {
+                    ActiveNetworkApprovalAttribution::None => (None, Vec::new(), None),
                     ActiveNetworkApprovalAttribution::Single(call) => {
                         let environment_id = call.environment_id.clone();
-                        (Some(call), Some(environment_id))
+                        (Some(call), Vec::new(), Some(environment_id))
                     }
-                    ActiveNetworkApprovalAttribution::Ambiguous => {
+                    ActiveNetworkApprovalAttribution::Ambiguous(_) => {
                         return NetworkDecision::deny(REASON_NOT_ALLOWED);
                     }
                 }
@@ -567,6 +605,23 @@ impl NetworkApprovalService {
             }
         }
         let use_guardian = routes_approval_to_guardian(&turn_context);
+        let possible_triggers = possible_trigger_calls
+            .iter()
+            .map(|call| call.trigger.clone())
+            .collect::<Vec<_>>();
+        if use_guardian {
+            let candidates_fit = possible_triggers.len()
+                <= MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_CANDIDATES
+                && serde_json::to_vec_pretty(&possible_triggers).is_ok_and(|encoded| {
+                    approx_tokens_from_byte_count(encoded.len())
+                        <= MAX_GUARDIAN_NETWORK_ACCESS_TRIGGER_TOKENS
+                });
+            if !candidates_fit {
+                pending.set_decision(PendingApprovalDecision::Deny).await;
+                self.pending_host_approvals.lock().await.remove(&key);
+                return NetworkDecision::deny(REASON_NOT_ALLOWED);
+            }
+        }
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
             review_approval_request(
@@ -583,6 +638,7 @@ impl NetworkApprovalService {
                     protocol,
                     port: key.port,
                     trigger: owner_call.as_ref().map(|call| call.trigger.clone()),
+                    possible_triggers,
                 },
                 Some(policy_denial_message.clone()),
             )

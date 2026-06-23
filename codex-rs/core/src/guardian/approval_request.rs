@@ -55,6 +55,7 @@ pub(crate) enum GuardianApprovalRequest {
         protocol: NetworkApprovalProtocol,
         port: u16,
         trigger: Option<GuardianNetworkAccessTrigger>,
+        possible_triggers: Vec<GuardianNetworkAccessTrigger>,
     },
     McpToolCall {
         id: String,
@@ -158,6 +159,8 @@ struct NetworkAccessApprovalAction<'a> {
     port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     trigger: Option<&'a GuardianNetworkAccessTrigger>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    possible_triggers: Option<&'a [GuardianNetworkAccessTrigger]>,
 }
 
 #[derive(Serialize)]
@@ -327,6 +330,7 @@ pub(crate) fn guardian_approval_request_to_json(
             protocol,
             port,
             trigger,
+            possible_triggers,
         } => serialize_guardian_action(NetworkAccessApprovalAction {
             tool: "network_access",
             target,
@@ -334,6 +338,8 @@ pub(crate) fn guardian_approval_request_to_json(
             protocol: *protocol,
             port: *port,
             trigger: trigger.as_ref(),
+            possible_triggers: (!possible_triggers.is_empty())
+                .then_some(possible_triggers.as_slice()),
         }),
         GuardianApprovalRequest::McpToolCall {
             id: _,
@@ -409,6 +415,7 @@ pub(crate) fn guardian_assessment_action(
             protocol,
             port,
             trigger: _trigger,
+            possible_triggers: _possible_triggers,
         } => GuardianAssessmentAction::NetworkAccess {
             target: target.clone(),
             host: host.clone(),

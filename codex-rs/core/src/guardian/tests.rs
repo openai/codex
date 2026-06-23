@@ -974,6 +974,7 @@ fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_j
             justification: Some("Fetch the release metadata.".to_string()),
             tty: None,
         }),
+        possible_triggers: Vec::new(),
     };
 
     assert_eq!(
@@ -1024,6 +1025,7 @@ async fn build_guardian_prompt_items_explains_network_access_review_scope() -> a
                 justification: Some("Fetch the release metadata.".to_string()),
                 tty: None,
             }),
+            possible_triggers: Vec::new(),
         },
         GuardianPromptMode::Full,
     )
@@ -1099,6 +1101,7 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         protocol: NetworkApprovalProtocol::Https,
         port: 443,
         trigger: None,
+        possible_triggers: Vec::new(),
     };
     let apply_patch = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
@@ -1137,6 +1140,7 @@ fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
             justification: None,
             tty: None,
         }),
+        possible_triggers: Vec::new(),
     };
 
     assert_eq!(guardian_request_target_item_id(&network_access), None);
