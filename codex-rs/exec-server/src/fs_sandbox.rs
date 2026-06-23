@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;

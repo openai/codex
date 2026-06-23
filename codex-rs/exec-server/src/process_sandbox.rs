@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::models::PermissionProfile;

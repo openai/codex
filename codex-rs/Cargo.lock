@@ -2883,13 +2883,12 @@ dependencies = [
  "bytes",
  "clatter",
  "codex-api",
- "codex-app-server-protocol",
  "codex-client",
+ "codex-exec-server-protocol",
  "codex-file-system",
  "codex-network-proxy",
  "codex-protocol",
  "codex-sandboxing",
- "codex-shell-command",
  "codex-test-binary-support",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
@@ -2916,6 +2915,21 @@ dependencies = [
  "uuid",
  "windows-sys 0.52.0",
  "wiremock",
+]
+
+[[package]]
+name = "codex-exec-server-protocol"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "codex-file-system",
+ "codex-network-proxy",
+ "codex-protocol",
+ "codex-shell-command",
+ "codex-utils-path-uri",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
