@@ -73,6 +73,15 @@ fn regex_matcher_requires_a_full_value_match() {
 }
 
 #[test]
+fn regex_matcher_allows_a_later_alternative_to_match_the_full_value() {
+    let matcher = McpServerValueMatcher::Regex {
+        expression: r"https://api\.example\.com|https://api\.example\.com/mcp".to_string(),
+    };
+
+    assert!(matcher.matches("https://api.example.com/mcp"));
+}
+
+#[test]
 fn matcher_deserializes_command_and_url_shapes() {
     let command: McpServerMatcher = toml::from_str(
         r#"

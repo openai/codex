@@ -13,23 +13,25 @@ pub enum McpServerValueMatcher {
 }
 
 impl McpServerValueMatcher {
+    fn compile_full_regex(expression: &str) -> Result<Regex, String> {
+        Regex::new(&format!(r"\A(?:{expression})\z"))
+            .map_err(|err| format!("invalid regex `{expression}`: {err}"))
+    }
+
     fn validate(&self) -> Result<(), String> {
         let Self::Regex { expression } = self else {
             return Ok(());
         };
-        Regex::new(expression)
-            .map(|_| ())
-            .map_err(|err| format!("invalid regex `{expression}`: {err}"))
+        Self::compile_full_regex(expression).map(|_| ())
     }
 
     fn matches(&self, candidate: &str) -> bool {
         match self {
             Self::Exact { value } => candidate == value,
             Self::Prefix { value } => candidate.starts_with(value),
-            Self::Regex { expression } => Regex::new(expression)
+            Self::Regex { expression } => Self::compile_full_regex(expression)
                 .ok()
-                .and_then(|regex| regex.find(candidate))
-                .is_some_and(|matched| matched.start() == 0 && matched.end() == candidate.len()),
+                .is_some_and(|regex| regex.is_match(candidate)),
         }
     }
 }
