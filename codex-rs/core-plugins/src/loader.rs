@@ -151,18 +151,27 @@ async fn load_plugins_from_layer_stack_with_scope(
     configured_plugins.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut plugins = Vec::with_capacity(configured_plugins.len());
-    let mut seen_mcp_server_names = HashMap::<String, String>::new();
+    let mut seen_mcp_server_names = HashMap::<String, (String, AbsolutePathBuf)>::new();
     for (configured_name, plugin) in configured_plugins {
         let loaded_plugin = load_plugin(configured_name.clone(), &plugin, store, &scope).await;
         for name in loaded_plugin.mcp_servers.keys() {
-            if let Some(previous_plugin) =
-                seen_mcp_server_names.insert(name.clone(), configured_name.clone())
-            {
+            if let Some((winner_plugin, winner_path)) = seen_mcp_server_names.get(name) {
+                let remediation = format!(
+                    "remove `{configured_name}` or set [plugins.\"{configured_name}\"].enabled = false"
+                );
                 warn!(
-                    plugin = configured_name,
-                    previous_plugin,
                     server = name,
-                    "skipping duplicate plugin MCP server name"
+                    winner_plugin = %winner_plugin,
+                    winner_path = %winner_path.display(),
+                    duplicate_plugin = %configured_name,
+                    duplicate_path = %loaded_plugin.root.display(),
+                    remediation = %remediation,
+                    "duplicate plugin MCP server ownership for `{name}`: `{winner_plugin}` wins over `{configured_name}`; {remediation}"
+                );
+            } else {
+                seen_mcp_server_names.insert(
+                    name.clone(),
+                    (configured_name.clone(), loaded_plugin.root.clone()),
                 );
             }
         }
@@ -374,7 +383,21 @@ pub fn refresh_curated_plugin_cache(
 
         if store.active_plugin_version(plugin_id).as_deref() == Some(cache_plugin_version.as_str())
         {
-            continue;
+            let source_matches = store
+                .active_plugin_matches_source(plugin_id, source_path.as_path())
+                .map_err(|err| {
+                    format!(
+                        "failed to verify curated plugin cache for {}: {err}",
+                        plugin_id.as_key()
+                    )
+                })?;
+            if source_matches {
+                continue;
+            }
+            warn!(
+                plugin = %plugin_id.as_key(),
+                "curated plugin cache bytes differ from the intended source; reinstalling"
+            );
         }
 
         store
@@ -545,7 +568,28 @@ fn refresh_non_curated_plugin_cache_with_mode(
         if mode == NonCuratedCacheRefreshMode::IfVersionChanged
             && store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str())
         {
-            continue;
+            let source_matches = match manifest_fallback_contents.as_deref() {
+                Some(manifest_contents) => store
+                    .active_plugin_matches_source_with_fallback_manifest(
+                        &plugin_id,
+                        source_path.as_path(),
+                        manifest_contents,
+                    ),
+                None => store.active_plugin_matches_source(&plugin_id, source_path.as_path()),
+            }
+            .map_err(|err| {
+                format!(
+                    "failed to verify plugin cache for {}: {err}",
+                    plugin_id.as_key()
+                )
+            })?;
+            if source_matches {
+                continue;
+            }
+            warn!(
+                plugin = %plugin_id.as_key(),
+                "plugin cache bytes differ from the intended source; reinstalling"
+            );
         }
 
         match manifest_fallback_contents.as_deref() {

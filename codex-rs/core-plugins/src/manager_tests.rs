@@ -5153,7 +5153,7 @@ plugins = true
 }
 
 #[test]
-fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_current() {
+fn refresh_curated_plugin_cache_reinstalls_unverified_current_version() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
@@ -5169,8 +5169,8 @@ fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_curren
     );
 
     assert!(
-        !refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
-            .expect("cache refresh should be a no-op when configured plugins are current")
+        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should reinstall current but unverified plugin bytes")
     );
 }
 
@@ -5374,7 +5374,7 @@ enabled = true
 }
 
 #[test]
-fn refresh_non_curated_plugin_cache_returns_false_when_configured_plugins_are_current() {
+fn refresh_non_curated_plugin_cache_reinstalls_changed_current_version() {
     let tmp = tempfile::tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
     fs::create_dir_all(repo_root.join(".git")).unwrap();
@@ -5395,12 +5395,6 @@ fn refresh_non_curated_plugin_cache_returns_false_when_configured_plugins_are_cu
   ]
 }"#,
     );
-    write_plugin_with_version(
-        &tmp.path().join("plugins/cache/debug"),
-        "sample-plugin/1.2.3",
-        "sample-plugin",
-        Some("1.2.3"),
-    );
     write_file(
         &tmp.path().join(CONFIG_TOML_FILE),
         r#"[features]
@@ -5411,13 +5405,11 @@ enabled = true
 "#,
     );
 
-    assert!(
-        !refresh_non_curated_plugin_cache(
-            tmp.path(),
-            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-        )
-        .expect("cache refresh should be a no-op when configured plugins are current")
-    );
+    let roots = [AbsolutePathBuf::try_from(repo_root.clone()).unwrap()];
+    assert!(refresh_non_curated_plugin_cache(tmp.path(), &roots).unwrap());
+    fs::write(repo_root.join("sample-plugin/skills/SKILL.md"), "updated").unwrap();
+    assert!(refresh_non_curated_plugin_cache(tmp.path(), &roots).unwrap());
+    assert!(!refresh_non_curated_plugin_cache(tmp.path(), &roots).unwrap());
 }
 
 #[test]
