@@ -67,6 +67,11 @@ pub async fn build_skill_injections(
     analytics_client: &AnalyticsEventsClient,
     tracking: TrackEventsContext,
 ) -> SkillInjections {
+    tracing::info!(
+        mentioned_skill_count = mentioned_skills.len(),
+        loaded_skills_available = loaded_skills.is_some(),
+        "building core skill injections"
+    );
     if mentioned_skills.is_empty() {
         return SkillInjections::default();
     }
@@ -82,8 +87,23 @@ pub async fn build_skill_injections(
             .and_then(|outcome| outcome.file_system_for_skill(skill))
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
         let path = PathUri::from_abs_path(&skill.path_to_skills_md);
+        tracing::info!(
+            skill = %skill.name,
+            path = %skill.path_to_skills_md.to_string_lossy(),
+            scope = ?skill.scope,
+            plugin_id = ?skill.plugin_id,
+            "reading core skill injection file"
+        );
         match fs.read_file_text(&path, /*sandbox*/ None).await {
             Ok(contents) => {
+                tracing::info!(
+                    skill = %skill.name,
+                    path = %skill.path_to_skills_md.to_string_lossy(),
+                    scope = ?skill.scope,
+                    plugin_id = ?skill.plugin_id,
+                    contents_bytes = contents.len(),
+                    "read core skill injection file"
+                );
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {
                     skill_name: skill.name.clone(),
@@ -99,6 +119,14 @@ pub async fn build_skill_injections(
                 });
             }
             Err(err) => {
+                tracing::info!(
+                    skill = %skill.name,
+                    path = %skill.path_to_skills_md.to_string_lossy(),
+                    scope = ?skill.scope,
+                    plugin_id = ?skill.plugin_id,
+                    error = %err,
+                    "failed to read core skill injection file"
+                );
                 emit_skill_injected_metric(otel, skill, "error");
                 let message = format!(
                     "Failed to load skill {name} at {path}: {err:#}",
@@ -111,6 +139,11 @@ pub async fn build_skill_injections(
     }
 
     analytics_client.track_skill_invocations(tracking, invocations);
+    tracing::info!(
+        injection_count = result.items.len(),
+        warning_count = result.warnings.len(),
+        "built core skill injections"
+    );
 
     result
 }
@@ -202,6 +235,21 @@ pub fn collect_explicit_skill_mentions(
         }
     }
 
+    tracing::info!(
+        input_count = inputs.len(),
+        available_skill_count = skills.len(),
+        disabled_skill_count = disabled_paths.len(),
+        selected_skill_count = selected.len(),
+        selected_skill_names = ?selected
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect::<Vec<_>>(),
+        selected_skill_paths = ?selected
+            .iter()
+            .map(|skill| skill.path_to_skills_md.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        "collected core explicit skill mentions"
+    );
     selected
 }
 

@@ -154,7 +154,31 @@ impl HostSkillsSnapshot {
             .file_system_for_skill(skill)
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
         let path = PathUri::from_abs_path(&skill.path_to_skills_md);
-        fs.read_file_text(&path, /*sandbox*/ None).await
+        tracing::info!(
+            skill = %skill.name,
+            path = %skill.path_to_skills_md.to_string_lossy(),
+            "reading host skill file text"
+        );
+        let result = fs.read_file_text(&path, /*sandbox*/ None).await;
+        match &result {
+            Ok(contents) => {
+                tracing::info!(
+                    skill = %skill.name,
+                    path = %skill.path_to_skills_md.to_string_lossy(),
+                    contents_bytes = contents.len(),
+                    "read host skill file text"
+                );
+            }
+            Err(err) => {
+                tracing::info!(
+                    skill = %skill.name,
+                    path = %skill.path_to_skills_md.to_string_lossy(),
+                    error = %err,
+                    "failed to read host skill file text"
+                );
+            }
+        }
+        result
     }
 }
 

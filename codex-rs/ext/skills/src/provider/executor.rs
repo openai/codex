@@ -114,6 +114,8 @@ impl SkillProvider for ExecutorSkillProvider {
 
     fn read(&self, request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {
         Box::pin(async move {
+            let package = request.package.0.clone();
+            let resource = request.resource.as_str().to_string();
             if request.authority.kind != SkillSourceKind::Executor {
                 return Err(SkillProviderError::new(format!(
                     "executor skill provider cannot read {} resources",
@@ -135,17 +137,34 @@ impl SkillProvider for ExecutorSkillProvider {
                     "executor skill resource references unavailable environment `{environment_id}`"
                 )));
             };
+            let resource_path_for_log = resource_path.to_string_lossy().into_owned();
             let resource_path = PathUri::from_abs_path(resource_path);
+            tracing::info!(
+                authority_id = %request.authority.id,
+                package = %package,
+                resource = %resource,
+                environment_id = %environment_id,
+                path = %resource_path_for_log,
+                "reading executor skill resource"
+            );
             let contents = environment
                 .get_filesystem()
                 .read_file_text(&resource_path, /*sandbox*/ None)
                 .await
                 .map_err(|err| {
                     SkillProviderError::new(format!(
-                        "failed to read executor skill resource {}: {err}",
-                        request.resource.as_str()
+                        "failed to read executor skill resource {resource}: {err}"
                     ))
                 })?;
+            tracing::info!(
+                authority_id = %request.authority.id,
+                package = %package,
+                resource = %resource,
+                environment_id = %environment_id,
+                path = %resource_path_for_log,
+                contents_bytes = contents.len(),
+                "read executor skill resource"
+            );
 
             Ok(SkillReadResult {
                 resource: request.resource,

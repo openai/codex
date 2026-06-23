@@ -150,6 +150,8 @@ impl SkillProvider for OrchestratorSkillProvider {
 
     fn read(&self, request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {
         Box::pin(async move {
+            let package = request.package.0.clone();
+            let resource = request.resource.as_str().to_string();
             if request.authority
                 != SkillAuthority::new(SkillSourceKind::Orchestrator, CODEX_APPS_MCP_SERVER_NAME)
             {
@@ -169,6 +171,12 @@ impl SkillProvider for OrchestratorSkillProvider {
                     "session MCP resource client is not configured",
                 ));
             };
+            tracing::info!(
+                authority_id = %request.authority.id,
+                package = %package,
+                resource = %resource,
+                "reading orchestrator skill resource"
+            );
             let result = tokio::time::timeout(
                 ORCHESTRATOR_SKILL_READ_TIMEOUT,
                 client.read_resource(CODEX_APPS_MCP_SERVER_NAME, request.resource.as_str()),
@@ -206,6 +214,13 @@ impl SkillProvider for OrchestratorSkillProvider {
                     request.resource.as_str()
                 )));
             }
+            tracing::info!(
+                authority_id = %request.authority.id,
+                package = %package,
+                resource = %resource,
+                contents_bytes = contents.len(),
+                "read orchestrator skill resource"
+            );
 
             Ok(SkillReadResult {
                 resource: request.resource,

@@ -51,6 +51,13 @@ impl SkillProvider for HostSkillProvider {
                     "host skill provider requires a host skills snapshot",
                 ));
             };
+            tracing::info!(
+                authority_kind = %request.authority.kind,
+                authority_id = %request.authority.id,
+                package = %request.package.0,
+                resource = %request.resource.as_str(),
+                "reading host skill resource"
+            );
             let Some(skill) = host_snapshot.outcome().skills.iter().find(|skill| {
                 let skill_path = skill.path_to_skills_md.to_string_lossy();
                 skill_path == request.resource.as_str()
@@ -61,6 +68,12 @@ impl SkillProvider for HostSkillProvider {
                     request.resource.as_str()
                 )));
             };
+            tracing::info!(
+                skill = %skill.name,
+                path = %skill.path_to_skills_md.to_string_lossy(),
+                resource = %request.resource.as_str(),
+                "matched host skill resource"
+            );
 
             let contents = host_snapshot.read_skill_text(skill).await.map_err(|err| {
                 SkillProviderError::new(format!(
@@ -68,6 +81,13 @@ impl SkillProvider for HostSkillProvider {
                     request.resource.as_str()
                 ))
             })?;
+            tracing::info!(
+                skill = %skill.name,
+                path = %skill.path_to_skills_md.to_string_lossy(),
+                resource = %request.resource.as_str(),
+                contents_bytes = contents.len(),
+                "read host skill resource"
+            );
 
             Ok(SkillReadResult {
                 resource: request.resource,

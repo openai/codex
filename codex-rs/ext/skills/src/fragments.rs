@@ -56,6 +56,12 @@ impl ContextualUserFragment for SkillInstructions {
         let name = &self.name;
         let path = &self.path;
         let contents = &self.contents;
+        tracing::info!(
+            skill = %name,
+            path = %path,
+            contents_bytes = contents.len(),
+            "rendering extension skill instructions fragment"
+        );
         format!("\n<name>{name}</name>\n<path>{path}</path>\n{contents}\n")
     }
 }

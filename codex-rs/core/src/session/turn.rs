@@ -588,6 +588,16 @@ async fn build_skills_and_plugins(
     let extension_injection_items =
         build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
             .await?;
+    tracing::info!(
+        turn_id = %turn_context.sub_id,
+        user_input_count = user_input.len(),
+        structured_skill_input_count = user_input
+            .iter()
+            .filter(|input| matches!(input, UserInput::Skill { .. }))
+            .count(),
+        extension_injection_item_count = extension_injection_items.len(),
+        "built extension turn input items for skill injection"
+    );
     let skill_name_counts_lower =
         build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
     let mentioned_skills = collect_explicit_skill_mentions(
@@ -595,6 +605,19 @@ async fn build_skills_and_plugins(
         &skills_outcome.skills,
         &skills_outcome.disabled_paths,
         &connector_slug_counts,
+    );
+    tracing::info!(
+        turn_id = %turn_context.sub_id,
+        mentioned_skill_count = mentioned_skills.len(),
+        mentioned_skill_names = ?mentioned_skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect::<Vec<_>>(),
+        mentioned_skill_paths = ?mentioned_skills
+            .iter()
+            .map(|skill| skill.path_to_skills_md.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        "collected explicit core skill mentions"
     );
     maybe_prompt_and_install_mcp_dependencies(
         sess,
@@ -619,6 +642,13 @@ async fn build_skills_and_plugins(
         tracking.clone(),
     )
     .await;
+    let skill_warning_count = skill_warnings.len();
+    tracing::info!(
+        turn_id = %turn_context.sub_id,
+        core_skill_injection_count = skill_injections.len(),
+        core_skill_warning_count = skill_warning_count,
+        "built core skill injection items"
+    );
 
     for message in skill_warnings {
         sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
@@ -668,17 +698,34 @@ async fn build_skills_and_plugins(
     }
 
     let mut injection_items: Vec<ResponseItem> = match injected_host_skill_prompts {
-        Some(injected_host_skill_prompts) => skill_injections
-            .iter()
-            .filter(|skill| !injected_host_skill_prompts.contains_path(&skill.path))
-            .map(|skill| {
-                ContextualUserFragment::into(crate::context::SkillInstructions::from(skill))
-            })
-            .collect(),
+        Some(injected_host_skill_prompts) => {
+            let items = skill_injections
+                .iter()
+                .filter(|skill| !injected_host_skill_prompts.contains_path(&skill.path))
+                .map(|skill| {
+                    ContextualUserFragment::into(crate::context::SkillInstructions::from(skill))
+                })
+                .collect::<Vec<_>>();
+            tracing::info!(
+                turn_id = %turn_context.sub_id,
+                core_skill_injection_count = skill_injections.len(),
+                filtered_core_skill_injection_count = items.len(),
+                "filtered core skill injections already provided by extension"
+            );
+            items
+        }
         None => skill_items,
     };
+    let skill_and_plugin_injection_count = injection_items.len() + plugin_items.len();
     injection_items.extend(plugin_items);
     injection_items.extend(extension_injection_items);
+    tracing::info!(
+        turn_id = %turn_context.sub_id,
+        final_injection_item_count = injection_items.len(),
+        skill_and_plugin_injection_count,
+        explicitly_enabled_connector_count = explicitly_enabled_connectors.len(),
+        "built final turn injection items"
+    );
     Some((injection_items, explicitly_enabled_connectors))
 }
 
