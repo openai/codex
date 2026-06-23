@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 
 use codex_otel::MetricsClient;
@@ -8,15 +10,29 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use serde::Serialize;
 
 use crate::policy::is_persisted_rollout_item;
 
 const ITEM_BYTES_METRIC: &str = "codex.rollout.persistence.item_bytes";
 const APPEND_METRIC: &str = "codex.rollout.persistence.append";
 const TURN_BYTES_METRIC: &str = "codex.rollout.persistence.turn_bytes";
+const LOAD_THREAD_BYTES_METRIC: &str = "codex.rollout.persistence.load_thread_bytes";
+const LOAD_THREAD_ITEMS_METRIC: &str = "codex.rollout.persistence.load_thread_items";
+const LOAD_TURN_BYTES_METRIC: &str = "codex.rollout.persistence.load_turn_bytes";
+const LOAD_TURN_ITEMS_METRIC: &str = "codex.rollout.persistence.load_turn_items";
+const PROJECTION_THREAD_BYTES_METRIC: &str = "codex.rollout.persistence.projection_thread_bytes";
+const PROJECTION_THREAD_ITEMS_METRIC: &str = "codex.rollout.persistence.projection_thread_items";
+const PROJECTION_THREAD_TURNS_METRIC: &str = "codex.rollout.persistence.projection_thread_turns";
+const PROJECTION_TURN_BYTES_METRIC: &str = "codex.rollout.persistence.projection_turn_bytes";
+const PROJECTION_TURN_ITEMS_METRIC: &str = "codex.rollout.persistence.projection_turn_items";
 const MEASUREMENT_ERROR_METRIC: &str = "codex.rollout.persistence.measurement_error";
 const SAMPLE_DENOMINATOR: u64 = 100;
 const SAMPLE_RATE_LABEL: &str = "0.01";
+static MEASURED_ROLLOUT_LOAD_THREADS: LazyLock<Mutex<HashSet<ThreadId>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+static MEASURED_PROJECTED_THREADS: LazyLock<Mutex<HashSet<ThreadId>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistenceDecision {
@@ -200,7 +216,7 @@ fn add_item_to_turn(totals: &mut TurnSizeTotals, item: &RolloutItemMeasurement) 
     }
 }
 
-fn serialized_len(item: &RolloutItem) -> serde_json::Result<u64> {
+fn serialized_len(item: &(impl Serialize + ?Sized)) -> serde_json::Result<u64> {
     let mut writer = CountingWriter::default();
     serde_json::to_writer(&mut writer, item)?;
     Ok(writer.bytes)
@@ -389,6 +405,310 @@ impl RolloutPersistenceTelemetry {
     fn enabled_metrics(&self) -> Option<&MetricsClient> {
         self.sampled.then_some(self.metrics.as_ref()).flatten()
     }
+}
+
+/// Records detached per-thread and per-turn size proxies for rollout loads.
+pub(crate) struct RolloutLoadTelemetry {
+    metrics: Option<MetricsClient>,
+    sampled: bool,
+    thread_id: ThreadId,
+}
+
+impl RolloutLoadTelemetry {
+    pub fn new(thread_id: ThreadId) -> Self {
+        let metrics = codex_otel::global();
+        let sampled = metrics.is_some() && is_thread_sampled(thread_id);
+        Self {
+            metrics,
+            sampled,
+            thread_id,
+        }
+    }
+
+    /// Records bytes for successfully loaded decompressed JSONL records, excluding newlines.
+    pub fn record_rollout_load(
+        &self,
+        totals: RolloutSizeTotals,
+        turn_totals: &[RolloutSizeTotals],
+    ) {
+        let Some(metrics) = self.enabled_metrics() else {
+            return;
+        };
+        if !mark_thread_measured(&MEASURED_ROLLOUT_LOAD_THREADS, self.thread_id) {
+            return;
+        }
+        record_size_totals(
+            metrics,
+            totals,
+            LOAD_THREAD_BYTES_METRIC,
+            LOAD_THREAD_ITEMS_METRIC,
+            "rollout_jsonl",
+            "rollout_line_json_v1",
+            "rollout_load",
+        );
+        record_turn_size_totals(
+            metrics,
+            turn_totals,
+            LOAD_TURN_BYTES_METRIC,
+            LOAD_TURN_ITEMS_METRIC,
+            "rollout_jsonl",
+            "rollout_line_json_v1",
+            "rollout_load",
+        );
+    }
+
+    fn enabled_metrics(&self) -> Option<&MetricsClient> {
+        self.sampled.then_some(self.metrics.as_ref()).flatten()
+    }
+}
+
+/// Records detached size proxies for app-server ThreadItem projection reads.
+pub struct RolloutProjectionTelemetry {
+    metrics: Option<MetricsClient>,
+    sampled: bool,
+    thread_id: ThreadId,
+}
+
+impl RolloutProjectionTelemetry {
+    pub fn new(thread_id: ThreadId) -> Self {
+        let metrics = codex_otel::global();
+        let sampled = metrics.is_some() && is_thread_sampled(thread_id);
+        Self {
+            metrics,
+            sampled,
+            thread_id,
+        }
+    }
+
+    /// Records compact JSON bytes for the final materialized app-server turns.
+    pub fn record_projected_turns<'a, T, U>(
+        &self,
+        turns: &T,
+        turn_count: u64,
+        item_count: u64,
+        forecast_turn_items: impl IntoIterator<Item = (&'a U, u64)>,
+    ) where
+        T: Serialize + ?Sized,
+        U: Serialize + 'a,
+    {
+        let Some(metrics) = self.enabled_metrics() else {
+            return;
+        };
+        if MEASURED_PROJECTED_THREADS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&self.thread_id)
+        {
+            return;
+        }
+        let payload_bytes = match serialized_len(turns) {
+            Ok(payload_bytes) => payload_bytes,
+            Err(_) => {
+                let _ = metrics.counter(
+                    MEASUREMENT_ERROR_METRIC,
+                    /*inc*/ 1,
+                    &[
+                        ("phase", "projection_serialize"),
+                        ("representation", "thread_turns"),
+                        ("source", "app_server_thread_read"),
+                    ],
+                );
+                return;
+            }
+        };
+        let turn_totals = match forecast_turn_items
+            .into_iter()
+            .map(|(items, item_count)| {
+                serialized_len(items).map(|payload_bytes| RolloutSizeTotals {
+                    items: item_count,
+                    payload_bytes,
+                })
+            })
+            .collect::<serde_json::Result<Vec<_>>>()
+        {
+            Ok(turn_totals) => turn_totals,
+            Err(_) => {
+                let _ = metrics.counter(
+                    MEASUREMENT_ERROR_METRIC,
+                    /*inc*/ 1,
+                    &[
+                        ("phase", "projection_turn_serialize"),
+                        ("representation", "thread_turns"),
+                        ("source", "app_server_thread_read"),
+                    ],
+                );
+                return;
+            }
+        };
+        if !mark_thread_measured(&MEASURED_PROJECTED_THREADS, self.thread_id) {
+            return;
+        }
+        record_size_totals(
+            metrics,
+            RolloutSizeTotals {
+                items: item_count,
+                payload_bytes,
+            },
+            PROJECTION_THREAD_BYTES_METRIC,
+            PROJECTION_THREAD_ITEMS_METRIC,
+            "thread_turns",
+            "app_server_turns_json_v2",
+            "app_server_thread_read",
+        );
+        record_turn_size_totals(
+            metrics,
+            &turn_totals,
+            PROJECTION_TURN_BYTES_METRIC,
+            PROJECTION_TURN_ITEMS_METRIC,
+            "thread_turns",
+            "app_server_turn_items_json_v2",
+            "app_server_thread_read",
+        );
+        let _ = metrics.histogram(
+            PROJECTION_THREAD_TURNS_METRIC,
+            saturating_i64(turn_count),
+            &[
+                ("representation", "thread_turns"),
+                ("encoding", "app_server_turns_json_v2"),
+                ("sample_rate", SAMPLE_RATE_LABEL),
+                ("source", "app_server_thread_read"),
+            ],
+        );
+    }
+
+    fn enabled_metrics(&self) -> Option<&MetricsClient> {
+        self.sampled.then_some(self.metrics.as_ref()).flatten()
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct RolloutTurnSizeTracker {
+    current: Option<PendingRolloutTurn>,
+    completed: Vec<RolloutSizeTotals>,
+}
+
+#[derive(Default)]
+struct PendingRolloutTurn {
+    totals: RolloutSizeTotals,
+    explicit: bool,
+    saw_user_message: bool,
+    saw_final_agent_message: bool,
+}
+
+impl RolloutTurnSizeTracker {
+    pub(crate) fn observe(&mut self, item: &RolloutItem, payload_bytes: u64) {
+        match item {
+            RolloutItem::EventMsg(EventMsg::TurnStarted(_)) => {
+                self.finish_implicit_turn();
+                self.current = Some(PendingRolloutTurn {
+                    explicit: true,
+                    ..Default::default()
+                });
+            }
+            RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                if self
+                    .current
+                    .as_ref()
+                    .is_some_and(|turn| !turn.explicit && turn.saw_user_message)
+                {
+                    self.finish_implicit_turn();
+                }
+                self.current
+                    .get_or_insert_with(PendingRolloutTurn::default)
+                    .saw_user_message = true;
+            }
+            _ => {}
+        }
+
+        let Some(turn) = self.current.as_mut() else {
+            return;
+        };
+        turn.totals.items = turn.totals.items.saturating_add(1);
+        turn.totals.payload_bytes = turn.totals.payload_bytes.saturating_add(payload_bytes);
+
+        match item {
+            RolloutItem::EventMsg(EventMsg::AgentMessage(message))
+                if !matches!(
+                    message.phase,
+                    Some(codex_protocol::models::MessagePhase::Commentary)
+                ) =>
+            {
+                turn.saw_final_agent_message = true;
+            }
+            RolloutItem::EventMsg(EventMsg::TurnComplete(_)) => self.finish_current_turn(),
+            RolloutItem::EventMsg(EventMsg::TurnAborted(_)) => {
+                self.current = None;
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn finish(mut self) -> Vec<RolloutSizeTotals> {
+        self.finish_implicit_turn();
+        self.completed
+    }
+
+    fn finish_implicit_turn(&mut self) {
+        if self.current.as_ref().is_some_and(|turn| !turn.explicit) {
+            self.finish_current_turn();
+        }
+    }
+
+    fn finish_current_turn(&mut self) {
+        if let Some(turn) = self.current.take()
+            && turn.saw_user_message
+            && turn.saw_final_agent_message
+        {
+            self.completed.push(turn.totals);
+        }
+    }
+}
+
+fn record_size_totals(
+    metrics: &MetricsClient,
+    totals: RolloutSizeTotals,
+    bytes_metric: &'static str,
+    items_metric: &'static str,
+    representation: &str,
+    encoding: &str,
+    source: &str,
+) {
+    let tags = [
+        ("representation", representation),
+        ("encoding", encoding),
+        ("sample_rate", SAMPLE_RATE_LABEL),
+        ("source", source),
+    ];
+    let _ = metrics.histogram(bytes_metric, saturating_i64(totals.payload_bytes), &tags);
+    let _ = metrics.histogram(items_metric, saturating_i64(totals.items), &tags);
+}
+
+fn record_turn_size_totals(
+    metrics: &MetricsClient,
+    turn_totals: &[RolloutSizeTotals],
+    bytes_metric: &'static str,
+    items_metric: &'static str,
+    representation: &str,
+    encoding: &str,
+    source: &str,
+) {
+    let tags = [
+        ("representation", representation),
+        ("encoding", encoding),
+        ("sample_rate", SAMPLE_RATE_LABEL),
+        ("source", source),
+    ];
+    for totals in turn_totals {
+        let _ = metrics.histogram(bytes_metric, saturating_i64(totals.payload_bytes), &tags);
+        let _ = metrics.histogram(items_metric, saturating_i64(totals.items), &tags);
+    }
+}
+
+fn mark_thread_measured(measured_threads: &Mutex<HashSet<ThreadId>>, thread_id: ThreadId) -> bool {
+    measured_threads
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(thread_id)
 }
 
 fn saturating_i64(value: u64) -> i64 {

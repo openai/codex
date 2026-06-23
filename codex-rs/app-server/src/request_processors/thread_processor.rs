@@ -2263,6 +2263,7 @@ impl ThreadRequestProcessor {
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
                 if include_turns && let Some(history) = history {
                     thread.turns = build_api_turns_from_rollout_items(&history.items);
+                    record_rollout_projection(thread_id, &thread.turns);
                 }
                 Ok(Some(thread))
             }

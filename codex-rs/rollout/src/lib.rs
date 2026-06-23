@@ -59,6 +59,7 @@ pub use list::rollout_date_parts;
 pub use metadata::builder_from_items;
 pub use persistence_metrics::RolloutPersistenceBatchMeasurement;
 pub use persistence_metrics::RolloutPersistenceTelemetry;
+pub use persistence_metrics::RolloutProjectionTelemetry;
 pub use persistence_metrics::measure_and_filter_rollout_items;
 pub use policy::is_persisted_rollout_item;
 pub use policy::persisted_rollout_items;
