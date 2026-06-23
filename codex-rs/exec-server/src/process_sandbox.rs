@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
+use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
@@ -8,6 +10,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::with_managed_mitm_ca_readable_root;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 
@@ -59,6 +62,20 @@ pub(crate) fn prepare_exec_request(
         native_workspace_roots.as_slice()
     };
     let permissions = permissions.materialize_project_roots_with_workspace_roots(workspace_roots);
+    let managed_mitm_ca_trust_bundle_path = params.managed_network.as_ref().and_then(|_| {
+        CUSTOM_CA_ENV_KEYS.iter().find_map(|key| {
+            let path = env.get(*key)?;
+            if !is_managed_mitm_ca_trust_bundle_path(path) {
+                return None;
+            }
+            AbsolutePathBuf::from_absolute_path(path).ok()
+        })
+    });
+    let permissions = with_managed_mitm_ca_readable_root(
+        permissions,
+        managed_mitm_ca_trust_bundle_path.as_ref(),
+        native_sandbox_policy_cwd.as_path(),
+    );
     let (file_system_policy, network_policy) = permissions.to_runtime_permissions();
     let sandbox_manager = SandboxManager::new();
     let sandbox = sandbox_manager.select_initial(
@@ -90,6 +107,8 @@ pub(crate) fn prepare_exec_request(
     let request = sandbox_manager
         .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
             workspace_roots,
+            windows_sandbox_proxy_settings_mode:
+                codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
             transform: SandboxTransformRequest {
                 // TODO(jif): Preserve params.arg0 for the inner command across the sandbox
                 // wrapper, or reject sandboxed requests with a custom arg0.
@@ -98,6 +117,7 @@ pub(crate) fn prepare_exec_request(
                     args: args.to_vec(),
                     cwd: params.cwd.clone(),
                     env,
+                    managed_network: params.managed_network.clone(),
                     additional_permissions: None,
                 },
                 permissions: &permissions,

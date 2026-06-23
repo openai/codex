@@ -1162,6 +1162,7 @@ mod tests {
                 arg0: None,
                 sandbox: None,
                 enforce_managed_network: false,
+                managed_network: None,
             })
             .await
             .expect("start process");
@@ -1201,6 +1202,7 @@ mod tests {
                 arg0: None,
                 sandbox: Some(sandbox),
                 enforce_managed_network: false,
+                managed_network: None,
             })
             .await;
         let Err(err) = result else {

@@ -86,6 +86,17 @@ impl LegacyAppPathString {
         PathUri::try_from(self.clone()).ok()
     }
 
+    /// Renders this API path for display in a user interface.
+    ///
+    /// Absolute paths are normalized using their inferred native convention.
+    /// Strings that cannot be interpreted as absolute paths retain their raw
+    /// API spelling.
+    pub fn render_for_ui(&self) -> String {
+        self.to_inferred_path_uri()
+            .map(|path| path.inferred_native_path_string())
+            .unwrap_or_else(|| self.0.clone())
+    }
+
     /// Parses this API string as a host-native absolute path.
     pub fn to_inferred_abs_path(&self) -> Option<AbsolutePathBuf> {
         AbsolutePathBuf::try_from(self.clone()).ok()

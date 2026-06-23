@@ -177,7 +177,6 @@ pub(crate) fn prompt_is_rejected_by_policy(
 ) -> Option<&'static str> {
     match approval_policy {
         AskForApproval::Never => Some(PROMPT_CONFLICT_REASON),
-        AskForApproval::OnFailure => None,
         AskForApproval::OnRequest => None,
         AskForApproval::UnlessTrusted => None,
         AskForApproval::Granular(granular_config) => {
@@ -689,15 +688,14 @@ pub(crate) fn render_decision_for_unmatched_command(
                     Decision::Forbidden
                 }
             }
-            AskForApproval::OnFailure
-            | AskForApproval::OnRequest
+            AskForApproval::OnRequest
             | AskForApproval::UnlessTrusted
             | AskForApproval::Granular(_) => Decision::Prompt,
         };
     }
 
     match approval_policy {
-        AskForApproval::Never | AskForApproval::OnFailure => {
+        AskForApproval::Never => {
             // We allow the command to run, relying on the sandbox for
             // protection.
             Decision::Allow

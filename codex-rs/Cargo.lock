@@ -2888,6 +2888,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-client",
  "codex-file-system",
+ "codex-network-proxy",
  "codex-protocol",
  "codex-sandboxing",
  "codex-shell-command",

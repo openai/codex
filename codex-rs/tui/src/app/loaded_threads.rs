@@ -128,6 +128,7 @@ mod tests {
     fn test_thread(thread_id: ThreadId, source: SessionSource) -> Thread {
         Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,

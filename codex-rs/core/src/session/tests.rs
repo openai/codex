@@ -1288,7 +1288,7 @@ async fn reload_user_config_layer_updates_base_and_selected_profile_layers() {
     let profile_config_path = codex_home.join("work.config.toml");
     std::fs::write(
         &base_config_path,
-        "model = \"base\"\napproval_policy = \"on-failure\"\n",
+        "model = \"base\"\napproval_policy = \"on-request\"\n",
     )
     .expect("write base user config");
     std::fs::write(&profile_config_path, "model = \"profile-old\"\n")
@@ -10147,7 +10147,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     // Ensure policy is NOT OnRequest so the early rejection path triggers
     turn_context_raw
         .approval_policy
-        .set(AskForApproval::OnFailure)
+        .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
     let session = Arc::new(session);
     let mut turn_context = Arc::new(turn_context_raw);
@@ -10310,7 +10310,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     let (session, mut turn_context_raw) = make_session_and_context().await;
     turn_context_raw
         .approval_policy
-        .set(AskForApproval::OnFailure)
+        .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);

@@ -165,7 +165,7 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let approval_policy = AskForApproval::OnFailure;
+    let approval_policy = AskForApproval::OnRequest;
     let permission_profile = PermissionProfile::workspace_write_with(
         &[],
         NetworkSandboxPolicy::Enabled,
@@ -263,7 +263,7 @@ async fn submit_managed_network_turn(
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(turn_environment_selections),
-                approval_policy: Some(AskForApproval::OnFailure),
+                approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
