@@ -96,7 +96,7 @@ async fn replace_mcp_servers_serializes_oauth_client_id() -> anyhow::Result<()> 
     let servers = BTreeMap::from([(
         "maas_outlook".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            use_chatgpt_auth: true,
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: None,
@@ -133,6 +133,7 @@ async fn replace_mcp_servers_serializes_oauth_client_id() -> anyhow::Result<()> 
         serialized,
         r#"[mcp_servers.maas_outlook]
 url = "https://example.com/mcp"
+use_chatgpt_auth = true
 
 [mcp_servers.maas_outlook.oauth]
 client_id = "eci-prd-pub-codex-123"
