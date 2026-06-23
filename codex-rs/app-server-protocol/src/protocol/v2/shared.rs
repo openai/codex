@@ -70,7 +70,7 @@ pub enum NonSteerableTurnKind {
 #[ts(export_to = "v2/")]
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
-    RolloutBudgetExceeded,
+    SessionBudgetExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
     CyberPolicy,
@@ -116,7 +116,7 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
     fn from(value: CoreCodexErrorInfo) -> Self {
         match value {
             CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
-            CoreCodexErrorInfo::RolloutBudgetExceeded => CodexErrorInfo::RolloutBudgetExceeded,
+            CoreCodexErrorInfo::SessionBudgetExceeded => CodexErrorInfo::SessionBudgetExceeded,
             CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
             CoreCodexErrorInfo::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
             CoreCodexErrorInfo::CyberPolicy => CodexErrorInfo::CyberPolicy,
