@@ -500,7 +500,7 @@ mod tests {
         assert_matches!(
             maybe_parse_apply_patch_verified(
                 &args,
-                &PathUri::from_path(dir.path()).expect("absolute test path"),
+                &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
                 LOCAL_FS.as_ref(),
                 /*sandbox*/ None,
             )
@@ -517,7 +517,7 @@ mod tests {
         assert_matches!(
             maybe_parse_apply_patch_verified(
                 &args,
-                &PathUri::from_path(dir.path()).expect("absolute test path"),
+                &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
                 LOCAL_FS.as_ref(),
                 /*sandbox*/ None,
             )
@@ -752,7 +752,7 @@ PATCH"#,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
 
-        let path_uri = PathUri::from_path(&path).expect("absolute test path");
+        let path_uri = PathUri::from_host_native_path(&path).expect("absolute test path");
         let diff =
             unified_diff_from_chunks(&path_uri, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
                 .await
@@ -792,7 +792,7 @@ PATCH"#,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
 
-        let path_uri = PathUri::from_path(&path).expect("absolute test path");
+        let path_uri = PathUri::from_host_native_path(&path).expect("absolute test path");
         let diff =
             unified_diff_from_chunks(&path_uri, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
                 .await
@@ -832,7 +832,7 @@ PATCH"#,
 
         let result = maybe_parse_apply_patch_verified(
             &argv,
-            &PathUri::from_path(session_dir.path()).expect("absolute test path"),
+            &PathUri::from_host_native_path(session_dir.path()).expect("absolute test path"),
             LOCAL_FS.as_ref(),
             /*sandbox*/ None,
         )
@@ -844,7 +844,7 @@ PATCH"#,
             result,
             MaybeApplyPatchVerified::Body(ApplyPatchAction {
                 changes: HashMap::from([(
-                    PathUri::from_path(session_dir.path().join(relative_path))
+                    PathUri::from_host_native_path(session_dir.path().join(relative_path))
                         .expect("absolute test path"),
                     ApplyPatchFileChange::Update {
                         unified_diff: r#"@@ -1 +1 @@
@@ -857,7 +857,8 @@ PATCH"#,
                     },
                 )]),
                 patch: argv[1].clone(),
-                cwd: PathUri::from_path(session_dir.path()).expect("absolute test path"),
+                cwd: PathUri::from_host_native_path(session_dir.path())
+                    .expect("absolute test path"),
             })
         );
     }
@@ -887,7 +888,7 @@ PATCH"#,
 
         let result = maybe_parse_apply_patch_verified(
             &argv,
-            &PathUri::from_path(session_dir.path()).expect("absolute test path"),
+            &PathUri::from_host_native_path(session_dir.path()).expect("absolute test path"),
             LOCAL_FS.as_ref(),
             /*sandbox*/ None,
         )
@@ -902,8 +903,8 @@ PATCH"#,
             worktree_dir.as_path()
         );
 
-        let source_path =
-            PathUri::from_path(worktree_dir.join(source_name)).expect("absolute test path");
+        let source_path = PathUri::from_host_native_path(worktree_dir.join(source_name))
+            .expect("absolute test path");
         let change = action
             .changes()
             .get(&source_path)
@@ -912,7 +913,8 @@ PATCH"#,
         match change {
             ApplyPatchFileChange::Update { move_path, .. } => {
                 let expected_move_path =
-                    PathUri::from_path(worktree_dir.join(dest_name)).expect("absolute test path");
+                    PathUri::from_host_native_path(worktree_dir.join(dest_name))
+                        .expect("absolute test path");
                 assert_eq!(move_path.as_ref(), Some(&expected_move_path));
             }
             other => panic!("expected update change, got {other:?}"),
@@ -923,7 +925,7 @@ PATCH"#,
     async fn test_unreadable_destinations_still_verify() {
         let session_dir = tempdir().unwrap();
         fs::write(session_dir.path().join("binary.dat"), [0xff, 0xfe, 0xfd]).unwrap();
-        let cwd = PathUri::from_path(session_dir.path()).expect("absolute test path");
+        let cwd = PathUri::from_host_native_path(session_dir.path()).expect("absolute test path");
         let add_argv = vec![
             "apply_patch".to_string(),
             "*** Begin Patch\n*** Add File: binary.dat\n+text\n*** End Patch".to_string(),
@@ -966,7 +968,7 @@ PATCH"#,
 
         let result = maybe_parse_apply_patch_verified(
             &argv,
-            &PathUri::from_path(session_dir.path()).expect("absolute test path"),
+            &PathUri::from_host_native_path(session_dir.path()).expect("absolute test path"),
             LOCAL_FS.as_ref(),
             /*sandbox*/ None,
         )

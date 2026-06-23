@@ -747,7 +747,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
     let fixture = test_codex()
         .with_workspace_setup(|cwd, fs| async move {
             let configured_cwd = cwd.join("mcp-configured-cwd");
-            let configured_cwd_uri = PathUri::from_path(&configured_cwd)?;
+            let configured_cwd_uri = PathUri::from_host_native_path(&configured_cwd)?;
             fs.create_directory(
                 &configured_cwd_uri,
                 CreateDirectoryOptions { recursive: true },
