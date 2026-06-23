@@ -71,21 +71,20 @@ async fn guardian_receives_all_possible_triggers_for_concurrent_network_requests
     skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
-    let permission_profile = PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::unrestricted(),
-        NetworkSandboxPolicy::Enabled,
-    );
-    let test = managed_network_unified_exec_test(
-        &server,
-        permission_profile.clone(),
-        ManagedNetworkTestEnvironments::Local,
-    )
-    .await?;
+    let test =
+        managed_network_unified_exec_test(&server, ManagedNetworkTestEnvironments::Local).await?;
     let barrier_dir = TempDir::new()?;
     let first_marker = barrier_dir.path().join("first");
     let second_marker = barrier_dir.path().join("second");
-    let first_command = concurrent_network_fetch_command(&first_marker, &second_marker);
-    let second_command = concurrent_network_fetch_command(&second_marker, &first_marker);
+    let network_command = |marker: &PathBuf, peer_marker: &PathBuf| {
+        format!(
+            "touch '{}' && while [ ! -e '{}' ]; do sleep 0.01; done && python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); opener.open('http://{NETWORK_TEST_HOST}', timeout=10).read()\"",
+            marker.display(),
+            peer_marker.display(),
+        )
+    };
+    let first_command = network_command(&first_marker, &second_marker);
+    let second_command = network_command(&second_marker, &first_marker);
     let first_args = network_exec_args(LOCAL_ENVIRONMENT_ID, &first_command);
     let second_args = network_exec_args(LOCAL_ENVIRONMENT_ID, &second_command);
     let responses = mount_sse_sequence(
@@ -107,16 +106,7 @@ async fn guardian_receives_all_possible_triggers_for_concurrent_network_requests
             ]),
             sse(vec![
                 ev_response_created("resp-network-guardian"),
-                ev_assistant_message(
-                    "msg-network-guardian",
-                    &json!({
-                        "risk_level": "low",
-                        "user_authorization": "high",
-                        "outcome": "allow",
-                        "rationale": "At least one candidate explains the requested access.",
-                    })
-                    .to_string(),
-                ),
+                ev_assistant_message("msg-network-guardian", r#"{"outcome":"allow"}"#),
                 ev_completed("resp-network-guardian"),
             ]),
             sse(vec![
@@ -134,7 +124,6 @@ async fn guardian_receives_all_possible_triggers_for_concurrent_network_requests
         vec![local(test.config.cwd.clone())],
         AskForApproval::OnRequest,
         ApprovalsReviewer::AutoReview,
-        permission_profile,
     )
     .await?;
     wait_for_turn_complete(&test).await;
@@ -147,41 +136,38 @@ async fn guardian_receives_all_possible_triggers_for_concurrent_network_requests
         })
         .expect("expected Guardian network review request");
     let user_texts = guardian_request.message_input_texts("user");
-    let action = user_texts
-        .iter()
-        .find_map(|text| {
-            let action = serde_json::from_str::<Value>(text.trim()).ok()?;
-            (action["tool"].as_str() == Some("network_access")).then_some(action)
-        })
-        .context("expected network access JSON in Guardian request")?;
+    let action: Value = serde_json::from_str(
+        user_texts
+            .iter()
+            .find(|text| text.contains("\"possibleTriggers\""))
+            .context("expected network access JSON in Guardian request")?
+            .trim(),
+    )?;
     assert_eq!(action.get("trigger"), None);
-    let possible_triggers = action["possibleTriggers"]
+    let mut actual_triggers = action["possibleTriggers"]
         .as_array()
-        .context("expected possible network access triggers")?;
-    let mut call_ids = possible_triggers
+        .context("expected possible network access triggers")?
         .iter()
         .map(|trigger| {
-            trigger["callId"]
-                .as_str()
-                .context("expected possible trigger call id")
+            Ok((
+                trigger["callId"]
+                    .as_str()
+                    .context("expected possible trigger call id")?,
+                trigger["command"]
+                    .as_array()
+                    .and_then(|command| command.last())
+                    .and_then(Value::as_str)
+                    .context("expected possible trigger command")?,
+            ))
         })
         .collect::<Result<Vec<_>>>()?;
-    call_ids.sort_unstable();
-    assert_eq!(call_ids, vec!["exec-network-first", "exec-network-second"]);
-    let mut commands = possible_triggers
-        .iter()
-        .map(|trigger| {
-            trigger["command"]
-                .as_array()
-                .and_then(|command| command.last())
-                .and_then(Value::as_str)
-                .context("expected possible trigger command")
-        })
-        .collect::<Result<Vec<_>>>()?;
-    commands.sort_unstable();
-    let mut expected_commands = vec![first_command.as_str(), second_command.as_str()];
-    expected_commands.sort_unstable();
-    assert_eq!(commands, expected_commands);
+    actual_triggers.sort_unstable();
+    let mut expected_triggers = vec![
+        ("exec-network-first", first_command.as_str()),
+        ("exec-network-second", second_command.as_str()),
+    ];
+    expected_triggers.sort_unstable();
+    assert_eq!(actual_triggers, expected_triggers);
     assert!(
         user_texts
             .concat()
@@ -202,18 +188,9 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
     };
 
     let server = start_mock_server().await;
-    let permission_profile = PermissionProfile::workspace_write_with(
-        &[],
-        NetworkSandboxPolicy::Enabled,
-        /*exclude_tmpdir_env_var*/ false,
-        /*exclude_slash_tmp*/ false,
-    );
-    let test = managed_network_unified_exec_test(
-        &server,
-        permission_profile.clone(),
-        ManagedNetworkTestEnvironments::RemoteAndLocal,
-    )
-    .await?;
+    let test =
+        managed_network_unified_exec_test(&server, ManagedNetworkTestEnvironments::RemoteAndLocal)
+            .await?;
     let local_cwd = TempDir::new()?;
     let remote_cwd = PathBuf::from(format!(
         "/tmp/codex-network-approval-{}",
@@ -249,7 +226,6 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         environments.clone(),
         AskForApproval::OnFailure,
         ApprovalsReviewer::User,
-        permission_profile.clone(),
     )
     .await?;
     let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
@@ -275,7 +251,6 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         environments.clone(),
         AskForApproval::OnFailure,
         ApprovalsReviewer::User,
-        permission_profile,
     )
     .await?;
     let approval = expect_network_approval(&test, REMOTE_ENVIRONMENT_ID).await?;
@@ -304,7 +279,6 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
 
 async fn managed_network_unified_exec_test(
     server: &wiremock::MockServer,
-    permission_profile: PermissionProfile,
     environments: ManagedNetworkTestEnvironments,
 ) -> Result<TestCodex> {
     let home = Arc::new(TempDir::new()?);
@@ -321,7 +295,7 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let permission_profile_for_config = permission_profile.clone();
+    let permission_profile_for_config = managed_network_test_permission_profile();
     let mut builder = test_codex()
         .with_home(home)
         .with_cloud_config_bundle(managed_network_requirements_loader())
@@ -357,6 +331,13 @@ allow_local_binding = true
         .expect("expected runtime managed network proxy addresses");
 
     Ok(test)
+}
+
+fn managed_network_test_permission_profile() -> PermissionProfile {
+    PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::unrestricted(),
+        NetworkSandboxPolicy::Enabled,
+    )
 }
 
 async fn mount_exec_network_turn(
@@ -397,25 +378,14 @@ fn network_exec_args(environment_id: &str, command: &str) -> Value {
     })
 }
 
-fn concurrent_network_fetch_command(
-    marker: &std::path::Path,
-    peer_marker: &std::path::Path,
-) -> String {
-    format!(
-        "touch '{}' && while [ ! -e '{}' ]; do sleep 0.01; done && python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); opener.open('http://{NETWORK_TEST_HOST}', timeout=10).read()\"",
-        marker.display(),
-        peer_marker.display(),
-    )
-}
-
 async fn submit_managed_network_turn(
     test: &TestCodex,
     prompt: &str,
     environments: Vec<TurnEnvironmentSelection>,
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
-    permission_profile: PermissionProfile,
 ) -> Result<()> {
+    let permission_profile = managed_network_test_permission_profile();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(permission_profile, test.config.cwd.as_path());
     let turn_environment_selections =

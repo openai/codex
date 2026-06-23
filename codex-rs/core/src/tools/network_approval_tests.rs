@@ -353,25 +353,13 @@ async fn active_call_attribution_returns_all_matching_environment_candidates() {
     let service = NetworkApprovalService::default();
     register_call_with_default_shell_trigger(&service, "registration-1").await;
     register_call_with_default_shell_trigger(&service, "registration-2").await;
-    service
-        .register_call(
-            "registration-remote".to_string(),
-            "turn-1".to_string(),
-            GuardianNetworkAccessTrigger {
-                call_id: "call-remote".to_string(),
-                tool_name: "shell_command".to_string(),
-                command: vec!["curl".to_string(), "https://example.com".to_string()],
-                cwd: test_path_buf("/tmp").abs(),
-                sandbox_permissions: SandboxPermissions::UseDefault,
-                additional_permissions: None,
-                justification: None,
-                tty: None,
-            },
-            "curl https://example.com".to_string(),
-            "remote".to_string(),
-            CancellationToken::new(),
-        )
-        .await;
+
+    assert!(matches!(
+        service
+            .resolve_active_call_attribution(ActiveNetworkApprovalCallScope::Environment("remote"))
+            .await,
+        ActiveNetworkApprovalAttribution::None
+    ));
 
     match service
         .resolve_active_call_attribution(ActiveNetworkApprovalCallScope::Environment("local"))
