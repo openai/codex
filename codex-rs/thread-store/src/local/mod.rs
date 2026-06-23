@@ -13,6 +13,8 @@ mod update_thread_metadata;
 mod test_support;
 
 use codex_protocol::ThreadId;
+#[cfg(test)]
+use codex_protocol::protocol::SessionContextWindow;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
@@ -1133,6 +1135,7 @@ mod tests {
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_context_window: SessionContextWindow::new_initial(),
             metadata: thread_metadata(),
         }
     }

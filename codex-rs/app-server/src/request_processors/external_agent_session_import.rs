@@ -15,6 +15,7 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::is_persisted_rollout_item;
 use codex_thread_store::AppendThreadItemsParams;
@@ -215,6 +216,7 @@ impl ExternalAgentSessionImporter {
             },
             dynamic_tools: Vec::new(),
             multi_agent_version: Some(MultiAgentVersion::V1),
+            initial_context_window: SessionContextWindow::new_initial(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(cwd.clone()),
                 model_provider: model_provider.clone(),

@@ -1,5 +1,6 @@
 use super::*;
 use crate::context_manager::is_user_turn_boundary;
+use codex_protocol::protocol::SessionContextWindow;
 use uuid::Uuid;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
@@ -113,6 +114,14 @@ impl Session {
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
         // are both known; then replay only the buffered surviving tail forward to preserve exact
         // history semantics.
+        let initial_window = rollout_items.iter().find_map(|item| match item {
+            RolloutItem::SessionMeta(session_meta) => session_meta
+                .meta
+                .context_window
+                .as_ref()
+                .and_then(reconstructed_window_from_session_context_window),
+            _ => None,
+        });
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
@@ -348,7 +357,7 @@ impl Session {
             reference_context_item
         };
 
-        let window = window.unwrap_or(ReconstructedWindow {
+        let window = window.or(initial_window).unwrap_or(ReconstructedWindow {
             number: fallback_window_number,
             first_id: None,
             previous_id: None,
@@ -370,4 +379,21 @@ fn parse_uuid_v7(value: &str) -> Option<Uuid> {
     Uuid::parse_str(value)
         .ok()
         .filter(|uuid| uuid.get_version_num() == 7)
+}
+
+fn reconstructed_window_from_session_context_window(
+    context_window: &SessionContextWindow,
+) -> Option<ReconstructedWindow> {
+    let first_id = parse_uuid_v7(&context_window.first_window_id)?;
+    let previous_id = match context_window.previous_window_id.as_deref() {
+        Some(previous_window_id) => Some(parse_uuid_v7(previous_window_id)?),
+        None => None,
+    };
+    let id = parse_uuid_v7(&context_window.window_id)?;
+    Some(ReconstructedWindow {
+        number: context_window.window_number,
+        first_id: Some(first_id),
+        previous_id,
+        id: Some(id),
+    })
 }
