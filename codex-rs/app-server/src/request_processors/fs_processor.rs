@@ -116,11 +116,15 @@ impl FsRequestProcessor {
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let path = PathUri::from_abs_path(&params.path);
-        let metadata = self
-            .file_system()?
-            .get_metadata(&path, /*sandbox*/ None)
-            .await
-            .map_err(map_fs_error)?;
+        let file_system = self.file_system()?;
+        let metadata = if params.follow_symlinks.unwrap_or(true) {
+            file_system.get_metadata(&path, /*sandbox*/ None).await
+        } else {
+            file_system
+                .get_symlink_metadata(&path, /*sandbox*/ None)
+                .await
+        }
+        .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
             is_directory: metadata.is_directory,
             is_file: metadata.is_file,
@@ -147,6 +151,7 @@ impl FsRequestProcessor {
                     file_name: entry.file_name,
                     is_directory: entry.is_directory,
                     is_file: entry.is_file,
+                    is_symlink: entry.is_symlink,
                 })
                 .collect(),
         })

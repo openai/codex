@@ -10,4 +10,8 @@ export type FsGetMetadataParams = {
 /**
  * Absolute path to inspect.
  */
-path: AbsolutePathBuf, };
+path: AbsolutePathBuf,
+/**
+ * Whether metadata should describe the symlink target. Defaults to `true`.
+ */
+followSymlinks?: boolean | null, };

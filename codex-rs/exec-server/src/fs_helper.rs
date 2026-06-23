@@ -225,10 +225,16 @@ pub(crate) async fn run_direct_request(
             ))
         }
         FsHelperRequest::GetMetadata(params) => {
-            let metadata = file_system
-                .get_metadata(&params.path, /*sandbox*/ None)
-                .await
-                .map_err(map_fs_error)?;
+            let metadata = if params.follow_symlinks {
+                file_system
+                    .get_metadata(&params.path, /*sandbox*/ None)
+                    .await
+            } else {
+                file_system
+                    .get_symlink_metadata(&params.path, /*sandbox*/ None)
+                    .await
+            }
+            .map_err(map_fs_error)?;
             Ok(FsHelperPayload::GetMetadata(FsGetMetadataResponse {
                 is_directory: metadata.is_directory,
                 is_file: metadata.is_file,
@@ -257,6 +263,7 @@ pub(crate) async fn run_direct_request(
                     file_name: entry.file_name,
                     is_directory: entry.is_directory,
                     is_file: entry.is_file,
+                    is_symlink: entry.is_symlink,
                 })
                 .collect();
             Ok(FsHelperPayload::ReadDirectory(FsReadDirectoryResponse {

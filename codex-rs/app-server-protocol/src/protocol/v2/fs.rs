@@ -64,6 +64,9 @@ pub struct FsCreateDirectoryResponse {}
 pub struct FsGetMetadataParams {
     /// Absolute path to inspect.
     pub path: AbsolutePathBuf,
+    /// Whether metadata should describe the symlink target. Defaults to `true`.
+    #[ts(optional = nullable)]
+    pub follow_symlinks: Option<bool>,
 }
 
 /// Metadata returned by `fs/getMetadata`.
@@ -105,6 +108,8 @@ pub struct FsReadDirectoryEntry {
     pub is_directory: bool,
     /// Whether this entry resolves to a regular file.
     pub is_file: bool,
+    /// Whether this entry itself is a symbolic link.
+    pub is_symlink: bool,
 }
 
 /// Directory entries returned by `fs/readDirectory`.

@@ -8,6 +8,13 @@
   },
   "description": "Request metadata for an absolute path.",
   "properties": {
+    "followSymlinks": {
+      "description": "Whether metadata should describe the symlink target. Defaults to `true`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "path": {
       "allOf": [
         {

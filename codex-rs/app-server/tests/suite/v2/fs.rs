@@ -75,6 +75,7 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
     let request_id = mcp
         .send_fs_get_metadata_request(codex_app_server_protocol::FsGetMetadataParams {
             path: absolute_path(file_path.clone()),
+            follow_symlinks: None,
         })
         .await?;
     let response = timeout(
@@ -154,6 +155,7 @@ async fn fs_get_metadata_reports_symlink() -> Result<()> {
     let request_id = mcp
         .send_fs_get_metadata_request(codex_app_server_protocol::FsGetMetadataParams {
             path: absolute_path(symlink_path),
+            follow_symlinks: Some(false),
         })
         .await?;
     let response = timeout(
@@ -164,8 +166,45 @@ async fn fs_get_metadata_reports_symlink() -> Result<()> {
 
     let stat: FsGetMetadataResponse = to_response(response)?;
     assert_eq!(stat.is_directory, false);
-    assert_eq!(stat.is_file, true);
+    assert_eq!(stat.is_file, false);
     assert_eq!(stat.is_symlink, true);
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_read_directory_reports_symlink_entries() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let target_path = codex_home.path().join("target");
+    std::fs::create_dir(&target_path)?;
+    symlink(&target_path, codex_home.path().join("target-link"))?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let request_id = mcp
+        .send_fs_read_directory_request(codex_app_server_protocol::FsReadDirectoryParams {
+            path: absolute_path(codex_home.path().to_path_buf()),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let entries =
+        to_response::<codex_app_server_protocol::FsReadDirectoryResponse>(response)?.entries;
+
+    assert_eq!(
+        entries
+            .into_iter()
+            .find(|entry| entry.file_name == "target-link"),
+        Some(FsReadDirectoryEntry {
+            file_name: "target-link".to_string(),
+            is_directory: true,
+            is_file: false,
+            is_symlink: true,
+        })
+    );
 
     Ok(())
 }
@@ -292,11 +331,13 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
                 file_name: "nested".to_string(),
                 is_directory: true,
                 is_file: false,
+                is_symlink: false,
             },
             FsReadDirectoryEntry {
                 file_name: "root.txt".to_string(),
                 is_directory: false,
                 is_file: true,
+                is_symlink: false,
             },
         ]
     );

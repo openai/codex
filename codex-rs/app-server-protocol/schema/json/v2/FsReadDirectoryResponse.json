@@ -15,12 +15,17 @@
         "isFile": {
           "description": "Whether this entry resolves to a regular file.",
           "type": "boolean"
+        },
+        "isSymlink": {
+          "description": "Whether this entry itself is a symbolic link.",
+          "type": "boolean"
         }
       },
       "required": [
         "fileName",
         "isDirectory",
-        "isFile"
+        "isFile",
+        "isSymlink"
       ],
       "type": "object"
     }

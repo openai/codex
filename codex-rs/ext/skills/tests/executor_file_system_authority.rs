@@ -60,12 +60,14 @@ impl SyntheticFileSystem {
                 file_name: "skill".to_string(),
                 is_directory: true,
                 is_file: false,
+                is_symlink: false,
             }])
         } else if path == self.canonical_root.join("skill") {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
                 is_file: true,
+                is_symlink: false,
             }])
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))

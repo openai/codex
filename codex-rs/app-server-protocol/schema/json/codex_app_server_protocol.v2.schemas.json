@@ -6159,6 +6159,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Request metadata for an absolute path.",
       "properties": {
+        "followSymlinks": {
+          "description": "Whether metadata should describe the symlink target. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "path": {
           "allOf": [
             {
@@ -6225,12 +6232,17 @@
         "isFile": {
           "description": "Whether this entry resolves to a regular file.",
           "type": "boolean"
+        },
+        "isSymlink": {
+          "description": "Whether this entry itself is a symbolic link.",
+          "type": "boolean"
         }
       },
       "required": [
         "fileName",
         "isDirectory",
-        "isFile"
+        "isFile",
+        "isSymlink"
       ],
       "type": "object"
     },
