@@ -353,7 +353,6 @@ impl AgentControl {
         state.notify_thread_created(new_thread.thread_id);
 
         self.persist_thread_spawn_edge_for_source(
-            new_thread.thread.as_ref(),
             new_thread.thread_id,
             notification_source.as_ref(),
         )
@@ -545,19 +544,16 @@ impl AgentControl {
         {
             return Ok(resumed_thread_id);
         }
-        let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
-            return Ok(resumed_thread_id);
-        };
-        let Some(state_db_ctx) = resumed_thread.state_db() else {
+        let Some(agent_graph_store) = state.agent_graph_store() else {
             return Ok(resumed_thread_id);
         };
 
         let mut resume_queue = VecDeque::from([(thread_id, root_depth)]);
         while let Some((parent_thread_id, parent_depth)) = resume_queue.pop_front() {
-            let child_ids = match state_db_ctx
-                .list_thread_spawn_children_with_status(
+            let child_ids = match agent_graph_store
+                .list_thread_spawn_children(
                     parent_thread_id,
-                    DirectionalThreadSpawnEdgeStatus::Open,
+                    Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
                 )
                 .await
             {
@@ -710,7 +706,6 @@ impl AgentControl {
             );
         }
         self.persist_thread_spawn_edge_for_source(
-            resumed_thread.thread.as_ref(),
             resumed_thread.thread_id,
             Some(&notification_source),
         )

@@ -608,6 +608,7 @@ impl TestCodexBuilder {
             user_instructions_provider,
             /*analytics_events_client*/ None,
             thread_store,
+            codex_core::agent_graph_store_from_state_db(state_db.as_ref()),
             state_db.clone(),
             installation_id,
             /*attestation_provider*/ None,

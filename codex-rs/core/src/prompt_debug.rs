@@ -58,6 +58,7 @@ pub async fn build_prompt_input(
         user_instructions_provider,
         /*analytics_events_client*/ None,
         thread_store,
+        crate::agent_graph_store_from_state_db(state_db.as_ref()),
         state_db.clone(),
         installation_id,
         /*attestation_provider*/ None,
