@@ -141,6 +141,52 @@ pub(crate) fn parse_plugin_manifest(
     manifest_path: &Path,
     contents: &str,
 ) -> Result<PluginManifest, serde_json::Error> {
+    let resolver = HostManifestResourceResolver {
+        plugin_root,
+        manifest_path,
+    };
+    parse_plugin_manifest_with_resolver(&resolver, contents)
+}
+
+trait ManifestResourceResolver {
+    type Resource;
+
+    fn plugin_name_fallback(&self) -> Option<String>;
+    fn manifest_path_for_warning(&self) -> String;
+    fn resolve_path(&self, field: &'static str, path: Option<&str>) -> Option<Self::Resource>;
+}
+
+struct HostManifestResourceResolver<'a> {
+    plugin_root: &'a Path,
+    manifest_path: &'a Path,
+}
+
+impl ManifestResourceResolver for HostManifestResourceResolver<'_> {
+    type Resource = AbsolutePathBuf;
+
+    fn plugin_name_fallback(&self) -> Option<String> {
+        self.plugin_root
+            .file_name()
+            .and_then(|entry| entry.to_str())
+            .map(str::to_string)
+    }
+
+    fn manifest_path_for_warning(&self) -> String {
+        self.manifest_path.display().to_string()
+    }
+
+    fn resolve_path(&self, field: &'static str, path: Option<&str>) -> Option<Self::Resource> {
+        resolve_manifest_path(self.plugin_root, field, path)
+    }
+}
+
+fn parse_plugin_manifest_with_resolver<R>(
+    resolver: &R,
+    contents: &str,
+) -> Result<codex_plugin::manifest::PluginManifest<R::Resource>, serde_json::Error>
+where
+    R: ManifestResourceResolver,
+{
     let RawPluginManifest {
         name: raw_name,
         version,
@@ -152,12 +198,11 @@ pub(crate) fn parse_plugin_manifest(
         hooks,
         interface,
     } = serde_json::from_str::<RawPluginManifest>(contents)?;
-    let name = plugin_root
-        .file_name()
-        .and_then(|entry| entry.to_str())
+    let name = resolver
+        .plugin_name_fallback()
         .filter(|_| raw_name.trim().is_empty())
-        .unwrap_or(&raw_name)
-        .to_string();
+        .unwrap_or(raw_name);
+    let manifest_path_for_warning = resolver.manifest_path_for_warning();
     let version = version.and_then(|version| {
         let version = version.trim();
         (!version.is_empty()).then(|| version.to_string())
@@ -181,7 +226,7 @@ pub(crate) fn parse_plugin_manifest(
             screenshots,
         } = interface;
 
-        let interface = PluginManifestInterface {
+        let interface = codex_plugin::manifest::PluginManifestInterface {
             display_name,
             short_description,
             long_description,
@@ -191,16 +236,19 @@ pub(crate) fn parse_plugin_manifest(
             website_url,
             privacy_policy_url,
             terms_of_service_url,
-            default_prompt: resolve_default_prompts(manifest_path, default_prompt.as_ref()),
+            default_prompt: resolve_default_prompts(
+                &manifest_path_for_warning,
+                default_prompt.as_ref(),
+            ),
             brand_color,
             composer_icon: resolve_interface_asset_path(
-                plugin_root,
+                resolver,
                 "interface.composerIcon",
                 composer_icon.as_deref(),
             ),
-            logo: resolve_interface_asset_path(plugin_root, "interface.logo", logo.as_deref()),
+            logo: resolve_interface_asset_path(resolver, "interface.logo", logo.as_deref()),
             logo_dark: resolve_interface_asset_path(
-                plugin_root,
+                resolver,
                 "interface.logoDark",
                 logo_dark.as_deref(),
             ),
@@ -208,7 +256,7 @@ pub(crate) fn parse_plugin_manifest(
                 .iter()
                 .filter_map(|screenshot| {
                     resolve_interface_asset_path(
-                        plugin_root,
+                        resolver,
                         "interface.screenshots",
                         Some(screenshot),
                     )
@@ -234,41 +282,46 @@ pub(crate) fn parse_plugin_manifest(
 
         has_fields.then_some(interface)
     });
-    Ok(PluginManifest {
+    Ok(codex_plugin::manifest::PluginManifest {
         name,
         version,
         description,
         keywords,
-        paths: PluginManifestPaths {
-            skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
-            mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
-            apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
-            hooks: resolve_manifest_hooks(plugin_root, hooks),
+        paths: codex_plugin::manifest::PluginManifestPaths {
+            skills: resolve_manifest_paths(resolver, "skills", skills.as_ref()),
+            mcp_servers: resolve_manifest_mcp_servers(resolver, mcp_servers),
+            apps: resolver.resolve_path("apps", apps.as_deref()),
+            hooks: resolve_manifest_hooks(resolver, hooks),
         },
         interface,
     })
 }
 
-fn resolve_manifest_hooks(
-    plugin_root: &Path,
+fn resolve_manifest_hooks<R>(
+    resolver: &R,
     hooks: Option<RawPluginManifestHooks>,
-) -> Option<PluginManifestHooks> {
+) -> Option<codex_plugin::manifest::PluginManifestHooks<R::Resource>>
+where
+    R: ManifestResourceResolver,
+{
     match hooks? {
-        RawPluginManifestHooks::Path(path) => {
-            resolve_manifest_path(plugin_root, "hooks", Some(&path))
-                .map(|path| PluginManifestHooks::Paths(vec![path]))
-        }
+        RawPluginManifestHooks::Path(path) => resolver
+            .resolve_path("hooks", Some(&path))
+            .map(|path| codex_plugin::manifest::PluginManifestHooks::Paths(vec![path])),
         RawPluginManifestHooks::Paths(paths) => {
             let hooks = paths
                 .iter()
-                .filter_map(|path| resolve_manifest_path(plugin_root, "hooks", Some(path)))
+                .filter_map(|path| resolver.resolve_path("hooks", Some(path)))
                 .collect::<Vec<_>>();
-            (!hooks.is_empty()).then_some(PluginManifestHooks::Paths(hooks))
+            (!hooks.is_empty()).then_some(codex_plugin::manifest::PluginManifestHooks::Paths(hooks))
         }
-        RawPluginManifestHooks::Inline(hooks) => Some(PluginManifestHooks::Inline(vec![hooks])),
-        RawPluginManifestHooks::InlineList(hooks) => {
-            (!hooks.is_empty()).then_some(PluginManifestHooks::Inline(hooks))
+        RawPluginManifestHooks::Inline(hooks) => {
+            Some(codex_plugin::manifest::PluginManifestHooks::Inline(vec![
+                hooks,
+            ]))
         }
+        RawPluginManifestHooks::InlineList(hooks) => (!hooks.is_empty())
+            .then_some(codex_plugin::manifest::PluginManifestHooks::Inline(hooks)),
         RawPluginManifestHooks::Invalid(value) => {
             tracing::warn!(
                 "ignoring hooks: expected a string, string array, object, or object array; found {}",
@@ -279,17 +332,21 @@ fn resolve_manifest_hooks(
     }
 }
 
-fn resolve_manifest_mcp_servers(
-    plugin_root: &Path,
+fn resolve_manifest_mcp_servers<R>(
+    resolver: &R,
     mcp_servers: Option<RawPluginManifestMcpServers>,
-) -> Option<PluginManifestMcpServers> {
+) -> Option<codex_plugin::manifest::PluginManifestMcpServers<R::Resource>>
+where
+    R: ManifestResourceResolver,
+{
     match mcp_servers? {
-        RawPluginManifestMcpServers::Path(path) => {
-            resolve_manifest_path(plugin_root, "mcpServers", Some(&path))
-                .map(PluginManifestMcpServers::Path)
-        }
+        RawPluginManifestMcpServers::Path(path) => resolver
+            .resolve_path("mcpServers", Some(&path))
+            .map(codex_plugin::manifest::PluginManifestMcpServers::Path),
         RawPluginManifestMcpServers::Object(servers) => match serde_json::to_string(&servers) {
-            Ok(servers) => Some(PluginManifestMcpServers::Object(servers)),
+            Ok(servers) => Some(codex_plugin::manifest::PluginManifestMcpServers::Object(
+                servers,
+            )),
             Err(err) => {
                 tracing::warn!("ignoring mcpServers: failed to serialize object: {err}");
                 None
@@ -305,16 +362,19 @@ fn resolve_manifest_mcp_servers(
     }
 }
 
-fn resolve_interface_asset_path(
-    plugin_root: &Path,
+fn resolve_interface_asset_path<R>(
+    resolver: &R,
     field: &'static str,
     path: Option<&str>,
-) -> Option<AbsolutePathBuf> {
-    resolve_manifest_path(plugin_root, field, path)
+) -> Option<R::Resource>
+where
+    R: ManifestResourceResolver,
+{
+    resolver.resolve_path(field, path)
 }
 
 fn resolve_default_prompts(
-    manifest_path: &Path,
+    manifest_path: &str,
     value: Option<&RawPluginManifestDefaultPrompt>,
 ) -> Option<Vec<String>> {
     match value? {
@@ -370,7 +430,7 @@ fn resolve_default_prompts(
     }
 }
 
-fn resolve_default_prompt_str(manifest_path: &Path, field: &str, prompt: &str) -> Option<String> {
+fn resolve_default_prompt_str(manifest_path: &str, field: &str, prompt: &str) -> Option<String> {
     let prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
     if prompt.is_empty() {
         warn_invalid_default_prompt(manifest_path, field, "prompt must not be empty");
@@ -387,11 +447,8 @@ fn resolve_default_prompt_str(manifest_path: &Path, field: &str, prompt: &str) -
     Some(prompt)
 }
 
-fn warn_invalid_default_prompt(manifest_path: &Path, field: &str, message: &str) {
-    tracing::warn!(
-        path = %manifest_path.display(),
-        "ignoring {field}: {message}"
-    );
+fn warn_invalid_default_prompt(manifest_path: &str, field: &str, message: &str) {
+    tracing::warn!(path = manifest_path, "ignoring {field}: {message}");
 }
 
 fn json_value_type(value: &JsonValue) -> &'static str {
@@ -405,20 +462,22 @@ fn json_value_type(value: &JsonValue) -> &'static str {
     }
 }
 
-fn resolve_manifest_paths(
-    plugin_root: &Path,
+fn resolve_manifest_paths<R>(
+    resolver: &R,
     field: &'static str,
     paths: Option<&RawPluginManifestPaths>,
-) -> Vec<AbsolutePathBuf> {
+) -> Vec<R::Resource>
+where
+    R: ManifestResourceResolver,
+{
     match paths {
-        Some(RawPluginManifestPaths::Path(path)) => {
-            resolve_manifest_path(plugin_root, field, Some(path))
-                .map(|path| vec![path])
-                .unwrap_or_default()
-        }
+        Some(RawPluginManifestPaths::Path(path)) => resolver
+            .resolve_path(field, Some(path))
+            .map(|path| vec![path])
+            .unwrap_or_default(),
         Some(RawPluginManifestPaths::Paths(paths)) => paths
             .iter()
-            .filter_map(|path| resolve_manifest_path(plugin_root, field, Some(path)))
+            .filter_map(|path| resolver.resolve_path(field, Some(path)))
             .collect(),
         Some(RawPluginManifestPaths::Invalid(value)) => {
             tracing::warn!(
