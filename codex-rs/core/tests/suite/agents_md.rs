@@ -16,7 +16,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::create_directory_symlink;
-use core_test_support::get_remote_test_env;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -25,6 +24,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_no_remote_env;
 use core_test_support::test_codex::RecordingUserInstructionsProvider;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
@@ -57,7 +57,7 @@ async fn agents_instructions(mut builder: TestCodexBuilder) -> Result<String> {
     )
     .await;
 
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn("hello").await?;
 
     let request = resp_mock.single_request();
@@ -372,7 +372,7 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
             .await?;
             Ok::<(), anyhow::Error>(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let project_agents = test.config.cwd.join("AGENTS.md");
     let global_agents = global_agents.abs();
 
@@ -430,7 +430,7 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
             .await?;
             Ok(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     assert_eq!(provider.load_count(), 1);
 
     let no_environment_thread = test
@@ -515,7 +515,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
             .await?;
             Ok(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let project_source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
     let creation_sources = vec![
         PathUri::from_abs_path(&global_source),
@@ -597,9 +597,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapshot() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(

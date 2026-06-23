@@ -371,9 +371,11 @@ impl Session {
             let current_manager = self.services.mcp_connection_manager.load_full();
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         }
-        self.services
+        let superseded_manager = self
+            .services
             .mcp_connection_manager
-            .store(Arc::new(refreshed_manager));
+            .swap(Arc::new(refreshed_manager));
+        superseded_manager.shutdown().await;
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(
@@ -619,6 +621,7 @@ fn guardian_elicitation_review_request(
                 meta,
                 MCP_ELICITATION_CONNECTOR_DESCRIPTION_KEY,
             ),
+            connected_account_email: None,
             tool_title: metadata_owned_string(meta, MCP_ELICITATION_TOOL_TITLE_KEY),
             tool_description: metadata_owned_string(meta, MCP_ELICITATION_TOOL_DESCRIPTION_KEY),
             annotations: None,

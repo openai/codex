@@ -2883,12 +2883,12 @@ dependencies = [
  "bytes",
  "clatter",
  "codex-api",
- "codex-app-server-protocol",
  "codex-client",
+ "codex-exec-server-protocol",
  "codex-file-system",
+ "codex-network-proxy",
  "codex-protocol",
  "codex-sandboxing",
- "codex-shell-command",
  "codex-test-binary-support",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
@@ -2915,6 +2915,21 @@ dependencies = [
  "uuid",
  "windows-sys 0.52.0",
  "wiremock",
+]
+
+[[package]]
+name = "codex-exec-server-protocol"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "codex-file-system",
+ "codex-network-proxy",
+ "codex-protocol",
+ "codex-shell-command",
+ "codex-utils-path-uri",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3605,6 +3620,7 @@ dependencies = [
  "codex-config",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "codex-utils-plugins",
  "pretty_assertions",
  "thiserror 2.0.18",
@@ -3978,6 +3994,7 @@ dependencies = [
  "chrono",
  "codex-git-utils",
  "codex-install-context",
+ "codex-otel",
  "codex-protocol",
  "codex-rollout",
  "codex-state",
@@ -9448,7 +9465,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
@@ -10534,7 +10551,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -11454,9 +11471,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0810a9f717d9828f475fe1f629f4c305c8464b7f496c3a854b58d29e65f4058e"
+checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11489,9 +11506,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aefac48c364756e97f04c0401ba3231e8607882c7c1d92da0437dc16307904d"
+checksum = "1aad0035b69380782d78ea95b508327e6deaa2235909053e596eea8f27b5e1d5"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",

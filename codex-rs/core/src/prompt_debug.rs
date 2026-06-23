@@ -3,6 +3,7 @@ use std::sync::Arc;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_extension_api::UserInstructionsProvider;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -77,7 +78,8 @@ pub(crate) async fn build_prompt_input_from_session(
     input: Vec<UserInput>,
 ) -> CodexResult<Vec<ResponseItem>> {
     let turn_context = sess.new_default_turn().await;
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+    let world_state = sess
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
     if !input.is_empty() {
@@ -86,11 +88,21 @@ pub(crate) async fn build_prompt_input_from_session(
             .await;
     }
 
+    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+    if turn_context
+        .config
+        .features
+        .enabled(Feature::DeferredExecutor)
+    {
+        sess.record_step_environment_context_if_changed(&world_state, step_context.as_ref())
+            .await;
+    }
+
     let prompt_input = sess
         .clone_history()
         .await
         .for_prompt(&turn_context.model_info.input_modalities);
-    let router = built_tools(sess, turn_context.as_ref(), &CancellationToken::new()).await?;
+    let router = built_tools(sess, step_context.as_ref(), &CancellationToken::new()).await?;
     let base_instructions = sess.get_base_instructions().await;
     let prompt = build_prompt(
         prompt_input,

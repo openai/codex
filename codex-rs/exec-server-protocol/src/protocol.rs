@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_shell_command::shell_detect::DetectedShell;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,9 +23,9 @@ pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
-pub(crate) const FS_OPEN_METHOD: &str = "fs/open";
-pub(crate) const FS_READ_BLOCK_METHOD: &str = "fs/readBlock";
-pub(crate) const FS_CLOSE_METHOD: &str = "fs/close";
+pub const FS_OPEN_METHOD: &str = "fs/open";
+pub const FS_READ_BLOCK_METHOD: &str = "fs/readBlock";
+pub const FS_CLOSE_METHOD: &str = "fs/close";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
@@ -71,6 +73,21 @@ pub struct InitializeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentInfo {
     pub shell: ShellInfo,
+    /// Working directory inherited by the exec-server process.
+    #[serde(default)]
+    pub cwd: Option<PathUri>,
+}
+
+impl EnvironmentInfo {
+    /// Returns information about the current local exec-server process.
+    pub fn local() -> Self {
+        Self {
+            shell: codex_shell_command::shell_detect::default_user_shell().into(),
+            cwd: std::env::current_dir()
+                .ok()
+                .and_then(|cwd| PathUri::from_host_native_path(cwd).ok()),
+        }
+    }
 }
 
 /// Shell detected for an execution/filesystem environment.
@@ -82,6 +99,15 @@ pub struct ShellInfo {
     /// Target-native shell executable path or command name. Fallbacks such as `cmd.exe` need not
     /// be absolute, so this is not a [`PathUri`].
     pub path: String,
+}
+
+impl From<DetectedShell> for ShellInfo {
+    fn from(shell: DetectedShell) -> Self {
+        Self {
+            name: shell.name().to_string(),
+            path: shell.shell_path.to_string_lossy().into_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +135,12 @@ pub struct ExecParams {
     /// Whether the eventual executor-side sandbox must enforce managed networking.
     #[serde(default)]
     pub enforce_managed_network: bool,
+    /// Optional details for enforcing managed networking without a live proxy object.
+    ///
+    /// When `enforce_managed_network` is true and these details are absent, the executor must
+    /// continue to fail closed. This preserves compatibility with older clients.
+    #[serde(default)]
+    pub managed_network: Option<ManagedNetworkSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -504,46 +536,110 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
+    use super::EnvironmentInfo;
+    use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
+    use super::ProcessId;
+    use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
+    use codex_network_proxy::ManagedNetworkSandboxContext;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
 
     #[test]
-    fn filesystem_protocol_accepts_legacy_absolute_paths_and_serializes_path_uris() {
-        let legacy_path = std::env::current_dir()
-            .expect("current directory")
-            .join("legacy-file.txt");
-        let legacy_cwd = std::env::current_dir().expect("current directory");
-        let native_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
-            PermissionProfile::default(),
-            PathUri::from_host_native_path(&legacy_cwd).expect("cwd URI"),
-        );
-        let mut legacy_sandbox =
-            serde_json::to_value(&native_sandbox).expect("sandbox should serialize");
-        legacy_sandbox["cwd"] = serde_json::json!(legacy_cwd.to_string_lossy());
-        let params: FsReadFileParams = serde_json::from_value(serde_json::json!({
-            "path": legacy_path.to_string_lossy(),
-            "sandbox": legacy_sandbox,
-        }))
-        .expect("legacy absolute path should deserialize");
-        let expected_sandbox = native_sandbox;
-        let expected = FsReadFileParams {
-            path: PathUri::from_host_native_path(legacy_path).expect("path URI"),
-            sandbox: Some(expected_sandbox.clone()),
+    fn exec_params_managed_network_context_round_trips_and_defaults_for_legacy_peers() {
+        let cwd =
+            PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                .expect("cwd URI");
+        let params = ExecParams {
+            process_id: ProcessId::from("managed-network"),
+            argv: vec!["true".to_string()],
+            cwd,
+            env_policy: None,
+            env: HashMap::new(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: None,
+            enforce_managed_network: true,
+            managed_network: Some(ManagedNetworkSandboxContext {
+                loopback_ports: vec![43123, 48081],
+                allow_local_binding: false,
+            }),
         };
 
-        assert_eq!(params, expected);
+        let mut serialized = serde_json::to_value(&params).expect("serialize exec params");
         assert_eq!(
-            serde_json::to_value(params).expect("params should serialize"),
+            serialized["managedNetwork"],
             serde_json::json!({
-                "path": expected.path.to_string(),
-                "sandbox": serde_json::to_value(expected_sandbox)
-                    .expect("sandbox should serialize"),
+                "loopbackPorts": [43123, 48081],
+                "allowLocalBinding": false,
             })
         );
+        let round_trip: ExecParams =
+            serde_json::from_value(serialized.clone()).expect("deserialize exec params");
+        assert_eq!(round_trip, params);
+
+        serialized
+            .as_object_mut()
+            .expect("exec params object")
+            .remove("managedNetwork");
+        let legacy: ExecParams =
+            serde_json::from_value(serialized).expect("deserialize legacy exec params");
+        assert!(legacy.enforce_managed_network);
+        assert_eq!(legacy.managed_network, None);
+    }
+
+    #[test]
+    fn environment_info_accepts_legacy_response_without_cwd() {
+        let info: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "shell": { "name": "zsh", "path": "/bin/zsh" }
+        }))
+        .expect("legacy environment info should deserialize");
+
+        assert_eq!(
+            info,
+            EnvironmentInfo {
+                shell: ShellInfo {
+                    name: "zsh".to_string(),
+                    path: "/bin/zsh".to_string(),
+                },
+                cwd: None,
+            }
+        );
+    }
+
+    #[test]
+    fn filesystem_protocol_rejects_native_absolute_paths() {
+        let native_path = std::env::current_dir()
+            .expect("current directory")
+            .join("native-file.txt");
+        let native_cwd = std::env::current_dir().expect("current directory");
+
+        serde_json::from_value::<FsReadFileParams>(serde_json::json!({
+            "path": native_path.to_string_lossy(),
+            "sandbox": null,
+        }))
+        .expect_err("native absolute path should not deserialize as a URI");
+
+        let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+            PermissionProfile::default(),
+            PathUri::from_host_native_path(&native_cwd).expect("cwd URI"),
+        );
+        let mut native_path_sandbox =
+            serde_json::to_value(sandbox).expect("sandbox should serialize");
+        native_path_sandbox["cwd"] = serde_json::json!(native_cwd.to_string_lossy());
+
+        serde_json::from_value::<FsReadFileParams>(serde_json::json!({
+            "path": PathUri::from_host_native_path(native_path)
+                .expect("path URI")
+                .to_string(),
+            "sandbox": native_path_sandbox,
+        }))
+        .expect_err("native absolute sandbox cwd should not deserialize as a URI");
     }
 
     #[test]

@@ -4,6 +4,7 @@ use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
 use crate::init_state_db;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
@@ -73,8 +74,10 @@ fn invocation(
     tool_name: &str,
     payload: ToolPayload,
 ) -> ToolInvocation {
+    let step_context = StepContext::for_test(Arc::clone(&turn));
     ToolInvocation {
         session,
+        step_context,
         turn,
         cancellation_token: CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),

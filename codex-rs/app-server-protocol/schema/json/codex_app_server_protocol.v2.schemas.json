@@ -990,7 +990,6 @@
         {
           "enum": [
             "untrusted",
-            "on-failure",
             "on-request",
             "never"
           ],
@@ -1170,6 +1169,7 @@
               "type": "string"
             },
             "path": {
+              "description": "Absolute path for the root in the selected environment.",
               "type": "string"
             },
             "type": {
@@ -3310,6 +3310,7 @@
         {
           "enum": [
             "contextWindowExceeded",
+            "rolloutBudgetExceeded",
             "usageLimitExceeded",
             "serverOverloaded",
             "cyberPolicy",
@@ -14610,6 +14611,7 @@
           "description": "Optional Git metadata captured when the thread was created."
         },
         "id": {
+          "description": "Identifier for this thread. Codex-generated thread IDs are UUIDv7.",
           "type": "string"
         },
         "modelProvider": {
@@ -14829,6 +14831,10 @@
         "threadId"
       ],
       "title": "ThreadDeletedNotification",
+      "type": "object"
+    },
+    "ThreadExtra": {
+      "description": "Extra app-server data for a thread.",
       "type": "object"
     },
     "ThreadForkParams": {
@@ -15813,7 +15819,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/LegacyAppPathString"
             },
             "type": {
               "enum": [
@@ -17478,6 +17484,7 @@
           "description": "Only populated when the Turn's status is failed."
         },
         "id": {
+          "description": "Identifier for this turn. Codex-generated turn IDs are UUIDv7.",
           "type": "string"
         },
         "items": {

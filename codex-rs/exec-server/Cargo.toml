@@ -16,13 +16,13 @@ axum = { workspace = true, features = ["http1", "tokio", "ws"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
 clatter = { workspace = true }
-codex-app-server-protocol = { workspace = true }
 codex-api = { workspace = true }
 codex-client = { workspace = true }
+codex-exec-server-protocol = { workspace = true }
 codex-file-system = { workspace = true }
+codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
-codex-shell-command = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-pty = { workspace = true }

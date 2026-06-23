@@ -46,10 +46,10 @@ use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
 
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
@@ -153,13 +153,13 @@ fn resolve_workdir_base_path(
 }
 
 fn resolve_tool_environment<'a>(
-    turn: &'a TurnContext,
+    environments: &'a TurnEnvironmentSnapshot,
     environment_id: Option<&str>,
 ) -> Result<Option<&'a TurnEnvironment>, FunctionCallError> {
     environment_id.map_or_else(
-        || Ok(turn.environments.primary()),
+        || Ok(environments.primary()),
         |environment_id| {
-            turn.environments
+            environments
                 .turn_environments
                 .iter()
                 .find(|environment| environment.environment_id == environment_id)

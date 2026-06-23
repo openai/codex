@@ -12,6 +12,7 @@ use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::InProcessCodeModeSession;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
@@ -21,6 +22,7 @@ use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
@@ -67,7 +69,7 @@ impl CodeModeService {
     pub(crate) fn new() -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Some(Arc::new(codex_code_mode::CodeModeService::with_delegate(
+            session: Some(Arc::new(InProcessCodeModeSession::with_delegate(
                 dispatch_broker.clone(),
             ))),
             dispatch_broker,
@@ -113,10 +115,11 @@ impl CodeModeService {
     pub(crate) fn start_turn_worker(
         &self,
         session: &Arc<Session>,
-        turn: &Arc<TurnContext>,
+        step_context: Arc<StepContext>,
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
+        let turn = &step_context.turn;
         let tool_mode = effective_tool_mode(turn);
         if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
             || self.session.is_none()
@@ -130,7 +133,7 @@ impl CodeModeService {
         };
         Some(
             self.dispatch_broker
-                .start_turn_worker(exec, router, tracker),
+                .start_turn_worker(exec, router, step_context, tracker),
         )
     }
 

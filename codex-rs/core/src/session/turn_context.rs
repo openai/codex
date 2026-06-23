@@ -208,10 +208,6 @@ impl TurnContext {
             && self.config.orchestrator_mcp_enabled
     }
 
-    pub(crate) fn tool_environment_mode(&self) -> ToolEnvironmentMode {
-        ToolEnvironmentMode::from_count(self.environments.turn_environments.len())
-    }
-
     pub(crate) async fn with_model(
         &self,
         model: String,
@@ -303,13 +299,6 @@ impl TurnContext {
                 self.model_verification_emitted.load(Ordering::Relaxed),
             ),
         }
-    }
-
-    #[deprecated(note = "resolve paths from the selected turn environment cwd instead")]
-    pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
-        #[allow(deprecated)]
-        path.as_ref()
-            .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
     }
 
     pub(crate) fn file_system_sandbox_context(

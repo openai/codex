@@ -8,9 +8,10 @@ use codex_plugin::PluginResourceLocator;
 use codex_plugin::ResolvedPlugin;
 use codex_plugin::ResolvedPluginLocation;
 use codex_plugin::manifest::PluginManifestMcpServers;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use codex_utils_path_uri::PathUriParseError;
 use std::io;
+use std::path::PathBuf;
 use thiserror::Error;
 
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
@@ -25,14 +26,24 @@ pub(super) enum ExecutorPluginMcpProviderError {
     #[error("failed to read MCP config for selected plugin `{plugin_id}` at `{path}`: {source}")]
     ReadConfig {
         plugin_id: String,
-        path: AbsolutePathBuf,
+        path: PathUri,
         #[source]
         source: io::Error,
+    },
+    #[error(
+        "failed to resolve MCP config path `{relative_path}` below selected plugin `{plugin_id}` at `{root}`: {source}"
+    )]
+    InvalidConfigPath {
+        plugin_id: String,
+        root: PathUri,
+        relative_path: &'static str,
+        #[source]
+        source: PathUriParseError,
     },
     #[error("failed to parse MCP config for selected plugin `{plugin_id}` at `{path}`: {source}")]
     ParseConfig {
         plugin_id: String,
-        path: AbsolutePathBuf,
+        path: PathUri,
         #[source]
         source: serde_json::Error,
     },
@@ -52,7 +63,7 @@ impl ExecutorPluginMcpProvider {
 
 async fn load_from_file_system(
     plugin: &ResolvedPlugin,
-    plugin_root: &AbsolutePathBuf,
+    plugin_root: &PathUri,
     file_system: &dyn ExecutorFileSystem,
 ) -> Result<Vec<(String, McpServerConfig)>, ExecutorPluginMcpProviderError> {
     let ResolvedPluginLocation::Environment { environment_id, .. } = plugin.location();
@@ -61,10 +72,9 @@ async fn load_from_file_system(
         Some(PluginManifestMcpServers::Path(PluginResourceLocator::Environment {
             path, ..
         })) => {
-            let config_uri = PathUri::from_abs_path(path);
             (
                 file_system
-                    .read_file_text(&config_uri, /*sandbox*/ None)
+                    .read_file_text(path, /*sandbox*/ None)
                     .await
                     .map_err(|source| ExecutorPluginMcpProviderError::ReadConfig {
                         plugin_id: plugin_id.to_string(),
@@ -74,15 +84,21 @@ async fn load_from_file_system(
                 path.clone(),
             )
         }
-        Some(PluginManifestMcpServers::Object(object_config)) => (
-            object_config.clone(),
-            plugin_root.join(".codex-plugin/plugin.json"),
-        ),
+        Some(PluginManifestMcpServers::Object(object_config)) => {
+            let PluginResourceLocator::Environment { path, .. } = plugin.manifest_path();
+            (object_config.clone(), path.clone())
+        }
         None => {
-            let config_path = plugin_root.join(DEFAULT_MCP_CONFIG_FILE);
-            let config_uri = PathUri::from_abs_path(&config_path);
+            let config_path = plugin_root
+                .join(DEFAULT_MCP_CONFIG_FILE)
+                .map_err(|source| ExecutorPluginMcpProviderError::InvalidConfigPath {
+                    plugin_id: plugin_id.to_string(),
+                    root: plugin_root.clone(),
+                    relative_path: DEFAULT_MCP_CONFIG_FILE,
+                    source,
+                })?;
             let contents = match file_system
-                .read_file_text(&config_uri, /*sandbox*/ None)
+                .read_file_text(&config_path, /*sandbox*/ None)
                 .await
             {
                 Ok(contents) => contents,
@@ -100,8 +116,9 @@ async fn load_from_file_system(
             (contents, config_path)
         }
     };
+    let plugin_root_path = PathBuf::from(plugin_root.inferred_native_path_string());
     let parsed = parse_plugin_mcp_config(
-        plugin_root.as_path(),
+        plugin_root_path.as_path(),
         &contents,
         PluginMcpServerPlacement::Environment { environment_id },
     )

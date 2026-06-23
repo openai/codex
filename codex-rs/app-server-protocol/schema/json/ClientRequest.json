@@ -125,7 +125,6 @@
         {
           "enum": [
             "untrusted",
-            "on-failure",
             "on-request",
             "never"
           ],
@@ -210,6 +209,7 @@
               "type": "string"
             },
             "path": {
+              "description": "Absolute path for the root in the selected environment.",
               "type": "string"
             },
             "type": {

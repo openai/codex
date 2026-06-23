@@ -9,8 +9,12 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::SessionContextWindow;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -69,7 +73,9 @@ async fn record_initial_history_reconstructs_typed_inter_agent_message() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: vec![RolloutItem::InterAgentCommunication(communication.clone())],
+            history: Arc::new(vec![RolloutItem::InterAgentCommunication(
+                communication.clone(),
+            )]),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -112,7 +118,7 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -189,7 +195,7 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -757,7 +763,7 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -841,7 +847,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -871,7 +877,7 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_seed_referenc
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -898,13 +904,123 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
+}
+
+#[tokio::test]
+async fn reconstruct_history_restores_initial_window_from_session_meta() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = ThreadId::default();
+    let initial_window_id = Uuid::now_v7();
+    let rollout_items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+        meta: SessionMeta {
+            session_id: thread_id.into(),
+            id: thread_id,
+            context_window: Some(SessionContextWindow {
+                window_id: initial_window_id.to_string(),
+            }),
+            ..SessionMeta::default()
+        },
+        git: None,
+    })];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.window_number, 0);
+    assert_eq!(reconstructed.first_window_id, Some(initial_window_id));
+    assert_eq!(reconstructed.previous_window_id, None);
+    assert_eq!(reconstructed.window_id, Some(initial_window_id));
+}
+
+#[tokio::test]
+async fn reconstruct_history_prefers_compacted_window_over_session_meta() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = ThreadId::default();
+    let initial_window_id = Uuid::now_v7();
+    let compacted_first_window_id = Uuid::now_v7();
+    let compacted_previous_window_id = Uuid::now_v7();
+    let compacted_window_id = Uuid::now_v7();
+    let rollout_items = vec![
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: thread_id.into(),
+                id: thread_id,
+                context_window: Some(SessionContextWindow {
+                    window_id: initial_window_id.to_string(),
+                }),
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
+        RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(Vec::new()),
+            window_number: Some(2),
+            first_window_id: Some(compacted_first_window_id.to_string()),
+            previous_window_id: Some(compacted_previous_window_id.to_string()),
+            window_id: Some(compacted_window_id.to_string()),
+        }),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.window_number, 2);
+    assert_eq!(
+        reconstructed.first_window_id,
+        Some(compacted_first_window_id)
+    );
+    assert_eq!(
+        reconstructed.previous_window_id,
+        Some(compacted_previous_window_id)
+    );
+    assert_eq!(reconstructed.window_id, Some(compacted_window_id));
+}
+
+#[tokio::test]
+async fn reconstruct_history_preserves_legacy_compaction_count_with_session_meta_window() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = ThreadId::default();
+    let initial_window_id = Uuid::now_v7();
+    let rollout_items = vec![
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: thread_id.into(),
+                id: thread_id,
+                context_window: Some(SessionContextWindow {
+                    window_id: initial_window_id.to_string(),
+                }),
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
+        RolloutItem::Compacted(CompactedItem {
+            message: "legacy summary".to_string(),
+            replacement_history: None,
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+        }),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.window_number, 1);
+    assert_eq!(reconstructed.first_window_id, None);
+    assert_eq!(reconstructed.previous_window_id, None);
+    assert_eq!(reconstructed.window_id, None);
 }
 
 #[tokio::test]
@@ -1070,7 +1186,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1215,7 +1331,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1338,7 +1454,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1454,7 +1570,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1505,7 +1621,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_preserves_turn_
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1633,7 +1749,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
