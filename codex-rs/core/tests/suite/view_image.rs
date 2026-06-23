@@ -133,7 +133,7 @@ fn png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> anyhow::Result<Vec<u8>> 
 
 async fn create_workspace_directory(test: &TestCodex, rel_path: &str) -> anyhow::Result<PathBuf> {
     let abs_path = test.config.cwd.join(rel_path);
-    let abs_path_uri = PathUri::from_path(&abs_path)?;
+    let abs_path_uri = PathUri::from_host_native_path(&abs_path)?;
     test.fs()
         .create_directory(
             &abs_path_uri,
@@ -151,7 +151,7 @@ async fn write_workspace_file(
 ) -> anyhow::Result<PathBuf> {
     let abs_path = test.config.cwd.join(rel_path);
     if let Some(parent) = abs_path.parent() {
-        let parent_uri = PathUri::from_path(&parent)?;
+        let parent_uri = PathUri::from_host_native_path(&parent)?;
         test.fs()
             .create_directory(
                 &parent_uri,
@@ -160,7 +160,7 @@ async fn write_workspace_file(
             )
             .await?;
     }
-    let abs_path_uri = PathUri::from_path(&abs_path)?;
+    let abs_path_uri = PathUri::from_host_native_path(&abs_path)?;
     test.fs()
         .write_file(&abs_path_uri, contents, /*sandbox*/ None)
         .await?;
@@ -589,7 +589,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     ))
     .abs();
     let image_path = remote_cwd.join("remote.png");
-    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
     test.fs()
         .create_directory(
             &remote_cwd_uri,
@@ -598,7 +598,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
         )
         .await?;
     let png = png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?;
-    let image_path_uri = PathUri::from_path(&image_path)?;
+    let image_path_uri = PathUri::from_host_native_path(&image_path)?;
     test.fs()
         .write_file(&image_path_uri, png, /*sandbox*/ None)
         .await?;

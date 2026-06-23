@@ -54,8 +54,72 @@ fn has_hosted_tool(tools: &[Value], tool_type: &str) -> bool {
         .any(|tool| tool.get("type").and_then(Value::as_str) == Some(tool_type))
 }
 
+fn additional_tools(body: &Value) -> Result<&[Value]> {
+    body["input"]
+        .as_array()
+        .context("Responses request input should be an array")?
+        .first()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))
+        .context("Responses request should start with additional_tools")?["tools"]
+        .as_array()
+        .map(Vec::as_slice)
+        .context("additional_tools tools should be an array")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_lite_strips_data_image_detail() -> Result<()> {
+async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_config(|config| {
+            config.base_instructions = Some("test instructions".to_string());
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let body = response_mock.single_request().body_json();
+    assert!(body.get("instructions").is_none());
+    assert!(body.get("tools").is_none());
+
+    let input = body["input"]
+        .as_array()
+        .context("Responses request input should be an array")?;
+    assert_eq!(input[0]["type"], "additional_tools");
+    assert_eq!(input[0]["role"], "developer");
+    assert_eq!(
+        input[1],
+        serde_json::json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": "test instructions",
+            }],
+        })
+    );
+
+    let tools = additional_tools(&body)?;
+    assert!(!tools.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_prepares_images() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -68,6 +132,7 @@ async fn responses_lite_strips_data_image_detail() -> Result<()> {
     )
     .await;
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    let remote_image_url = "https://example.com/image.png";
     let mut builder = test_codex().with_model_info_override("gpt-5.4", |model_info| {
         model_info.use_responses_lite = true;
         configure_image_capable_model(model_info);
@@ -76,10 +141,16 @@ async fn responses_lite_strips_data_image_detail() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Image {
-                image_url: image_url.to_string(),
-                detail: Some(ImageDetail::Original),
-            }],
+            items: vec![
+                UserInput::Image {
+                    image_url: image_url.to_string(),
+                    detail: Some(ImageDetail::Original),
+                },
+                UserInput::Image {
+                    image_url: remote_image_url.to_string(),
+                    detail: Some(ImageDetail::High),
+                },
+            ],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
@@ -92,20 +163,27 @@ async fn responses_lite_strips_data_image_detail() -> Result<()> {
     .await;
 
     let request = response_mock.single_request();
-    let input = request.input();
-    let image = input
-        .iter()
-        .filter_map(|item| item.get("content").and_then(Value::as_array))
-        .flatten()
-        .find(|item| item.get("type").and_then(Value::as_str) == Some("input_image"))
-        .context("request should contain an image")?;
+    let user_content = request
+        .input()
+        .into_iter()
+        .rev()
+        .find(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+        .and_then(|item| item.get("content").and_then(Value::as_array).cloned())
+        .context("request should contain user content")?;
     assert_eq!(
-        image,
-        &serde_json::json!({
-            "type": "input_image",
-            "image_url": image_url
-        })
+        user_content,
+        vec![
+            serde_json::json!({
+                "type": "input_image",
+                "image_url": image_url
+            }),
+            serde_json::json!({
+                "type": "input_text",
+                "text": "image content omitted because remote image URLs are not supported"
+            }),
+        ]
     );
+    assert!(!request.body_json().to_string().contains(remote_image_url));
 
     Ok(())
 }
@@ -144,17 +222,10 @@ async fn responses_lite_uses_standalone_web_search_and_image_generation() -> Res
         request.header(RESPONSES_LITE_HEADER).as_deref(),
         Some("true")
     );
-    request
-        .tool_by_name("web", "run")
-        .context("Responses Lite should expose standalone web search")?;
-    request
-        .tool_by_name("image_gen", "imagegen")
-        .context("Responses Lite should expose standalone image generation")?;
-
     let body = request.body_json();
-    let tools = body["tools"]
-        .as_array()
-        .context("Responses request tools should be an array")?;
+    assert!(body.get("tools").is_none());
+    let tools = additional_tools(&body)?;
+    assert!(!tools.is_empty());
     assert!(!has_hosted_tool(tools, "web_search"));
     assert!(!has_hosted_tool(tools, "image_generation"));
 
@@ -242,9 +313,8 @@ async fn responses_lite_omits_hosted_tools_without_standalone_extensions() -> Re
     test.submit_turn("Do not use hosted tools").await?;
 
     let body = response_mock.single_request().body_json();
-    let tools = body["tools"]
-        .as_array()
-        .context("Responses request tools should be an array")?;
+    assert!(body.get("tools").is_none());
+    let tools = additional_tools(&body)?;
     assert!(!has_hosted_tool(tools, "web_search"));
     assert!(!has_hosted_tool(tools, "image_generation"));
 

@@ -9046,6 +9046,12 @@
     "ModelSafetyBufferingUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "fasterModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "model": {
           "type": "string"
         },
@@ -9054,6 +9060,9 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "showBufferingUi": {
+          "type": "boolean"
         },
         "threadId": {
           "type": "string"
@@ -9071,6 +9080,7 @@
       "required": [
         "model",
         "reasons",
+        "showBufferingUi",
         "threadId",
         "turnId",
         "useCases"
@@ -9811,8 +9821,26 @@
           ],
           "description": "Local logo path, resolved from the installed plugin package."
         },
+        "logoDark": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Local dark-mode logo path, resolved from the installed plugin package."
+        },
         "logoUrl": {
           "description": "Remote logo URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logoUrlDark": {
+          "description": "Remote dark-mode logo URL from the plugin catalog.",
           "type": [
             "string",
             "null"
@@ -11980,16 +12008,6 @@
         },
         {
           "properties": {
-            "internal_chat_message_metadata_passthrough": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "enum": [
                 "compaction_trigger"

@@ -314,8 +314,9 @@ mod tests {
 
     #[test]
     fn helper_protocol_uses_path_uris() -> serde_json::Result<()> {
-        let local_path = PathUri::from_path(std::env::current_dir().expect("cwd").join("file"))
-            .expect("path URI");
+        let local_path =
+            PathUri::from_host_native_path(std::env::current_dir().expect("cwd").join("file"))
+                .expect("path URI");
         let paths = [
             local_path,
             PathUri::parse("file://server/share/file").expect("path URI"),

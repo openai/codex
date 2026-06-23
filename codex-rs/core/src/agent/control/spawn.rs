@@ -41,7 +41,8 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
             _ => false,
         },
         RolloutItem::ResponseItem(
-            ResponseItem::AgentMessage { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }

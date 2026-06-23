@@ -716,8 +716,12 @@ pub struct PluginInterface {
     pub composer_icon_url: Option<String>,
     /// Local logo path, resolved from the installed plugin package.
     pub logo: Option<AbsolutePathBuf>,
+    /// Local dark-mode logo path, resolved from the installed plugin package.
+    pub logo_dark: Option<AbsolutePathBuf>,
     /// Remote logo URL from the plugin catalog.
     pub logo_url: Option<String>,
+    /// Remote dark-mode logo URL from the plugin catalog.
+    pub logo_url_dark: Option<String>,
     /// Local screenshot paths, resolved from the installed plugin package.
     pub screenshots: Vec<AbsolutePathBuf>,
     /// Remote screenshot URLs from the plugin catalog.

@@ -86,7 +86,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
         resumed_history
             .history
             .iter()
-            .any(|item| matches!(item, RolloutItem::ResponseItem(response_item) if response_item == &injected_item)),
+            .any(|item| matches!(item, RolloutItem::ResponseItem(response_item) if responses::strip_metadata(response_item.clone()) == injected_item)),
         "injected item should be persisted in rollout history"
     );
 

@@ -210,9 +210,9 @@ fn effective_originator_value(
     default_originator: String,
 ) -> String {
     originator_from_service_name(metrics_service_name)
-        .or(env_originator)
         .or(persisted_originator)
         .or(inherited_originator)
+        .or(env_originator)
         .unwrap_or(default_originator)
 }
 
