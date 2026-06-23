@@ -13,6 +13,9 @@ On x86-64 Linux, run Wine exec with
 `bazel test //codex-rs/core:core-all-wine-exec-test --test_output=errors`.
 Temporary blockers belong beside the test in `skip_if_wine_exec!` calls.
 
+The app-server integration suite uses the same runner:
+`bazel test //codex-rs/app-server:app-server-all-wine-exec-test --test_output=errors`.
+
 You can list devboxes via `applied_devbox ls`, pick the one with `codex` in the name.
 Connect to devbox via `ssh <devbox_name>`.
 Reuse the same checkout of codex in `~/code/codex`. Reset files if needed. Multiple checkouts take longer to build and take up more space.
