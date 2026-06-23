@@ -32,6 +32,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::RecommendedPluginsInstructions;
+use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::WorldState;
 use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
@@ -238,6 +239,7 @@ use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
+use self::step_context::StepContext;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
 #[cfg(test)]
@@ -2785,6 +2787,19 @@ impl Session {
         self.record_conversation_items(turn_context, &items).await;
     }
 
+    pub(crate) async fn capture_step_context(&self, turn_context: &TurnContext) -> StepContext {
+        let environments = if turn_context
+            .config
+            .features
+            .enabled(Feature::DeferredExecutor)
+        {
+            self.services.turn_environments.snapshot().await
+        } else {
+            turn_context.environments.clone()
+        };
+        StepContext { environments }
+    }
+
     pub(crate) async fn record_inter_agent_communication(
         &self,
         turn_context: &TurnContext,
@@ -2884,6 +2899,7 @@ impl Session {
         turn_context: &TurnContext,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
+        world_state_baseline: Option<WorldState>,
         compacted_item: CompactedItem,
     ) {
         let items = if turn_context.config.features.enabled(Feature::ItemIds) {
@@ -2894,11 +2910,6 @@ impl Session {
         let compacted_item = CompactedItem {
             replacement_history: Some(items.clone()),
             ..compacted_item
-        };
-        let world_state_baseline = if reference_context_item.is_some() {
-            Some(self.build_world_state(turn_context).await)
-        } else {
-            None
         };
         {
             let mut state = self.state.lock().await;
@@ -3031,6 +3042,7 @@ impl Session {
         items
     }
 
+    #[cfg(test)]
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
@@ -3038,6 +3050,32 @@ impl Session {
         let world_state = self.build_world_state(turn_context).await;
         self.build_initial_context_with_world_state(turn_context, &world_state)
             .await
+    }
+
+    pub(crate) async fn build_initial_context_for_current_step(
+        &self,
+        turn_context: &TurnContext,
+    ) -> (Vec<ResponseItem>, WorldState) {
+        let step_context = self.capture_step_context(turn_context).await;
+        let mut world_state = WorldState::default();
+        if turn_context.config.include_environment_context {
+            let environment_subagents = self
+                .services
+                .agent_control
+                .format_environment_context_subagents(self.thread_id)
+                .await;
+            world_state.add_section(
+                EnvironmentsState::from_turn_context_with_environments(
+                    turn_context,
+                    &step_context.environments,
+                )
+                .with_subagents(environment_subagents),
+            );
+        }
+        let items = self
+            .build_initial_context_with_world_state(turn_context, &world_state)
+            .await;
+        (items, world_state)
     }
 
     async fn build_world_state(&self, turn_context: &TurnContext) -> WorldState {
@@ -3407,9 +3445,8 @@ impl Session {
             state.start_new_context_window_if_requested()
         };
         let (window_number, window_ids) = window?;
-        let world_state = self.build_world_state(turn_context).await;
-        let context_items = self
-            .build_initial_context_with_world_state(turn_context, &world_state)
+        let (context_items, world_state) = self
+            .build_initial_context_for_current_step(turn_context)
             .await;
         let turn_context_item = turn_context.to_turn_context_item();
         let replacement_history = context_items;

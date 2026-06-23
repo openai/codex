@@ -293,7 +293,7 @@ async fn run_remote_compact_task_inner_impl(
         build_v2_compacted_history(&prompt_input, compaction_output);
     analytics_details.retained_image_count = Some(retained_images);
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
-    let new_history = process_compacted_history(
+    let (new_history, world_state_baseline) = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
         compacted_history,
@@ -321,6 +321,7 @@ async fn run_remote_compact_task_inner_impl(
         turn_context.as_ref(),
         new_history,
         reference_context_item,
+        world_state_baseline,
         compacted_item,
     )
     .await;

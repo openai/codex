@@ -4,6 +4,7 @@ use std::time::Instant;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::context::world_state::WorldState;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -64,6 +65,23 @@ const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 pub(crate) enum InitialContextInjection {
     BeforeLastUserMessage,
     DoNotInject,
+}
+
+pub(crate) async fn build_compaction_initial_context(
+    sess: &Session,
+    turn_context: &TurnContext,
+    initial_context_injection: InitialContextInjection,
+) -> (Vec<ResponseItem>, Option<WorldState>) {
+    // Return the rendered state with its items so history and its baseline stay identical.
+    match initial_context_injection {
+        InitialContextInjection::BeforeLastUserMessage => {
+            let (items, world_state) = sess
+                .build_initial_context_for_current_step(turn_context)
+                .await;
+            (items, Some(world_state))
+        }
+        InitialContextInjection::DoNotInject => (Vec::new(), None),
+    }
 }
 
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
@@ -309,11 +327,13 @@ async fn run_compact_task_inner_impl(
     }
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
 
-    if matches!(
+    let (initial_context, world_state_baseline) = build_compaction_initial_context(
+        sess.as_ref(),
+        turn_context.as_ref(),
         initial_context_injection,
-        InitialContextInjection::BeforeLastUserMessage
-    ) {
-        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+    )
+    .await;
+    if !initial_context.is_empty() {
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
@@ -333,6 +353,7 @@ async fn run_compact_task_inner_impl(
         turn_context.as_ref(),
         new_history,
         reference_context_item,
+        world_state_baseline,
         compacted_item,
     )
     .await;
