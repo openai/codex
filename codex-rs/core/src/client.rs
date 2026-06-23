@@ -44,6 +44,7 @@ use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
 use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
 use codex_api::Reasoning;
 use codex_api::ReasoningContext;
+use codex_api::ReasoningSummaryDelivery;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
@@ -56,7 +57,6 @@ use codex_api::ResponsesWsRequest;
 use codex_api::SharedAuthProvider;
 use codex_api::SseTelemetry;
 use codex_api::StreamOptions;
-use codex_api::SummaryDelivery;
 use codex_api::TransportError;
 use codex_api::WebsocketTelemetry;
 use codex_api::auth_header_telemetry;
@@ -383,13 +383,15 @@ fn sideband_websocket_auth_headers(api_auth: &dyn AuthProvider) -> ApiHeaderMap 
 }
 
 impl ModelClient {
-    pub(crate) fn uses_parallel_reasoning_summaries(
+    pub(crate) fn should_use_concurrent_reasoning_summaries(
         provider_info: &ModelProviderInfo,
         model_info: &ModelInfo,
         effort: Option<&ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        requested_delivery: Option<ReasoningSummaryDelivery>,
     ) -> bool {
-        provider_info.is_openai()
+        requested_delivery.is_some()
+            && provider_info.is_openai()
             && model_info.supports_reasoning_summaries
             && summary != ReasoningSummaryConfig::None
             && !matches!(
@@ -552,6 +554,7 @@ impl ModelClient {
             model_info,
             settings.effort,
             settings.summary,
+            /*reasoning_summary_delivery*/ None,
             settings.service_tier,
             responses_metadata,
         )?;
@@ -813,6 +816,7 @@ impl ModelClient {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
@@ -845,14 +849,15 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
-        let stream_options = Self::uses_parallel_reasoning_summaries(
+        let stream_options = Self::should_use_concurrent_reasoning_summaries(
             self.state.provider.info(),
             model_info,
             effort.as_ref(),
             summary,
+            reasoning_summary_delivery,
         )
         .then_some(StreamOptions {
-            summary_delivery: SummaryDelivery::ParallelTruncated,
+            reasoning_summary_delivery: ReasoningSummaryDelivery::ConcurrentCutoff,
         });
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {
@@ -1347,6 +1352,7 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
@@ -1385,6 +1391,7 @@ impl ModelClientSession {
                 model_info,
                 effort.clone(),
                 summary,
+                reasoning_summary_delivery,
                 service_tier.clone(),
                 responses_metadata,
             )?;
@@ -1472,6 +1479,7 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         warmup: bool,
@@ -1497,6 +1505,7 @@ impl ModelClientSession {
                 model_info,
                 effort.clone(),
                 summary,
+                reasoning_summary_delivery,
                 service_tier.clone(),
                 responses_metadata,
             )?;
@@ -1679,6 +1688,7 @@ impl ModelClientSession {
                 session_telemetry,
                 effort,
                 summary,
+                /*reasoning_summary_delivery*/ None,
                 service_tier,
                 responses_metadata,
                 /*warmup*/ true,
@@ -1722,6 +1732,7 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
@@ -1738,6 +1749,7 @@ impl ModelClientSession {
                             session_telemetry,
                             effort.clone(),
                             summary,
+                            reasoning_summary_delivery,
                             service_tier.clone(),
                             responses_metadata,
                             /*warmup*/ false,
@@ -1759,6 +1771,7 @@ impl ModelClientSession {
                     session_telemetry,
                     effort,
                     summary,
+                    reasoning_summary_delivery,
                     service_tier,
                     responses_metadata,
                     inference_trace,

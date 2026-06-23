@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+use codex_api::ReasoningSummaryDelivery;
 use codex_api::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
 use codex_api::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
 use codex_core::CodexResponsesMetadata;
@@ -550,6 +551,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &inference_trace,
@@ -674,7 +676,8 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
                     "responses_lite": body["client_metadata"]
                         .get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY),
                     "reasoning_context": body["reasoning"].get("context"),
-                    "summary_delivery": body["stream_options"].get("summary_delivery"),
+                    "reasoning_summary_delivery": body["stream_options"]
+                        .get("reasoning_summary_delivery"),
                     "parallel_tool_calls": body["parallel_tool_calls"],
                 })
             })
@@ -683,19 +686,19 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
             json!({
                 "responses_lite": null,
                 "reasoning_context": null,
-                "summary_delivery": "parallel_truncated",
+                "reasoning_summary_delivery": "concurrent_cutoff",
                 "parallel_tool_calls": false,
             }),
             json!({
                 "responses_lite": "true",
                 "reasoning_context": "all_turns",
-                "summary_delivery": "parallel_truncated",
+                "reasoning_summary_delivery": "concurrent_cutoff",
                 "parallel_tool_calls": false,
             }),
             json!({
                 "responses_lite": null,
                 "reasoning_context": null,
-                "summary_delivery": "parallel_truncated",
+                "reasoning_summary_delivery": "concurrent_cutoff",
                 "parallel_tool_calls": false,
             }),
         ]
@@ -730,6 +733,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -783,6 +787,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -1193,6 +1198,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -1268,6 +1274,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -1924,6 +1931,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2013,6 +2021,7 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2249,6 +2258,7 @@ async fn stream_until_complete_with_model_info(
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            Some(ReasoningSummaryDelivery::ConcurrentCutoff),
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2298,6 +2308,7 @@ async fn stream_until_complete_with_metadata(
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            /*reasoning_summary_delivery*/ None,
             service_tier.map(|service_tier| service_tier.request_value().to_string()),
             responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),

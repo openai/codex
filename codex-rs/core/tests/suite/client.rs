@@ -1,3 +1,4 @@
+use codex_api::ReasoningSummaryDelivery;
 use codex_config::ConfigLayerStack;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ModelClient;
@@ -1251,6 +1252,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2271,6 +2273,9 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+            let _ = config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -2304,9 +2309,9 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     pretty_assertions::assert_eq!(
         request_body
             .get("stream_options")
-            .and_then(|options| options.get("summary_delivery"))
+            .and_then(|options| options.get("reasoning_summary_delivery"))
             .and_then(|value| value.as_str()),
-        Some("parallel_truncated")
+        Some("concurrent_cutoff")
     );
     pretty_assertions::assert_eq!(
         request_body
@@ -2456,6 +2461,9 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::None);
+            let _ = config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -2491,7 +2499,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parallel_summary_delivery_is_omitted_for_minimal_effort() -> anyhow::Result<()> {
+async fn concurrent_summary_delivery_is_omitted_for_minimal_effort() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
@@ -2504,6 +2512,9 @@ async fn parallel_summary_delivery_is_omitted_for_minimal_effort() -> anyhow::Re
         .with_config(|config| {
             config.model_reasoning_effort = Some(ReasoningEffort::Minimal);
             config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+            let _ = config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -2976,6 +2987,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
+            Some(ReasoningSummaryDelivery::ConcurrentCutoff),
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),

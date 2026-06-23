@@ -75,6 +75,7 @@ use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
+use codex_api::ReasoningSummaryDelivery;
 use codex_async_utils::OrCancelExt;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
@@ -1894,6 +1895,11 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
+    let requested_reasoning_summary_delivery = turn_context
+        .config
+        .features
+        .enabled(Feature::ConcurrentReasoningSummaries)
+        .then_some(ReasoningSummaryDelivery::ConcurrentCutoff);
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut stream = client_session
         .stream(
@@ -1902,6 +1908,7 @@ async fn try_run_sampling_request(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
+            requested_reasoning_summary_delivery,
             turn_context.config.service_tier.clone(),
             responses_metadata,
             &inference_trace,
@@ -1909,12 +1916,14 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
-    let uses_parallel_reasoning_summaries = ModelClient::uses_parallel_reasoning_summaries(
-        turn_context.provider.info(),
-        &turn_context.model_info,
-        turn_context.reasoning_effort.as_ref(),
-        turn_context.reasoning_summary,
-    );
+    let uses_concurrent_reasoning_summaries =
+        ModelClient::should_use_concurrent_reasoning_summaries(
+            turn_context.provider.info(),
+            &turn_context.model_info,
+            turn_context.reasoning_effort.as_ref(),
+            turn_context.reasoning_summary,
+            requested_reasoning_summary_delivery,
+        );
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
@@ -2279,7 +2288,7 @@ async fn try_run_sampling_request(
                 delta,
                 summary_index,
             } => {
-                if uses_parallel_reasoning_summaries {
+                if uses_concurrent_reasoning_summaries {
                     continue;
                 }
                 if let Some(active) = active_items.get(None) {
@@ -2304,18 +2313,15 @@ async fn try_run_sampling_request(
                 summary_index,
                 item_id,
             } => {
-                // Parallel delivery can cut off partial deltas at the next output item. Present
-                // only atomic, completed summary parts that still belong to the current item.
-                if !uses_parallel_reasoning_summaries {
+                // Concurrent cutoff can cancel an in-flight summary at the terminal boundary.
+                // Ignore partial deltas and present only atomic, item-scoped completed parts.
+                if !uses_concurrent_reasoning_summaries {
                     continue;
                 }
                 let Some(response_item_id) = item_id.as_deref() else {
                     error_or_panic("ReasoningSummaryDone without item_id".to_string());
                     continue;
                 };
-                if !active_items.is_current(response_item_id) {
-                    continue;
-                }
                 let Some(active) = active_items.get(Some(response_item_id)) else {
                     error_or_panic("ReasoningSummaryDone without active item".to_string());
                     continue;
@@ -2345,7 +2351,7 @@ async fn try_run_sampling_request(
                     .await;
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                if uses_parallel_reasoning_summaries {
+                if uses_concurrent_reasoning_summaries {
                     continue;
                 }
                 if let Some(active) = active_items.get(None) {

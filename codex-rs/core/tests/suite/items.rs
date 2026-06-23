@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
@@ -1102,7 +1103,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
         ev_reasoning_item("reasoning-1", &["step one"], &[]),
         ev_completed("resp-1"),
     ]);
-    mount_sse_once(&server, stream).await;
+    let response_mock = mount_sse_once(&server, stream).await;
 
     codex
         .submit(Op::UserInput {
@@ -1133,18 +1134,28 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
     .await;
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "step one");
+    assert_eq!(
+        response_mock
+            .single_request()
+            .body_json()
+            .get("stream_options"),
+        None
+    );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parallel_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
+async fn concurrent_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Auto);
+            let _ = config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -1159,12 +1170,16 @@ async fn parallel_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
         ev_output_text_delta_for_item("message-1", "Final"),
         ev_reasoning_item_added("reasoning-2", &[""]),
         ev_output_text_delta_for_item("message-1", " answer"),
-        ev_reasoning_summary_text_done_for_item("reasoning-1", 2, "stale summary"),
+        ev_reasoning_summary_text_done_for_item("reasoning-1", 2, "**Finishing checks**"),
         ev_reasoning_summary_text_done_for_item("reasoning-2", 0, "**Checking result**"),
         ev_assistant_message("message-1", "Final answer"),
         ev_reasoning_item(
             "reasoning-1",
-            &["**Inspecting files**", "**Planning checks**"],
+            &[
+                "**Inspecting files**",
+                "**Planning checks**",
+                "**Finishing checks**",
+            ],
             &[],
         ),
         ev_reasoning_item("reasoning-2", &["**Checking result**"], &[]),
@@ -1239,13 +1254,24 @@ async fn parallel_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
                 "**Planning checks**".to_string(),
             ),
             (
+                "reasoning-1".to_string(),
+                2,
+                "**Finishing checks**".to_string(),
+            ),
+            (
                 "reasoning-2".to_string(),
                 0,
                 "**Checking result**".to_string(),
             ),
         ]
     );
-    assert_eq!(summary_section_breaks, vec![("reasoning-1".to_string(), 1)]);
+    assert_eq!(
+        summary_section_breaks,
+        vec![
+            ("reasoning-1".to_string(), 1),
+            ("reasoning-1".to_string(), 2),
+        ]
+    );
 
     Ok(())
 }

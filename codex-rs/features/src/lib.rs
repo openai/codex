@@ -201,6 +201,8 @@ pub enum Feature {
     ResizeAllImages,
     /// Generate Responses API item IDs for client-created history items.
     ItemIds,
+    /// Allow reasoning summaries to stream concurrently with later output items.
+    ConcurrentReasoningSummaries,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -1174,6 +1176,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ItemIds,
         key: "item_ids",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ConcurrentReasoningSummaries,
+        key: "concurrent_reasoning_summaries",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

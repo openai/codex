@@ -66,8 +66,4 @@ impl ActiveTurnItems {
             }
         }
     }
-
-    pub(super) fn is_current(&self, response_item_id: &str) -> bool {
-        self.current_response_item_id.as_deref() == Some(response_item_id)
-    }
 }
