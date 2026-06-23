@@ -201,28 +201,7 @@ impl LiveThread {
     pub async fn shutdown(&self) -> ThreadStoreResult<()> {
         self.flush_pending_metadata_update_for_existing_history()
             .await?;
-        self.thread_store.shutdown_thread(self.thread_id).await?;
-        if self.persistence_telemetry.is_enabled() {
-            match self
-                .thread_store
-                .load_history(LoadThreadHistoryParams {
-                    thread_id: self.thread_id,
-                    include_archived: true,
-                })
-                .await
-            {
-                Ok(history) => self
-                    .persistence_telemetry
-                    .record_shutdown_with_persisted_items(&history.items),
-                Err(err) => {
-                    warn!(
-                        "failed to load persisted history for rollout persistence telemetry: {err}"
-                    );
-                    self.persistence_telemetry.record_shutdown();
-                }
-            }
-        }
-        Ok(())
+        self.thread_store.shutdown_thread(self.thread_id).await
     }
 
     pub async fn discard(&self) -> ThreadStoreResult<()> {

@@ -6,17 +6,10 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
 use pretty_assertions::assert_eq;
 
-use super::RolloutSizeTotals;
-use super::ThreadTotals;
-use super::add_totals;
 use super::is_thread_sampled;
 use super::measure_and_filter_rollout_items;
-use super::measure_rollout_items;
-use super::thread_totals_with_persisted_history;
 
 fn retained_message(text: &str) -> RolloutItem {
     RolloutItem::ResponseItem(ResponseItem::Message {
@@ -98,89 +91,6 @@ fn retained_items_are_byte_identical() {
     assert_eq!(
         measurement.post_filter.payload_bytes,
         measurement.items[0].payload_bytes.expect("payload bytes")
-    );
-}
-
-#[test]
-fn thread_totals_accumulate_append_batches() {
-    let mut totals = RolloutSizeTotals::default();
-
-    add_totals(
-        &mut totals,
-        RolloutSizeTotals {
-            items: 2,
-            payload_bytes: 30,
-        },
-    );
-    add_totals(
-        &mut totals,
-        RolloutSizeTotals {
-            items: 3,
-            payload_bytes: 40,
-        },
-    );
-
-    assert_eq!(
-        totals,
-        RolloutSizeTotals {
-            items: 5,
-            payload_bytes: 70,
-        }
-    );
-}
-
-#[test]
-fn persisted_history_totals_include_session_metadata() {
-    let session_meta = RolloutItem::SessionMeta(SessionMetaLine {
-        meta: SessionMeta::default(),
-        git: None,
-    });
-    let message = retained_message("persisted");
-    let items = vec![session_meta, message];
-
-    assert_eq!(
-        measure_rollout_items(&items),
-        RolloutSizeTotals {
-            items: 2,
-            payload_bytes: items
-                .iter()
-                .map(|item| serde_json::to_vec(item).expect("serialize item").len() as u64)
-                .sum(),
-        }
-    );
-}
-
-#[test]
-fn persisted_history_replaces_post_filter_totals_and_preserves_dropped_delta() {
-    let totals = thread_totals_with_persisted_history(
-        ThreadTotals {
-            pre_filter: RolloutSizeTotals {
-                items: 5,
-                payload_bytes: 100,
-            },
-            post_filter: RolloutSizeTotals {
-                items: 3,
-                payload_bytes: 80,
-            },
-        },
-        RolloutSizeTotals {
-            items: 4,
-            payload_bytes: 90,
-        },
-    );
-
-    assert_eq!(
-        totals,
-        ThreadTotals {
-            pre_filter: RolloutSizeTotals {
-                items: 6,
-                payload_bytes: 110,
-            },
-            post_filter: RolloutSizeTotals {
-                items: 4,
-                payload_bytes: 90,
-            },
-        }
     );
 }
 

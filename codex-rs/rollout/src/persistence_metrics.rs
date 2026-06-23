@@ -1,8 +1,4 @@
 use std::io::Write;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
@@ -14,8 +10,7 @@ use codex_protocol::protocol::RolloutItem;
 use crate::policy::is_persisted_rollout_item;
 
 const ITEM_BYTES_METRIC: &str = "codex.rollout.persistence.item_bytes";
-const THREAD_BYTES_METRIC: &str = "codex.rollout.persistence.thread_bytes";
-const THREAD_ITEMS_METRIC: &str = "codex.rollout.persistence.thread_items";
+const APPEND_METRIC: &str = "codex.rollout.persistence.append";
 const MEASUREMENT_ERROR_METRIC: &str = "codex.rollout.persistence.measurement_error";
 const SAMPLE_DENOMINATOR: u64 = 100;
 const SAMPLE_RATE_LABEL: &str = "0.01";
@@ -86,14 +81,6 @@ pub fn measure_and_filter_rollout_items(
     }
 
     (persisted, measurement)
-}
-
-fn measure_rollout_items(items: &[RolloutItem]) -> RolloutSizeTotals {
-    let mut totals = RolloutSizeTotals::default();
-    for item in items {
-        add_to_totals(&mut totals, serialized_len(item).ok());
-    }
-    totals
 }
 
 fn add_to_totals(totals: &mut RolloutSizeTotals, payload_bytes: Option<u64>) {
@@ -181,26 +168,13 @@ fn response_item_type(item: &ResponseItem) -> &'static str {
 pub struct RolloutPersistenceTelemetry {
     metrics: Option<MetricsClient>,
     sampled: bool,
-    totals: Arc<Mutex<ThreadTotals>>,
-    finalized: Arc<AtomicBool>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct ThreadTotals {
-    pre_filter: RolloutSizeTotals,
-    post_filter: RolloutSizeTotals,
 }
 
 impl RolloutPersistenceTelemetry {
     pub fn new(thread_id: ThreadId) -> Self {
         let metrics = codex_otel::global();
         let sampled = metrics.is_some() && is_thread_sampled(thread_id);
-        Self {
-            metrics,
-            sampled,
-            totals: Arc::new(Mutex::new(ThreadTotals::default())),
-            finalized: Arc::new(AtomicBool::new(false)),
-        }
+        Self { metrics, sampled }
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -235,68 +209,18 @@ impl RolloutPersistenceTelemetry {
                 );
             }
         }
-        let mut totals = self
-            .totals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        add_totals(&mut totals.pre_filter, measurement.pre_filter);
-        add_totals(&mut totals.post_filter, measurement.post_filter);
-    }
-
-    pub fn record_shutdown(&self) {
-        let Some(metrics) = self.begin_shutdown() else {
-            return;
-        };
-        let totals = *self
-            .totals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::record_shutdown_totals(metrics, totals);
-    }
-
-    /// Records final thread totals from the persisted history plus dropped items observed live.
-    pub fn record_shutdown_with_persisted_items(&self, items: &[RolloutItem]) {
-        let Some(metrics) = self.begin_shutdown() else {
-            return;
-        };
-        let persisted = measure_rollout_items(items);
-        let accumulated = *self
-            .totals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let totals = thread_totals_with_persisted_history(accumulated, persisted);
-        Self::record_shutdown_totals(metrics, totals);
-    }
-
-    fn begin_shutdown(&self) -> Option<&MetricsClient> {
-        let metrics = self.enabled_metrics()?;
-        (!self.finalized.swap(true, Ordering::Relaxed)).then_some(metrics)
-    }
-
-    fn record_shutdown_totals(metrics: &MetricsClient, totals: ThreadTotals) {
-        for (stage, values) in [
-            ("pre_filter", totals.pre_filter),
-            ("post_filter", totals.post_filter),
-        ] {
-            let _ = metrics.histogram(
-                THREAD_BYTES_METRIC,
-                saturating_i64(values.payload_bytes),
-                &[
-                    ("stage", stage),
-                    ("encoding", "rollout_item_json_v1"),
-                    ("sample_rate", SAMPLE_RATE_LABEL),
-                    ("finalization", "shutdown"),
-                ],
-            );
-            let _ = metrics.histogram(
-                THREAD_ITEMS_METRIC,
-                saturating_i64(values.items),
-                &[
-                    ("stage", stage),
-                    ("encoding", "rollout_item_json_v1"),
-                    ("sample_rate", SAMPLE_RATE_LABEL),
-                    ("finalization", "shutdown"),
-                ],
+        // Count successful input appends and the subset that remain storage operations after the
+        // persistence policy removes filtered items.
+        let _ = metrics.counter(
+            APPEND_METRIC,
+            /*inc*/ 1,
+            &[("stage", "pre_filter"), ("sample_rate", SAMPLE_RATE_LABEL)],
+        );
+        if measurement.post_filter.items > 0 {
+            let _ = metrics.counter(
+                APPEND_METRIC,
+                /*inc*/ 1,
+                &[("stage", "post_filter"), ("sample_rate", SAMPLE_RATE_LABEL)],
             );
         }
     }
@@ -304,35 +228,6 @@ impl RolloutPersistenceTelemetry {
     fn enabled_metrics(&self) -> Option<&MetricsClient> {
         self.sampled.then_some(self.metrics.as_ref()).flatten()
     }
-}
-
-fn thread_totals_with_persisted_history(
-    accumulated: ThreadTotals,
-    persisted: RolloutSizeTotals,
-) -> ThreadTotals {
-    let dropped = RolloutSizeTotals {
-        items: accumulated
-            .pre_filter
-            .items
-            .saturating_sub(accumulated.post_filter.items),
-        payload_bytes: accumulated
-            .pre_filter
-            .payload_bytes
-            .saturating_sub(accumulated.post_filter.payload_bytes),
-    };
-    let mut pre_filter = persisted;
-    add_totals(&mut pre_filter, dropped);
-    ThreadTotals {
-        pre_filter,
-        post_filter: persisted,
-    }
-}
-
-fn add_totals(destination: &mut RolloutSizeTotals, source: RolloutSizeTotals) {
-    destination.items = destination.items.saturating_add(source.items);
-    destination.payload_bytes = destination
-        .payload_bytes
-        .saturating_add(source.payload_bytes);
 }
 
 fn saturating_i64(value: u64) -> i64 {
