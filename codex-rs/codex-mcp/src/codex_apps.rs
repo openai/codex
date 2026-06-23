@@ -8,7 +8,6 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::runtime::emit_duration;
 use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
 use crate::tools::ToolInfo;
@@ -125,16 +124,11 @@ pub(crate) fn normalize_codex_apps_callable_namespace(
     }
 }
 
-pub(crate) fn write_cached_codex_apps_tools_if_needed(
-    server_name: &str,
+pub(crate) fn write_codex_apps_tools_cache(
     cache_context: Option<&CodexAppsToolsCacheContext>,
     server_info: &McpServerInfo,
     tools: &[ToolInfo],
 ) {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return;
-    }
-
     if let Some(cache_context) = cache_context {
         let cache_write_start = Instant::now();
         write_cached_codex_apps_tools(cache_context, tools);

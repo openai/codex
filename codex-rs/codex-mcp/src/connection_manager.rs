@@ -16,7 +16,7 @@ use std::time::Instant;
 use crate::McpAuthStatusEntry;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::CodexAppsToolsCacheKey;
-use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
+use crate::codex_apps::write_codex_apps_tools_cache;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -521,8 +521,7 @@ impl McpConnectionManager {
             &[],
         );
 
-        write_cached_codex_apps_tools_if_needed(
-            CODEX_APPS_MCP_SERVER_NAME,
+        write_codex_apps_tools_cache(
             managed_client.codex_apps_tools_cache_context.as_ref(),
             &managed_client.server_info,
             &tools,
