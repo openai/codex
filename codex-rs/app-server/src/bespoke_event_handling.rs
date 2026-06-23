@@ -40,6 +40,7 @@ use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ModelReroutedNotification;
+use codex_app_server_protocol::ModelSafetyBufferingUpdatedNotification;
 use codex_app_server_protocol::ModelVerificationNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
@@ -113,6 +114,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestU
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -129,7 +131,7 @@ enum CommandExecutionApprovalPresentation {
 #[derive(Debug, PartialEq)]
 struct CommandExecutionCompletionItem {
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: LegacyAppPathString,
     command_actions: Vec<V2ParsedCommand>,
 }
 
@@ -350,6 +352,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::TurnModerationMetadata(notification))
                 .await;
         }
+        EventMsg::SafetyBuffering(event) => {
+            let notification = ModelSafetyBufferingUpdatedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                model: event.model,
+                use_cases: event.use_cases,
+                reasons: event.reasons,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ModelSafetyBufferingUpdated(
+                    notification,
+                ))
+                .await;
+        }
         EventMsg::RealtimeConversationStarted(event) => {
             let notification = ThreadRealtimeStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -550,6 +566,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 call_id,
                 approval_id,
                 turn_id,
+                environment_id,
                 started_at_ms,
                 command,
                 cwd,
@@ -574,7 +591,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let command_string = shlex_join(&command);
                 let completion_item = CommandExecutionCompletionItem {
                     command: command_string,
-                    cwd: cwd.clone(),
+                    cwd: cwd.clone().into(),
                     command_actions: command_actions.clone(),
                 };
                 CommandExecutionApprovalPresentation::Command(completion_item)
@@ -626,6 +643,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 item_id: call_id.clone(),
                 started_at_ms,
                 approval_id: approval_id.clone(),
+                environment_id,
                 reason,
                 network_approval_context,
                 command,
@@ -687,6 +705,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 turn_id: request.turn_id,
                 item_id: request.call_id,
                 questions,
+                auto_resolution_ms: request.auto_resolution_ms,
             };
             let (pending_request_id, rx) = outgoing
                 .send_request(ServerRequestPayload::ToolRequestUserInput(params))
@@ -785,6 +804,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             let pending_response = PendingRequestPermissionsResponse {
                 call_id: request.call_id,
+                conversation_id,
+                turn_id: request.turn_id,
                 requested_permissions,
                 request_cwd,
                 pending_request_id,
@@ -947,15 +968,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
                 additional_details: None,
             };
-            handle_error(conversation_id, turn_error.clone(), &thread_state).await;
-            outgoing
-                .send_server_notification(ServerNotification::Error(ErrorNotification {
-                    error: turn_error.clone(),
-                    will_retry: false,
-                    thread_id: conversation_id.to_string(),
-                    turn_id: event_turn_id.clone(),
-                }))
-                .await;
+            handle_error_notification(
+                conversation_id,
+                &event_turn_id,
+                turn_error,
+                &outgoing,
+                &thread_state,
+            )
+            .await;
         }
         EventMsg::StreamError(ev) => {
             // We don't need to update the turn summary store for stream errors as they are intermediate error states for retries,
@@ -1350,7 +1370,7 @@ async fn start_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: LegacyAppPathString,
     command_actions: Vec<V2ParsedCommand>,
     source: CommandExecutionSource,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -1394,7 +1414,7 @@ async fn complete_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: LegacyAppPathString,
     process_id: Option<String>,
     source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
@@ -1640,6 +1660,24 @@ async fn handle_error(
     state.turn_summary.last_error = Some(error);
 }
 
+async fn handle_error_notification(
+    conversation_id: ThreadId,
+    event_turn_id: &str,
+    error: TurnError,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+    thread_state: &Arc<Mutex<ThreadState>>,
+) {
+    handle_error(conversation_id, error.clone(), thread_state).await;
+    outgoing
+        .send_server_notification(ServerNotification::Error(ErrorNotification {
+            error,
+            will_retry: false,
+            thread_id: conversation_id.to_string(),
+            turn_id: event_turn_id.to_string(),
+        }))
+        .await;
+}
+
 async fn on_request_user_input_response(
     event_turn_id: String,
     pending_request_id: RequestId,
@@ -1795,6 +1833,8 @@ async fn on_request_permissions_response(
 ) {
     let PendingRequestPermissionsResponse {
         call_id,
+        conversation_id,
+        turn_id,
         requested_permissions,
         request_cwd,
         pending_request_id,
@@ -1805,12 +1845,34 @@ async fn on_request_permissions_response(
     let response = receiver.await;
     resolve_server_request_on_thread_listener(&thread_state, pending_request_id.clone()).await;
     drop(request_permissions_guard);
-    let Some(response) = request_permissions_response_from_client_result(
+    let response = match request_permissions_response_from_client_result(
         requested_permissions,
         response,
         request_cwd.as_path(),
-    ) else {
-        return;
+    ) {
+        Ok(Some(response)) => response,
+        Ok(None) => return,
+        // TODO(anp): Remove this native-path localization error path once core permission paths
+        // remain PathUri after crossing the app-server boundary.
+        Err(err) => {
+            let message = format!("failed to localize granted filesystem paths: {err}");
+            handle_error_notification(
+                conversation_id,
+                &turn_id,
+                TurnError {
+                    message,
+                    codex_error_info: None,
+                    additional_details: None,
+                },
+                &outgoing,
+                &thread_state,
+            )
+            .await;
+            if let Err(err) = conversation.submit(Op::Interrupt).await {
+                error!("failed to interrupt turn after invalid permission paths: {err}");
+            }
+            return;
+        }
     };
     outgoing.track_effective_permissions_approval_response(pending_request_id, response.clone());
 
@@ -1827,6 +1889,8 @@ async fn on_request_permissions_response(
 
 struct PendingRequestPermissionsResponse {
     call_id: String,
+    conversation_id: ThreadId,
+    turn_id: String,
     requested_permissions: CoreRequestPermissionProfile,
     request_cwd: AbsolutePathBuf,
     pending_request_id: RequestId,
@@ -1839,25 +1903,25 @@ fn request_permissions_response_from_client_result(
     requested_permissions: CoreRequestPermissionProfile,
     response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
     cwd: &std::path::Path,
-) -> Option<CoreRequestPermissionsResponse> {
+) -> std::io::Result<Option<CoreRequestPermissionsResponse>> {
     let value = match response {
         Ok(Ok(value)) => value,
-        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return None,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return Ok(None),
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
-            return Some(CoreRequestPermissionsResponse {
+            return Ok(Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
                 scope: CorePermissionGrantScope::Turn,
                 strict_auto_review: false,
-            });
+            }));
         }
         Err(err) => {
             error!("request failed: {err:?}");
-            return Some(CoreRequestPermissionsResponse {
+            return Ok(Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
                 scope: CorePermissionGrantScope::Turn,
                 strict_auto_review: false,
-            });
+            }));
         }
     };
 
@@ -1878,23 +1942,23 @@ fn request_permissions_response_from_client_result(
         )
     {
         error!("strict auto review is only supported for turn-scoped permission grants");
-        return Some(CoreRequestPermissionsResponse {
+        return Ok(Some(CoreRequestPermissionsResponse {
             permissions: Default::default(),
             scope: CorePermissionGrantScope::Turn,
             strict_auto_review: false,
-        });
+        }));
     }
-    let granted_permissions: CoreAdditionalPermissionProfile = response.permissions.into();
+    let granted_permissions: CoreAdditionalPermissionProfile = response.permissions.try_into()?;
     let permissions = if granted_permissions.is_empty() {
         CoreRequestPermissionProfile::default()
     } else {
         intersect_permission_profiles(requested_permissions.into(), granted_permissions, cwd).into()
     };
-    Some(CoreRequestPermissionsResponse {
+    Ok(Some(CoreRequestPermissionsResponse {
         permissions,
         scope: response.scope.to_core(),
         strict_auto_review,
-    })
+    }))
 }
 
 const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
@@ -2213,6 +2277,7 @@ mod tests {
             reasoning_effort: None,
             created_at,
             updated_at: created_at,
+            recency_at: created_at,
             archived_at: None,
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
@@ -2274,7 +2339,7 @@ mod tests {
     fn command_execution_completion_item(command: &str) -> CommandExecutionCompletionItem {
         CommandExecutionCompletionItem {
             command: command.to_string(),
-            cwd: test_path_buf("/tmp").abs(),
+            cwd: test_path_buf("/tmp").abs().into(),
             command_actions: vec![V2ParsedCommand::Unknown {
                 command: command.to_string(),
             }],
@@ -2898,7 +2963,8 @@ mod tests {
             CoreRequestPermissionProfile::default(),
             Ok(Err(error)),
             std::env::current_dir().expect("current dir").as_path(),
-        );
+        )
+        .expect("paths should localize");
 
         assert_eq!(response, None);
     }
@@ -2993,6 +3059,7 @@ mod tests {
                 }))),
                 cwd.as_path(),
             )
+            .expect("paths should localize")
             .expect("response should be accepted");
 
             assert_eq!(
@@ -3016,6 +3083,7 @@ mod tests {
             }))),
             std::env::current_dir().expect("current dir").as_path(),
         )
+        .expect("paths should localize")
         .expect("response should be accepted");
 
         assert_eq!(
@@ -3043,6 +3111,7 @@ mod tests {
             }))),
             std::env::current_dir().expect("current dir").as_path(),
         )
+        .expect("paths should localize")
         .expect("response should be accepted");
 
         assert_eq!(
@@ -3074,6 +3143,7 @@ mod tests {
             }))),
             std::env::current_dir().expect("current dir").as_path(),
         )
+        .expect("paths should localize")
         .expect("response should be accepted");
 
         assert_eq!(response.scope, CorePermissionGrantScope::Turn);
@@ -3109,6 +3179,7 @@ mod tests {
             }))),
             cwd.as_path(),
         )
+        .expect("paths should localize")
         .expect("response should be accepted");
 
         assert_eq!(
@@ -3155,6 +3226,7 @@ mod tests {
             }))),
             request_cwd.as_path(),
         )
+        .expect("paths should localize")
         .expect("response should be accepted");
 
         assert_eq!(
@@ -3196,6 +3268,7 @@ mod tests {
             }))),
             cwd.as_path(),
         )
+        .expect("paths should localize")
         .expect("response should be accepted");
 
         assert_eq!(

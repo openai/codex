@@ -60,6 +60,33 @@ fn failed_turn_does_not_overwrite_output_last_message_file() {
 }
 
 #[test]
+fn runtime_warning_emits_a_non_fatal_error_item() {
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+
+    let collected = processor.collect_thread_events(ServerNotification::Warning(
+        codex_app_server_protocol::WarningNotification {
+            thread_id: Some("thread-1".to_string()),
+            message: "invalid global instructions".to_string(),
+        },
+    ));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "item_0".to_string(),
+                    details: ThreadItemDetails::Error(ErrorItem {
+                        message: "invalid global instructions".to_string(),
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
 fn mcp_tool_call_result_preserves_meta_in_jsonl_event() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
@@ -71,6 +98,7 @@ fn mcp_tool_call_result_preserves_meta_in_jsonl_event() {
                 tool: "web_run".to_string(),
                 status: McpToolCallStatus::Completed,
                 arguments: json!({"search_query": [{"q": "OpenAI Codex CLI documentation"}]}),
+                app_context: None,
                 mcp_app_resource_uri: None,
                 plugin_id: None,
                 result: Some(Box::new(codex_app_server_protocol::McpToolCallResult {

@@ -1,5 +1,10 @@
 use super::AnalyticsEventsClient;
+use super::AnalyticsEventsDestination;
 use super::AnalyticsEventsQueue;
+#[cfg(debug_assertions)]
+use super::capture_track_events_request;
+#[cfg(debug_assertions)]
+use super::send_track_events_request;
 use super::track_event_request_batches;
 use crate::events::CodexAcceptedLineFingerprintsEventParams;
 use crate::events::CodexAcceptedLineFingerprintsEventRequest;
@@ -31,8 +36,14 @@ use codex_app_server_protocol::TurnSteerResponse;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use std::collections::HashSet;
+#[cfg(debug_assertions)]
+use std::fs;
+#[cfg(debug_assertions)]
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(debug_assertions)]
+use std::time::SystemTime;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
@@ -74,6 +85,18 @@ fn sample_regular_track_event(thread_id: &str) -> TrackEventRequest {
     })
 }
 
+#[cfg(debug_assertions)]
+fn unique_capture_path(name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("system clock should be after Unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "codex-analytics-{name}-{}-{nonce}.jsonl",
+        std::process::id()
+    ))
+}
+
 fn client_with_receiver() -> (AnalyticsEventsClient, mpsc::Receiver<AnalyticsFact>) {
     let (sender, receiver) = mpsc::channel(8);
     let queue = AnalyticsEventsQueue {
@@ -82,6 +105,138 @@ fn client_with_receiver() -> (AnalyticsEventsClient, mpsc::Receiver<AnalyticsFac
         plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
     };
     (AnalyticsEventsClient { queue: Some(queue) }, receiver)
+}
+
+#[test]
+#[cfg(debug_assertions)]
+fn analytics_destination_uses_explicit_capture_file() {
+    let capture_path = unique_capture_path("destination");
+    let destination = AnalyticsEventsDestination::from_base_url_and_capture_file(
+        "https://chatgpt.com/backend-api/".to_string(),
+        Some(capture_path.clone()),
+    );
+
+    assert_eq!(
+        destination,
+        AnalyticsEventsDestination::CaptureFile {
+            path: capture_path.clone()
+        }
+    );
+    assert_eq!(
+        fs::read_to_string(&capture_path).expect("read capture file"),
+        ""
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = fs::metadata(&capture_path)
+            .expect("read capture file metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    fs::remove_file(capture_path).expect("remove capture file");
+}
+
+#[test]
+fn analytics_destination_uses_http_without_capture_file() {
+    let destination = AnalyticsEventsDestination::from_base_url_and_capture_file(
+        "https://chatgpt.com/backend-api/".to_string(),
+        /*capture_file*/ None,
+    );
+
+    assert_eq!(
+        destination,
+        AnalyticsEventsDestination::Http {
+            url: "https://chatgpt.com/backend-api/codex/analytics-events/events".to_string()
+        }
+    );
+}
+
+#[test]
+#[cfg(not(debug_assertions))]
+fn analytics_destination_ignores_capture_file_in_release() {
+    let destination = AnalyticsEventsDestination::from_base_url_and_capture_file(
+        "https://chatgpt.com/backend-api/".to_string(),
+        Some(std::path::PathBuf::from("ignored.jsonl")),
+    );
+
+    assert_eq!(
+        destination,
+        AnalyticsEventsDestination::Http {
+            url: "https://chatgpt.com/backend-api/codex/analytics-events/events".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+#[cfg(debug_assertions)]
+async fn capture_file_writes_exact_serialized_request() {
+    let capture_path = unique_capture_path("single");
+    let destination = AnalyticsEventsDestination::CaptureFile {
+        path: capture_path.clone(),
+    };
+    let event = sample_regular_track_event("thread-1");
+    let expected_event = serde_json::to_value(&event).expect("serialize expected event");
+    let auth = codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    send_track_events_request(&auth, &destination, vec![event]).await;
+
+    let contents = fs::read_to_string(&capture_path).expect("read capture file");
+    let lines = contents.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1);
+    let payload: serde_json::Value =
+        serde_json::from_str(lines[0]).expect("parse captured payload");
+    assert_eq!(payload, serde_json::json!({"events": [expected_event]}));
+
+    fs::remove_file(capture_path).expect("remove capture file");
+}
+
+#[tokio::test]
+#[cfg(debug_assertions)]
+async fn capture_file_writes_final_batches_as_separate_lines() {
+    let capture_path = unique_capture_path("batches");
+    let destination = AnalyticsEventsDestination::CaptureFile {
+        path: capture_path.clone(),
+    };
+    let auth = codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let events = vec![
+        sample_regular_track_event("thread-1"),
+        sample_accepted_line_fingerprint_event("thread-2"),
+        sample_regular_track_event("thread-3"),
+    ];
+
+    for batch in track_event_request_batches(events) {
+        send_track_events_request(&auth, &destination, batch).await;
+    }
+
+    let contents = fs::read_to_string(&capture_path).expect("read capture file");
+    let payloads = contents
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("parse capture line"))
+        .collect::<Vec<_>>();
+    assert_eq!(payloads.len(), 3);
+    assert_eq!(payloads[0]["events"][0]["skill_id"], "skill-thread-1");
+    assert_eq!(
+        payloads[1]["events"][0]["event_type"],
+        "codex_accepted_line_fingerprints"
+    );
+    assert_eq!(payloads[2]["events"][0]["skill_id"], "skill-thread-3");
+
+    fs::remove_file(capture_path).expect("remove capture file");
+}
+
+#[test]
+#[cfg(debug_assertions)]
+fn capture_write_failure_still_consumes_delivery() {
+    let capture_path = unique_capture_path("missing-parent").join("events.jsonl");
+    let destination = AnalyticsEventsDestination::CaptureFile { path: capture_path };
+    let payload = crate::events::TrackEventsRequest {
+        events: vec![sample_regular_track_event("thread-1")],
+    };
+
+    assert!(capture_track_events_request(&destination, &payload));
 }
 
 fn sample_turn_start_request() -> ClientRequest {
@@ -130,6 +285,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         model_provider: "openai".to_string(),
         created_at: 1,
         updated_at: 2,
+        recency_at: Some(2),
         status: AppServerThreadStatus::Idle,
         path: None,
         cwd: test_path_buf("/tmp").abs(),
@@ -158,6 +314,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
     })
 }
 
@@ -175,6 +332,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
         initial_turns_page: None,
     })
 }
@@ -193,6 +351,7 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
     })
 }
 

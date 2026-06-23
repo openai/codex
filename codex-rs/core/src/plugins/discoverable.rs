@@ -5,7 +5,9 @@ use codex_core_plugins::ToolSuggestPluginDiscoveryInput;
 use codex_login::CodexAuth;
 use codex_tools::DiscoverablePluginInfo;
 use std::collections::HashSet;
+use tracing::instrument;
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) async fn list_tool_suggest_discoverable_plugins(
     config: &Config,
     plugins_manager: &PluginsManager,
@@ -41,6 +43,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
                 .into_iter()
                 .map(|plugin| DiscoverablePluginInfo {
                     id: plugin.id,
+                    remote_plugin_id: plugin.remote_plugin_id,
                     name: plugin.name,
                     description: plugin.description,
                     has_skills: plugin.has_skills,

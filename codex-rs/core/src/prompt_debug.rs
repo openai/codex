@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_extension_api::UserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
@@ -27,6 +27,7 @@ pub async fn build_prompt_input(
     mut config: Config,
     input: Vec<UserInput>,
     state_db: Option<StateDbHandle>,
+    user_instructions_provider: Arc<dyn UserInstructionsProvider>,
 ) -> CodexResult<Vec<ResponseItem>> {
     config.ephemeral = true;
 
@@ -53,11 +54,13 @@ pub async fn build_prompt_input(
             .map_err(|err| CodexErr::Fatal(err.to_string()))?,
         ),
         empty_extension_registry(),
+        user_instructions_provider,
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
         installation_id,
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let thread = thread_manager.start_thread(config).await?;
 
@@ -78,8 +81,7 @@ pub(crate) async fn build_prompt_input_from_session(
         .await;
 
     if !input.is_empty() {
-        let input_item = ResponseInputItem::from(input);
-        let response_item = ResponseItem::from(input_item);
+        let response_item = sess.response_item_from_user_input(input);
         sess.record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&response_item))
             .await;
     }
@@ -97,5 +99,5 @@ pub(crate) async fn build_prompt_input_from_session(
         base_instructions,
     );
 
-    Ok(prompt.get_formatted_input())
+    Ok(prompt.input)
 }

@@ -22,7 +22,6 @@ impl Handler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "spawn_agent")
@@ -39,11 +38,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        handle_spawn_agent(invocation).await.map(boxed_tool_output)
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async move { handle_spawn_agent(invocation).await.map(boxed_tool_output) })
     }
 }
 
@@ -136,6 +132,7 @@ async fn handle_spawn_agent(
             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
             parent_thread_id: Some(session.thread_id),
             environments: Some(turn.environments.to_selections()),
+            initial_multi_agent_mode: None,
         },
     ))
     .await
@@ -204,7 +201,7 @@ async fn handle_spawn_agent(
     turn.session_telemetry.counter(
         "codex.multi_agent.spawn",
         /*inc*/ 1,
-        &[("role", role_tag)],
+        &[("role", role_tag), ("version", "v1")],
     );
 
     Ok(SpawnAgentResult {

@@ -15,6 +15,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -26,6 +27,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -37,6 +39,7 @@ fn developer_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -51,6 +54,16 @@ fn inter_agent_msg(text: &str, trigger_turn: bool) -> ResponseItem {
     communication.to_response_input_item().into()
 }
 
+fn inter_agent_communication(text: &str, trigger_turn: bool) -> RolloutItem {
+    RolloutItem::InterAgentCommunication(InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        text.to_string(),
+        trigger_turn,
+    ))
+}
+
 #[test]
 fn truncates_rollout_from_start_before_nth_user_only() {
     let items = [
@@ -60,12 +73,13 @@ fn truncates_rollout_from_start_before_nth_user_only() {
         user_msg("u2"),
         assistant_msg("a3"),
         ResponseItem::Reasoning {
-            id: "r1".to_string(),
+            id: Some("r1".to_string()),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "s".to_string(),
             }],
             content: None,
             encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -73,6 +87,7 @@ fn truncates_rollout_from_start_before_nth_user_only() {
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
+            internal_chat_message_metadata_passthrough: None,
         },
         assistant_msg("a4"),
     ];
@@ -206,6 +221,20 @@ fn truncates_rollout_to_last_n_fork_turns_counts_trigger_turn_messages() {
         serde_json::to_value(&truncated).unwrap(),
         serde_json::to_value(&expected).unwrap()
     );
+}
+
+#[test]
+fn fork_turn_positions_use_inter_agent_delivery_metadata() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(user_msg("user task")),
+        inter_agent_communication("queued during user turn", /*trigger_turn*/ false),
+        RolloutItem::ResponseItem(assistant_msg("first answer")),
+        inter_agent_communication("follow-up task", /*trigger_turn*/ true),
+        RolloutItem::ResponseItem(assistant_msg("second answer")),
+        RolloutItem::ResponseItem(user_msg("next user task")),
+    ];
+
+    assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 3, 5]);
 }
 
 #[test]

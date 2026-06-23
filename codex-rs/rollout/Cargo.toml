@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-async-trait = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-file-search = { workspace = true }
 codex-git-utils = { workspace = true }

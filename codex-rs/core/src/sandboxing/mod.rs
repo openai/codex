@@ -10,11 +10,11 @@ ExecRequest for execution.
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::StdoutStream;
-use crate::exec::WindowsSandboxFilesystemOverrides;
 use crate::exec::execute_exec_request;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_file_system::FileSystemSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -24,7 +24,9 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::WindowsSandboxFilesystemOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -42,14 +44,15 @@ pub(crate) struct ExecServerEnvConfig {
 #[derive(Debug)]
 pub struct ExecRequest {
     pub command: Vec<String>,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub env: HashMap<String, String>,
     pub(crate) exec_server_env_config: Option<ExecServerEnvConfig>,
     pub network: Option<NetworkProxy>,
+    pub network_environment_id: Option<String>,
     pub expiration: ExecExpiration,
     pub capture_policy: ExecCapturePolicy,
     pub sandbox: SandboxType,
-    pub windows_sandbox_policy_cwd: AbsolutePathBuf,
+    pub windows_sandbox_policy_cwd: PathUri,
     pub windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -58,6 +61,8 @@ pub struct ExecRequest {
     pub network_sandbox_policy: NetworkSandboxPolicy,
     pub(crate) windows_sandbox_filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
     pub arg0: Option<String>,
+    pub(crate) exec_server_sandbox: Option<FileSystemSandboxContext>,
+    pub(crate) exec_server_enforce_managed_network: bool,
 }
 
 impl ExecRequest {
@@ -67,6 +72,7 @@ impl ExecRequest {
         cwd: AbsolutePathBuf,
         env: HashMap<String, String>,
         network: Option<NetworkProxy>,
+        network_environment_id: Option<String>,
         expiration: ExecExpiration,
         capture_policy: ExecCapturePolicy,
         sandbox: SandboxType,
@@ -76,6 +82,7 @@ impl ExecRequest {
         permission_profile: PermissionProfile,
         arg0: Option<String>,
     ) -> Self {
+        let cwd = PathUri::from_abs_path(&cwd);
         let windows_sandbox_policy_cwd = cwd.clone();
         let (file_system_sandbox_policy, network_sandbox_policy) =
             permission_profile.to_runtime_permissions();
@@ -85,6 +92,7 @@ impl ExecRequest {
             env,
             exec_server_env_config: None,
             network,
+            network_environment_id,
             expiration,
             capture_policy,
             sandbox,
@@ -97,20 +105,23 @@ impl ExecRequest {
             network_sandbox_policy,
             windows_sandbox_filesystem_overrides: None,
             arg0,
+            exec_server_sandbox: None,
+            exec_server_enforce_managed_network: false,
         }
     }
 
     pub(crate) fn from_sandbox_exec_request(
         request: SandboxExecRequest,
         options: ExecOptions,
-        windows_sandbox_policy_cwd: AbsolutePathBuf,
         windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
     ) -> Self {
         let SandboxExecRequest {
             command,
             cwd,
+            sandbox_policy_cwd: windows_sandbox_policy_cwd,
             mut env,
             network,
+            network_environment_id,
             sandbox,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
@@ -139,6 +150,7 @@ impl ExecRequest {
             env,
             exec_server_env_config: None,
             network,
+            network_environment_id,
             expiration,
             capture_policy,
             sandbox,
@@ -151,6 +163,8 @@ impl ExecRequest {
             network_sandbox_policy,
             windows_sandbox_filesystem_overrides: None,
             arg0,
+            exec_server_sandbox: None,
+            exec_server_enforce_managed_network: false,
         }
     }
 }

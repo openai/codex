@@ -1,4 +1,5 @@
 use super::*;
+use crate::unified_exec::clamp_yield_time;
 use pretty_assertions::assert_eq;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -66,7 +67,7 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
 }
 
 #[test]
-fn exec_server_params_use_env_policy_overlay_contract() {
+fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     let cwd: codex_utils_absolute_path::AbsolutePathBuf = std::env::current_dir()
         .expect("current dir")
         .try_into()
@@ -75,9 +76,9 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted();
     let network_sandbox_policy = codex_protocol::permissions::NetworkSandboxPolicy::Restricted;
     let permission_profile = codex_protocol::models::PermissionProfile::Disabled;
-    let request = ExecRequest {
+    let mut request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-        cwd: cwd.clone(),
+        cwd: cwd.clone().into(),
         env: HashMap::from([
             ("HOME".to_string(), "/client-home".to_string()),
             ("PATH".to_string(), "/sandbox-path".to_string()),
@@ -97,24 +98,28 @@ fn exec_server_params_use_env_policy_overlay_contract() {
             ]),
         }),
         network: None,
+        network_environment_id: None,
         expiration: crate::exec::ExecExpiration::DefaultTimeout,
         capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
         sandbox: codex_sandboxing::SandboxType::None,
-        windows_sandbox_policy_cwd: cwd.clone(),
+        windows_sandbox_policy_cwd: cwd.clone().into(),
         windows_sandbox_workspace_roots: vec![cwd],
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
-        permission_profile,
+        permission_profile: permission_profile.clone(),
         file_system_sandbox_policy,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
+        exec_server_sandbox: None,
+        exec_server_enforce_managed_network: false,
     };
 
     let params =
         exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
 
     assert_eq!(params.process_id.as_str(), "123");
+    assert_eq!(params.cwd, request.cwd);
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,
@@ -123,11 +128,42 @@ fn exec_server_params_use_env_policy_overlay_contract() {
             ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
         ])
     );
+    request.exec_server_sandbox = Some(
+        codex_exec_server::FileSystemSandboxContext::from_permission_profile(permission_profile),
+    );
+    let first =
+        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+    let second =
+        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+    assert!(first.process_id.as_str().starts_with("123-"));
+    assert!(second.process_id.as_str().starts_with("123-"));
+    assert_ne!(first.process_id, second.process_id);
 }
 
+#[cfg(windows)]
 #[test]
-fn exec_server_process_id_matches_unified_exec_process_id() {
-    assert_eq!(exec_server_process_id(/*process_id*/ 4321), "4321");
+fn initial_exec_yield_time_uses_windows_floor() {
+    let above_max_yield_time_ms = crate::unified_exec::MAX_YIELD_TIME_MS + 1;
+
+    assert_eq!(
+        clamp_yield_time(/*yield_time_ms*/ 1_000),
+        crate::unified_exec::WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS
+    );
+    assert_eq!(clamp_yield_time(/*yield_time_ms*/ 10_000), 10_000);
+    assert_eq!(
+        clamp_yield_time(/*yield_time_ms*/ above_max_yield_time_ms),
+        crate::unified_exec::MAX_YIELD_TIME_MS
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn initial_exec_yield_time_has_no_platform_floor() {
+    assert_eq!(clamp_yield_time(/*yield_time_ms*/ 1_000), 1_000);
+    assert_eq!(
+        clamp_yield_time(/*yield_time_ms*/ 1),
+        crate::unified_exec::MIN_YIELD_TIME_MS
+    );
 }
 
 #[tokio::test]
@@ -172,12 +208,13 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         yield_time_ms: 1000,
         max_output_tokens: None,
         #[allow(deprecated)]
-        cwd: turn.cwd.clone(),
+        cwd: turn.cwd.clone().into(),
         #[allow(deprecated)]
-        sandbox_cwd: turn.cwd.clone(),
-        environment: turn
+        sandbox_cwd: turn.cwd.clone().into(),
+        turn_environment: turn
             .environments
-            .primary_environment()
+            .primary()
+            .cloned()
             .expect("primary environment"),
         shell_mode: codex_tools::UnifiedExecShellMode::Direct,
         network: None,
@@ -200,7 +237,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         &context,
         &request,
         #[allow(deprecated)]
-        turn.cwd.clone(),
+        turn.cwd.clone().into(),
         transcript,
         "PRE_DENIAL_MARKER".to_string(),
         "Network access denied".to_string(),

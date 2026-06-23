@@ -3,6 +3,8 @@
 //! This module owns the typed JSON-RPC calls needed by the TUI and keeps
 //! request/response plumbing out of `App` and `ChatWidget`.
 
+mod fs;
+
 use crate::bottom_pane::FeedbackAudience;
 use crate::legacy_core::config::Config;
 use crate::permission_compat::legacy_compatible_permission_profile;
@@ -14,6 +16,7 @@ use crate::status::plan_type_display_name;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::AppServerPath;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
@@ -53,6 +56,8 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadDeleteParams;
+use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoalClearParams;
@@ -76,14 +81,6 @@ use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
-use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
-use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
-use codex_app_server_protocol::ThreadRealtimeAudioChunk;
-use codex_app_server_protocol::ThreadRealtimeStartParams;
-use codex_app_server_protocol::ThreadRealtimeStartResponse;
-use codex_app_server_protocol::ThreadRealtimeStartTransport;
-use codex_app_server_protocol::ThreadRealtimeStopParams;
-use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -123,17 +120,22 @@ use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use uuid::Uuid;
 
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str =
+    "A previous Claude Code import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
@@ -176,6 +178,7 @@ pub(crate) struct AppServerSession {
     thread_settings_update_supported: bool,
     default_model: Option<String>,
     available_models: Vec<ModelPreset>,
+    external_agent_config_import_completion_pending: AtomicBool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,6 +222,7 @@ impl AppServerSession {
             thread_settings_update_supported: true,
             default_model: None,
             available_models: Vec::new(),
+            external_agent_config_import_completion_pending: AtomicBool::new(false),
         }
     }
 
@@ -233,6 +237,17 @@ impl AppServerSession {
 
     pub(crate) fn uses_remote_workspace(&self) -> bool {
         matches!(self.thread_params_mode, ThreadParamsMode::Remote)
+    }
+
+    pub(crate) fn uses_embedded_app_server(&self) -> bool {
+        matches!(&self.client, AppServerClient::InProcess(_))
+    }
+
+    pub(crate) fn codex_home_path(
+        &self,
+        local_codex_home: &AbsolutePathBuf,
+    ) -> Option<AppServerPath> {
+        self.client.codex_home(local_codex_home)
     }
 
     pub(crate) fn server_version(&self) -> Option<&str> {
@@ -296,16 +311,19 @@ impl AppServerSession {
                 false,
             ),
             Some(Account::Chatgpt { email, plan_type }) => {
-                let feedback_audience = if email.ends_with("@openai.com") {
+                let feedback_audience = if email
+                    .as_deref()
+                    .is_some_and(|email| email.ends_with("@openai.com"))
+                {
                     FeedbackAudience::OpenAiEmployee
                 } else {
                     FeedbackAudience::External
                 };
                 (
-                    Some(email.clone()),
+                    email.clone(),
                     Some(TelemetryAuthMode::Chatgpt),
                     Some(StatusAccountDisplay::ChatGpt {
-                        email: Some(email),
+                        email,
                         plan: Some(plan_type_display_name(plan_type)),
                     }),
                     Some(plan_type),
@@ -313,7 +331,7 @@ impl AppServerSession {
                     true,
                 )
             }
-            Some(Account::AmazonBedrock {}) => {
+            Some(Account::AmazonBedrock { .. }) => {
                 (None, None, None, None, FeedbackAudience::External, false)
             }
             None => (None, None, None, None, FeedbackAudience::External, false),
@@ -357,21 +375,51 @@ impl AppServerSession {
         self.client
             .request_typed(ClientRequest::ExternalAgentConfigDetect { request_id, params })
             .await
-            .wrap_err("externalAgentConfig/detect failed during TUI startup")
+            .wrap_err("externalAgentConfig/detect failed during Claude Code import")
     }
 
     pub(crate) async fn external_agent_config_import(
         &mut self,
         migration_items: Vec<ExternalAgentConfigMigrationItem>,
-    ) -> Result<ExternalAgentConfigImportResponse> {
+    ) -> Result<()> {
+        // Mark the import active before sending the request so a fast completion notification
+        // cannot arrive before the TUI records it.
+        if self
+            .external_agent_config_import_completion_pending
+            .swap(true, Ordering::Relaxed)
+        {
+            color_eyre::eyre::bail!(EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE);
+        }
         let request_id = self.next_request_id();
-        self.client
+        let response: Result<ExternalAgentConfigImportResponse> = self
+            .client
             .request_typed(ClientRequest::ExternalAgentConfigImport {
                 request_id,
-                params: ExternalAgentConfigImportParams { migration_items },
+                params: ExternalAgentConfigImportParams {
+                    migration_items,
+                    source: None,
+                },
             })
             .await
-            .wrap_err("externalAgentConfig/import failed during TUI startup")
+            .wrap_err("externalAgentConfig/import failed during Claude Code import");
+        match response {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                self.external_agent_config_import_completion_pending
+                    .store(false, Ordering::Relaxed);
+                Err(err)
+            }
+        }
+    }
+
+    pub(crate) fn external_agent_config_import_in_progress(&self) -> bool {
+        self.external_agent_config_import_completion_pending
+            .load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn consume_external_agent_config_import_completion(&self) -> bool {
+        self.external_agent_config_import_completion_pending
+            .swap(false, Ordering::Relaxed)
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
@@ -589,6 +637,21 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn thread_delete(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadDeleteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadDelete {
+                request_id,
+                params: ThreadDeleteParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("failed to delete session")?;
+        Ok(())
+    }
+
     pub(crate) async fn thread_unarchive(&mut self, thread_id: ThreadId) -> Result<Thread> {
         let request_id = self.next_request_id();
         let response: ThreadUnarchiveResponse = self
@@ -726,6 +789,7 @@ impl AppServerSession {
                     personality,
                     output_schema,
                     collaboration_mode,
+                    multi_agent_mode: None,
                 },
             })
             .await
@@ -1055,57 +1119,6 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn thread_realtime_start(
-        &mut self,
-        thread_id: ThreadId,
-        transport: Option<ThreadRealtimeStartTransport>,
-        voice: Option<serde_json::Value>,
-    ) -> Result<()> {
-        let request_id = self.next_request_id();
-        let params = thread_realtime_start_params(thread_id, transport, voice)?;
-        let _: ThreadRealtimeStartResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadRealtimeStart { request_id, params })
-            .await
-            .wrap_err("thread/realtime/start failed in TUI")?;
-        Ok(())
-    }
-
-    pub(crate) async fn thread_realtime_audio(
-        &mut self,
-        thread_id: ThreadId,
-        frame: ThreadRealtimeAudioChunk,
-    ) -> Result<()> {
-        let request_id = self.next_request_id();
-        let _: ThreadRealtimeAppendAudioResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadRealtimeAppendAudio {
-                request_id,
-                params: ThreadRealtimeAppendAudioParams {
-                    thread_id: thread_id.to_string(),
-                    audio: frame,
-                },
-            })
-            .await
-            .wrap_err("thread/realtime/appendAudio failed in TUI")?;
-        Ok(())
-    }
-
-    pub(crate) async fn thread_realtime_stop(&mut self, thread_id: ThreadId) -> Result<()> {
-        let request_id = self.next_request_id();
-        let _: ThreadRealtimeStopResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadRealtimeStop {
-                request_id,
-                params: ThreadRealtimeStopParams {
-                    thread_id: thread_id.to_string(),
-                },
-            })
-            .await
-            .wrap_err("thread/realtime/stop failed in TUI")?;
-        Ok(())
-    }
-
     pub(crate) async fn reject_server_request(
         &self,
         request_id: RequestId,
@@ -1158,34 +1171,6 @@ pub(crate) async fn start_thread_with_request_handle(
     started_thread_from_start_response(response, &config, thread_params_mode).await
 }
 
-fn thread_realtime_start_params(
-    thread_id: ThreadId,
-    transport: Option<ThreadRealtimeStartTransport>,
-    voice: Option<serde_json::Value>,
-) -> Result<ThreadRealtimeStartParams> {
-    let mut value = serde_json::Map::new();
-    value.insert(
-        "threadId".to_string(),
-        serde_json::Value::String(thread_id.to_string()),
-    );
-    value.insert(
-        "outputModality".to_string(),
-        serde_json::Value::String("audio".to_string()),
-    );
-    if let Some(transport) = transport {
-        value.insert(
-            "transport".to_string(),
-            serde_json::to_value(transport).wrap_err("serializing realtime transport")?,
-        );
-    }
-    if let Some(voice) = voice {
-        value.insert("voice".to_string(), voice);
-    }
-
-    serde_json::from_value(serde_json::Value::Object(value))
-        .wrap_err("mapping TUI realtime start params to app-server params")
-}
-
 pub(crate) fn status_account_display_from_auth_mode(
     auth_mode: Option<AuthMode>,
     plan_type: Option<codex_protocol::account::PlanType>,
@@ -1199,6 +1184,7 @@ pub(crate) fn status_account_display_from_auth_mode(
             email: None,
             plan: plan_type.map(plan_type_display_name),
         }),
+        Some(AuthMode::BedrockApiKey) => None,
         None => None,
     }
 }
@@ -1580,7 +1566,7 @@ async fn thread_session_state_from_thread_start_response(
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.runtime_workspace_roots.clone(),
-        response.instruction_sources.clone(),
+        response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
         config,
     )
@@ -1621,7 +1607,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.runtime_workspace_roots.clone(),
-        response.instruction_sources.clone(),
+        response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
         config,
     )
@@ -1653,7 +1639,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.runtime_workspace_roots.clone(),
-        response.instruction_sources.clone(),
+        response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
         config,
     )
@@ -1692,7 +1678,7 @@ async fn thread_session_state_from_thread_response(
     active_permission_profile: Option<ActivePermissionProfile>,
     cwd: AbsolutePathBuf,
     runtime_workspace_roots: Vec<AbsolutePathBuf>,
-    instruction_source_paths: Vec<AbsolutePathBuf>,
+    instruction_source_paths: Vec<PathUri>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     config: &Config,
 ) -> Result<ThreadSessionState, String> {
@@ -1778,6 +1764,7 @@ mod tests {
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use codex_utils_path_uri::LegacyAppPathString;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -1814,6 +1801,7 @@ mod tests {
                 ("codex".to_string(), rate_limit_snapshot("codex")),
                 ("other".to_string(), rate_limit_snapshot("other")),
             ])),
+            rate_limit_reset_credits: None,
         };
 
         let snapshots = app_server_rate_limit_snapshots(response);
@@ -2340,6 +2328,7 @@ mod tests {
                 model_provider: "openai".to_string(),
                 created_at: 1,
                 updated_at: 2,
+                recency_at: Some(2),
                 status: ThreadStatus::Idle,
                 path: None,
                 cwd: test_path_buf("/tmp/project").abs(),
@@ -2384,7 +2373,9 @@ mod tests {
                 test_path_buf("/tmp/project").abs(),
                 test_path_buf("/tmp/project/extra").abs(),
             ],
-            instruction_sources: vec![test_path_buf("/tmp/project/AGENTS.md").abs()],
+            instruction_sources: vec![LegacyAppPathString::from_abs_path(
+                &test_path_buf("/tmp/project/AGENTS.md").abs(),
+            )],
             approval_policy: codex_app_server_protocol::AskForApproval::Never,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
             sandbox: read_only_profile
@@ -2393,6 +2384,7 @@ mod tests {
                 .into(),
             active_permission_profile: None,
             reasoning_effort: None,
+            multi_agent_mode: Default::default(),
             initial_turns_page: None,
         };
 
@@ -2410,7 +2402,7 @@ mod tests {
         );
         assert_eq!(
             started.session.instruction_source_paths,
-            response.instruction_sources
+            response.instruction_source_path_uris()
         );
         assert_eq!(started.session.permission_profile, read_only_profile);
         assert_eq!(started.turns.len(), 1);

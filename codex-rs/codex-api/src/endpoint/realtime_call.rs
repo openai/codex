@@ -1,4 +1,5 @@
 use crate::auth::SharedAuthProvider;
+use crate::endpoint::realtime_websocket::RealtimeEventParser;
 use crate::endpoint::realtime_websocket::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::session_update_session_json;
 use crate::endpoint::session::EndpointSession;
@@ -6,6 +7,7 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use bytes::Bytes;
 use codex_client::HttpTransport;
+use codex_client::Request;
 use codex_client::RequestBody;
 use codex_client::RequestTelemetry;
 use http::HeaderMap;
@@ -123,6 +125,7 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
         // WebRTC can begin inference as soon as the peer connection comes up, so the initial
         // session payload is sent with call creation. The sideband WebSocket still sends its normal
         // session.update after it joins.
+        validate_avas_session_config(&session_config)?;
         let mut session = realtime_session_json(session_config)?;
         if let Some(session) = session.as_object_mut() {
             session.remove("id");
@@ -136,7 +139,13 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime call: {err}")))?;
             let resp = self
                 .session
-                .execute(Method::POST, Self::path(), extra_headers, Some(body))
+                .execute_with(
+                    Method::POST,
+                    Self::path(),
+                    extra_headers,
+                    Some(body),
+                    configure_realtime_call_request,
+                )
                 .await?;
             let sdp = decode_sdp_response(resp.body.as_ref())?;
             let call_id = decode_call_id_from_location(&resp.headers)?;
@@ -167,6 +176,7 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
                 extra_headers,
                 /*body*/ None,
                 |req| {
+                    configure_realtime_call_request(req);
                     req.headers.insert(
                         CONTENT_TYPE,
                         HeaderValue::from_static(MULTIPART_CONTENT_TYPE),
@@ -181,6 +191,31 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
 
         Ok(RealtimeCallResponse { sdp, call_id })
     }
+}
+
+fn configure_realtime_call_request(request: &mut Request) {
+    append_query_pair(&mut request.url, "intent", "quicksilver");
+    append_query_pair(&mut request.url, "architecture", "avas");
+}
+
+fn validate_avas_session_config(session_config: &RealtimeSessionConfig) -> Result<(), ApiError> {
+    if session_config.event_parser != RealtimeEventParser::V1 {
+        return Err(ApiError::InvalidRequest {
+            message: "AVAS realtime calls require realtime v1".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn append_query_pair(url: &mut String, key: &str, value: &str) {
+    if url.contains('?') {
+        url.push('&');
+    } else {
+        url.push('?');
+    }
+    url.push_str(key);
+    url.push('=');
+    url.push_str(value);
 }
 
 fn realtime_session_json(session_config: RealtimeSessionConfig) -> Result<Value, ApiError> {
@@ -209,13 +244,28 @@ fn decode_call_id_from_location(headers: &HeaderMap) -> Result<String, ApiError>
         .next()
         .unwrap_or(location)
         .rsplit('/')
-        .find(|segment| segment.starts_with("rtc_") && segment.len() > "rtc_".len())
+        .find(|segment| is_realtime_call_id_segment(segment))
         .map(str::to_string)
         .ok_or_else(|| {
             ApiError::Stream(format!(
                 "realtime call Location does not contain a call id: {location}"
             ))
         })
+}
+
+fn is_realtime_call_id_segment(segment: &str) -> bool {
+    if segment.starts_with("rtc_") && segment.len() > "rtc_".len() {
+        return true;
+    }
+
+    if segment.len() != 36 {
+        return false;
+    }
+
+    segment.char_indices().all(|(index, ch)| match index {
+        8 | 13 | 18 | 23 => ch == '-',
+        _ => ch.is_ascii_hexdigit(),
+    })
 }
 
 #[cfg(test)]
@@ -226,7 +276,6 @@ mod tests {
     use crate::endpoint::realtime_websocket::RealtimeOutputModality;
     use crate::endpoint::realtime_websocket::RealtimeSessionMode;
     use crate::provider::RetryConfig;
-    use async_trait::async_trait;
     use codex_client::Request;
     use codex_client::Response;
     use codex_client::StreamResponse;
@@ -265,7 +314,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl HttpTransport for CapturingTransport {
         async fn execute(&self, req: Request) -> Result<Response, TransportError> {
             *self.last_request.lock().unwrap() = Some(req);
@@ -315,10 +363,18 @@ mod tests {
             instructions: "hi".to_string(),
             model: Some("gpt-realtime".to_string()),
             session_id: Some(session_id.to_string()),
-            event_parser: RealtimeEventParser::RealtimeV2,
+            event_parser: RealtimeEventParser::V1,
             session_mode: RealtimeSessionMode::Conversational,
             output_modality: RealtimeOutputModality::Audio,
+            voice: RealtimeVoice::Cove,
+        }
+    }
+
+    fn realtime_v2_session_config(session_id: &str) -> RealtimeSessionConfig {
+        RealtimeSessionConfig {
+            event_parser: RealtimeEventParser::RealtimeV2,
             voice: RealtimeVoice::Marin,
+            ..realtime_session_config(session_id)
         }
     }
 
@@ -426,7 +482,10 @@ mod tests {
 
         let request = transport.last_request.lock().unwrap().clone().unwrap();
         assert_eq!(request.method, Method::POST);
-        assert_eq!(request.url, "https://api.openai.com/v1/realtime/calls");
+        assert_eq!(
+            request.url,
+            "https://api.openai.com/v1/realtime/calls?intent=quicksilver&architecture=avas"
+        );
         assert_eq!(
             request.headers.get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static(MULTIPART_CONTENT_TYPE)
@@ -462,6 +521,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sends_session_call_with_avas_query_params() {
+        let transport = CapturingTransport::new();
+        let client = RealtimeCallClient::new(
+            transport.clone(),
+            provider("https://api.openai.com/v1"),
+            Arc::new(DummyAuth),
+        );
+
+        let response = client
+            .create_with_session_and_headers(
+                "v=offer\r\n".to_string(),
+                realtime_session_config("sess-api"),
+                HeaderMap::new(),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(
+            response,
+            RealtimeCallResponse {
+                sdp: "v=0\r\n".to_string(),
+                call_id: "rtc_test".to_string(),
+            }
+        );
+
+        let request = transport.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(
+            request.url,
+            "https://api.openai.com/v1/realtime/calls?intent=quicksilver&architecture=avas"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_v2_session_call_before_sending_request() {
+        let transport = CapturingTransport::new();
+        let client = RealtimeCallClient::new(
+            transport.clone(),
+            provider("https://api.openai.com/v1"),
+            Arc::new(DummyAuth),
+        );
+
+        let err = client
+            .create_with_session(
+                "v=offer\r\n".to_string(),
+                realtime_v2_session_config("sess-api"),
+            )
+            .await
+            .expect_err("v2 session config should be rejected");
+
+        assert_eq!(
+            err.to_string(),
+            "invalid request: AVAS realtime calls require realtime v1"
+        );
+        assert!(transport.last_request.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn sends_backend_session_call_as_json_body() {
         let transport = CapturingTransport::new();
         let client = RealtimeCallClient::new(
@@ -490,7 +607,7 @@ mod tests {
         assert_eq!(request.method, Method::POST);
         assert_eq!(
             request.url,
-            "https://chatgpt.com/backend-api/codex/realtime/calls"
+            "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
         );
         let mut expected_session = realtime_session_json(realtime_session_config("sess-backend"))
             .expect("session should encode");
@@ -542,5 +659,18 @@ mod tests {
             err.to_string(),
             "stream error: realtime call Location does not contain a call id: /v1/realtime/calls"
         );
+    }
+
+    #[test]
+    fn accepts_uuid_call_id_from_location() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            LOCATION,
+            HeaderValue::from_static("/v1/realtime/calls/019eb97d-8e9a-7ff3-94b0-ea019babd5d7"),
+        );
+
+        let call_id = decode_call_id_from_location(&headers).expect("UUID call id should parse");
+
+        assert_eq!(call_id, "019eb97d-8e9a-7ff3-94b0-ea019babd5d7");
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use codex_config::config_toml::ConfigToml;
+use codex_core::config::permission_profile_catalog;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -434,35 +434,15 @@ impl CatalogRequestProcessor {
                 .await
                 .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
         };
-        let effective_config: ConfigToml = config_layer_stack
-            .effective_config()
-            .try_into()
-            .map_err(|err| internal_error(format!("failed to read effective config: {err}")))?;
-        let mut profiles = vec![
-            PermissionProfileSummary {
-                id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
-                description: None,
-            },
-            PermissionProfileSummary {
-                id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
-                description: None,
-            },
-            PermissionProfileSummary {
-                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
-                description: None,
-            },
-        ];
-        let mut configured_profiles = effective_config
-            .permissions
+        let profiles = permission_profile_catalog(&config_layer_stack)
+            .map_err(|err| internal_error(format!("failed to resolve permission profiles: {err}")))?
             .into_iter()
-            .flat_map(|permissions| permissions.entries)
-            .map(|(id, profile)| PermissionProfileSummary {
-                id,
+            .map(|profile| PermissionProfileSummary {
+                id: profile.id,
                 description: profile.description,
+                allowed: profile.allowed,
             })
             .collect::<Vec<_>>();
-        configured_profiles.sort_by(|left, right| left.id.cmp(&right.id));
-        profiles.extend(configured_profiles);
         let total = profiles.len();
         let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
         let effective_limit = effective_limit.min(total);
@@ -511,7 +491,7 @@ impl CatalogRequestProcessor {
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await;
-        let skills_manager = self.thread_manager.skills_manager();
+        let skills_service = self.thread_manager.skills_service();
         let plugins_manager = self.thread_manager.plugins_manager();
         let fs = self
             .thread_manager
@@ -523,7 +503,7 @@ impl CatalogRequestProcessor {
                 let config = &config;
                 let fs = fs.clone();
                 let plugins_manager = &plugins_manager;
-                let skills_manager = &skills_manager;
+                let skills_service = &skills_service;
                 async move {
                     let (cwd_abs, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
                         Ok(resolved) => resolved,
@@ -559,9 +539,10 @@ impl CatalogRequestProcessor {
                         config_layer_stack,
                         config.bundled_skills_enabled(),
                     );
-                    let outcome = skills_manager
-                        .skills_for_cwd(&skills_input, force_reload, fs)
+                    let snapshot = skills_service
+                        .snapshot_for_cwd(&skills_input, force_reload, fs)
                         .await;
+                    let outcome = snapshot.outcome();
                     let errors = errors_to_info(&outcome.errors);
                     let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
                     (
@@ -590,7 +571,7 @@ impl CatalogRequestProcessor {
         self.skills_watcher
             .register_runtime_extra_roots(&extra_roots);
         self.thread_manager
-            .skills_manager()
+            .skills_service()
             .set_extra_roots(extra_roots);
         self.outgoing
             .send_server_notification(ServerNotification::SkillsChanged(
@@ -703,7 +684,7 @@ impl CatalogRequestProcessor {
             .await
             .map(|()| {
                 self.thread_manager.plugins_manager().clear_cache();
-                self.thread_manager.skills_manager().clear_cache();
+                self.thread_manager.skills_service().clear_cache();
                 SkillsConfigWriteResponse {
                     effective_enabled: enabled,
                 }

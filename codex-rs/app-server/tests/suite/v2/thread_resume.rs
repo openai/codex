@@ -23,6 +23,7 @@ use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
@@ -33,6 +34,7 @@ use codex_app_server_protocol::ThreadGoalClearResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
@@ -80,6 +82,7 @@ use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::read_session_meta_line;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -103,6 +106,7 @@ use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
+use super::analytics::wait_for_goal_event;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -285,7 +289,8 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
         ..
     } = to_response::<ThreadStartResponse>(start_resp)?;
     let project_agents = AbsolutePathBuf::try_from(project_agents)?;
-    assert_eq!(instruction_sources, vec![project_agents.clone()]);
+    let project_agents_source = LegacyAppPathString::from_abs_path(&project_agents);
+    assert_eq!(instruction_sources, vec![project_agents_source.clone()]);
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -327,7 +332,7 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
         ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
-    assert_eq!(instruction_sources, vec![project_agents]);
+    assert_eq!(instruction_sources, vec![project_agents_source]);
 
     Ok(())
 }
@@ -458,6 +463,95 @@ async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
             .contains("ephemeral thread does not support goals"),
         "unexpected goal/get error: {}",
         goal_err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_first_live_thread_appears_in_state_db_thread_list() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let codex_home_path = normalized_existing_path(codex_home.path())?;
+    create_config_toml(&codex_home_path, &server.uri())?;
+    let config_path = codex_home_path.join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
+    )?;
+
+    let sqlite_home = codex_home_path
+        .as_path()
+        .to_str()
+        .expect("test codex home should be utf-8");
+    let mut mcp = TestAppServer::new_without_managed_config_with_env(
+        &codex_home_path,
+        &[("CODEX_SQLITE_HOME", Some(sqlite_home))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, cwd, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id.clone(),
+                "objective": "keep the goal-first thread visible",
+                "status": "paused",
+            })),
+        )
+        .await?;
+    let goal_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
+    )
+    .await??;
+    let _goal: ThreadGoalSetResponse = to_response(goal_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/goal/updated"),
+    )
+    .await??;
+
+    let list_id = mcp
+        .send_raw_request(
+            "thread/list",
+            Some(json!({
+                "limit": 10,
+                "modelProviders": ["mock_provider"],
+                "sourceKinds": ["vscode"],
+                "archived": false,
+                "cwd": cwd.as_path().to_string_lossy().to_string(),
+                "useStateDbOnly": true,
+            })),
+        )
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let list: ThreadListResponse = to_response(list_resp)?;
+    assert_eq!(
+        list.data
+            .iter()
+            .map(|thread| &thread.id)
+            .collect::<Vec<_>>(),
+        vec![&thread.id]
     );
 
     Ok(())
@@ -638,6 +732,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 .expect("remote resume should include redacted MCP item");
             let ThreadItem::McpToolCall {
                 arguments,
+                app_context,
                 result,
                 error,
                 ..
@@ -646,6 +741,14 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 unreachable!("matched MCP item");
             };
             assert_eq!(arguments, &json!("[redacted]"));
+            assert_eq!(
+                app_context,
+                &Some(McpToolCallAppContext {
+                    connector_id: "calendar".to_string(),
+                    link_id: Some("link_calendar".to_string()),
+                    resource_uri: Some("ui://widget/lookup.html".to_string()),
+                })
+            );
             let result = result.as_ref().expect("redacted MCP result");
             assert_eq!(
                 result.content,
@@ -679,12 +782,23 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
         .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
         .expect("normal resume should include MCP item");
     let ThreadItem::McpToolCall {
-        arguments, result, ..
+        arguments,
+        app_context,
+        result,
+        ..
     } = normal_mcp_item
     else {
         unreachable!("matched MCP item");
     };
     assert_eq!(arguments, &json!({"secret":"argument"}));
+    assert_eq!(
+        app_context,
+        &Some(McpToolCallAppContext {
+            connector_id: "calendar".to_string(),
+            link_id: Some("link_calendar".to_string()),
+            resource_uri: Some("ui://widget/lookup.html".to_string()),
+        })
+    );
     let result = result.as_ref().expect("normal MCP result");
     assert_eq!(
         result.content,
@@ -786,7 +900,9 @@ fn append_resume_redaction_history(
                 tool: "lookup".to_string(),
                 arguments: Some(json!({"secret":"argument"})),
             },
+            connector_id: Some("calendar".to_string()),
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+            link_id: Some("link_calendar".to_string()),
             plugin_id: None,
             duration: Duration::from_millis(8),
             result: Ok(CallToolResult {
@@ -1316,19 +1432,30 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
 }
 
 #[tokio::test]
-async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        responses::sse(vec![
+            responses::ev_response_created("materialize-thread"),
+            responses::ev_completed("materialize-thread"),
+        ]),
+        responses::sse(vec![
+            responses::ev_response_created("goal-continuation"),
+            responses::ev_completed_with_tokens("goal-continuation", /*total_tokens*/ 200),
+        ]),
+    ])
+    .await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
     let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         &config_path,
         config.replace("personality = true\n", "personality = true\ngoals = true\n"),
     )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(DEFAULT_READ_TIMEOUT.saturating_mul(2), mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -1370,7 +1497,8 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
             "thread/goal/set",
             Some(json!({
                 "threadId": thread.id,
-                "objective": "keep polishing",
+                "objective": "do not serialize this objective",
+                "tokenBudget": 100,
             })),
         )
         .await?;
@@ -1385,6 +1513,55 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/goal/updated"),
     )
     .await??;
+
+    let created = wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "created", "active").await?;
+    let persisted_goal_id = created["event_params"]["goal_id"]
+        .as_str()
+        .expect("created goal id");
+    assert_eq!(created["event_params"]["thread_id"], thread.id);
+    assert_eq!(created["event_params"]["turn_id"], serde_json::Value::Null);
+    assert_eq!(created["event_params"]["has_token_budget"], true);
+    assert!(created["event_params"]["session_id"].is_string());
+    assert!(created["event_params"]["app_server_client"].is_object());
+    assert!(created["event_params"]["runtime"].is_object());
+    assert!(created["event_params"].get("objective").is_none());
+    assert!(created["event_params"].get("token_budget").is_none());
+
+    let usage = wait_for_goal_event(
+        &server,
+        DEFAULT_READ_TIMEOUT,
+        "usage_accounted",
+        "budget_limited",
+    )
+    .await?;
+    let causal_turn_id = usage["event_params"]["turn_id"]
+        .as_str()
+        .expect("accounted usage turn id");
+    assert_eq!(usage["event_params"]["goal_id"], persisted_goal_id);
+    assert_eq!(usage["event_params"]["cumulative_tokens_accounted"], 200);
+    assert!(
+        usage["event_params"]["cumulative_time_accounted_seconds"]
+            .as_i64()
+            .is_some()
+    );
+
+    let status = wait_for_goal_event(
+        &server,
+        DEFAULT_READ_TIMEOUT,
+        "status_changed",
+        "budget_limited",
+    )
+    .await?;
+    assert_eq!(status["event_params"]["goal_id"], persisted_goal_id);
+    assert_eq!(status["event_params"]["turn_id"], causal_turn_id);
+    assert_eq!(
+        status["event_params"]["cumulative_tokens_accounted"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        status["event_params"]["cumulative_time_accounted_seconds"],
+        serde_json::Value::Null
+    );
 
     let clear_id = mcp
         .send_raw_request(
@@ -1407,6 +1584,11 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/goal/cleared"),
     )
     .await??;
+
+    let cleared =
+        wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "cleared", "budget_limited").await?;
+    assert_eq!(cleared["event_params"]["goal_id"], persisted_goal_id);
+    assert_eq!(cleared["event_params"]["turn_id"], serde_json::Value::Null);
 
     let get_id = mcp
         .send_raw_request(
@@ -1872,6 +2054,7 @@ stream_max_retries = 0
     let rollout_dir = rollout_path.parent().expect("rollout parent directory");
     std::fs::create_dir_all(rollout_dir)?;
     let session_meta = SessionMeta {
+        session_id: conversation_id.into(),
         id: conversation_id,
         forked_from_id: None,
         parent_thread_id: None,
@@ -2133,6 +2316,7 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
     assert_eq!(thread.updated_at, before_resume.updated_at);
+    assert_eq!(thread.recency_at, before_resume.recency_at);
     assert_eq!(thread.status, ThreadStatus::Idle);
 
     let after_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
@@ -2167,7 +2351,7 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id,
+            thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
@@ -2180,6 +2364,29 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
     )
     .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread_id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse {
+        thread: after_turn_start,
+        ..
+    } = to_response::<ThreadReadResponse>(read_resp)?;
+    assert!(after_turn_start.recency_at > before_resume.recency_at);
+
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -2382,6 +2589,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
                     text: "history override".to_string(),
                 }],
                 phase: None,
+                internal_chat_message_metadata_passthrough: None,
             }]),
             ..Default::default()
         })
@@ -2528,6 +2736,7 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
         "timestamp": "2025-01-01T00:00:00Z",
         "type": "session_meta",
         "payload": {
+            "session_id": thread_uuid,
             "id": thread_uuid,
             "timestamp": "2025-01-01T00:00:00Z",
             "cwd": codex_home.path(),
@@ -3389,6 +3598,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
             text: history_text.to_string(),
         }],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
 
     // Resume with explicit history and override the model.

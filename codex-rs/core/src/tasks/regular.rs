@@ -14,6 +14,7 @@ use tracing::trace_span;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::SessionTaskResult;
 
 #[derive(Default)]
 pub(crate) struct RegularTask;
@@ -39,26 +40,29 @@ impl SessionTask for RegularTask {
         ctx: Arc<TurnContext>,
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> SessionTaskResult {
         let sess = session.clone_session();
         let turn_extension_data = session.turn_extension_data();
         let run_turn_span = trace_span!("run_turn");
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.
-        let event = EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: ctx.sub_id.clone(),
-            trace_id: ctx.trace_id.clone(),
-            started_at: ctx.turn_timing_state.started_at_unix_secs().await,
-            model_context_window: ctx.model_context_window(),
-            collaboration_mode_kind: ctx.collaboration_mode.mode,
-        });
-        sess.send_event(ctx.as_ref(), event).await;
-        sess.set_server_reasoning_included(/*included*/ false).await;
-        let prewarmed_client_session = match sess
-            .consume_startup_prewarm_for_regular_turn(&cancellation_token)
-            .await
-        {
-            SessionStartupPrewarmResolution::Cancelled => return None,
+        let prewarmed_client_session = async {
+            let event = EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: ctx.sub_id.clone(),
+                trace_id: ctx.trace_id.clone(),
+                started_at: ctx.turn_timing_state.started_at_unix_secs().await,
+                model_context_window: ctx.model_context_window(),
+                collaboration_mode_kind: ctx.collaboration_mode.mode,
+            });
+            sess.send_event(ctx.as_ref(), event).await;
+            sess.set_server_reasoning_included(/*included*/ false).await;
+            sess.consume_startup_prewarm_for_regular_turn(&cancellation_token)
+                .await
+        }
+        .instrument(trace_span!("regular_task.prepare_run_turn"))
+        .await;
+        let prewarmed_client_session = match prewarmed_client_session {
+            SessionStartupPrewarmResolution::Cancelled => return Ok(None),
             SessionStartupPrewarmResolution::Unavailable { .. } => None,
             SessionStartupPrewarmResolution::Ready(prewarmed_client_session) => {
                 Some(*prewarmed_client_session)
@@ -76,9 +80,9 @@ impl SessionTask for RegularTask {
                 cancellation_token.child_token(),
             )
             .instrument(run_turn_span.clone())
-            .await;
+            .await?;
             if !sess.input_queue.has_pending_input(&sess.active_turn).await {
-                return last_agent_message;
+                return Ok(last_agent_message);
             }
             next_input = Vec::new();
         }

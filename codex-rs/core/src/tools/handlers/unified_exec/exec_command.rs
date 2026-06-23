@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
@@ -28,9 +29,14 @@ use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
+use codex_shell_command::shell_detect::detect_shell_type;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
+use codex_utils_path_uri::PathConvention;
 
 use super::super::shell_spec::CommandToolOptions;
 use super::super::shell_spec::create_exec_command_tool_with_environment_id;
@@ -71,7 +77,6 @@ impl ExecCommandHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("exec_command")
@@ -92,7 +97,13 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ExecCommandHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -124,31 +135,100 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
+        let native_environment_cwd = turn_environment.cwd().clone();
         let cwd = environment_args
             .workdir
             .as_deref()
             .filter(|workdir| !workdir.is_empty())
             .map_or_else(
-                || turn_environment.cwd.clone(),
-                |workdir| turn_environment.cwd.join(workdir),
-            );
+                || Ok(native_environment_cwd.clone()),
+                |workdir| native_environment_cwd.join(workdir),
+            )
+            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
-        let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+
+        // A foreign cwd cannot seed the AbsolutePathBufGuard used to resolve relative paths in the
+        // permissions config below. Consult the configured platform-sandbox requirement before
+        // deciding whether parsing may continue without that base path.
+        let sandbox = SandboxManager::new().select_initial(
+            &turn.file_system_sandbox_policy(),
+            turn.network_sandbox_policy(),
+            SandboxablePreference::Auto,
+            turn.windows_sandbox_level,
+            turn.network.is_some(),
+        );
+        // `to_abs_path()` alone cannot identify foreign drive paths: `file:///C:/repo` is
+        // representable as `/C:/repo` on POSIX. Require the inferred convention to match too.
+        let cwd_uses_native_convention =
+            cwd.infer_path_convention() == Some(PathConvention::native());
+        // TODO(anp): Remove this parsing split once sandboxing supports foreign paths.
+        let native_cwd = match cwd.to_abs_path() {
+            Ok(cwd) if cwd_uses_native_convention => Some(cwd),
+            _ if sandbox == SandboxType::None => None,
+            Err(err) => return Err(FunctionCallError::RespondToModel(err.to_string())),
+            Ok(_) => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "path URI `{cwd}` does not use the host's native {} path convention",
+                    PathConvention::native()
+                )));
+            }
+        };
+        let mut args: ExecCommandArgs = match native_cwd.as_ref() {
+            Some(native_cwd) => {
+                // The base path only resolves paths nested in the permissions config types.
+                parse_arguments_with_base_path(&arguments, native_cwd)?
+            }
+            None => {
+                // Parsing without a base only skips relative-path resolution inside the
+                // permissions config. That is safe only for a truly unsandboxed attempt;
+                // sandboxed attempts fall through and return the conversion error below.
+                parse_arguments(&arguments)?
+            }
+        };
         let hook_command = args.cmd.clone();
-        maybe_emit_implicit_skill_invocation(
-            session.as_ref(),
-            context.turn.as_ref(),
-            &hook_command,
-            &cwd,
-        )
-        .await;
-        let process_id = manager.allocate_process_id().await;
+        // TODO(anp) wire PathUri through implicit skills instead of skipping on foreign paths
+        if let Some(native_cwd) = native_cwd.as_ref() {
+            maybe_emit_implicit_skill_invocation(
+                session.as_ref(),
+                context.turn.as_ref(),
+                &hook_command,
+                native_cwd,
+            )
+            .await;
+        }
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
+        // Remote environments may use a different OS and must build commands with their native
+        // shell; fall back to the session shell when the environment did not report one.
+        let shell = turn_environment
+            .shell
+            .clone()
+            .map(Arc::new)
+            .unwrap_or_else(|| session.user_shell());
+        // TODO(anp): Resolve requested shells in remote environments instead of restricting
+        // commands to the reported default shell.
+        if environment.is_remote()
+            && let Some(requested_shell) = args.shell.take()
+        {
+            let Some(remote_shell) = turn_environment.shell.as_ref() else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "environment `{}` does not report a shell",
+                    turn_environment.environment_id
+                )));
+            };
+            if detect_shell_type(Path::new(&requested_shell)) != Some(remote_shell.shell_type) {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "environment `{}` only supports `{}`",
+                    turn_environment.environment_id,
+                    remote_shell.name()
+                )));
+            }
+        }
+        let process_id = manager.allocate_process_id().await;
         let resolved_command = get_command(
             &args,
-            session.user_shell(),
+            shell,
             &shell_mode,
             turn.config.permissions.allow_login_shell,
         )
@@ -171,10 +251,12 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         let exec_permission_approvals_enabled =
             session.features().enabled(Feature::ExecPermissionApprovals);
         let requested_additional_permissions = additional_permissions.clone();
+        // TODO(anp): Make permission matching operate on PathUri for remote environments.
+        let permission_cwd = native_cwd.as_ref().unwrap_or(&turn.config.cwd);
         let effective_additional_permissions = apply_granted_turn_permissions(
             context.session.as_ref(),
             &turn_environment.environment_id,
-            cwd.as_path(),
+            permission_cwd.as_path(),
             sandbox_permissions,
             additional_permissions,
         )
@@ -214,7 +296,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     effective_additional_permissions.sandbox_permissions,
                     effective_additional_permissions.additional_permissions,
                     effective_additional_permissions.permissions_preapproved,
-                    &cwd,
+                    permission_cwd,
                 )
             },
             |permissions| Ok(Some(permissions)),
@@ -245,7 +327,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
                 raw_output: output.into_text().into_bytes(),
-                truncation_policy: turn.truncation_policy,
+                truncation_policy: turn.model_info.truncation_policy.into(),
                 max_output_tokens,
                 process_id: None,
                 exit_code: None,
@@ -265,8 +347,8 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     yield_time_ms,
                     max_output_tokens,
                     cwd,
-                    sandbox_cwd: turn_environment.cwd.clone(),
-                    environment,
+                    sandbox_cwd: native_environment_cwd,
+                    turn_environment: turn_environment.clone(),
                     shell_mode,
                     network: context.turn.network.clone(),
                     tty,
@@ -290,7 +372,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     chunk_id: generate_chunk_id(),
                     wall_time: output.duration,
                     raw_output: output_text.into_bytes(),
-                    truncation_policy: turn.truncation_policy,
+                    truncation_policy: turn.model_info.truncation_policy.into(),
                     max_output_tokens,
                     // Sandbox denial is terminal, so there is no live
                     // process for write_stdin to resume.

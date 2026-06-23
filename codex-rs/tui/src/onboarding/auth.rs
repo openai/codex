@@ -1014,6 +1014,7 @@ mod tests {
     use codex_arg0::Arg0DispatchPaths;
     use codex_cloud_config::cloud_config_bundle_loader_for_storage;
     use codex_config::types::AuthCredentialsStoreMode;
+    use codex_login::AuthKeyringBackendKind;
 
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
@@ -1037,7 +1038,9 @@ mod tests {
                 codex_home_path.clone(),
                 /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
                 "https://chatgpt.com/backend-api/".to_string(),
+                /*auth_route_config*/ None,
             )
             .await,
             feedback: codex_feedback::CodexFeedback::new(),
@@ -1053,6 +1056,7 @@ mod tests {
             client_name: "test".to_string(),
             client_version: "test".to_string(),
             experimental_api: true,
+            mcp_server_openai_form_elicitation: false,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         })

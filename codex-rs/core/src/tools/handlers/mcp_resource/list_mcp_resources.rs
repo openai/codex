@@ -19,6 +19,8 @@ use super::ListResourcesPayload;
 use super::call_tool_result_from_content;
 use super::emit_tool_call_begin;
 use super::emit_tool_call_end;
+use super::ensure_model_can_access_mcp_server;
+use super::model_can_access_mcp_server;
 use super::normalize_optional_string;
 use super::parse_args_with_default;
 use super::parse_arguments;
@@ -26,7 +28,6 @@ use super::serialize_function_output;
 
 pub struct ListMcpResourcesHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("list_mcp_resources")
@@ -40,11 +41,13 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
         true
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource listing reads through the session-owned manager guard"
-    )]
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ListMcpResourcesHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -82,6 +85,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
 
         let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
             if let Some(server_name) = server.clone() {
+                ensure_model_can_access_mcp_server(turn.as_ref(), &server_name)?;
                 let params = cursor
                     .clone()
                     .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
@@ -105,17 +109,19 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
                 let resources = session
                     .services
                     .mcp_connection_manager
-                    .read()
-                    .await
-                    .list_all_resources()
+                    .load_full()
+                    .list_all_resources(|server_name| {
+                        model_can_access_mcp_server(turn.as_ref(), server_name)
+                    })
                     .await;
                 Ok(ListResourcesPayload::from_all_servers(resources))
             }
         }
         .await;
+        let truncation_policy = turn.model_info.truncation_policy.into();
 
         match payload_result {
-            Ok(payload) => match serialize_function_output(payload) {
+            Ok(payload) => match serialize_function_output(payload, truncation_policy) {
                 Ok(output) => {
                     let content = function_call_output_content_items_to_text(&output.body)
                         .unwrap_or_default();

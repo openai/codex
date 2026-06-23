@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use super::compact::COMPACT_WARNING_MESSAGE;
 use anyhow::Result;
 use codex_core::CodexThread;
@@ -141,9 +139,9 @@ fn window_id_parts(request: &ResponsesRequest) -> (String, u64) {
         .expect("missing x-codex-window-id header");
     let (thread_id, generation) = window_id
         .rsplit_once(':')
-        .unwrap_or_else(|| panic!("invalid window id header: {window_id}"));
+        .expect("window id header should contain a generation");
     let generation = generation
         .parse::<u64>()
-        .unwrap_or_else(|err| panic!("invalid window generation in {window_id}: {err}"));
+        .expect("window generation should be a valid integer");
     (thread_id.to_string(), generation)
 }

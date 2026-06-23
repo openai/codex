@@ -33,6 +33,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
 
     let session_meta = SessionMeta {
+        session_id: id.into(),
         id,
         forked_from_id: None,
         parent_thread_id: None,
@@ -71,6 +72,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
     let mut expected = builder.build("openai");
     apply_rollout_item(&mut expected, &rollout_line.item, "openai");
     expected.updated_at = file_modified_time_utc(&path).await.expect("mtime");
+    expected.recency_at = expected.updated_at;
 
     assert_eq!(outcome.metadata, expected);
     assert_eq!(outcome.memory_mode, None);
@@ -87,6 +89,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
 
     let session_meta = SessionMeta {
+        session_id: id.into(),
         id,
         forked_from_id: None,
         parent_thread_id: None,
@@ -153,6 +156,10 @@ fn builder_from_items_falls_back_to_filename() {
     let items = vec![RolloutItem::Compacted(CompactedItem {
         message: "noop".to_string(),
         replacement_history: None,
+        window_number: None,
+        first_window_id: None,
+        previous_window_id: None,
+        window_id: None,
     })];
 
     let builder = builder_from_items(items.as_slice(), path.as_path()).expect("builder");
@@ -350,6 +357,7 @@ fn write_rollout_in_sessions_with_cwd(
     std::fs::create_dir_all(sessions_dir.as_path()).expect("create sessions dir");
     let path = sessions_dir.join(format!("rollout-{filename_ts}-{thread_uuid}.jsonl"));
     let session_meta = SessionMeta {
+        session_id: id.into(),
         id,
         forked_from_id: None,
         parent_thread_id: None,

@@ -5,6 +5,7 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::RolloutRecorderParams;
+use codex_rollout::persisted_rollout_items;
 use tracing::warn;
 
 use super::LocalThreadStore;
@@ -73,13 +74,22 @@ pub(super) async fn resume_thread(
     store.insert_live_recorder(params.thread_id, recorder).await
 }
 
+#[tracing::instrument(
+    level = "trace",
+    skip_all,
+    fields(item_count = params.items.len())
+)]
 pub(super) async fn append_items(
     store: &LocalThreadStore,
     params: AppendThreadItemsParams,
 ) -> ThreadStoreResult<()> {
+    let canonical_items = persisted_rollout_items(params.items.as_slice());
+    if canonical_items.is_empty() {
+        return Ok(());
+    }
     let recorder = store.live_recorder(params.thread_id).await?;
     recorder
-        .record_canonical_items(params.items.as_slice())
+        .record_canonical_items(canonical_items.as_slice())
         .await
         .map_err(thread_store_io_error)?;
     // LiveThread applies metadata immediately after append_items returns. Wait for the local

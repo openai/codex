@@ -21,6 +21,7 @@ use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -95,7 +96,7 @@ fn tracker_update_for_known_delta<'a>(
 pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
-    cwd: &AbsolutePathBuf,
+    cwd: &PathUri,
     parsed_cmd: &[ParsedCommand],
     source: ExecCommandSource,
     interaction_input: Option<String>,
@@ -122,7 +123,7 @@ pub(crate) async fn emit_exec_command_begin(
 pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
     },
@@ -133,7 +134,7 @@ pub(crate) enum ToolEmitter {
     },
     UnifiedExec {
         command: Vec<String>,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
@@ -145,7 +146,7 @@ impl ToolEmitter {
         let parsed_cmd = parse_command(&command);
         Self::Shell {
             command,
-            cwd,
+            cwd: PathUri::from_abs_path(&cwd),
             source,
             parsed_cmd,
         }
@@ -165,7 +166,7 @@ impl ToolEmitter {
 
     pub fn unified_exec(
         command: &[String],
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         source: ExecCommandSource,
         process_id: Option<String>,
     ) -> Self {
@@ -346,7 +347,7 @@ impl ToolEmitter {
         output: &ExecToolCallOutput,
         ctx: ToolEventCtx<'_>,
     ) -> String {
-        super::format_exec_output_for_model(output, ctx.turn.truncation_policy)
+        super::format_exec_output_for_model(output, ctx.turn.model_info.truncation_policy.into())
     }
 
     pub async fn finish(
@@ -432,7 +433,7 @@ impl ToolEmitter {
 
 struct ExecCommandInput<'a> {
     command: &'a [String],
-    cwd: &'a AbsolutePathBuf,
+    cwd: &'a PathUri,
     parsed_cmd: &'a [ParsedCommand],
     source: ExecCommandSource,
     interaction_input: Option<&'a str>,
@@ -442,7 +443,7 @@ struct ExecCommandInput<'a> {
 impl<'a> ExecCommandInput<'a> {
     fn new(
         command: &'a [String],
-        cwd: &'a AbsolutePathBuf,
+        cwd: &'a PathUri,
         parsed_cmd: &'a [ParsedCommand],
         source: ExecCommandSource,
         interaction_input: Option<&'a str>,
@@ -495,7 +496,10 @@ async fn emit_exec_stage(
                 aggregated_output: output.aggregated_output.text.clone(),
                 exit_code: output.exit_code,
                 duration: output.duration,
-                formatted_output: format_exec_output_str(&output, ctx.turn.truncation_policy),
+                formatted_output: format_exec_output_str(
+                    &output,
+                    ctx.turn.model_info.truncation_policy.into(),
+                ),
                 status: if output.exit_code == 0 {
                     ExecCommandStatus::Completed
                 } else {
@@ -588,7 +592,7 @@ async fn emit_patch_end(
     if let Some(tracker) = ctx.turn_diff_tracker {
         let (should_emit_turn_diff, unified_diff) = {
             let mut guard = tracker.lock().await;
-            let previous_diff = guard.get_unified_diff();
+            let had_unified_diff = guard.has_unified_diff();
             let tracker_changed = match tracker_update {
                 TurnDiffTrackerUpdate::Track {
                     environment_id,
@@ -605,7 +609,7 @@ async fn emit_patch_end(
             };
             let unified_diff = guard.get_unified_diff();
             (
-                tracker_changed && (previous_diff.is_some() || unified_diff.is_some()),
+                tracker_changed && (had_unified_diff || unified_diff.is_some()),
                 unified_diff.unwrap_or_default(),
             )
         };
@@ -628,7 +632,7 @@ mod tests {
     use codex_protocol::exec_output::ExecToolCallOutput;
     use codex_protocol::items::TurnItem;
     use codex_protocol::protocol::PatchApplyStatus;
-    use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::Mutex;
@@ -641,7 +645,7 @@ mod tests {
             make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
         let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
         let dir = tempdir().expect("tempdir");
-        let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).expect("absolute cwd");
+        let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let delta = codex_apply_patch::apply_patch(
@@ -717,5 +721,99 @@ mod tests {
             PatchApplyStatus::Declined,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn net_zero_patch_emits_empty_turn_diff() {
+        let (session, turn, rx_event) =
+            make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
+        let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
+        let dir = tempdir().expect("tempdir");
+        let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
+
+        for patch in [
+            "*** Begin Patch\n*** Add File: a.txt\n+one\n*** End Patch",
+            "*** Begin Patch\n*** Delete File: a.txt\n*** End Patch",
+        ] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let delta = codex_apply_patch::apply_patch(
+                patch,
+                &cwd,
+                &mut stdout,
+                &mut stderr,
+                LOCAL_FS.as_ref(),
+                /*sandbox*/ None,
+            )
+            .await
+            .expect("apply patch");
+
+            emit_patch_end(
+                ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
+                HashMap::new(),
+                String::new(),
+                String::new(),
+                PatchApplyStatus::Completed,
+                TurnDiffTrackerUpdate::Track {
+                    environment_id: None,
+                    delta: &delta,
+                },
+            )
+            .await;
+
+            rx_event.recv().await.expect("item completed event");
+            let unified_diff = loop {
+                let event = rx_event.recv().await.expect("turn diff event");
+                if let EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) = event.msg {
+                    break unified_diff;
+                }
+            };
+            if patch.contains("Delete File") {
+                assert_eq!(unified_diff, "");
+            } else {
+                assert!(unified_diff.contains("+one"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn invalidation_emits_empty_turn_diff() {
+        let (session, turn, rx_event) =
+            make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
+        let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
+        let dir = tempdir().expect("tempdir");
+        let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let delta = codex_apply_patch::apply_patch(
+            "*** Begin Patch\n*** Add File: a.txt\n+one\n*** End Patch",
+            &cwd,
+            &mut stdout,
+            &mut stderr,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .expect("apply patch");
+        tracker.lock().await.track_delta("", &delta);
+
+        emit_patch_end(
+            ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
+            HashMap::new(),
+            String::new(),
+            String::new(),
+            PatchApplyStatus::Completed,
+            TurnDiffTrackerUpdate::Invalidate,
+        )
+        .await;
+
+        rx_event.recv().await.expect("item completed event");
+        loop {
+            let event = rx_event.recv().await.expect("turn diff event");
+            if let EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) = event.msg {
+                assert_eq!(unified_diff, "");
+                break;
+            }
+        }
     }
 }

@@ -1,28 +1,23 @@
 use super::*;
 use crate::shell::Shell;
 use crate::shell::ShellType;
-use crate::shell_snapshot::ShellSnapshot;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::process::Command;
-use tokio::sync::watch;
 
 fn shell_with_snapshot(
     shell_type: ShellType,
     shell_path: &str,
     snapshot_path: AbsolutePathBuf,
-    snapshot_cwd: AbsolutePathBuf,
-) -> Shell {
-    let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
-        path: snapshot_path,
-        cwd: snapshot_cwd,
-    })));
-    Shell {
-        shell_type,
-        shell_path: PathBuf::from(shell_path),
-        shell_snapshot,
-    }
+) -> (Shell, AbsolutePathBuf) {
+    (
+        Shell {
+            shell_type,
+            shell_path: PathBuf::from(shell_path),
+        },
+        snapshot_path,
+    )
 }
 
 #[test]
@@ -34,12 +29,8 @@ fn user_shell_snapshot_preserves_package_path_prepend() {
         "# Snapshot file\nexport PATH='/snapshot/bin'\n",
     )
     .expect("write snapshot");
-    let session_shell = shell_with_snapshot(
-        ShellType::Bash,
-        "/bin/bash",
-        snapshot_path.abs(),
-        dir.path().abs(),
-    );
+    let (session_shell, shell_snapshot) =
+        shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path.abs());
     let command = vec![
         "/bin/bash".to_string(),
         "-lc".to_string(),
@@ -50,7 +41,7 @@ fn user_shell_snapshot_preserves_package_path_prepend() {
     let rewritten = prepare_user_shell_exec_command_with_path_prepend(
         &command,
         &session_shell,
-        &dir.path().abs(),
+        Some(&shell_snapshot),
         &HashMap::new(),
         &mut env,
         |env, runtime_path_prepends| {

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use chrono::SecondsFormat;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
@@ -81,10 +82,11 @@ pub struct RolloutRecorder {
 #[derive(Clone)]
 pub enum RolloutRecorderParams {
     Create {
+        session_id: SessionId,
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         parent_thread_id: Option<ThreadId>,
-        source: SessionSource,
+        source: Box<SessionSource>,
         thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
@@ -167,15 +169,23 @@ impl RolloutRecorderParams {
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> Self {
         Self::Create {
+            session_id: conversation_id.into(),
             conversation_id,
             forked_from_id,
             parent_thread_id,
-            source,
+            source: Box::new(source),
             thread_source,
             base_instructions,
             dynamic_tools,
             multi_agent_version: None,
         }
+    }
+
+    pub fn with_session_id(mut self, session_id: SessionId) -> Self {
+        if let Self::Create { session_id: id, .. } = &mut self {
+            *id = session_id;
+        }
+        self
     }
 
     pub fn with_multi_agent_version(
@@ -376,6 +386,7 @@ impl RolloutRecorder {
                 allowed_sources,
                 model_providers,
                 cwd_filters,
+                /*parent_thread_id*/ None,
                 archived,
                 search_term,
             )
@@ -484,6 +495,7 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             cwd_filters,
+            /*parent_thread_id*/ None,
             archived,
             search_term,
         )
@@ -512,6 +524,7 @@ impl RolloutRecorder {
                     allowed_sources,
                     model_providers,
                     cwd_filters,
+                    /*parent_thread_id*/ None,
                     archived,
                     search_term,
                 )
@@ -539,6 +552,27 @@ impl RolloutRecorder {
                         /*new_thread_memory_mode*/ None,
                     )
                     .await;
+                }
+                if sort_key == ThreadSortKey::RecencyAt {
+                    if let Some(repaired_db_page) = state_db::list_threads_db(
+                        state_db_ctx.as_deref(),
+                        codex_home,
+                        page_size,
+                        cursor,
+                        sort_key,
+                        sort_direction,
+                        allowed_sources,
+                        model_providers,
+                        cwd_filters,
+                        /*parent_thread_id*/ None,
+                        archived,
+                        search_term,
+                    )
+                    .await
+                    {
+                        return Ok(repaired_db_page.into());
+                    }
+                    return Ok(db_page.into());
                 }
                 codex_state::record_fallback(
                     "list_threads",
@@ -608,6 +642,7 @@ impl RolloutRecorder {
                     allowed_sources,
                     model_providers,
                     cwd_filter.as_ref().map(std::slice::from_ref),
+                    /*parent_thread_id*/ None,
                     /*archived*/ false,
                     /*search_term*/ None,
                 )
@@ -671,6 +706,7 @@ impl RolloutRecorder {
     ) -> std::io::Result<Self> {
         let (file, deferred_log_file_info, rollout_path, meta) = match params {
             RolloutRecorderParams::Create {
+                session_id,
                 conversation_id,
                 forked_from_id,
                 parent_thread_id,
@@ -682,7 +718,7 @@ impl RolloutRecorder {
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
-                let session_id = log_file_info.conversation_id;
+                let thread_id = log_file_info.conversation_id;
                 let started_at = log_file_info.timestamp;
 
                 let timestamp_format: &[FormatItem] = format_description!(
@@ -694,7 +730,8 @@ impl RolloutRecorder {
                     .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
                 let session_meta = SessionMeta {
-                    id: session_id,
+                    session_id,
+                    id: thread_id,
                     forked_from_id,
                     parent_thread_id,
                     timestamp,
@@ -704,7 +741,7 @@ impl RolloutRecorder {
                     agent_nickname: source.get_nickname(),
                     agent_role: source.get_agent_role(),
                     agent_path: source.get_agent_path().map(Into::into),
-                    source,
+                    source: *source,
                     thread_source,
                     model_provider: Some(config.model_provider_id().to_string()),
                     base_instructions: Some(base_instructions),
@@ -868,28 +905,17 @@ impl RolloutRecorder {
 
             // Parse the rollout line structure
             match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => match rollout_line.item {
-                    RolloutItem::SessionMeta(session_meta_line) => {
-                        // Use the FIRST SessionMeta encountered in the file as the canonical
-                        // thread id and main session information. Keep all items intact.
-                        if thread_id.is_none() {
-                            thread_id = Some(session_meta_line.meta.id);
-                        }
-                        items.push(RolloutItem::SessionMeta(session_meta_line));
+                Ok(rollout_line) => {
+                    let item = rollout_line.item;
+                    // Use the FIRST SessionMeta encountered in the file as the canonical
+                    // thread id and main session information. Keep all items intact.
+                    if thread_id.is_none()
+                        && let RolloutItem::SessionMeta(session_meta_line) = &item
+                    {
+                        thread_id = Some(session_meta_line.meta.id);
                     }
-                    RolloutItem::ResponseItem(item) => {
-                        items.push(RolloutItem::ResponseItem(item));
-                    }
-                    RolloutItem::Compacted(item) => {
-                        items.push(RolloutItem::Compacted(item));
-                    }
-                    RolloutItem::TurnContext(item) => {
-                        items.push(RolloutItem::TurnContext(item));
-                    }
-                    RolloutItem::EventMsg(_ev) => {
-                        items.push(RolloutItem::EventMsg(_ev));
-                    }
-                },
+                    items.push(item);
+                }
                 Err(e) => {
                     trace!("failed to parse rollout line: {e}");
                     parse_errors = parse_errors.saturating_add(1);
@@ -992,6 +1018,11 @@ fn truncate_fs_page(
         let cursor_token = match sort_key {
             ThreadSortKey::CreatedAt => created_at.format(&Rfc3339).ok()?,
             ThreadSortKey::UpdatedAt => item.updated_at.as_deref()?.to_string(),
+            ThreadSortKey::RecencyAt => item
+                .recency_at
+                .as_deref()
+                .or(item.updated_at.as_deref())?
+                .to_string(),
         };
         parse_cursor(cursor_token.as_str())
     });
@@ -1056,6 +1087,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         cli_version,
         created_at,
         updated_at,
+        recency_at,
     } = state_item;
 
     if item.first_user_message.is_none() {
@@ -1099,6 +1131,9 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     if item.updated_at.is_none() {
         item.updated_at = updated_at;
+    }
+    if recency_at.is_some() {
+        item.recency_at = recency_at;
     }
 }
 
@@ -1276,9 +1311,20 @@ async fn list_threads_from_files_asc(
         .collect::<Vec<_>>();
 
     if let Some(cursor) = cursor {
-        let anchor = cursor.timestamp();
-        all_items
-            .retain(|item| thread_item_sort_key(item, sort_key).is_some_and(|key| key.0 > anchor));
+        let anchor = (
+            cursor.timestamp(),
+            cursor
+                .thread_id()
+                .and_then(|id| uuid::Uuid::parse_str(&id.to_string()).ok()),
+        );
+        all_items.retain(|item| {
+            thread_item_sort_key(item, sort_key).is_some_and(|key| match anchor.1 {
+                Some(anchor_id) if sort_key == ThreadSortKey::RecencyAt => {
+                    key > (anchor.0, anchor_id)
+                }
+                _ => key.0 > anchor.0,
+            })
+        });
     }
 
     let more_matches_available = all_items.len() > page_size || reached_scan_cap;
@@ -1336,14 +1382,27 @@ fn thread_item_sort_key(
             let updated_at = item.updated_at.as_deref().or(item.created_at.as_deref())?;
             OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
         }
+        ThreadSortKey::RecencyAt => {
+            let recency_at = item
+                .recency_at
+                .as_deref()
+                .or(item.updated_at.as_deref())
+                .or(item.created_at.as_deref())?;
+            OffsetDateTime::parse(recency_at, &Rfc3339).ok()?
+        }
     };
     Some((timestamp, id))
 }
 
 fn cursor_from_thread_item(item: &ThreadItem, sort_key: ThreadSortKey) -> Option<Cursor> {
-    let (timestamp, _id) = thread_item_sort_key(item, sort_key)?;
-    let cursor_token = timestamp.format(&Rfc3339).ok()?;
-    parse_cursor(cursor_token.as_str())
+    let (timestamp, id) = thread_item_sort_key(item, sort_key)?;
+    match sort_key {
+        ThreadSortKey::RecencyAt => Some(Cursor::with_thread_id(
+            timestamp,
+            ThreadId::from_string(&id.to_string()).ok()?,
+        )),
+        ThreadSortKey::CreatedAt | ThreadSortKey::UpdatedAt => Some(Cursor::new(timestamp)),
+    }
 }
 
 struct LogFileInfo {
@@ -1732,6 +1791,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         cli_version: Some(item.cli_version),
         created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
         updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+        recency_at: Some(item.recency_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
     }
 }
 
@@ -1772,14 +1832,15 @@ async fn resume_candidate_matches_cwd(
 
     if let Ok((items, _, _)) = RolloutRecorder::load_rollout_items(rollout_path).await
         && let Some(latest_turn_context_cwd) = items.iter().rev().find_map(|item| match item {
-            RolloutItem::TurnContext(turn_context) => Some(turn_context.cwd.as_path()),
+            RolloutItem::TurnContext(turn_context) => Some(&turn_context.cwd),
             RolloutItem::SessionMeta(_)
             | RolloutItem::ResponseItem(_)
+            | RolloutItem::InterAgentCommunication(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::EventMsg(_) => None,
         })
     {
-        return cwd_matches(latest_turn_context_cwd, cwd);
+        return cwd_matches(latest_turn_context_cwd.as_path(), cwd);
     }
 
     metadata::extract_metadata_from_rollout(rollout_path, default_provider)

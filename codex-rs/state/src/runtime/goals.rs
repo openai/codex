@@ -11,6 +11,10 @@ impl GoalStore {
     pub(crate) fn new(pool: Arc<SqlitePool>) -> Self {
         Self { pool }
     }
+
+    pub(crate) async fn close(&self) {
+        self.pool.close().await;
+    }
 }
 
 pub struct GoalUpdate {
@@ -377,18 +381,31 @@ WHERE thread_id = ?
         self.get_thread_goal(thread_id).await
     }
 
-    pub async fn delete_thread_goal(&self, thread_id: ThreadId) -> anyhow::Result<bool> {
-        let result = sqlx::query(
+    pub async fn delete_thread_goal(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<Option<crate::ThreadGoal>> {
+        let row = sqlx::query(
             r#"
 DELETE FROM thread_goals
 WHERE thread_id = ?
+RETURNING
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
             "#,
         )
         .bind(thread_id.to_string())
-        .execute(self.pool.as_ref())
+        .fetch_optional(self.pool.as_ref())
         .await?;
 
-        Ok(result.rows_affected() > 0)
+        row.map(|row| thread_goal_from_row(&row)).transpose()
     }
 
     pub async fn account_thread_goal_usage(
@@ -622,7 +639,8 @@ mod tests {
         assert_eq!(0, replaced.tokens_used);
         assert_eq!(0, replaced.time_used_seconds);
 
-        assert!(
+        assert_eq!(
+            Some(replaced),
             runtime
                 .thread_goals()
                 .delete_thread_goal(thread_id)
@@ -637,8 +655,9 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert!(
-            !runtime
+        assert_eq!(
+            None,
+            runtime
                 .thread_goals()
                 .delete_thread_goal(thread_id)
                 .await

@@ -1,5 +1,6 @@
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
+use crate::realtime_conversation::handle_speech as handle_realtime_conversation_speech;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use async_channel::Receiver;
@@ -15,10 +16,6 @@ use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
 use crate::config::Config;
-use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
-use crate::realtime_context::truncate_realtime_text_to_token_budget;
-use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
-use crate::realtime_conversation::prefix_realtime_v2_text;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
@@ -54,9 +51,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
-use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
-use codex_protocol::user_input::UserInput;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use serde_json::Value;
@@ -91,14 +86,7 @@ pub async fn user_input_or_turn(
     op: Op,
     client_user_message_id: Option<String>,
 ) {
-    user_input_or_turn_inner(
-        sess,
-        sub_id,
-        op,
-        /*mirror_user_text_to_realtime*/ Some(()),
-        client_user_message_id,
-    )
-    .await;
+    user_input_or_turn_inner(sess, sub_id, op, client_user_message_id).await;
 }
 
 pub async fn update_thread_settings(
@@ -136,6 +124,7 @@ async fn thread_settings_update(
         summary,
         service_tier,
         collaboration_mode,
+        multi_agent_mode,
         personality,
     } = thread_settings;
     let collaboration_mode = match collaboration_mode {
@@ -161,6 +150,7 @@ async fn thread_settings_update(
         active_permission_profile,
         windows_sandbox_level,
         collaboration_mode: Some(collaboration_mode),
+        multi_agent_mode,
         reasoning_summary: summary,
         service_tier,
         personality,
@@ -188,6 +178,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             reasoning_summary: snapshot.reasoning_summary,
             personality: snapshot.personality,
             collaboration_mode: snapshot.collaboration_mode,
+            multi_agent_mode: snapshot.multi_agent_mode,
         },
     })
 }
@@ -196,7 +187,6 @@ pub(super) async fn user_input_or_turn_inner(
     sess: &Arc<Session>,
     sub_id: String,
     op: Op,
-    mirror_user_text_to_realtime: Option<()>,
     client_user_message_id: Option<String>,
 ) {
     let Op::UserInput {
@@ -230,7 +220,7 @@ pub(super) async fn user_input_or_turn_inner(
     }
     sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
         .await;
-    let accepted_items = match sess
+    match sess
         .steer_input(
             items.clone(),
             additional_context.clone(),
@@ -242,7 +232,6 @@ pub(super) async fn user_input_or_turn_inner(
     {
         Ok(_) => {
             current_context.session_telemetry.user_prompt(&items);
-            Some(items)
         }
         Err(SteerInputError::NoActiveTurn(items)) => {
             if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
@@ -256,7 +245,6 @@ pub(super) async fn user_input_or_turn_inner(
                 Some(sess.mcp_elicitation_reviewer()),
             )
             .await;
-            let accepted_items = items.clone();
             let additional_context_input = {
                 let mut state = sess.state.lock().await;
                 state.additional_context.merge(additional_context)
@@ -278,7 +266,6 @@ pub(super) async fn user_input_or_turn_inner(
                 crate::tasks::RegularTask::new(),
             )
             .await;
-            Some(accepted_items)
         }
         Err(err) => {
             sess.send_event_raw(Event {
@@ -286,37 +273,11 @@ pub(super) async fn user_input_or_turn_inner(
                 msg: EventMsg::Error(err.to_error_event()),
             })
             .await;
-            None
         }
-    };
-    if let (Some(items), Some(())) = (accepted_items, mirror_user_text_to_realtime) {
-        self::mirror_user_text_to_realtime(sess, &items).await;
     }
 }
 
-async fn mirror_user_text_to_realtime(sess: &Arc<Session>, items: &[UserInput]) {
-    let text = UserMessageItem::new(items).message();
-    if text.is_empty() {
-        return;
-    }
-    let text = if sess.conversation.is_running_v2().await {
-        prefix_realtime_v2_text(text, REALTIME_USER_TEXT_PREFIX)
-    } else {
-        text
-    };
-    let text = truncate_realtime_text_to_token_budget(&text, REALTIME_TURN_TOKEN_BUDGET);
-    if text.is_empty() {
-        return;
-    }
-    if sess.conversation.running_state().await.is_none() {
-        return;
-    }
-    if let Err(err) = sess.conversation.text_in(text).await {
-        debug!("failed to mirror user text to realtime conversation: {err}");
-    }
-}
-
-/// Records an inter-agent assistant envelope, then lets the shared pending-work scheduler
+/// Queues an inter-agent message, then lets the shared pending-work scheduler
 /// decide whether an idle session should start a regular turn.
 pub async fn inter_agent_communication(
     sess: &Arc<Session>,
@@ -567,6 +528,10 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .collect::<Vec<_>>();
     sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
         .await;
+    sess.services
+        .agent_control
+        .rollout_budget()
+        .rearm_reminder(sess.thread_id());
     sess.recompute_token_usage(turn_context.as_ref()).await;
 
     sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
@@ -623,6 +588,9 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
 }
 
 async fn shutdown_session_runtime(sess: &Arc<Session>) {
+    if let Some(startup_prewarm) = sess.take_session_startup_prewarm().await {
+        startup_prewarm.abort().await;
+    }
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     let _ = sess.conversation.shutdown().await;
     sess.services
@@ -632,11 +600,11 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
-    let mcp_shutdown = {
-        let mut manager = sess.services.mcp_connection_manager.write().await;
-        manager.begin_shutdown()
-    };
-    mcp_shutdown.await;
+    sess.services
+        .mcp_connection_manager
+        .load_full()
+        .shutdown()
+        .await;
     sess.guardian_review_session.shutdown().await;
 }
 
@@ -775,6 +743,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::RealtimeConversationText(params) => {
                     handle_realtime_conversation_text(&sess, sub.id.clone(), params).await;
+                    false
+                }
+                Op::RealtimeConversationSpeech(params) => {
+                    handle_realtime_conversation_speech(&sess, sub.id.clone(), params).await;
                     false
                 }
                 Op::RealtimeConversationClose => {

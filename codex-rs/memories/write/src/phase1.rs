@@ -190,11 +190,12 @@ async fn build_request_context(
     context: &MemoryStartupContext,
     config: &Config,
 ) -> StageOneRequestContext {
-    let model_name = config
-        .memories
-        .extract_model
-        .clone()
-        .unwrap_or(crate::stage_one::MODEL.to_string());
+    let model_name = config.memories.extract_model.clone().unwrap_or_else(|| {
+        context
+            .provider()
+            .memory_extraction_preferred_model()
+            .to_string()
+    });
     context
         .stage_one_request_context(config, &model_name, crate::stage_one::REASONING_EFFORT)
         .await
@@ -302,6 +303,7 @@ mod job {
                 )?,
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         }];
         prompt.base_instructions = BaseInstructions {
             text: crate::stage_one::PROMPT.to_string(),
@@ -404,12 +406,15 @@ mod job {
     ) -> codex_protocol::error::Result<String> {
         let filtered = items
             .iter()
-            .filter_map(|item| {
-                if let RolloutItem::ResponseItem(item) = item {
-                    sanitize_response_item_for_memories(item)
-                } else {
-                    None
+            .filter_map(|item| match item {
+                RolloutItem::ResponseItem(item) => sanitize_response_item_for_memories(item),
+                RolloutItem::InterAgentCommunication(communication) => {
+                    Some(communication.to_model_input_item())
                 }
+                RolloutItem::SessionMeta(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
             })
             .collect::<Vec<_>>();
         let serialized = serde_json::to_string(&filtered).map_err(|err| {
@@ -424,6 +429,7 @@ mod job {
             role,
             content,
             phase,
+            internal_chat_message_metadata_passthrough: metadata,
         } = item
         else {
             return should_persist_response_item_for_memories(item).then(|| item.clone());
@@ -451,6 +457,7 @@ mod job {
             role: role.clone(),
             content,
             phase: phase.clone(),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
         })
     }
 
@@ -459,7 +466,7 @@ mod job {
             return false;
         };
 
-        matches_marked_fragment(text, "# AGENTS.md instructions for ", "</INSTRUCTIONS>")
+        matches_marked_fragment(text, "# AGENTS.md instructions", "</INSTRUCTIONS>")
             || matches_marked_fragment(text, "<skill>", "</skill>")
     }
 
@@ -484,6 +491,10 @@ mod job {
             let cases = [
                 (
                     "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>",
+                    true,
+                ),
+                (
+                    "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>",
                     true,
                 ),
                 (
@@ -651,6 +662,8 @@ fn emit_metrics(context: &StageOneRequestContext, counts: &Stats) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::AgentPath;
+    use codex_protocol::protocol::InterAgentCommunication;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -665,11 +678,16 @@ mod tests {
                             .to_string(),
                 },
                 ContentItem::InputText {
+                    text: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+                        .to_string(),
+                },
+                ContentItem::InputText {
                     text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>"
                         .to_string(),
                 },
             ],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let skill_message = ResponseItem::Message {
             id: None,
@@ -680,6 +698,7 @@ mod tests {
                         .to_string(),
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let subagent_message = ResponseItem::Message {
             id: None,
@@ -689,6 +708,7 @@ mod tests {
                     .to_string(),
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         };
 
         let serialized = job::serialize_filtered_rollout_response_items(&[
@@ -710,6 +730,7 @@ mod tests {
                             .to_string(),
                     }],
                     phase: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 subagent_message,
             ]
@@ -721,6 +742,7 @@ mod tests {
         let serialized =
             job::serialize_filtered_rollout_response_items(&[RolloutItem::ResponseItem(
                 ResponseItem::FunctionCallOutput {
+                    id: None,
                     call_id: "call_123".to_string(),
                     output: codex_protocol::models::FunctionCallOutputPayload {
                         body: codex_protocol::models::FunctionCallOutputBody::Text(
@@ -728,12 +750,44 @@ mod tests {
                         ),
                         success: Some(true),
                     },
+                    internal_chat_message_metadata_passthrough: None,
                 },
             )])
             .expect("serialize");
 
         assert!(!serialized.contains("sk-abcdefghijklmnopqrstuvwxyz123456"));
         assert!(serialized.contains("[REDACTED_SECRET]"));
+    }
+
+    #[test]
+    fn serializes_inter_agent_communications_for_memory() {
+        let plaintext = InterAgentCommunication::new(
+            AgentPath::root().join("worker").expect("worker path"),
+            AgentPath::root(),
+            Vec::new(),
+            "child done".to_string(),
+            /*trigger_turn*/ false,
+        );
+        let encrypted = InterAgentCommunication::new_encrypted(
+            AgentPath::root(),
+            AgentPath::root().join("worker").expect("worker path"),
+            Vec::new(),
+            "encrypted payload".to_string(),
+            /*trigger_turn*/ true,
+        );
+        let expected = vec![
+            plaintext.to_model_input_item(),
+            encrypted.to_model_input_item(),
+        ];
+
+        let serialized = job::serialize_filtered_rollout_response_items(&[
+            RolloutItem::InterAgentCommunication(plaintext),
+            RolloutItem::InterAgentCommunication(encrypted),
+        ])
+        .expect("serialize");
+        let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("parse");
+
+        assert_eq!(parsed, expected);
     }
 
     #[test]

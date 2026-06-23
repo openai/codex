@@ -4,7 +4,6 @@ use crate::error::TransportError;
 use crate::request::Request;
 use crate::request::RequestBody;
 use crate::request::Response;
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -23,10 +22,15 @@ pub struct StreamResponse {
     pub bytes: ByteStream,
 }
 
-#[async_trait]
 pub trait HttpTransport: Send + Sync {
-    async fn execute(&self, req: Request) -> Result<Response, TransportError>;
-    async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError>;
+    fn execute(
+        &self,
+        req: Request,
+    ) -> impl std::future::Future<Output = Result<Response, TransportError>> + Send;
+    fn stream(
+        &self,
+        req: Request,
+    ) -> impl std::future::Future<Output = Result<StreamResponse, TransportError>> + Send;
 }
 
 #[derive(Clone, Debug)]
@@ -81,12 +85,14 @@ impl ReqwestTransport {
 fn request_body_for_trace(req: &Request) -> String {
     match req.body.as_ref() {
         Some(RequestBody::Json(body)) => body.to_string(),
+        Some(RequestBody::EncodedJson(body)) => {
+            String::from_utf8_lossy(body.trace_bytes()).into_owned()
+        }
         Some(RequestBody::Raw(body)) => format!("<raw body: {} bytes>", body.len()),
         None => String::new(),
     }
 }
 
-#[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn execute(&self, req: Request) -> Result<Response, TransportError> {
         if enabled!(Level::TRACE) {

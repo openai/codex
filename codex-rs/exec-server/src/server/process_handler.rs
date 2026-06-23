@@ -1,10 +1,13 @@
 use codex_app_server_protocol::JSONRPCErrorError;
 
+use crate::ExecServerRuntimePaths;
 use crate::local_process::LocalProcess;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::SignalParams;
+use crate::protocol::SignalResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -17,9 +20,12 @@ pub(crate) struct ProcessHandler {
 }
 
 impl ProcessHandler {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn new(
+        notifications: RpcNotificationSender,
+        runtime_paths: ExecServerRuntimePaths,
+    ) -> Self {
         Self {
-            process: LocalProcess::new(notifications),
+            process: LocalProcess::new(notifications, runtime_paths),
         }
     }
 
@@ -47,6 +53,13 @@ impl ProcessHandler {
         params: WriteParams,
     ) -> Result<WriteResponse, JSONRPCErrorError> {
         self.process.exec_write(params).await
+    }
+
+    pub(crate) async fn signal(
+        &self,
+        params: SignalParams,
+    ) -> Result<SignalResponse, JSONRPCErrorError> {
+        self.process.signal_process(params).await
     }
 
     pub(crate) async fn terminate(

@@ -38,7 +38,6 @@ use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::ResolvedPermissionProfile;
-use codex_shell_escalation::ShellCommandExecutor;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -367,6 +366,7 @@ async fn unsandboxed_intercepted_exec_strips_managed_network_env() -> anyhow::Re
         sandbox: SandboxType::None,
         env: HashMap::new(),
         network: None,
+        network_environment_id: None,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         arg0: None,
         sandbox_policy_cwd: workdir.clone(),
@@ -426,6 +426,7 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         session: Arc::new(session),
         turn: Arc::new(turn_context),
         call_id: "preapproved-additional-permissions".to_string(),
+        environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile: permission_profile.clone(),
@@ -561,6 +562,7 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         session: std::sync::Arc::new(session),
         turn: std::sync::Arc::new(turn_context),
         call_id: "execve-hook-call".to_string(),
+        environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::read_only(),
@@ -771,6 +773,7 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
         session: Arc::new(session),
         turn: Arc::new(turn_context),
         call_id: "deny-read-prefix-allow".to_string(),
+        environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile,
@@ -807,6 +810,7 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
         session: Arc::new(session),
         turn: Arc::new(turn_context),
         call_id: "deny-read-granular-sandbox-reject".to_string(),
+        environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::Granular(GranularApprovalConfig {
             sandbox_approval: false,

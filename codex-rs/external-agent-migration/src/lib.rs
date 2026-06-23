@@ -18,7 +18,6 @@ const EXTERNAL_AGENT_HOOKS_SUBDIR: &str = "hooks";
 const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "hooks";
 const COMMAND_SKILL_PREFIX: &str = "source-command";
 const MAX_SKILL_NAME_LEN: usize = 64;
-const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
 
 #[derive(Debug)]
 struct ParsedDocument {
@@ -155,13 +154,13 @@ pub fn missing_subagent_names(
     Ok(names)
 }
 
-pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<usize> {
+pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<Vec<String>> {
     if !source_agents.is_dir() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
     fs::create_dir_all(target_agents)?;
-    let mut imported = 0usize;
+    let mut imported = Vec::new();
     for source_file in agent_source_files(source_agents)? {
         let Some(target) = subagent_target_file(&source_file, target_agents) else {
             continue;
@@ -174,7 +173,7 @@ pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Resul
             continue;
         };
         fs::write(&target, render_agent_toml(&document.body, &metadata)?)?;
-        imported += 1;
+        imported.push(metadata.name);
     }
 
     Ok(imported)
@@ -195,13 +194,13 @@ pub fn missing_command_names(
         .collect())
 }
 
-pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<usize> {
+pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<Vec<String>> {
     if !source_commands.is_dir() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
     fs::create_dir_all(target_skills)?;
-    let mut imported = 0usize;
+    let mut imported = Vec::new();
     for (source_file, name) in unique_supported_command_sources(source_commands)? {
         let document = parse_document(&source_file)?;
         let target_dir = target_skills.join(&name);
@@ -217,7 +216,7 @@ pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Resu
             target_dir.join("SKILL.md"),
             render_command_skill(&document.body, &name, &description, &source_name),
         )?;
-        imported += 1;
+        imported.push(name);
     }
 
     Ok(imported)
@@ -1130,12 +1129,9 @@ fn command_skill_name_if_supported(
         return None;
     }
     let source_name = command_source_name(source_commands, source_file);
-    let description = command_skill_description(document, &source_name)?;
+    command_skill_description(document, &source_name)?;
     let name = command_skill_name(source_commands, source_file);
     if name.chars().count() > MAX_SKILL_NAME_LEN {
-        return None;
-    }
-    if description.chars().count() > MAX_SKILL_DESCRIPTION_LEN {
         return None;
     }
     if has_unsupported_command_template_features(&document.body) {
@@ -1387,6 +1383,8 @@ fn external_agent_term_variants() -> [String; 5] {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
 
     fn source_path(relative_path: &str) -> PathBuf {
         Path::new("/repo")
@@ -1720,6 +1718,35 @@ command = "enabled-server"
         let document = parse_document_content("---\ndescription: Review PR\n---\nReview\n");
 
         assert!(command_skill_name_if_supported(&root, &file, &document).is_none());
+    }
+
+    #[test]
+    fn commands_with_overlong_descriptions_are_preserved() {
+        let root = source_path("commands");
+        let file = source_path("commands/review.md");
+        let description = "x".repeat(MAX_SKILL_DESCRIPTION_LEN + 1);
+        let document =
+            parse_document_content(&format!("---\ndescription: {description}\n---\nReview\n"));
+
+        assert_eq!(
+            command_skill_name_if_supported(&root, &file, &document),
+            Some("source-command-review".to_string())
+        );
+
+        let rendered = render_command_skill(
+            &document.body,
+            "source-command-review",
+            &description,
+            "review",
+        );
+        let rendered_document = parse_document_content(&rendered);
+        assert_eq!(
+            rendered_document
+                .frontmatter
+                .get("description")
+                .and_then(FrontmatterValue::as_scalar),
+            Some(description.as_str())
+        );
     }
 
     #[test]

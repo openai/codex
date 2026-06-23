@@ -42,6 +42,7 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> 
             text: text.to_string(),
         }],
         phase,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -52,6 +53,7 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
             id: None,
             status: Some("completed".to_string()),
             action: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -59,12 +61,15 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "calendar"}),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
+            id: None,
             call_id: Some("search-1".to_string()),
             status: "completed".to_string(),
             execution: "client".to_string(),
             tools: Vec::new(),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -89,6 +94,7 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
                 env: None,
                 user: None,
             }),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -96,10 +102,13 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
+            id: None,
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -107,11 +116,14 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
             call_id: "custom-1".to_string(),
             name: "apply_patch".to_string(),
             input: "*** Begin Patch\n*** End Patch\n".to_string(),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCallOutput {
+            id: None,
             call_id: "custom-1".to_string(),
             name: Some("apply_patch".to_string()),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            internal_chat_message_metadata_passthrough: None,
         },
         assistant_output_text("plain assistant text"),
     ];
@@ -167,41 +179,43 @@ struct TestTurnItemContributor;
 #[derive(Debug)]
 struct TurnItemContributorRan;
 
-#[async_trait::async_trait]
 impl TurnItemContributor for TestTurnItemContributor {
-    async fn contribute(
-        &self,
-        _thread_store: &ExtensionData,
-        turn_store: &ExtensionData,
-        item: &mut TurnItem,
-    ) -> Result<(), String> {
-        turn_store.insert(TurnItemContributorRan);
-        if let TurnItem::AgentMessage(agent_message) = item {
-            agent_message.memory_citation = Some(MemoryCitation {
-                entries: Vec::new(),
-                rollout_ids: Vec::new(),
-            });
-        }
-        Ok(())
+    fn contribute<'a>(
+        &'a self,
+        _thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a mut TurnItem,
+    ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            turn_store.insert(TurnItemContributorRan);
+            if let TurnItem::AgentMessage(agent_message) = item {
+                agent_message.memory_citation = Some(MemoryCitation {
+                    entries: Vec::new(),
+                    rollout_ids: Vec::new(),
+                });
+            }
+            Ok(())
+        })
     }
 }
 
 struct RewriteAgentMessageContributor;
 
-#[async_trait::async_trait]
 impl TurnItemContributor for RewriteAgentMessageContributor {
-    async fn contribute(
-        &self,
-        _thread_store: &ExtensionData,
-        _turn_store: &ExtensionData,
-        item: &mut TurnItem,
-    ) -> Result<(), String> {
-        if let TurnItem::AgentMessage(agent_message) = item {
-            agent_message.content = vec![AgentMessageContent::Text {
-                text: "contributed assistant text".to_string(),
-            }];
-        }
-        Ok(())
+    fn contribute<'a>(
+        &'a self,
+        _thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
+        item: &'a mut TurnItem,
+    ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            if let TurnItem::AgentMessage(agent_message) = item {
+                agent_message.content = vec![AgentMessageContent::Text {
+                    text: "contributed assistant text".to_string(),
+                }];
+            }
+            Ok(())
+        })
     }
 }
 
@@ -268,12 +282,13 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     let router = Arc::new(ToolRouter::from_turn_context(
         &turn_context,
         crate::tools::router::ToolRouterParams {
+            tool_suggest_candidates: None,
             mcp_tools: None,
             deferred_mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
+        &Default::default(),
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let tool_runtime = ToolCallRuntime::new(
@@ -406,10 +421,11 @@ fn completed_item_keeps_mailbox_delivery_open_for_commentary_messages() {
 #[test]
 fn completed_item_defers_mailbox_delivery_for_image_generation_calls() {
     let item = ResponseItem::ImageGenerationCall {
-        id: "ig-1".to_string(),
+        id: Some("ig-1".to_string()),
         status: "completed".to_string(),
         revised_prompt: None,
         result: "Zm9v".to_string(),
+        internal_chat_message_metadata_passthrough: None,
     };
 
     assert!(completed_item_defers_mailbox_delivery_to_next_turn(

@@ -47,6 +47,7 @@ pub enum TurnItem {
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
+    Sleep(SleepItem),
     ImageGeneration(ImageGenerationItem),
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
@@ -140,6 +141,12 @@ pub struct ImageViewItem {
     pub path: AbsolutePathBuf,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct SleepItem {
+    pub id: String,
+    pub duration_ms: u64,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ImageGenerationItem {
     pub id: String,
@@ -181,7 +188,13 @@ pub struct McpToolCallItem {
     pub arguments: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub connector_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub link_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plugin_id: Option<String>,
@@ -391,6 +404,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
         role: "user".to_string(),
         content,
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     })
 }
 
@@ -538,7 +552,9 @@ impl McpToolCallItem {
                 tool: self.tool.clone(),
                 arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
             },
+            connector_id: self.connector_id.clone(),
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+            link_id: self.link_id.clone(),
             plugin_id: self.plugin_id.clone(),
         })
     }
@@ -558,6 +574,8 @@ impl McpToolCallItem {
                 arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
             },
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+            connector_id: self.connector_id.clone(),
+            link_id: self.link_id.clone(),
             plugin_id: self.plugin_id.clone(),
             duration: self.duration?,
             result,
@@ -575,6 +593,7 @@ impl TurnItem {
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ImageView(item) => item.id.clone(),
+            TurnItem::Sleep(item) => item.id.clone(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
             TurnItem::McpToolCall(item) => item.id.clone(),
@@ -595,6 +614,7 @@ impl TurnItem {
                     path: item.path.clone(),
                 })]
             }
+            TurnItem::Sleep(_) => Vec::new(),
             TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
             TurnItem::FileChange(item) => item
                 .as_legacy_end_event(String::new())

@@ -5,12 +5,12 @@ use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::requests::Compression;
-use crate::requests::attach_item_ids;
 use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
 use crate::sse::spawn_response_stream;
 use crate::telemetry::SseTelemetry;
+use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
 use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
@@ -81,11 +81,8 @@ impl<T: HttpTransport> ResponsesClient<T> {
             turn_state,
         } = options;
 
-        let mut body = serde_json::to_value(&request)
+        let body = EncodedJsonBody::encode(&request)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
-        if request.store && self.session.provider().is_azure_responses_endpoint() {
-            attach_item_ids(&mut body, &request.input);
-        }
 
         let mut headers = extra_headers;
         if let Some(ref thread_id) = thread_id {
@@ -96,7 +93,8 @@ impl<T: HttpTransport> ResponsesClient<T> {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
-        self.stream(body, headers, compression, turn_state).await
+        self.stream_encoded(body, headers, compression, turn_state)
+            .await
     }
 
     fn path() -> &'static str {
@@ -121,6 +119,19 @@ impl<T: HttpTransport> ResponsesClient<T> {
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponseStream, ApiError> {
+        let body = EncodedJsonBody::encode(&body)
+            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        self.stream_encoded(body, extra_headers, compression, turn_state)
+            .await
+    }
+
+    async fn stream_encoded(
+        &self,
+        body: EncodedJsonBody,
+        extra_headers: HeaderMap,
+        compression: Compression,
+        turn_state: Option<Arc<OnceLock<String>>>,
+    ) -> Result<ResponseStream, ApiError> {
         let request_compression = match compression {
             Compression::None => RequestCompression::None,
             Compression::Zstd => RequestCompression::Zstd,
@@ -128,7 +139,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
 
         let stream_response = self
             .session
-            .stream_with(
+            .stream_encoded_json_with(
                 Method::POST,
                 Self::path(),
                 extra_headers,

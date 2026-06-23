@@ -1,3 +1,4 @@
+use super::REMOTE_CREATED_BY_ME_MARKETPLACE_NAME;
 use super::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
@@ -144,12 +145,24 @@ pub async fn sync_remote_installed_plugin_bundles_once(
         .await?;
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
     };
+    let user = async {
+        let scope = RemotePluginScope::User;
+        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
+            config, auth, scope, /*include_download_urls*/ true,
+        )
+        .await?;
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
 
-    let (global, workspace) = tokio::try_join!(global, workspace)?;
+    let (global, workspace, user) = tokio::try_join!(global, workspace, user)?;
     let store = PluginStore::try_new(codex_home.clone())?;
     let mut installed_plugin_names_by_marketplace =
         BTreeMap::<String, BTreeSet<String>>::from_iter([
             (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
+            (
+                REMOTE_CREATED_BY_ME_MARKETPLACE_NAME.to_string(),
+                BTreeSet::new(),
+            ),
             (
                 REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
                 BTreeSet::new(),
@@ -170,7 +183,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     let mut installed_plugin_ids = BTreeSet::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
-    for (_scope, installed_plugins) in [global, workspace] {
+    for (_scope, installed_plugins) in [global, workspace, user] {
         for installed_plugin in installed_plugins {
             let plugin = installed_plugin.plugin;
             let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
@@ -199,6 +212,16 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 .map(str::trim)
                 .filter(|version| !version.is_empty());
             if store.active_plugin_version(&plugin_id).as_deref() == release_version {
+                if let Err(err) = store.write_remote_plugin_id(&plugin_id, &plugin.id) {
+                    warn!(
+                        remote_plugin_id = %plugin.id,
+                        plugin = %plugin.name,
+                        marketplace = %marketplace_name,
+                        error = %err,
+                        "failed to persist identity for cached remote installed plugin"
+                    );
+                    failed_remote_plugin_ids.insert(plugin.id);
+                }
                 continue;
             }
 
@@ -308,6 +331,7 @@ fn remove_stale_remote_plugin_caches(
     let mut removed_cache_plugin_ids = Vec::new();
     for marketplace_name in [
         REMOTE_GLOBAL_MARKETPLACE_NAME,
+        REMOTE_CREATED_BY_ME_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
@@ -425,6 +449,13 @@ fn clear_remote_installed_plugin_bundle_sync_in_flight(key: &RemoteInstalledPlug
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
 
     #[test]
     fn remote_installed_plugin_sync_in_flight_dedupes_by_cache_root() {
@@ -445,6 +476,105 @@ mod tests {
             key.clone()
         ));
         clear_remote_installed_plugin_bundle_sync_in_flight(&key);
+    }
+
+    #[tokio::test]
+    async fn sync_backfills_remote_plugin_install_metadata_for_current_bundle() {
+        let server = MockServer::start().await;
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let cached_manifest = codex_home
+            .path()
+            .join(PLUGINS_CACHE_DIR)
+            .join(REMOTE_GLOBAL_MARKETPLACE_NAME)
+            .join("linear")
+            .join("1.2.3")
+            .join(".codex-plugin")
+            .join("plugin.json");
+        std::fs::create_dir_all(cached_manifest.parent().expect("manifest parent"))
+            .expect("create cached plugin manifest parent");
+        std::fs::write(&cached_manifest, r#"{"name":"linear","version":"1.2.3"}"#)
+            .expect("write cached plugin manifest");
+        let remote_plugin_id = "plugins~Plugin_linear";
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param("scope", "GLOBAL"))
+            .and(query_param("includeDownloadUrls", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plugins": [{
+                    "id": remote_plugin_id,
+                    "name": "linear",
+                    "scope": "GLOBAL",
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "ENABLED",
+                    "release": {
+                        "version": "1.2.3",
+                        "display_name": "Linear",
+                        "description": "Track work",
+                        "interface": {},
+                    },
+                    "enabled": true,
+                }],
+                "pagination": {"next_page_token": null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param("scope", "USER"))
+            .and(query_param("includeDownloadUrls", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plugins": [],
+                "pagination": {"next_page_token": null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param("scope", "WORKSPACE"))
+            .and(query_param("includeDownloadUrls", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plugins": [],
+                "pagination": {"next_page_token": null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let config = RemotePluginServiceConfig {
+            chatgpt_base_url: format!("{}/backend-api", server.uri()),
+        };
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+        let outcome = sync_remote_installed_plugin_bundles_once(
+            codex_home.path().to_path_buf(),
+            &config,
+            Some(&auth),
+        )
+        .await
+        .expect("sync current remote plugin bundle");
+
+        assert_eq!(outcome, RemoteInstalledPluginBundleSyncOutcome::default());
+        let plugin_id = PluginId::new(
+            "linear".to_string(),
+            REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(),
+        )
+        .expect("valid plugin id");
+        let metadata_path = PluginStore::new(codex_home.path().to_path_buf())
+            .plugin_base_root(&plugin_id)
+            .join(".codex-remote-plugin-install.json");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(metadata_path.as_path())
+                    .expect("read remote plugin install metadata")
+            )
+            .expect("parse remote plugin install metadata"),
+            json!({
+                "schema_version": 1,
+                "remote_plugin_id": remote_plugin_id,
+            })
+        );
     }
 
     #[test]
@@ -517,8 +647,27 @@ mod tests {
     }
 
     #[test]
-    fn stale_remote_plugin_cleanup_removes_old_shared_with_me_cache_and_keeps_canonical_cache() {
+    fn stale_remote_plugin_cleanup_removes_stale_marketplace_caches_and_keeps_canonical_cache() {
         let codex_home = tempfile::tempdir().expect("create codex home");
+        let created_by_me_cached_manifest = codex_home
+            .path()
+            .join(PLUGINS_CACHE_DIR)
+            .join(REMOTE_CREATED_BY_ME_MARKETPLACE_NAME)
+            .join("created-by-me-plugin")
+            .join("1.2.3")
+            .join(".codex-plugin")
+            .join("plugin.json");
+        std::fs::create_dir_all(
+            created_by_me_cached_manifest
+                .parent()
+                .expect("manifest parent"),
+        )
+        .expect("create cached plugin manifest parent");
+        std::fs::write(
+            &created_by_me_cached_manifest,
+            r#"{"name":"created-by-me-plugin"}"#,
+        )
+        .expect("write cached plugin manifest");
         let cached_manifest = codex_home
             .path()
             .join(PLUGINS_CACHE_DIR)
@@ -547,6 +696,10 @@ mod tests {
             BTreeMap::<String, BTreeSet<String>>::from_iter([
                 (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
                 (
+                    REMOTE_CREATED_BY_ME_MARKETPLACE_NAME.to_string(),
+                    BTreeSet::new(),
+                ),
+                (
                     REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
                     BTreeSet::new(),
                 ),
@@ -572,8 +725,12 @@ mod tests {
 
         assert_eq!(
             removed,
-            vec!["private-plugin@workspace-shared-with-me-private".to_string()]
+            vec![
+                "created-by-me-plugin@created-by-me-remote".to_string(),
+                "private-plugin@workspace-shared-with-me-private".to_string(),
+            ]
         );
+        assert!(!created_by_me_cached_manifest.exists());
         assert!(!cached_manifest.exists());
         assert!(canonical_cached_manifest.is_file());
     }

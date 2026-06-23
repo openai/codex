@@ -37,11 +37,12 @@ struct SeqResponder {
 impl Respond for SeqResponder {
     fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
         let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
-        match self.responses.get(call_num) {
-            Some(response) => ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(response.clone(), "text/event-stream"),
-            None => panic!("no response for {call_num}"),
-        }
+        let response = self
+            .responses
+            .get(call_num)
+            .expect("mock model response should exist");
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_raw(response.clone(), "text/event-stream")
     }
 }

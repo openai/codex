@@ -17,7 +17,7 @@ pub fn install(registry: &mut ExtensionRegistryBuilder<()>) {
 struct StyleContributor;
 
 impl ContextContributor for StyleContributor {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
@@ -37,7 +37,7 @@ impl ContextContributor for StyleContributor {
 struct UsageContributor;
 
 impl ContextContributor for UsageContributor {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,

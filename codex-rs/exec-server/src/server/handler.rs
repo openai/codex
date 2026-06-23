@@ -19,16 +19,18 @@ use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
+use crate::protocol::FsCloseParams;
+use crate::protocol::FsCloseResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
-use crate::protocol::FsJoinParams;
-use crate::protocol::FsJoinResponse;
-use crate::protocol::FsParentParams;
-use crate::protocol::FsParentResponse;
+use crate::protocol::FsOpenParams;
+use crate::protocol::FsOpenResponse;
+use crate::protocol::FsReadBlockParams;
+use crate::protocol::FsReadBlockResponse;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
@@ -42,6 +44,8 @@ use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::SignalParams;
+use crate::protocol::SignalResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -62,6 +66,7 @@ pub(crate) struct ExecServerHandler {
     background_task_shutdown: CancellationToken,
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
+    runtime_paths: ExecServerRuntimePaths,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -79,7 +84,8 @@ impl ExecServerHandler {
             active_body_stream_ids: Mutex::new(HashSet::new()),
             background_task_shutdown: CancellationToken::new(),
             background_tasks: TaskTracker::new(),
-            file_system: FileSystemHandler::new(runtime_paths),
+            file_system: FileSystemHandler::new(runtime_paths.clone()),
+            runtime_paths,
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
         }
@@ -89,6 +95,7 @@ impl ExecServerHandler {
         self.background_task_shutdown.cancel();
         self.background_tasks.close();
         self.background_tasks.wait().await;
+        self.file_system.shutdown().await;
         if let Some(session) = self.session() {
             session.detach().await;
         }
@@ -111,7 +118,11 @@ impl ExecServerHandler {
 
         let session = match self
             .session_registry
-            .attach(params.resume_session_id.clone(), self.notifications.clone())
+            .attach(
+                params.resume_session_id.clone(),
+                self.notifications.clone(),
+                self.runtime_paths.clone(),
+            )
             .await
         {
             Ok(session) => session,
@@ -171,6 +182,14 @@ impl ExecServerHandler {
         session.process().exec_write(params).await
     }
 
+    pub(crate) async fn signal(
+        &self,
+        params: SignalParams,
+    ) -> Result<SignalResponse, JSONRPCErrorError> {
+        let session = self.require_initialized_for("exec")?;
+        session.process().signal(params).await
+    }
+
     pub(crate) async fn terminate(
         &self,
         params: TerminateParams,
@@ -228,6 +247,30 @@ impl ExecServerHandler {
         self.file_system.read_file(params).await
     }
 
+    pub(crate) async fn fs_open(
+        &self,
+        params: FsOpenParams,
+    ) -> Result<FsOpenResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.open(params).await
+    }
+
+    pub(crate) async fn fs_read_block(
+        &self,
+        params: FsReadBlockParams,
+    ) -> Result<FsReadBlockResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.read_block(params).await
+    }
+
+    pub(crate) async fn fs_close(
+        &self,
+        params: FsCloseParams,
+    ) -> Result<FsCloseResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.close(params).await
+    }
+
     pub(crate) async fn fs_write_file(
         &self,
         params: FsWriteFileParams,
@@ -258,22 +301,6 @@ impl ExecServerHandler {
     ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.canonicalize(params).await
-    }
-
-    pub(crate) async fn fs_join(
-        &self,
-        params: FsJoinParams,
-    ) -> Result<FsJoinResponse, JSONRPCErrorError> {
-        self.require_initialized_for("filesystem")?;
-        self.file_system.join(params).await
-    }
-
-    pub(crate) async fn fs_parent(
-        &self,
-        params: FsParentParams,
-    ) -> Result<FsParentResponse, JSONRPCErrorError> {
-        self.require_initialized_for("filesystem")?;
-        self.file_system.parent(params).await
     }
 
     pub(crate) async fn fs_read_directory(

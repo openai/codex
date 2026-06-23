@@ -8,6 +8,12 @@
     "AppSummary": {
       "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
       "properties": {
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": [
             "string",
@@ -25,21 +31,23 @@
         },
         "name": {
           "type": "string"
-        },
-        "needsAuth": {
-          "type": "boolean"
         }
       },
       "required": [
         "id",
-        "name",
-        "needsAuth"
+        "name"
       ],
       "type": "object"
     },
     "AppTemplateSummary": {
       "properties": {
         "canonicalConnectorId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
           "type": [
             "string",
             "null"
@@ -184,6 +192,12 @@
           },
           "type": "array"
         },
+        "shareUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "skills": {
           "items": {
             "$ref": "#/definitions/SkillSummary"
@@ -299,8 +313,26 @@
           ],
           "description": "Local logo path, resolved from the installed plugin package."
         },
+        "logoDark": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Local dark-mode logo path, resolved from the installed plugin package."
+        },
         "logoUrl": {
           "description": "Remote logo URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logoUrlDark": {
+          "description": "Remote dark-mode logo URL from the plugin catalog.",
           "type": [
             "string",
             "null"

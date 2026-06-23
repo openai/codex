@@ -268,6 +268,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
 
     for (scope, body) in [
         ("GLOBAL", global_installed_body),
+        ("USER", empty_page_body),
         ("WORKSPACE", empty_page_body),
     ] {
         Mock::given(method("GET"))
@@ -788,6 +789,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             base_instructions: None,
             developer_instructions: None,
             personality: None,
+            multi_agent_mode: None,
             ephemeral: None,
             session_start_source: None,
             thread_source: None,

@@ -18,6 +18,93 @@ cargo run -p codex-app-server-test-client -- \
 cargo run -p codex-app-server-test-client -- model-list
 ```
 
+`send-message` and `send-message-v2` handle `request_user_input` server requests interactively.
+When Codex asks a question, choose a numbered option (or `o` for a free-form answer when offered)
+and the client will send the response and continue streaming the same turn.
+
+## Testing Plugin Analytics
+
+The `plugin-analytics-smoke` command exercises `plugin/installed`, plugin
+enable/disable config writes, and a structured plugin mention through one
+app-server connection. Analytics are captured to a local JSONL file and are
+not sent to the analytics backend. The model turn uses a loopback Responses
+API server.
+
+The selected plugin must already be installed and enabled remotely, and the
+active Codex profile must be authenticated. On a fresh local cache, the command
+retries ephemeral turns while the installed remote bundle finishes syncing.
+
+```bash
+# Build a debug Codex binary; analytics capture is unavailable in release builds.
+cargo build -p codex-cli --bin codex
+
+cargo run -p codex-app-server-test-client -- \
+  --codex-bin ./target/debug/codex \
+  plugin-analytics-smoke \
+  --plugin-id linear@openai-curated-remote
+```
+
+Use `--capture-file /tmp/plugin-analytics.jsonl` to select the output path.
+The command validates one `codex_plugin_disabled`, `codex_plugin_enabled`, and
+`codex_plugin_used` event with the expected local plugin identity and capability
+metadata. The enabled and disabled events come from successful writes to the
+temporary config; the command does not mutate the remote enabled state. It
+prints the events and leaves the JSONL file in place for inspection. It does not
+install or uninstall plugins and does not modify the profile's persistent
+config.
+
+### Testing remote install and uninstall analytics
+
+`plugin-analytics-mutation-smoke` is a manually invoked live smoke test. It
+contacts the configured remote plugin API and temporarily changes the active
+account's installed-plugin state. It is not run by `cargo test`, `just test`,
+or CI.
+
+Choose a remote plugin that is available to the active account and is not
+currently installed. The command refuses to run when the plugin is already
+installed, installs it, validates `codex_plugin_installed`, uninstalls it, and
+verifies that the original uninstalled state was restored. The current install
+event uses the backend ID as `plugin_id`. Uninstall is part of cleanup but is
+not yet an analytics assertion.
+
+`--remote-plugin-id` takes the backend ID, such as `plugins~Plugin_...`, not the
+local `<plugin>@<marketplace>` ID.
+
+```bash
+cargo run -p codex-app-server-test-client -- \
+  --codex-bin ./target/debug/codex \
+  plugin-analytics-mutation-smoke \
+  --remote-plugin-id <REMOTE_PLUGIN_ID> \
+  --confirm-account-mutation \
+  --capture-file /tmp/plugin-mutation-analytics.jsonl
+```
+
+Analytics use the normal queue, reduction, batching, and serialization path,
+but the debug capture destination suppresses analytics network delivery. The
+command prints one of these final states:
+
+- `PASS`: the install event validated and the plugin is uninstalled.
+- `FAIL-CLEAN`: validation failed, but the original uninstalled state was
+  restored.
+- `FAIL-LOCAL-CACHE`: the backend is uninstalled, but local cleanup reported
+  an error.
+- `FAIL-DIRTY`: cleanup failed and the plugin still appears installed.
+- `FAIL-UNKNOWN`: the command could not verify the final installed state.
+
+For a dirty or uncertain result, retry cleanup with:
+
+```bash
+cargo run -p codex-app-server-test-client -- \
+  --codex-bin ./target/debug/codex \
+  plugin-remote-uninstall \
+  --remote-plugin-id <REMOTE_PLUGIN_ID> \
+  --confirm-account-mutation
+```
+
+Cleanup does not require analytics capture or a debug Codex binary. When the
+smoke uses global `--config` overrides, its printed recovery command preserves
+them so cleanup targets the same backend and account.
+
 ## Watching Raw Inbound Traffic
 
 Initialize a connection, then print every inbound JSON-RPC message until you stop it with

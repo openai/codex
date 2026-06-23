@@ -14,6 +14,15 @@ fn enable_test_ambient_pet(chat: &mut ChatWidget) {
     chat.install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
 }
 
+fn take_workspace_headline_request_id(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> u64 {
+    match rx.try_recv() {
+        Ok(AppEvent::RefreshStatusLineWorkspaceHeadline { request_id }) => request_id,
+        event => panic!("expected workspace headline refresh, got {event:?}"),
+    }
+}
+
 /// Receiving a token usage update without usage clears the context indicator.
 #[tokio::test]
 async fn token_count_none_resets_context_indicator() {
@@ -411,7 +420,7 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
     let mut cfg = test_config().await;
     cfg.tui_pet = Some(crate::pets::DEFAULT_PET_ID.to_string());
     crate::pets::write_test_pack(&cfg.codex_home);
-    let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
+    let resolved_model = get_model_offline_for_tests(cfg.model.as_deref());
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
@@ -421,6 +430,7 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
+        has_codex_backend_auth: false,
         model_catalog: test_model_catalog(&cfg),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
@@ -1023,6 +1033,39 @@ async fn rate_limit_switch_prompt_shows_once_per_session() {
 }
 
 #[tokio::test]
+async fn account_update_clears_derived_usage_limit_state_and_prompt() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    set_chatgpt_auth(&mut chat);
+    let mut limits = snapshot(/*percent*/ 95.0);
+    limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    chat.on_rate_limit_snapshot(Some(limits));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    assert!(chat.rate_limit_warnings.primary_index > 0);
+    assert!(chat.codex_rate_limit_reached_type.is_some());
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
+
+    assert_eq!(chat.rate_limit_warnings.primary_index, 0);
+    assert_eq!(chat.rate_limit_warnings.secondary_index, 0);
+    assert_eq!(chat.codex_rate_limit_reached_type, None);
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+    assert!(chat.rate_limit_snapshots_by_limit_id.is_empty());
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_respects_hidden_notice() {
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;
@@ -1409,33 +1452,97 @@ async fn streaming_final_answer_keeps_task_running_state() {
 #[tokio::test]
 async fn ctrl_c_interrupt_pauses_active_goal_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = start_active_goal_turn(&mut chat);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_interrupt_op(&mut op_rx);
+    assert_goal_paused_event(&mut rx, thread_id);
+}
+
+#[tokio::test]
+async fn esc_interrupt_pauses_active_goal_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    let thread_id = start_active_goal_turn(&mut chat);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
+    assert_goal_paused_event(&mut rx, thread_id);
+
+    update_thread_goal(&mut chat, thread_id, AppThreadGoalStatus::Paused);
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw goal paused footer");
+    let snapshot = normalized_backend_snapshot(terminal.backend());
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        assert_chatwidget_snapshot!("esc_interrupt_goal_paused_footer", snapshot);
+    });
+    #[cfg(not(target_os = "windows"))]
+    assert_chatwidget_snapshot!("esc_interrupt_goal_paused_footer", snapshot);
+}
+
+#[tokio::test]
+async fn request_user_input_interrupt_pauses_active_goal_turn() {
+    for key_event in [
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    ] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let thread_id = start_active_goal_turn(&mut chat);
+        chat.handle_request_user_input_now(ToolRequestUserInputParams {
+            thread_id: thread_id.to_string(),
+            item_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: Vec::new(),
+            auto_resolution_ms: None,
+        });
+
+        chat.handle_key_event(key_event);
+
+        assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
+        assert_goal_paused_event(&mut rx, thread_id);
+    }
+}
+
+fn start_active_goal_turn(chat: &mut ChatWidget) -> ThreadId {
     let thread_id = ThreadId::new();
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(thread_id);
+    update_thread_goal(chat, thread_id, AppThreadGoalStatus::Active);
+    chat.on_task_started();
+    thread_id
+}
+
+fn update_thread_goal(chat: &mut ChatWidget, thread_id: ThreadId, status: AppThreadGoalStatus) {
     let mut goal = test_thread_goal(
-        codex_app_server_protocol::ThreadGoalStatus::Active,
+        status,
         /*token_budget*/ Some(50_000),
         /*tokens_used*/ 40_000,
     );
-    goal.thread_id = thread_id.to_string();
+    let thread_id = thread_id.to_string();
+    goal.thread_id = thread_id.clone();
     chat.handle_server_notification(
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
-                thread_id: thread_id.to_string(),
+                thread_id,
                 turn_id: None,
                 goal,
             },
         ),
         /*replay_kind*/ None,
     );
-    chat.on_task_started();
+}
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-
-    match op_rx.try_recv() {
-        Ok(Op::Interrupt { .. }) => {}
-        other => panic!("expected Op::Interrupt, got {other:?}"),
-    }
+fn assert_goal_paused_event(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    thread_id: ThreadId,
+) {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::SetThreadGoalStatus {
@@ -1863,6 +1970,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         call_id: "call-approve-exec".into(),
         approval_id: Some("call-approve-exec".into()),
         turn_id: "turn-approve-exec".into(),
+        environment_id: None,
         command: vec!["echo".into(), "hello world".into()],
         cwd: test_path_buf("/tmp").abs(),
         reason: Some(
@@ -2076,6 +2184,192 @@ async fn status_line_legacy_context_usage_renders_context_used_percent() {
 }
 
 #[tokio::test]
+async fn status_line_workspace_headline_renders_cached_value() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Workspace maintenance starts at 5pm".to_string());
+
+    chat.refresh_status_line();
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Workspace maintenance starts at 5pm".to_string())
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace-headline should be a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn status_line_workspace_headline_omits_when_unavailable() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec![
+        "workspace-headline".to_string(),
+        "run-state".to_string(),
+    ]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Ready".to_string()));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace-headline should be omitted without warning when no headline is cached"
+    );
+}
+
+#[tokio::test]
+async fn workspace_headline_update_applies_feature_disabled_result() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Old headline".to_string());
+    let request_id = 3;
+    chat.status_line_workspace_headline_pending_request_id = Some(request_id);
+
+    assert!(chat.set_status_line_workspace_headline(
+        request_id,
+        Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled),
+    ));
+
+    assert_eq!(status_line_text(&chat), None);
+    assert!(chat.status_line_workspace_messages_disabled);
+}
+
+#[tokio::test]
+async fn workspace_headline_update_applies_available_headline() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    let request_id = 4;
+    chat.status_line_workspace_headline_pending_request_id = Some(request_id);
+
+    assert!(chat.set_status_line_workspace_headline(
+        request_id,
+        Ok(
+            crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+                "Fresh workspace headline".to_string(),
+            ))
+        ),
+    ));
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Fresh workspace headline".to_string())
+    );
+    assert!(!chat.status_line_workspace_messages_disabled);
+}
+
+#[tokio::test]
+async fn account_update_clears_workspace_headline_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Old workspace headline".to_string());
+    chat.status_line_workspace_headline_pending_request_id = Some(5);
+    chat.status_line_workspace_headline_last_requested_at = Some(Instant::now());
+    chat.status_line_workspace_messages_disabled = true;
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ false,
+    );
+
+    assert_eq!(
+        (
+            status_line_text(&chat),
+            chat.status_line_workspace_headline_pending_request_id,
+            chat.status_line_workspace_headline_last_requested_at,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (None, None, None, false)
+    );
+}
+
+#[tokio::test]
+async fn workspace_headline_fetch_allows_backend_auth_without_chatgpt_account() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
+    );
+
+    let request_id = take_workspace_headline_request_id(&mut rx);
+    assert_eq!(
+        chat.status_line_workspace_headline_pending_request_id,
+        Some(request_id)
+    );
+}
+
+#[tokio::test]
+async fn account_update_discards_stale_workspace_headline_results() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+
+    chat.update_account_state(
+        Some(StatusAccountDisplay::ChatGpt {
+            email: Some("first@example.com".to_string()),
+            plan: None,
+        }),
+        /*plan_type*/ None,
+        /*has_chatgpt_account*/ true,
+        /*has_codex_backend_auth*/ true,
+    );
+    let stale_request_id = take_workspace_headline_request_id(&mut rx);
+
+    chat.update_account_state(
+        Some(StatusAccountDisplay::ChatGpt {
+            email: Some("second@example.com".to_string()),
+            plan: None,
+        }),
+        /*plan_type*/ None,
+        /*has_chatgpt_account*/ true,
+        /*has_codex_backend_auth*/ true,
+    );
+    let current_request_id = take_workspace_headline_request_id(&mut rx);
+
+    assert_ne!(stale_request_id, current_request_id);
+    assert!(!chat.set_status_line_workspace_headline(
+        stale_request_id,
+        Ok(
+            crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+                "First account headline".to_string(),
+            ))
+        ),
+    ));
+    assert_eq!(
+        (
+            chat.status_line_workspace_headline.clone(),
+            chat.status_line_workspace_headline_pending_request_id,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (None, Some(current_request_id), false)
+    );
+
+    assert!(chat.set_status_line_workspace_headline(
+        current_request_id,
+        Ok(
+            crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+                "Second account headline".to_string(),
+            ))
+        ),
+    ));
+    assert!(!chat.set_status_line_workspace_headline(
+        stale_request_id,
+        Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled),
+    ));
+    assert_eq!(
+        (
+            status_line_text(&chat),
+            chat.status_line_workspace_headline_pending_request_id,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (Some("Second account headline".to_string()), None, false,)
+    );
+}
+
+#[tokio::test]
 async fn status_line_branch_state_resets_when_git_branch_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("main".to_string());
@@ -2168,6 +2462,32 @@ async fn interrupted_turn_clears_visible_running_hook() {
         "interrupted_turn_clears_visible_running_hook",
         format!(
             "before interrupt:\n{before_interrupt}after interrupt:\n{}",
+            active_hook_blob(&chat)
+        )
+    );
+}
+
+#[tokio::test]
+async fn completed_turn_clears_visible_running_hook() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "post-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            /*status_message*/ None,
+        ),
+    );
+    reveal_running_hooks(&mut chat);
+    let before_completion = active_hook_blob(&chat);
+
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+
+    assert_chatwidget_snapshot!(
+        "completed_turn_clears_visible_running_hook",
+        format!(
+            "before completion:\n{before_completion}after completion:\n{}",
             active_hook_blob(&chat)
         )
     );
@@ -3586,7 +3906,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         AppServerThreadItem::CommandExecution {
             id: "c1".into(),
             command: codex_shell_command::parse_command::shlex_join(&command),
-            cwd: cwd.clone(),
+            cwd: cwd.clone().into(),
             process_id: None,
             source: ExecCommandSource::Agent,
             status: AppServerCommandExecutionStatus::InProgress,
@@ -3601,7 +3921,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         AppServerThreadItem::CommandExecution {
             id: "c1".into(),
             command: codex_shell_command::parse_command::shlex_join(&command),
-            cwd,
+            cwd: cwd.into(),
             process_id: None,
             source: ExecCommandSource::Agent,
             status: AppServerCommandExecutionStatus::Completed,

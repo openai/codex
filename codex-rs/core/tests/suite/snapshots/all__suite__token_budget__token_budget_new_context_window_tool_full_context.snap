@@ -1,0 +1,15 @@
+---
+source: core/tests/suite/token_budget.rs
+assertion_line: 545
+expression: snapshot
+---
+Scenario: New context window tool installs fresh full context before the next follow-up request.
+
+## Final Follow-Up Request
+00:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <SKILLS_INSTRUCTIONS>
+    [03] <context_window>\nThread id: <THREAD_ID>\nFirst context window id: <FIRST_WINDOW_ID>\nCurrent context window id: <WINDOW_ID>\nPrevious context window id: <FIRST_WINDOW_ID>\n</context_window>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:function_call/update_plan
+03:function_call_output:Plan updated

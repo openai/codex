@@ -169,7 +169,7 @@ impl ConfigRequestProcessor {
 
     pub(crate) async fn handle_config_mutation(&self) {
         self.thread_manager.plugins_manager().clear_cache();
-        self.thread_manager.skills_manager().clear_cache();
+        self.thread_manager.skills_service().clear_cache();
     }
 
     async fn handle_config_mutation_result<T>(
@@ -295,15 +295,14 @@ impl ConfigRequestProcessor {
         &self,
         pending_changes: std::collections::BTreeMap<String, bool>,
     ) {
+        let plugins_manager = self.thread_manager.plugins_manager();
         for (plugin_id, enabled) in pending_changes {
             let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
                 continue;
             };
-            let metadata = codex_core_plugins::loader::installed_plugin_telemetry_metadata(
-                self.config_manager.codex_home(),
-                &plugin_id,
-            )
-            .await;
+            let metadata = plugins_manager
+                .telemetry_metadata_for_installed_plugin(&plugin_id)
+                .await;
             if enabled {
                 self.analytics_events_client.track_plugin_enabled(metadata);
             } else {
@@ -364,6 +363,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         }),
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
         allow_appshots: requirements.allow_appshots,
+        allow_remote_control: requirements.allow_remote_control,
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
@@ -616,6 +616,16 @@ mod tests {
 
         assert_eq!(mapped.allow_appshots, Some(false));
         assert_eq!(mapped.hooks, None);
+    }
+
+    #[test]
+    fn requirements_api_includes_allow_remote_control() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allow_remote_control: Some(false),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.allow_remote_control, Some(false));
     }
 
     #[test]

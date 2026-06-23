@@ -22,7 +22,10 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::test_support::all_model_presets;
+use codex_features::Feature;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
+use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -91,6 +94,162 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
         }),
         "future turn did not use updated model/service tier: {request_bodies:#?}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_multi_agent_mode_applies_to_future_turns() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        (1..=2)
+            .map(|index| {
+                responses::sse(vec![
+                    responses::ev_response_created(&format!("resp-{index}")),
+                    responses::ev_assistant_message(&format!("msg-{index}"), "done"),
+                    responses::ev_completed(&format!("resp-{index}")),
+                ])
+            })
+            .collect(),
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::from([(Feature::MultiAgentV2, true)]),
+        /*auto_compact_limit*/ 200_000,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    start_text_turn(&mut mcp, thread.id.clone()).await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert_eq!(response_mock.requests().len(), 1);
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            multi_agent_mode: Some(MultiAgentMode::Proactive),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(
+        response_mock.requests().len(),
+        1,
+        "settings-only update should not start a model request"
+    );
+
+    let updated = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(updated.thread_id, thread.id);
+    assert_eq!(
+        updated.thread_settings.multi_agent_mode,
+        MultiAgentMode::Proactive
+    );
+
+    start_text_turn(&mut mcp, thread.id).await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    let first_developer_texts = requests[0].message_input_texts("developer");
+    let second_developer_texts = requests[1].message_input_texts("developer");
+    assert_eq!(
+        first_developer_texts
+            .iter()
+            .filter(|text| text.contains(MULTI_AGENT_MODE_OPEN_TAG))
+            .count(),
+        1
+    );
+    assert_eq!(
+        second_developer_texts
+            .iter()
+            .filter(|text| text.contains(MULTI_AGENT_MODE_OPEN_TAG))
+            .count(),
+        2
+    );
+    assert_eq!(
+        second_developer_texts
+            .iter()
+            .filter(|text| text.contains("Proactive multi-agent delegation is active."))
+            .count(),
+        1
+    );
+    assert_eq!(
+        second_developer_texts
+            .iter()
+            .filter(|text| text
+                .contains("Do not spawn sub-agents unless the user explicitly asks for sub-agents"))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_cwd_retargets_default_environment() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            cwd: Some(workspace.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let updated = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(updated.thread_settings.cwd.as_path(), workspace.path());
+
+    start_text_turn(&mut mcp, thread.id).await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let environment_context = response_mock
+        .single_request()
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.starts_with("<environment_context>"))
+        .context("environment context should be model visible")?;
+    assert!(
+        environment_context.contains(&format!(
+            "<cwd>{}</cwd>",
+            workspace.path().to_string_lossy()
+        )),
+        "default environment should use the updated cwd: {environment_context}"
+    );
+
     Ok(())
 }
 

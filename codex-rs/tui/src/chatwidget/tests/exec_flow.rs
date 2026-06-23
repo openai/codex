@@ -10,6 +10,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         call_id: "call-short".into(),
         approval_id: Some("call-short".into()),
         turn_id: "turn-short".into(),
+        environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: Some(
@@ -56,13 +57,14 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
             item_id: "item-1".to_string(),
             started_at_ms: 0,
             approval_id: Some("approval-1".to_string()),
+            environment_id: None,
             reason: None,
             network_approval_context: None,
             command: Some(
                 shlex::try_join(["/bin/zsh", "-lc", script])
                     .expect("round-trippable shell wrapper"),
             ),
-            cwd: Some(test_path_buf("/tmp").abs()),
+            cwd: Some(test_path_buf("/tmp").abs().into()),
             command_actions: None,
             additional_permissions: None,
             proposed_execpolicy_amendment: None,
@@ -93,6 +95,7 @@ async fn exec_approval_uses_approval_id_when_present() {
             call_id: "call-parent".into(),
             approval_id: Some("approval-subcommand".into()),
             turn_id: "turn-short".into(),
+            environment_id: None,
             command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
             cwd: AbsolutePathBuf::current_dir().expect("current dir"),
             reason: Some(
@@ -136,6 +139,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         call_id: "call-multi".into(),
         approval_id: Some("call-multi".into()),
         turn_id: "turn-multi".into(),
+        environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
         cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: Some(
@@ -189,6 +193,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         call_id: "call-long".into(),
         approval_id: Some("call-long".into()),
         turn_id: "turn-long".into(),
+        environment_id: None,
         command: vec!["bash".into(), "-lc".into(), long],
         cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: None,
@@ -358,7 +363,7 @@ async fn exec_end_without_begin_uses_event_command() {
         AppServerThreadItem::CommandExecution {
             id: "call-orphan".to_string(),
             command: codex_shell_command::parse_command::shlex_join(&command),
-            cwd,
+            cwd: cwd.into(),
             process_id: None,
             source: ExecCommandSource::Agent,
             status: AppServerCommandExecutionStatus::Completed,
@@ -864,6 +869,7 @@ async fn image_generation_call_adds_history_cell() {
     handle_image_generation_end(
         &mut chat,
         "call-image-generation",
+        "completed",
         Some("A tiny blue square".into()),
         Some(test_path_buf("/tmp/ig-1.png").abs()),
     );
@@ -876,6 +882,21 @@ async fn image_generation_call_adds_history_cell() {
     let combined =
         lines_to_single_string(&cells[0]).replace(&platform_file_url, "file:///tmp/ig-1.png");
     assert_chatwidget_snapshot!("image_generation_call_history_snapshot", combined);
+
+    handle_image_generation_end(
+        &mut chat,
+        "call-image-generation-failed",
+        "failed",
+        Some("A tiny blue square".into()),
+        /*saved_path*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single failure history cell");
+    assert_chatwidget_snapshot!(
+        "failed_image_generation_call_history_snapshot",
+        lines_to_single_string(&cells[0])
+    );
 }
 
 #[tokio::test]
@@ -1048,10 +1069,10 @@ async fn user_message_during_user_shell_command_is_queued_not_steered() {
 async fn disabled_slash_command_while_task_running_snapshot() {
     // Build a chat widget and simulate an active task
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.bottom_pane.set_task_running(/*running*/ true);
+    handle_turn_started(&mut chat, "turn-1");
 
-    // Dispatch a command that is unavailable while a task runs (e.g., /model)
-    chat.dispatch_command(SlashCommand::Model);
+    // Resume remains available during MCP startup, but not while an agent turn is active.
+    chat.dispatch_command(SlashCommand::Resume);
 
     // Drain history and snapshot the rendered error line(s)
     let cells = drain_insert_history(&mut rx);
@@ -1082,6 +1103,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
         call_id: "call-approve-cmd".into(),
         approval_id: Some("call-approve-cmd".into()),
         turn_id: "turn-approve-cmd".into(),
+        environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: Some(
@@ -1139,6 +1161,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
         call_id: "call-approve-cmd-noreason".into(),
         approval_id: Some("call-approve-cmd-noreason".into()),
         turn_id: "turn-approve-cmd-noreason".into(),
+        environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: None,
@@ -1185,6 +1208,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         call_id: "call-approve-cmd-multiline-trunc".into(),
         approval_id: Some("call-approve-cmd-multiline-trunc".into()),
         turn_id: "turn-approve-cmd-multiline-trunc".into(),
+        environment_id: None,
         command: command.clone(),
         cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: None,

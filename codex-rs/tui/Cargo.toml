@@ -49,7 +49,6 @@ codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
-codex-realtime-webrtc = { workspace = true }
 codex-rollout = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-shell-command = { workspace = true }
@@ -63,6 +62,7 @@ codex-utils-fuzzy-match = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-oss = { workspace = true }
 codex-utils-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-sandbox-summary = { workspace = true }
 codex-utils-sleep-inhibitor = { workspace = true }
@@ -125,9 +125,6 @@ uuid = { workspace = true }
 codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
 
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-cpal = "0.15"
-
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
@@ -151,6 +148,7 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
+app_test_support = { workspace = true }
 codex-cli = { workspace = true }
 codex-mcp = { workspace = true }
 core_test_support = { workspace = true }

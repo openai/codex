@@ -16,6 +16,7 @@ use codex_core_api::AskForApproval;
 use codex_core_api::AuthCredentialsStoreMode;
 use codex_core_api::AuthManager;
 use codex_core_api::AutoCompactTokenLimitScope;
+use codex_core_api::CodexHomeUserInstructionsProvider;
 use codex_core_api::CodexThread;
 use codex_core_api::Config;
 use codex_core_api::ConfigLayerStack;
@@ -120,17 +121,22 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?,
     );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
+        config.codex_home.clone(),
+    ));
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
         environment_manager,
         empty_extension_registry(),
+        user_instructions_provider,
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),
         state_db,
         installation_id,
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let NewThread {
@@ -184,7 +190,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
-        user_instructions: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -192,6 +197,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         include_apps_instructions: false,
         include_collaboration_mode_instructions: false,
         include_skill_instructions: false,
+        orchestrator_skills_enabled: false,
+        orchestrator_mcp_enabled: false,
         include_environment_context: false,
         compact_prompt: None,
         notify: None,
@@ -251,10 +258,11 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_catalog: None,
         model_verbosity: None,
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-        apps_mcp_path_override: None,
+        respect_system_proxy: false,
         apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_ws_base_url: None,
+        experimental_realtime_webrtc_call_base_url: None,
         experimental_realtime_ws_model: None,
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
@@ -272,6 +280,9 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         background_terminal_max_timeout: 300_000,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
+        token_budget: None,
+        rollout_budget: None,
+        current_time_reminder: None,
         features: Default::default(),
         suppress_unstable_features_warning: false,
         active_project: ProjectConfig { trust_level: None },

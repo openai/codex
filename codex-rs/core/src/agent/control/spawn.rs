@@ -1,11 +1,13 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
+use codex_protocol::config_types::MultiAgentMode;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
 struct SpawnAgentThreadInheritance {
-    shell_snapshot: Option<Arc<ShellSnapshot>>,
+    environments: Option<TurnEnvironmentSnapshot>,
     exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+    inherited_multi_agent_mode: Option<MultiAgentMode>,
 }
 
 fn default_agent_nickname_list() -> Vec<&'static str> {
@@ -51,10 +53,11 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
+            | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other,
         ) => false,
+        RolloutItem::InterAgentCommunication(_) => false,
         // Full-history forks preserve the cached prompt prefix and can keep diffing
         // from the parent's durable baseline. Truncated forks drop part of that prompt,
         // so they must rebuild context on their first child turn.
@@ -155,8 +158,8 @@ impl AgentControl {
         let parent_thread_id = initial_history
             .get_resumed_parent_thread_id()
             .or(stored_parent_thread_id);
-        let inherited_shell_snapshot = self
-            .inherited_shell_snapshot_for_source(&state, Some(&session_source))
+        let inherited_environments = self
+            .inherited_environments_for_source(&state, Some(&session_source))
             .await;
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
@@ -169,7 +172,7 @@ impl AgentControl {
                 agent_control: self.clone(),
                 session_source,
                 parent_thread_id,
-                inherited_shell_snapshot,
+                inherited_environments,
                 inherited_exec_policy,
             })
             .await
@@ -230,12 +233,13 @@ impl AgentControl {
         };
         let mut reservation = self.state.reserve_spawn_slot(reservation_max_threads)?;
         let inheritance = SpawnAgentThreadInheritance {
-            shell_snapshot: self
-                .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
+            environments: self
+                .inherited_environments_for_source(&state, session_source.as_ref())
                 .await,
             exec_policy: self
                 .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
                 .await,
+            inherited_multi_agent_mode: options.initial_multi_agent_mode,
         };
         let (session_source, mut agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -282,7 +286,8 @@ impl AgentControl {
                     /*forked_from_thread_id*/ None,
                     /*thread_source*/ Some(ThreadSource::Subagent),
                     /*metrics_service_name*/ None,
-                    inheritance.shell_snapshot,
+                    inheritance.inherited_multi_agent_mode,
+                    inheritance.environments,
                     inheritance.exec_policy,
                     options.environments.clone(),
                 ))
@@ -385,8 +390,9 @@ impl AgentControl {
         multi_agent_version: MultiAgentVersion,
     ) -> CodexResult<crate::thread_manager::NewThread> {
         let SpawnAgentThreadInheritance {
-            shell_snapshot: inherited_shell_snapshot,
+            environments: inherited_environments,
             exec_policy: inherited_exec_policy,
+            inherited_multi_agent_mode,
         } = inheritance;
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
@@ -492,7 +498,6 @@ impl AgentControl {
         }
         if preserve_reference_context_item
             && multi_agent_version == MultiAgentVersion::V2
-            && config.multi_agent_v2.usage_hint_enabled
             && let Some(subagent_usage_hint_text) =
                 config.multi_agent_v2.subagent_usage_hint_text.clone()
             && let Some(subagent_usage_hint_message) =
@@ -512,7 +517,8 @@ impl AgentControl {
                 /*thread_source*/ Some(ThreadSource::Subagent),
                 /*parent_thread_id*/ Some(parent_thread_id),
                 /*forked_from_thread_id*/ Some(parent_thread_id),
-                inherited_shell_snapshot,
+                inherited_multi_agent_mode,
+                inherited_environments,
                 inherited_exec_policy,
                 options.environments.clone(),
             )
@@ -664,8 +670,8 @@ impl AgentControl {
             other => (other, AgentMetadata::default()),
         };
         let notification_source = session_source.clone();
-        let inherited_shell_snapshot = self
-            .inherited_shell_snapshot_for_source(&state, Some(&session_source))
+        let inherited_environments = self
+            .inherited_environments_for_source(&state, Some(&session_source))
             .await;
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
@@ -678,7 +684,7 @@ impl AgentControl {
                 agent_control: self.clone(),
                 session_source,
                 parent_thread_id,
-                inherited_shell_snapshot,
+                inherited_environments,
                 inherited_exec_policy,
             })
             .await?;

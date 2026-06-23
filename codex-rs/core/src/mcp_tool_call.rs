@@ -33,6 +33,9 @@ use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_connectors::AppToolPolicy;
+use codex_connectors::AppToolPolicyEvaluator;
+use codex_connectors::AppToolPolicyInput;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -78,6 +81,7 @@ use codex_rollout::state_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
@@ -139,33 +143,38 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
-    let item_metadata = McpToolCallItemMetadata {
-        mcp_app_resource_uri: metadata
-            .as_ref()
-            .and_then(|metadata| metadata.mcp_app_resource_uri.clone()),
-        plugin_id: metadata
-            .as_ref()
-            .and_then(|metadata| metadata.plugin_id.clone()),
-    };
+    let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, metadata.as_ref());
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
-        connectors::app_tool_policy(
-            &turn_context.config,
-            metadata
-                .as_ref()
-                .and_then(|metadata| metadata.connector_id.as_deref()),
-            &tool_name,
-            metadata
-                .as_ref()
-                .and_then(|metadata| metadata.tool_title.as_deref()),
-            metadata
-                .as_ref()
-                .and_then(|metadata| metadata.annotations.as_ref()),
+        let annotations = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.annotations.as_ref());
+        AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack).policy(
+            AppToolPolicyInput {
+                connector_id: metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.connector_id.as_deref()),
+                tool_name: &tool_name,
+                tool_title: metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.tool_title.as_deref()),
+                destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
+                open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
+            },
         )
     } else {
-        connectors::AppToolPolicy::default()
+        AppToolPolicy::default()
     };
     let approval_mode = if server == CODEX_APPS_MCP_SERVER_NAME {
         app_tool_policy.approval
+    } else if let Some(approval_mode) = {
+        // Selected-plugin registrations are absent from config.toml and the legacy plugin manager,
+        // so their resolved catalog entry is the authoritative source for tool approval policy.
+        let manager = sess.services.mcp_connection_manager.load();
+        manager
+            .is_selected_plugin_mcp_server(&server)
+            .then(|| manager.tool_approval_mode(&server, &tool_name))
+    } {
+        approval_mode
     } else {
         custom_mcp_tool_approval_mode(sess.as_ref(), turn_context.as_ref(), &server, &tool_name)
             .await
@@ -296,10 +305,30 @@ pub(crate) struct HandledMcpToolCall {
     pub(crate) tool_input: JsonValue,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct McpToolCallItemMetadata {
+    connector_id: Option<String>,
+    link_id: Option<String>,
     mcp_app_resource_uri: Option<String>,
     plugin_id: Option<String>,
+}
+
+impl McpToolCallItemMetadata {
+    fn from_tool_metadata(server: &str, metadata: Option<&McpToolApprovalMetadata>) -> Self {
+        let trusted_mcp_app_metadata = if server == CODEX_APPS_MCP_SERVER_NAME {
+            metadata
+        } else {
+            None
+        };
+        Self {
+            connector_id: trusted_mcp_app_metadata
+                .and_then(|metadata| metadata.connector_id.clone()),
+            link_id: trusted_mcp_app_metadata.and_then(|metadata| metadata.link_id.clone()),
+            mcp_app_resource_uri: metadata
+                .and_then(|metadata| metadata.mcp_app_resource_uri.clone()),
+            plugin_id: metadata.and_then(|metadata| metadata.plugin_id.clone()),
+        }
+    }
 }
 
 async fn handle_approved_mcp_tool_call(
@@ -319,8 +348,7 @@ async fn handle_approved_mcp_tool_call(
     let server_origin = sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .server_origin(&server)
         .map(str::to_string);
 
@@ -606,14 +634,17 @@ async fn maybe_request_codex_apps_auth_elicitation(
     if !sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .is_host_owned_codex_apps_server(server)
     {
         return result;
     }
 
-    if !turn_context.features.enabled(Feature::AuthElicitation) {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::AuthElicitation)
+    {
         return result;
     }
 
@@ -669,13 +700,9 @@ async fn maybe_request_codex_apps_auth_elicitation(
     auth_elicitation_completed_result(&plan.auth_failure, result.meta)
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "Codex Apps cache refresh reads through the session-owned manager guard"
-)]
 async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &TurnContext) {
     let mcp_tools_result = {
-        let manager = sess.services.mcp_connection_manager.read().await;
+        let manager = sess.services.mcp_connection_manager.load_full();
         manager.hard_refresh_codex_apps_tools_cache().await
     };
 
@@ -694,21 +721,14 @@ async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP sandbox metadata reads through the session-owned manager guard"
-)]
 async fn augment_mcp_tool_request_meta_with_sandbox_state(
     sess: &Session,
     turn_context: &TurnContext,
     server: &str,
     mut meta: Option<serde_json::Value>,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let supports_sandbox_state_meta = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
+    let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
+    let supports_sandbox_state_meta = mcp_connection_manager
         .server_supports_sandbox_state_meta_capability(server)
         .await
         .unwrap_or(false);
@@ -716,13 +736,18 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         return Ok(meta);
     }
 
+    let server_environment_id = mcp_connection_manager
+        .server_environment_id(server)
+        .unwrap_or(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID);
+    let Some(sandbox_cwd) = sandbox_cwd_for_mcp_server(turn_context, server_environment_id) else {
+        return Ok(meta);
+    };
+    let permission_profile = turn_context.permission_profile();
     let sandbox_state = serde_json::to_value(SandboxState {
-        permission_profile: Some(turn_context.permission_profile()),
-        sandbox_policy: turn_context.sandbox_policy(),
-        codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
-        #[allow(deprecated)]
-        sandbox_cwd: turn_context.cwd.to_path_buf(),
-        use_legacy_landlock: turn_context.features.use_legacy_landlock(),
+        permission_profile: Some(permission_profile),
+        codex_linux_sandbox_exe: turn_context.config.codex_linux_sandbox_exe.clone(),
+        sandbox_cwd,
+        use_legacy_landlock: turn_context.config.features.use_legacy_landlock(),
     })?;
 
     match meta.as_mut() {
@@ -746,6 +771,24 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     Ok(meta)
 }
 
+fn sandbox_cwd_for_mcp_server(turn_context: &TurnContext, environment_id: &str) -> Option<PathUri> {
+    if let Some(environment) = turn_context
+        .environments
+        .turn_environments
+        .iter()
+        .find(|environment| environment.environment_id == environment_id)
+    {
+        return Some(environment.cwd().clone());
+    }
+
+    if environment_id == codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
+        #[allow(deprecated)]
+        return Some(PathUri::from_abs_path(&turn_context.cwd));
+    }
+
+    None
+}
+
 async fn maybe_mark_thread_memory_mode_polluted(
     sess: &Session,
     turn_context: &TurnContext,
@@ -757,8 +800,7 @@ async fn maybe_mark_thread_memory_mode_polluted(
     let pollutes_memory = sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .server_pollutes_memory(server);
     if !pollutes_memory {
         return;
@@ -863,7 +905,9 @@ async fn notify_mcp_tool_call_started(
         server,
         tool,
         arguments: arguments.unwrap_or(JsonValue::Null),
+        connector_id: item_metadata.connector_id,
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
+        link_id: item_metadata.link_id,
         plugin_id: item_metadata.plugin_id,
         status: McpToolCallStatus::InProgress,
         result: None,
@@ -903,7 +947,9 @@ async fn notify_mcp_tool_call_completed(
         server,
         tool,
         arguments: arguments.unwrap_or(JsonValue::Null),
+        connector_id: item_metadata.connector_id,
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
+        link_id: item_metadata.link_id,
         plugin_id: item_metadata.plugin_id,
         status,
         result,
@@ -969,6 +1015,7 @@ enum McpToolApprovalDecision {
 pub(crate) struct McpToolApprovalMetadata {
     annotations: Option<ToolAnnotations>,
     connector_id: Option<String>,
+    link_id: Option<String>,
     connector_name: Option<String>,
     connector_description: Option<String>,
     plugin_id: Option<String>,
@@ -981,6 +1028,7 @@ pub(crate) struct McpToolApprovalMetadata {
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
+const MCP_TOOL_LINK_ID_META_KEY: &str = "link_id";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
@@ -1180,8 +1228,16 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
-    let persistent_approval_key =
-        persistent_mcp_tool_approval_key(invocation, metadata, approval_mode);
+    let persistent_approval_key = if sess
+        .services
+        .mcp_connection_manager
+        .load()
+        .is_selected_plugin_mcp_server(&invocation.server)
+    {
+        None
+    } else {
+        persistent_mcp_tool_approval_key(invocation, metadata, approval_mode)
+    };
     if let Some(key) = session_approval_key.as_ref()
         && mcp_tool_approval_is_remembered(sess, key).await
     {
@@ -1309,6 +1365,7 @@ async fn maybe_request_mcp_tool_approval(
 
     let args = RequestUserInputArgs {
         questions: vec![question],
+        auto_resolution_ms: None,
     };
     let response = sess
         .request_user_input(turn_context.as_ref(), call_id.to_string(), args)
@@ -1414,17 +1471,13 @@ async fn mcp_tool_approval_decision_from_guardian(
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP approval metadata reads through the session-owned manager guard"
-)]
 pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
-    let manager = sess.services.mcp_connection_manager.read().await;
+    let manager = sess.services.mcp_connection_manager.load_full();
     let plugin_id = manager
         .plugin_id_for_mcp_server_name(server)
         .map(str::to_string);
@@ -1459,6 +1512,13 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     Some(McpToolApprovalMetadata {
         annotations: tool_info.tool.annotations,
         connector_id: tool_info.connector_id,
+        link_id: tool_info
+            .tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get(MCP_TOOL_LINK_ID_META_KEY))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
         connector_name: tool_info.connector_name,
         connector_description,
         plugin_id,
@@ -1509,10 +1569,6 @@ fn get_mcp_app_resource_uri(
     })
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP app metadata reads through the session-owned manager guard"
-)]
 async fn lookup_mcp_app_usage_metadata(
     sess: &Session,
     server: &str,
@@ -1521,8 +1577,7 @@ async fn lookup_mcp_app_usage_metadata(
     let tools = sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .list_all_tools()
         .await;
 

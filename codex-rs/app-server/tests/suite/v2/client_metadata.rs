@@ -63,7 +63,10 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request(ThreadStartParams {
+            thread_source: Some(ThreadSource::Feature("automation".to_string())),
+            ..Default::default()
+        })
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -75,7 +78,6 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     let client_metadata = HashMap::from([
         ("fiber_run_id".to_string(), "fiber-start-123".to_string()),
         ("origin".to_string(), "gaas".to_string()),
-        ("thread_source".to_string(), "client-supplied".to_string()),
     ]);
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -107,11 +109,12 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+        .expect("x-codex-turn-metadata header should be present");
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
-    assert_eq!(metadata["thread_source"].as_str(), Some("client-supplied"));
+    assert_eq!(metadata["thread_source"].as_str(), Some("automation"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
+    assert!(metadata.get("installation_id").is_some());
     assert!(metadata.get("session_id").is_some());
     assert_eq!(
         metadata["window_id"].as_str(),
@@ -187,7 +190,7 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+        .expect("x-codex-turn-metadata header should be present");
     assert_eq!(
         metadata["forked_from_thread_id"].as_str(),
         Some(source_thread_id.as_str())
@@ -272,7 +275,7 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+        .expect("x-codex-turn-metadata header should be present");
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
         Some("review")
@@ -284,7 +287,7 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
     );
     let review_request_thread_id = metadata["thread_id"]
         .as_str()
-        .unwrap_or_else(|| panic!("missing review request thread_id"));
+        .expect("review request thread_id should be present");
     assert!(review_request_thread_id != review_thread_id.as_str());
     assert_eq!(
         request
@@ -299,7 +302,7 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
 }
 
 #[tokio::test]
-async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -> Result<()> {
+async fn turn_start_sends_nested_subagent_lineage_after_cold_thread_resume_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -320,6 +323,8 @@ async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -
         /*supports_websockets*/ false,
     )?;
 
+    let root_thread_id = CoreThreadId::new();
+    let root_thread_id_str = root_thread_id.to_string();
     let parent_thread_id = CoreThreadId::new();
     let parent_thread_id_str = parent_thread_id.to_string();
     let subagent_thread_id = create_fake_parented_rollout_with_source(
@@ -330,6 +335,7 @@ async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -
         Some("mock_provider"),
         /*git_info*/ None,
         SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
+        root_thread_id.into(),
         parent_thread_id,
     )?;
 
@@ -349,6 +355,7 @@ async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(thread.id, subagent_thread_id);
+    assert_eq!(thread.session_id, root_thread_id_str);
     assert_eq!(thread.parent_thread_id, Some(parent_thread_id_str.clone()));
     assert_eq!(
         thread.source,
@@ -383,12 +390,16 @@ async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+        .expect("x-codex-turn-metadata header should be present");
     assert_eq!(
         metadata["parent_thread_id"].as_str(),
         Some(parent_thread_id_str.as_str())
     );
     assert_eq!(metadata["subagent_kind"].as_str(), Some("guardian"));
+    assert_eq!(
+        metadata["session_id"].as_str(),
+        Some(thread.session_id.as_str())
+    );
     assert_eq!(metadata["thread_id"].as_str(), Some(thread.id.as_str()));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("forked_from_thread_id").is_none());
@@ -501,7 +512,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing first x-codex-turn-metadata header"));
+        .expect("first x-codex-turn-metadata header should be present");
     assert_eq!(
         first_metadata["fiber_run_id"].as_str(),
         Some("fiber-start-123")
@@ -512,7 +523,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing second x-codex-turn-metadata header"));
+        .expect("second x-codex-turn-metadata header should be present");
     assert_eq!(
         second_metadata["fiber_run_id"].as_str(),
         Some("fiber-steer-456")
@@ -552,7 +563,10 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request(ThreadStartParams {
+            thread_source: Some(ThreadSource::Feature("automation".to_string())),
+            ..Default::default()
+        })
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -607,9 +621,10 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
     let metadata = request["client_metadata"]["x-codex-turn-metadata"]
         .as_str()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing websocket x-codex-turn-metadata client metadata"));
+        .expect("websocket x-codex-turn-metadata client metadata should be present");
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
+    assert_eq!(metadata["thread_source"].as_str(), Some("automation"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("session_id").is_some());
     assert_eq!(
@@ -669,10 +684,7 @@ async fn fork_fake_rollout_thread(
 }
 
 fn parse_json_header(value: &str) -> serde_json::Value {
-    match serde_json::from_str(value) {
-        Ok(value) => value,
-        Err(err) => panic!("metadata header should be valid json: {err}"),
-    }
+    serde_json::from_str(value).expect("metadata header should contain valid JSON")
 }
 
 async fn wait_for_request_count(

@@ -1,5 +1,5 @@
-use std::future::Future;
-use std::pin::Pin;
+#![allow(clippy::expect_used)]
+
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -9,14 +9,17 @@ use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
+use codex_extension_api::PromptSlot;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::TurnContextContributionInput;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
 use codex_extension_api::TurnItemContributor;
@@ -33,36 +36,36 @@ use pretty_assertions::assert_eq;
 struct AllContributors;
 
 impl ContextContributor for AllContributors {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
-    ) -> Pin<Box<dyn Future<Output = Vec<PromptFragment>> + Send + 'a>> {
+    ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(std::future::ready(Vec::new()))
     }
 }
 
-#[async_trait::async_trait]
 impl ThreadLifecycleContributor<()> for AllContributors {}
 
-#[async_trait::async_trait]
 impl TurnLifecycleContributor for AllContributors {}
 
 impl ConfigContributor<()> for AllContributors {}
 
-#[async_trait::async_trait]
 impl TokenUsageContributor for AllContributors {}
 
-#[async_trait::async_trait]
 impl TurnInputContributor for AllContributors {
-    async fn contribute(
-        &self,
-        _input: TurnInputContext,
-        _session_store: &ExtensionData,
-        _thread_store: &ExtensionData,
-        _turn_store: &ExtensionData,
-    ) -> Vec<Box<dyn ContextualUserFragment + Send>> {
-        Vec::new()
+    fn contribute<'a>(
+        &'a self,
+        input: TurnInputContext,
+        _session_store: &'a ExtensionData,
+        _thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
+    ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+            Vec::new()
+        })
     }
 }
 
@@ -78,27 +81,31 @@ impl ToolContributor for AllContributors {
 
 impl ToolLifecycleContributor for AllContributors {}
 
-#[async_trait::async_trait]
 impl TurnItemContributor for AllContributors {
-    async fn contribute(
-        &self,
-        _thread_store: &ExtensionData,
-        _turn_store: &ExtensionData,
-        _item: &mut TurnItem,
-    ) -> Result<(), String> {
-        Ok(())
+    fn contribute<'a>(
+        &'a self,
+        _thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
+        _item: &'a mut TurnItem,
+    ) -> ExtensionFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let _self = self;
+            Ok(())
+        })
     }
 }
 
-#[async_trait::async_trait]
 impl ApprovalReviewContributor for AllContributors {
-    async fn contribute(
-        &self,
-        _session_store: &ExtensionData,
-        _thread_store: &ExtensionData,
-        _prompt: &str,
-    ) -> Option<ReviewDecision> {
-        Some(ReviewDecision::ApprovedForSession)
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a ExtensionData,
+        _thread_store: &'a ExtensionData,
+        _prompt: &'a str,
+    ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
+        Box::pin(async move {
+            let _self = self;
+            Some(ReviewDecision::ApprovedForSession)
+        })
     }
 }
 
@@ -142,12 +149,26 @@ async fn build_round_trips_every_contributor_category() {
 struct NamedContextContributor(&'static str);
 
 impl ContextContributor for NamedContextContributor {
-    fn contribute<'a>(
+    fn contribute_thread_context<'a>(
         &'a self,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
-    ) -> Pin<Box<dyn Future<Output = Vec<PromptFragment>> + Send + 'a>> {
+    ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(std::future::ready(vec![PromptFragment::developer_policy(
+            self.0,
+        )]))
+    }
+}
+
+struct NamedTurnContextContributor(&'static str);
+
+impl ContextContributor for NamedTurnContextContributor {
+    fn contribute_turn_context<'a>(
+        &'a self,
+        _input: TurnContextContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
+        Box::pin(std::future::ready(vec![PromptFragment::new(
+            PromptSlot::ContextualUser,
             self.0,
         )]))
     }
@@ -158,19 +179,20 @@ struct RecordingTurnItemContributor {
     calls: Arc<Mutex<Vec<&'static str>>>,
 }
 
-#[async_trait::async_trait]
 impl TurnItemContributor for RecordingTurnItemContributor {
-    async fn contribute(
-        &self,
-        _thread_store: &ExtensionData,
-        _turn_store: &ExtensionData,
-        _item: &mut TurnItem,
-    ) -> Result<(), String> {
-        self.calls
-            .lock()
-            .unwrap_or_else(|error| panic!("turn item calls lock poisoned: {error}"))
-            .push(self.name);
-        Ok(())
+    fn contribute<'a>(
+        &'a self,
+        _thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
+        _item: &'a mut TurnItem,
+    ) -> ExtensionFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.calls
+                .lock()
+                .expect("turn item calls lock should not be poisoned")
+                .push(self.name);
+            Ok(())
+        })
     }
 }
 
@@ -180,6 +202,8 @@ async fn contributors_preserve_registration_order() {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
     builder.prompt_contributor(Arc::new(NamedContextContributor("first")));
     builder.prompt_contributor(Arc::new(NamedContextContributor("second")));
+    builder.prompt_contributor(Arc::new(NamedTurnContextContributor("turn-first")));
+    builder.prompt_contributor(Arc::new(NamedTurnContextContributor("turn-second")));
     for name in ["first", "second"] {
         builder.turn_item_contributor(Arc::new(RecordingTurnItemContributor {
             name,
@@ -193,7 +217,25 @@ async fn contributors_preserve_registration_order() {
 
     let mut fragments = Vec::new();
     for contributor in registry.context_contributors() {
-        fragments.extend(contributor.contribute(&session_store, &thread_store).await);
+        fragments.extend(
+            contributor
+                .contribute_thread_context(&session_store, &thread_store)
+                .await,
+        );
+    }
+    for contributor in registry.context_contributors() {
+        fragments.extend(
+            contributor
+                .contribute_turn_context(TurnContextContributionInput {
+                    thread_id: codex_protocol::ThreadId::default(),
+                    turn_id: turn_store.level_id(),
+                    session_store: &session_store,
+                    thread_store: &thread_store,
+                    turn_store: &turn_store,
+                    model_context_window: Some(123),
+                })
+                .await,
+        );
     }
     let mut item = TurnItem::HookPrompt(HookPromptItem {
         id: "item".to_string(),
@@ -211,6 +253,8 @@ async fn contributors_preserve_registration_order() {
         vec![
             PromptFragment::developer_policy("first"),
             PromptFragment::developer_policy("second"),
+            PromptFragment::new(PromptSlot::ContextualUser, "turn-first"),
+            PromptFragment::new(PromptSlot::ContextualUser, "turn-second"),
         ]
     );
     assert_eq!(
@@ -236,24 +280,25 @@ struct RecordingApprovalContributor {
     calls: Arc<Mutex<Vec<ApprovalCall>>>,
 }
 
-#[async_trait::async_trait]
 impl ApprovalReviewContributor for RecordingApprovalContributor {
-    async fn contribute(
-        &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-        prompt: &str,
-    ) -> Option<ReviewDecision> {
-        self.calls
-            .lock()
-            .unwrap_or_else(|error| panic!("approval calls lock poisoned: {error}"))
-            .push(ApprovalCall {
-                contributor: self.name,
-                session_id: session_store.level_id().to_string(),
-                thread_id: thread_store.level_id().to_string(),
-                prompt: prompt.to_string(),
-            });
-        self.decision.clone()
+    fn contribute<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+        prompt: &'a str,
+    ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
+        Box::pin(async move {
+            self.calls
+                .lock()
+                .expect("approval calls lock should not be poisoned")
+                .push(ApprovalCall {
+                    contributor: self.name,
+                    session_id: session_store.level_id().to_string(),
+                    thread_id: thread_store.level_id().to_string(),
+                    prompt: prompt.to_string(),
+                });
+            self.decision.clone()
+        })
     }
 }
 
@@ -314,7 +359,7 @@ impl ExtensionEventSink for RecordingEventSink {
         };
         self.events
             .lock()
-            .unwrap_or_else(|error| panic!("recording event sink lock poisoned: {error}"))
+            .expect("recording event sink lock should not be poisoned")
             .push((event.id, warning.message));
     }
 }

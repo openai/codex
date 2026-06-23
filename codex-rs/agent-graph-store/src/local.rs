@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_state::StateRuntime;
 use std::sync::Arc;
@@ -29,7 +28,6 @@ impl LocalAgentGraphStore {
     }
 }
 
-#[async_trait]
 impl AgentGraphStore for LocalAgentGraphStore {
     async fn upsert_thread_spawn_edge(
         &self,

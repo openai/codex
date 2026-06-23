@@ -9,6 +9,7 @@ use schemars::schema::ObjectValidation;
 use schemars::schema::RootSchema;
 use schemars::schema::Schema;
 use schemars::schema::SchemaObject;
+use schemars::schema::SubschemaValidation;
 use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
@@ -43,12 +44,37 @@ pub fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
             );
             continue;
         }
-        if feature.id == codex_features::Feature::AppsMcpPathOverride {
+        if feature.id == codex_features::Feature::TokenBudget {
             validation.properties.insert(
                 feature.key.to_string(),
                 schema_gen.subschema_for::<codex_features::FeatureToml<
-                    codex_features::AppsMcpPathOverrideConfigToml,
+                    codex_features::TokenBudgetConfigToml,
                 >>(),
+            );
+            continue;
+        }
+        if feature.id == codex_features::Feature::RolloutBudget {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::RolloutBudgetConfigToml,
+                >>(),
+            );
+            continue;
+        }
+        if feature.id == codex_features::Feature::CurrentTimeReminder {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::CurrentTimeReminderConfigToml,
+                >>(),
+            );
+            continue;
+        }
+        if feature.id == codex_features::Feature::AppsMcpPathOverride {
+            validation.properties.insert(
+                feature.key.to_string(),
+                removed_apps_mcp_path_override_schema(schema_gen),
             );
             continue;
         }
@@ -74,6 +100,30 @@ pub fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
     object.object = Some(Box::new(validation));
 
     Schema::Object(object)
+}
+
+fn removed_apps_mcp_path_override_schema(schema_gen: &mut SchemaGenerator) -> Schema {
+    let mut config_validation = ObjectValidation::default();
+    config_validation
+        .properties
+        .insert("enabled".to_string(), schema_gen.subschema_for::<bool>());
+    config_validation
+        .properties
+        .insert("path".to_string(), schema_gen.subschema_for::<String>());
+    config_validation.additional_properties = Some(Box::new(Schema::Bool(false)));
+
+    let config = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Object.into()),
+        object: Some(Box::new(config_validation)),
+        ..Default::default()
+    });
+    Schema::Object(SchemaObject {
+        subschemas: Some(Box::new(SubschemaValidation {
+            any_of: Some(vec![schema_gen.subschema_for::<bool>(), config]),
+            ..Default::default()
+        })),
+        ..Default::default()
+    })
 }
 
 /// Schema for the `[mcp_servers]` map using the raw input shape.

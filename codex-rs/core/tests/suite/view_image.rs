@@ -28,6 +28,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::get_remote_test_env;
@@ -41,9 +42,9 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local;
-use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event_with_timeout;
@@ -80,7 +81,6 @@ fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) ->
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            environments: Some(local_selections(test.config.cwd.clone())),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -133,9 +133,10 @@ fn png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> anyhow::Result<Vec<u8>> 
 
 async fn create_workspace_directory(test: &TestCodex, rel_path: &str) -> anyhow::Result<PathBuf> {
     let abs_path = test.config.cwd.join(rel_path);
+    let abs_path_uri = PathUri::from_host_native_path(&abs_path)?;
     test.fs()
         .create_directory(
-            &abs_path,
+            &abs_path_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -150,16 +151,18 @@ async fn write_workspace_file(
 ) -> anyhow::Result<PathBuf> {
     let abs_path = test.config.cwd.join(rel_path);
     if let Some(parent) = abs_path.parent() {
+        let parent_uri = PathUri::from_host_native_path(&parent)?;
         test.fs()
             .create_directory(
-                &parent,
+                &parent_uri,
                 CreateDirectoryOptions { recursive: true },
                 /*sandbox*/ None,
             )
             .await?;
     }
+    let abs_path_uri = PathUri::from_host_native_path(&abs_path)?;
     test.fs()
-        .write_file(&abs_path, contents, /*sandbox*/ None)
+        .write_file(&abs_path_uri, contents, /*sandbox*/ None)
         .await?;
     Ok(abs_path.into_path_buf())
 }
@@ -266,6 +269,13 @@ async fn user_turn_with_vertical_local_image_resizes_to_square_bounds() -> anyho
     skip_if_no_network!(Ok(()));
 
     assert_user_turn_local_image_resizes_to((1024, 4096), (512, 2048)).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_local_image_applies_patch_budget() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    assert_user_turn_local_image_resizes_to((2048, 2048), (1600, 1600)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -560,6 +570,8 @@ async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()> {
+    // TODO(anp): Remove after remote-cwd fixtures use target-native paths.
+    skip_if_wine_exec!(Ok(()), "hardcodes a POSIX remote cwd");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -577,20 +589,22 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     ))
     .abs();
     let image_path = remote_cwd.join("remote.png");
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
         .await?;
     let png = png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?;
+    let image_path_uri = PathUri::from_host_native_path(&image_path)?;
     test.fs()
-        .write_file(&image_path, png, /*sandbox*/ None)
+        .write_file(&image_path_uri, png, /*sandbox*/ None)
         .await?;
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-        cwd: remote_cwd.clone(),
+        cwd: PathUri::from_abs_path(&remote_cwd),
     };
     let call_id = "call-view-image-multi-env";
     let response_mock = mount_sse_sequence(
@@ -645,7 +659,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -1172,11 +1186,10 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
+async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-
     let mut builder = test_codex();
     let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
@@ -1185,39 +1198,39 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
         ..
     } = &test;
 
-    let rel_path = "assets/example.json";
-    let abs_path =
-        write_workspace_file(&test, rel_path, br#"{ "message": "hello" }"#.to_vec()).await?;
-
-    let call_id = "view-image-non-image";
+    let rel_path = "assets/invalid-image.json";
+    write_workspace_file(&test, rel_path, br#"{ "message": "hello" }"#.to_vec()).await?;
+    let call_id = "view-image-invalid-placeholder";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
 
-    let first_response = sse(vec![
-        ev_response_created("resp-1"),
-        ev_function_call(call_id, "view_image", &arguments),
-        ev_completed("resp-1"),
-    ]);
-    responses::mount_sse_once(&server, first_response).await;
-
-    let second_response = sse(vec![
-        ev_assistant_message("msg-1", "done"),
-        ev_completed("resp-2"),
-    ]);
-    let mock = responses::mount_sse_once(&server, second_response).await;
-
-    let session_model = session_configured.model.clone();
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "view_image", &arguments),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
 
     codex
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
-                text: "please use the view_image tool to read the json file".into(),
+                text: "please inspect the image".into(),
                 text_elements: Vec::new(),
             }],
-            session_model,
+            session_configured.model.clone(),
         ))
         .await?;
-
     wait_for_event_with_timeout(
         codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
@@ -1225,26 +1238,14 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
     )
     .await;
 
-    let request = mock.single_request();
-    assert!(
-        request.inputs_of_type("input_image").is_empty(),
-        "non-image file should not produce an input_image message"
+    let request = second_mock.single_request();
+    assert_eq!(
+        request.function_call_output(call_id).get("output"),
+        Some(&serde_json::json!([{
+            "type": "input_text",
+            "text": "image content omitted because it could not be processed"
+        }]))
     );
-    let (error_text, success) = request
-        .function_call_output_content_and_success(call_id)
-        .expect("function_call_output should be present");
-    assert_eq!(success, None);
-    let error_text = error_text.expect("error text present");
-
-    let expected_error = format!(
-        "unable to process image at `{}`: unsupported image `application/json`",
-        abs_path.display()
-    );
-    assert!(
-        error_text.contains(&expected_error),
-        "error should describe unsupported file type: {error_text}"
-    );
-
     Ok(())
 }
 
@@ -1374,6 +1375,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     };

@@ -10,10 +10,13 @@ use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
+use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::tools::context::ExecCommandToolOutput;
@@ -25,6 +28,7 @@ use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::ExecCommandRequest;
@@ -49,13 +53,15 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_sandboxing::SandboxCommand;
 use codex_tools::ToolName;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
+use codex_utils_path_uri::PathUri;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -72,6 +78,7 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
 const NETWORK_ACCESS_DENIED_MESSAGE: &str =
     "Network access was denied by the Codex sandbox network proxy.";
 const LATE_NETWORK_DENIAL_GRACE_PERIOD: Duration = Duration::from_millis(100);
+const INTERRUPT: &str = "\u{3}";
 
 /// Test-only override for deterministic unified exec process IDs.
 ///
@@ -151,15 +158,23 @@ fn exec_server_params_for_request(
     tty: bool,
 ) -> codex_exec_server::ExecParams {
     let (env_policy, env) = exec_server_env_for_request(request);
+    // Sandbox retries reuse the unified-exec ID but start a distinct executor process.
+    let exec_server_process_id = if request.exec_server_sandbox.is_some() {
+        format!("{process_id}-{}", Uuid::new_v4())
+    } else {
+        process_id.to_string()
+    };
     codex_exec_server::ExecParams {
-        process_id: exec_server_process_id(process_id).into(),
+        process_id: exec_server_process_id.into(),
         argv: request.command.clone(),
-        cwd: request.cwd.to_path_buf(),
+        cwd: request.cwd.clone(),
         env_policy,
         env,
         tty,
         pipe_stdin: false,
         arg0: request.arg0.clone(),
+        sandbox: request.exec_server_sandbox.clone(),
+        enforce_managed_network: request.exec_server_enforce_managed_network,
     }
 }
 
@@ -174,13 +189,20 @@ struct PreparedProcessHandles {
     pause_state: Option<watch::Receiver<bool>>,
     session: Option<Arc<crate::session::session::Session>>,
     network_approval: Option<DeferredNetworkApproval>,
+    call_id: String,
     hook_command: String,
     process_id: i32,
     tty: bool,
 }
 
-fn exec_server_process_id(process_id: i32) -> String {
-    process_id.to_string()
+struct InitialExecCommandGuard {
+    active: Arc<AtomicBool>,
+}
+
+impl Drop for InitialExecCommandGuard {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+    }
 }
 
 async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
@@ -280,7 +302,7 @@ async fn emit_failed_initial_exec_end_if_unstored(
     process_started_alive: bool,
     context: &UnifiedExecContext,
     request: &ExecCommandRequest,
-    cwd: AbsolutePathBuf,
+    cwd: PathUri,
     transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     fallback_output: String,
     message: String,
@@ -413,7 +435,8 @@ impl UnifiedExecProcessManager {
         // Persist live sessions before the initial yield wait so interrupting the
         // turn cannot drop the last Arc and terminate the background process.
         let process_started_alive = !process.has_exited() && process.exit_code().is_none();
-        if process_started_alive {
+        let _initial_exec_command_guard = if process_started_alive {
+            let initial_exec_command_active = Arc::new(AtomicBool::new(true));
             self.store_process(
                 Arc::clone(&process),
                 context,
@@ -425,9 +448,15 @@ impl UnifiedExecProcessManager {
                 request.tty,
                 deferred_network_approval.clone(),
                 Arc::clone(&transcript),
+                Arc::clone(&initial_exec_command_active),
             )
             .await;
-        }
+            Some(InitialExecCommandGuard {
+                active: initial_exec_command_active,
+            })
+        } else {
+            None
+        };
 
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
         // For the initial exec_command call, we both stream output to events
@@ -581,7 +610,7 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             raw_output: collected,
-            truncation_policy: context.turn.truncation_policy,
+            truncation_policy: context.turn.model_info.truncation_policy.into(),
             max_output_tokens: request.max_output_tokens,
             process_id: response_process_id,
             exit_code,
@@ -608,6 +637,7 @@ impl UnifiedExecProcessManager {
             pause_state,
             session,
             network_approval,
+            call_id,
             hook_command,
             process_id,
             tty,
@@ -617,24 +647,29 @@ impl UnifiedExecProcessManager {
 
         if !request.input.is_empty() {
             if !tty {
-                return Err(UnifiedExecError::StdinClosed);
-            }
-            match process.write(request.input.as_bytes()).await {
-                Ok(()) => {
-                    // Give the remote process a brief window to react so that we are
-                    // more likely to capture its output in the poll below.
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                if request.input == INTERRUPT {
+                    process.interrupt().await?;
+                } else {
+                    return Err(UnifiedExecError::StdinClosed);
                 }
-                Err(err) => {
-                    let status = self.refresh_process_state(process_id).await;
-                    if matches!(status, ProcessStatus::Exited { .. }) {
-                        status_after_write = Some(status);
-                    } else if matches!(err, UnifiedExecError::ProcessFailed { .. }) {
-                        process.terminate();
-                        self.release_process_id(process_id).await;
-                        return Err(err);
-                    } else {
-                        return Err(err);
+            } else {
+                match process.write(request.input.as_bytes()).await {
+                    Ok(()) => {
+                        // Give the remote process a brief window to react so that we are
+                        // more likely to capture its output in the poll below.
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(err) => {
+                        let status = self.refresh_process_state(process_id).await;
+                        if matches!(status, ProcessStatus::Exited { .. }) {
+                            status_after_write = Some(status);
+                        } else if matches!(err, UnifiedExecError::ProcessFailed { .. }) {
+                            process.terminate();
+                            self.release_process_id(process_id).await;
+                            return Err(err);
+                        } else {
+                            return Err(err);
+                        }
                     }
                 }
             }
@@ -715,9 +750,13 @@ impl UnifiedExecProcessManager {
                 (None, exit_code, call_id)
             }
             ProcessStatus::Unknown => {
-                return Err(UnifiedExecError::UnknownProcessId {
-                    process_id: request.process_id,
-                });
+                if process.has_exited() {
+                    (None, process.exit_code(), call_id)
+                } else {
+                    return Err(UnifiedExecError::UnknownProcessId {
+                        process_id: request.process_id,
+                    });
+                }
             }
         };
 
@@ -738,29 +777,27 @@ impl UnifiedExecProcessManager {
     }
 
     async fn refresh_process_state(&self, process_id: i32) -> ProcessStatus {
-        {
-            let mut store = self.process_store.lock().await;
-            let Some(entry) = store.processes.get(&process_id) else {
+        let mut store = self.process_store.lock().await;
+        let Some(entry) = store.processes.get_mut(&process_id) else {
+            return ProcessStatus::Unknown;
+        };
+
+        let exit_code = entry.process.exit_code();
+        let process_id = entry.process_id;
+
+        if entry.process.has_exited() {
+            let Some(entry) = store.remove(process_id) else {
                 return ProcessStatus::Unknown;
             };
-
-            let exit_code = entry.process.exit_code();
-            let process_id = entry.process_id;
-
-            if entry.process.has_exited() {
-                let Some(entry) = store.remove(process_id) else {
-                    return ProcessStatus::Unknown;
-                };
-                ProcessStatus::Exited {
-                    exit_code,
-                    entry: Box::new(entry),
-                }
-            } else {
-                ProcessStatus::Alive {
-                    exit_code,
-                    call_id: entry.call_id.clone(),
-                    process_id,
-                }
+            ProcessStatus::Exited {
+                exit_code,
+                entry: Box::new(entry),
+            }
+        } else {
+            ProcessStatus::Alive {
+                exit_code,
+                call_id: entry.call_id.clone(),
+                process_id,
             }
         }
     }
@@ -798,6 +835,7 @@ impl UnifiedExecProcessManager {
             pause_state,
             session,
             network_approval: entry.network_approval.clone(),
+            call_id: entry.call_id.clone(),
             hook_command: entry.hook_command.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
@@ -811,17 +849,20 @@ impl UnifiedExecProcessManager {
         context: &UnifiedExecContext,
         command: &[String],
         hook_command: String,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         started_at: Instant,
         process_id: i32,
         tty: bool,
         network_approval: Option<DeferredNetworkApproval>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+        initial_exec_command_active: Arc<AtomicBool>,
     ) {
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
+            cwd: cwd.clone(),
+            initial_exec_command_active,
             hook_command,
             tty,
             network_approval,
@@ -854,7 +895,47 @@ impl UnifiedExecProcessManager {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn open_session_with_exec_env(
+        &self,
+        process_id: i32,
+        command: SandboxCommand,
+        options: ExecOptions,
+        attempt: &SandboxAttempt<'_>,
+        network: Option<&NetworkProxy>,
+        environment_id: Option<&str>,
+        exec_server_env_config: Option<ExecServerEnvConfig>,
+        tty: bool,
+        spawn_lifecycle: SpawnLifecycleHandle,
+        environment: &codex_exec_server::Environment,
+    ) -> Result<UnifiedExecProcess, ToolError> {
+        let mut request = if environment.is_remote() {
+            attempt.env_for_exec_server(command, options, network, environment_id)
+        } else {
+            attempt.env_for(command, options, network, environment_id)
+        }
+        .map_err(ToolError::Codex)?;
+        request.exec_server_env_config = exec_server_env_config;
+        self.open_session_with_prepared_exec_env(
+            process_id,
+            &request,
+            tty,
+            spawn_lifecycle,
+            environment,
+        )
+        .await
+        .map_err(|err| match err {
+            UnifiedExecError::SandboxDenied { output, .. } => {
+                ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(output),
+                    network_policy_decision: None,
+                }))
+            }
+            other => ToolError::Rejected(other.to_string()),
+        })
+    }
+
+    pub(crate) async fn open_session_with_prepared_exec_env(
         &self,
         process_id: i32,
         request: &ExecRequest,
@@ -866,6 +947,14 @@ impl UnifiedExecProcessManager {
 
         #[cfg(target_os = "windows")]
         if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
+            // TODO(anp): Keep PathUri through the Windows sandbox launch boundary.
+            let native_cwd =
+                request
+                    .cwd
+                    .to_abs_path()
+                    .map_err(|_| UnifiedExecError::ForeignPath {
+                        path: request.cwd.clone(),
+                    })?;
             let codex_home = crate::config::find_codex_home().map_err(|err| {
                 UnifiedExecError::create_process(format!(
                     "windows sandbox: failed to resolve codex_home: {err}"
@@ -900,8 +989,9 @@ impl UnifiedExecProcessManager {
                         request.windows_sandbox_workspace_roots.as_slice(),
                         codex_home.as_ref(),
                         request.command.clone(),
-                        request.cwd.as_path(),
+                        native_cwd.as_path(),
                         request.env.clone(),
+                        request.network.is_some(),
                         None,
                         elevated_read_roots_override.as_deref(),
                         elevated_read_roots_include_platform_defaults,
@@ -921,7 +1011,7 @@ impl UnifiedExecProcessManager {
                         request.windows_sandbox_workspace_roots.as_slice(),
                         codex_home.as_ref(),
                         request.command.clone(),
-                        request.cwd.as_path(),
+                        native_cwd.as_path(),
                         request.env.clone(),
                         None,
                         &additional_deny_read_paths,
@@ -954,8 +1044,16 @@ impl UnifiedExecProcessManager {
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
             spawn_lifecycle.after_spawn();
-            return UnifiedExecProcess::from_exec_server_started(started, request.sandbox).await;
+            return UnifiedExecProcess::from_exec_server_started(started).await;
         }
+
+        // TODO(anp): Keep PathUri through the local PTY/process launch boundary.
+        let native_cwd = request
+            .cwd
+            .to_abs_path()
+            .map_err(|_| UnifiedExecError::ForeignPath {
+                path: request.cwd.clone(),
+            })?;
 
         let (program, args) = request
             .command
@@ -965,7 +1063,7 @@ impl UnifiedExecProcessManager {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,
                 args,
-                request.cwd.as_path(),
+                native_cwd.as_path(),
                 &request.env,
                 &request.arg0,
                 codex_utils_pty::TerminalSize::default(),
@@ -976,7 +1074,7 @@ impl UnifiedExecProcessManager {
             codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
                 program,
                 args,
-                request.cwd.as_path(),
+                native_cwd.as_path(),
                 &request.env,
                 &request.arg0,
                 &inherited_fds,
@@ -992,11 +1090,11 @@ impl UnifiedExecProcessManager {
     pub(super) async fn open_session_with_sandbox(
         &self,
         request: &ExecCommandRequest,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let local_policy_env = create_env(
-            &context.turn.shell_environment_policy,
+            &context.turn.config.permissions.shell_environment_policy,
             /*thread_id*/ None,
         );
         let mut env = local_policy_env.clone();
@@ -1006,7 +1104,9 @@ impl UnifiedExecProcessManager {
         );
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {
-            policy: exec_env_policy_from_shell_policy(&context.turn.shell_environment_policy),
+            policy: exec_env_policy_from_shell_policy(
+                &context.turn.config.permissions.shell_environment_policy,
+            ),
             local_policy_env,
         };
         let mut orchestrator = ToolOrchestrator::new();
@@ -1035,10 +1135,16 @@ impl UnifiedExecProcessManager {
             process_id: request.process_id,
             cwd,
             sandbox_cwd: request.sandbox_cwd.clone(),
-            environment: Arc::clone(&request.environment),
+            turn_environment: request.turn_environment.clone(),
             env,
             exec_server_env_config: Some(exec_server_env_config),
-            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            explicit_env_overrides: context
+                .turn
+                .config
+                .permissions
+                .shell_environment_policy
+                .r#set
+                .clone(),
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
@@ -1267,6 +1373,59 @@ impl UnifiedExecProcessManager {
             unregister_network_approval_for_entry(&entry).await;
             entry.process.terminate();
         }
+    }
+
+    pub(crate) async fn list_processes(&self) -> Vec<BackgroundTerminalInfo> {
+        let store = self.process_store.lock().await;
+        let mut entries = store
+            .processes
+            .values()
+            .filter(|entry| !entry.process.has_exited())
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.process_id);
+        entries
+            .into_iter()
+            .map(|entry| BackgroundTerminalInfo {
+                item_id: entry.call_id.clone(),
+                process_id: entry.process_id.to_string(),
+                command: entry.hook_command.clone(),
+                cwd: entry.cwd.clone(),
+            })
+            .collect()
+    }
+
+    pub(crate) async fn terminate_process(&self, process_id: i32) -> bool {
+        let (process, already_exited) = {
+            let store = self.process_store.lock().await;
+            let Some(entry) = store.processes.get(&process_id) else {
+                return false;
+            };
+            (Arc::clone(&entry.process), entry.process.has_exited())
+        };
+
+        if !already_exited && process.terminate_confirmed().await.is_err() {
+            return false;
+        }
+
+        let entry = {
+            let mut store = self.process_store.lock().await;
+            let Some(entry) = store.processes.get(&process_id) else {
+                return true;
+            };
+            if !Arc::ptr_eq(&entry.process, &process) {
+                return true;
+            }
+            if entry.initial_exec_command_active.load(Ordering::Acquire) {
+                return true;
+            }
+            let Some(entry) = store.remove(process_id) else {
+                return false;
+            };
+            entry
+        };
+
+        unregister_network_approval_for_entry(&entry).await;
+        true
     }
 }
 

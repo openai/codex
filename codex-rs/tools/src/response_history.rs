@@ -95,6 +95,7 @@ mod tests {
                 }
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         }
     }
 
