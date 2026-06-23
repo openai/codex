@@ -2,7 +2,7 @@ use anyhow::Result;
 use codex_features::Feature;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
@@ -15,6 +15,7 @@ use std::time::Duration;
 const FIRST_PROMPT: &str = "spawn the first worker";
 const FIRST_TASK: &str = "first worker task";
 const SECOND_TASK: &str = "second worker task";
+const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     serde_json::from_slice::<serde_json::Value>(&request.body)
@@ -47,7 +48,12 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
         |request: &wiremock::Request| body_contains(request, FIRST_PROMPT),
         sse(vec![
             ev_response_created("first-response"),
-            ev_function_call("first-call", "spawn_agent", &first_args),
+            ev_function_call_with_namespace(
+                "first-call",
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &first_args,
+            ),
             ev_completed("first-response"),
         ]),
     )
@@ -63,7 +69,12 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
         },
         sse(vec![
             ev_response_created("first-worker-response"),
-            ev_function_call("second-call", "spawn_agent", &second_args),
+            ev_function_call_with_namespace(
+                "second-call",
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &second_args,
+            ),
             ev_completed("first-worker-response"),
         ]),
     )
