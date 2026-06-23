@@ -1,6 +1,7 @@
 //! App-level orchestration tests for the TUI.
 
 mod model_catalog;
+mod plugin_catalog;
 mod session_summary;
 mod startup;
 
