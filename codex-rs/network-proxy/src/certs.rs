@@ -42,6 +42,7 @@ use tracing::warn;
 pub(super) struct ManagedMitmCa {
     issuer: Issuer<'static, KeyPair>,
     certificate_path: PathBuf,
+    _artifact_lease: File,
 }
 
 static MANAGED_MITM_CAS: LazyLock<Mutex<HashMap<PathBuf, Arc<ManagedMitmCa>>>> =
@@ -67,9 +68,20 @@ impl ManagedMitmCa {
             .with_context(|| format!("failed to create {}", proxy_dir.display()))?;
 
         let (certificate_pem, private_key) = generate_ca()?;
+        let artifact_lock = match lock_managed_ca_artifacts(proxy_dir) {
+            Ok(lock) => Some(lock),
+            Err(err) => {
+                warn!("failed to lock managed MITM CA artifacts; skipping pruning: {err}");
+                None
+            }
+        };
         let certificate_path = persist_managed_ca_certificate(proxy_dir, &certificate_pem)?;
         let issuer = Issuer::from_ca_cert_pem(&certificate_pem, private_key)
             .context("failed to parse managed MITM CA certificate")?;
+        let artifact_lease = lock_managed_ca_certificate(&certificate_path)?;
+        if artifact_lock.is_some() {
+            prune_managed_ca_artifacts(proxy_dir);
+        }
         info!(
             cert_path = %certificate_path.display(),
             "generated process-local MITM CA"
@@ -77,6 +89,7 @@ impl ManagedMitmCa {
         Ok(Self {
             issuer,
             certificate_path,
+            _artifact_lease: artifact_lease,
         })
     }
 
@@ -134,8 +147,10 @@ fn issue_host_certificate_pem(
 }
 
 const MANAGED_MITM_CA_DIR: &str = "proxy";
+const MANAGED_MITM_CA_ARTIFACT_LOCK: &str = ".artifacts.lock";
 const MANAGED_MITM_CA_CERT_PREFIX: &str = "ca";
 const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
+const MAX_RETAINED_MANAGED_MITM_CAS: usize = 8;
 pub(crate) const SSL_CERT_DIR_ENV_KEY: &str = "SSL_CERT_DIR";
 
 // Best-effort compatibility set for common child toolchains that accept a CA bundle path.
@@ -413,11 +428,15 @@ fn is_current_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Pa
 }
 
 fn is_generated_trust_bundle_path(path: &Path, proxy_dir: &Path) -> bool {
+    is_generated_managed_ca_artifact_path(path, proxy_dir, MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX)
+}
+
+fn is_generated_managed_ca_artifact_path(path: &Path, proxy_dir: &Path, prefix: &str) -> bool {
     let Some(file_name) = path.file_name().and_then(|file_name| file_name.to_str()) else {
         return false;
     };
     let Some(expected_hash) = file_name
-        .strip_prefix(MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX)
+        .strip_prefix(prefix)
         .and_then(|suffix| suffix.strip_prefix('-'))
         .and_then(|suffix| suffix.strip_suffix(".pem"))
     else {
@@ -504,6 +523,151 @@ fn persist_managed_ca_certificate(proxy_dir: &Path, cert_pem: &str) -> Result<Pa
             )
         })?;
     Ok(cert_path)
+}
+
+struct ManagedCaArtifact {
+    path: PathBuf,
+    modified: SystemTime,
+}
+
+fn lock_managed_ca_certificate(certificate_path: &Path) -> Result<File> {
+    let lock_path = managed_ca_certificate_lock_path(certificate_path)
+        .ok_or_else(|| anyhow!("managed MITM CA certificate path is missing a file name"))?;
+    let file = open_managed_ca_lock(&lock_path)?;
+    file.lock_shared()
+        .with_context(|| format!("failed to lock {}", lock_path.display()))?;
+    Ok(file)
+}
+
+fn lock_managed_ca_artifacts(proxy_dir: &Path) -> Result<File> {
+    let lock_path = proxy_dir.join(MANAGED_MITM_CA_ARTIFACT_LOCK);
+    let file = open_managed_ca_lock(&lock_path)?;
+    file.lock()
+        .with_context(|| format!("failed to lock {}", lock_path.display()))?;
+    Ok(file)
+}
+
+fn managed_ca_certificate_lock_path(certificate_path: &Path) -> Option<PathBuf> {
+    let file_name = certificate_path.file_name()?.to_string_lossy();
+    Some(certificate_path.with_file_name(format!(".{file_name}.lock")))
+}
+
+fn open_managed_ca_lock(path: &Path) -> Result<File> {
+    if fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(anyhow!(
+            "refusing to use symlink lock file {}",
+            path.display()
+        ));
+    }
+
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options
+        .open(path)
+        .with_context(|| format!("failed to open {}", path.display()))
+}
+
+fn prune_managed_ca_artifacts(proxy_dir: &Path) {
+    let mut certificates = generated_managed_ca_artifacts(proxy_dir, MANAGED_MITM_CA_CERT_PREFIX);
+    certificates.sort_by_key(|artifact| std::cmp::Reverse(artifact.modified));
+    for certificate in certificates.iter().skip(MAX_RETAINED_MANAGED_MITM_CAS) {
+        remove_inactive_managed_ca_certificate(&certificate.path);
+    }
+
+    let remaining_certificates =
+        generated_managed_ca_artifacts(proxy_dir, MANAGED_MITM_CA_CERT_PREFIX)
+            .into_iter()
+            .filter_map(|artifact| fs::read(artifact.path).ok())
+            .filter(|certificate| !certificate.is_empty())
+            .collect::<Vec<_>>();
+    let bundles = generated_managed_ca_artifacts(proxy_dir, MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX);
+    for bundle in bundles {
+        let Ok(contents) = fs::read(&bundle.path) else {
+            continue;
+        };
+        if remaining_certificates.iter().any(|certificate| {
+            contents
+                .windows(certificate.len())
+                .any(|window| window == certificate)
+        }) {
+            continue;
+        }
+        if let Err(err) = fs::remove_file(&bundle.path)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                path = %bundle.path.display(),
+                "failed to prune stale managed MITM CA trust bundle: {err}"
+            );
+        }
+    }
+}
+
+fn generated_managed_ca_artifacts(proxy_dir: &Path, prefix: &str) -> Vec<ManagedCaArtifact> {
+    let Ok(entries) = fs::read_dir(proxy_dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(std::result::Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !is_generated_managed_ca_artifact_path(&path, proxy_dir, prefix) {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some(ManagedCaArtifact { path, modified })
+        })
+        .collect()
+}
+
+fn remove_inactive_managed_ca_certificate(certificate_path: &Path) {
+    let Some(lock_path) = managed_ca_certificate_lock_path(certificate_path) else {
+        return;
+    };
+    let Ok(lock_file) = open_managed_ca_lock(&lock_path) else {
+        return;
+    };
+    match lock_file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => return,
+        Err(err) => {
+            warn!(
+                path = %lock_path.display(),
+                "failed to inspect managed MITM CA artifact lease: {err}"
+            );
+            return;
+        }
+    }
+
+    let removed = match fs::remove_file(certificate_path) {
+        Ok(()) => true,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(err) => {
+            warn!(
+                path = %certificate_path.display(),
+                "failed to prune stale managed MITM CA certificate: {err}"
+            );
+            false
+        }
+    };
+    drop(lock_file);
+    if removed
+        && let Err(err) = fs::remove_file(&lock_path)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(
+            path = %lock_path.display(),
+            "failed to prune stale managed MITM CA artifact lease: {err}"
+        );
+    }
 }
 
 fn generate_ca() -> Result<(String, KeyPair)> {
@@ -649,6 +813,8 @@ mod tests {
 
     use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
     use pretty_assertions::assert_eq;
+    use std::fs::FileTimes;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -657,12 +823,82 @@ mod tests {
         let dir = tempdir().unwrap();
         let ca = ManagedMitmCa::create(dir.path()).unwrap();
         ca.tls_acceptor_data_for_host("example.com").unwrap();
-        let persisted_files = fs::read_dir(dir.path())
+        let mut persisted_files = fs::read_dir(dir.path())
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .collect::<Vec<_>>();
+        persisted_files.sort();
+        let mut expected_files = vec![
+            ca.certificate_path().to_path_buf(),
+            managed_ca_certificate_lock_path(ca.certificate_path()).unwrap(),
+            dir.path().join(MANAGED_MITM_CA_ARTIFACT_LOCK),
+        ];
+        expected_files.sort();
 
-        assert_eq!(persisted_files, vec![ca.certificate_path().to_path_buf()]);
+        assert_eq!(persisted_files, expected_files);
+        assert_eq!(
+            fs::read(managed_ca_certificate_lock_path(ca.certificate_path()).unwrap()).unwrap(),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[test]
+    fn managed_ca_artifact_pruning_preserves_active_and_recent_certificates() {
+        let dir = tempdir().unwrap();
+        let modified_base = UNIX_EPOCH + Duration::from_secs(1);
+        let mut artifacts = Vec::new();
+        let mut active_lease = None;
+        for index in 0..MAX_RETAINED_MANAGED_MITM_CAS + 2 {
+            let certificate = format!("certificate {index}\n");
+            let certificate_path =
+                persist_managed_ca_certificate(dir.path(), &certificate).unwrap();
+            let lease = lock_managed_ca_certificate(&certificate_path).unwrap();
+            if index == 0 {
+                active_lease = Some(lease);
+            } else {
+                drop(lease);
+            }
+            let bundle_path = persist_managed_ca_trust_bundle(
+                &certificate_path,
+                &format!("roots\n{certificate}"),
+            )
+            .unwrap();
+            let modified = modified_base + Duration::from_secs(index as u64);
+            File::open(&certificate_path)
+                .unwrap()
+                .set_times(FileTimes::new().set_modified(modified))
+                .unwrap();
+            File::open(&bundle_path)
+                .unwrap()
+                .set_times(FileTimes::new().set_modified(modified))
+                .unwrap();
+            artifacts.push((certificate_path, bundle_path));
+        }
+        let unrelated_path = dir.path().join("ca-user.pem");
+        fs::write(&unrelated_path, "user managed").unwrap();
+
+        prune_managed_ca_artifacts(dir.path());
+
+        let remaining_certificate_count =
+            generated_managed_ca_artifacts(dir.path(), MANAGED_MITM_CA_CERT_PREFIX).len();
+        assert_eq!(
+            remaining_certificate_count,
+            MAX_RETAINED_MANAGED_MITM_CAS + 1
+        );
+        assert!(artifacts[0].0.exists());
+        assert!(artifacts[0].1.exists());
+        assert!(!artifacts[1].0.exists());
+        assert!(!artifacts[1].1.exists());
+        assert!(unrelated_path.exists());
+
+        drop(active_lease.take());
+        prune_managed_ca_artifacts(dir.path());
+
+        let remaining_certificates =
+            generated_managed_ca_artifacts(dir.path(), MANAGED_MITM_CA_CERT_PREFIX);
+        assert_eq!(remaining_certificates.len(), MAX_RETAINED_MANAGED_MITM_CAS);
+        assert!(!artifacts[0].0.exists());
+        assert!(!artifacts[0].1.exists());
     }
 
     #[test]
