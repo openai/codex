@@ -294,3 +294,43 @@ async fn defers_apps_and_non_app_mcp_tools() {
         "_create_event"
     )));
 }
+
+#[tokio::test]
+async fn preloaded_tools_stay_direct_when_other_tools_are_deferred() {
+    let mut config = test_config().await;
+    config.tool_search.preloaded_tools = vec!["calendar_create_event".to_string()];
+    let deferred_tool = make_mcp_tool(
+        "rmcp",
+        "tool",
+        "mcp__rmcp",
+        "tool",
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    );
+    let preloaded_tool = make_mcp_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "calendar_create_event",
+        "mcp__codex_apps__calendar",
+        "_create_event",
+        Some("calendar"),
+        Some("Calendar"),
+    );
+    let connectors = vec![make_connector("calendar", "Calendar")];
+
+    let exposure = build_mcp_tool_exposure(
+        &[deferred_tool.clone(), preloaded_tool.clone()],
+        Some(connectors.as_slice()),
+        &config,
+        /*search_tool_enabled*/ true,
+    );
+
+    assert_eq!(
+        tool_names(&exposure.direct_tools),
+        tool_names(&[preloaded_tool])
+    );
+    let deferred_tools = exposure
+        .deferred_tools
+        .as_ref()
+        .expect("non-preloaded MCP tools should remain deferred");
+    assert_eq!(tool_names(deferred_tools), tool_names(&[deferred_tool]));
+}

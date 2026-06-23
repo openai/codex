@@ -292,6 +292,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         analytics_enabled: Some(false),
         feedback_enabled: false,
         tool_suggest: ToolSuggestConfig::default(),
+        tool_search: Default::default(),
         otel: OtelConfig::default(),
     };
     config

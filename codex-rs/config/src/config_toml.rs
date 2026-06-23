@@ -23,6 +23,7 @@ use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SkillsConfig;
+use crate::types::ToolSearchConfig;
 use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
@@ -435,6 +436,9 @@ pub struct ConfigToml {
 
     /// Additional discoverable tools that can be suggested for installation.
     pub tool_suggest: Option<ToolSuggestConfig>,
+
+    /// MCP tools to expose directly instead of discovering through tool_search.
+    pub tool_search: Option<ToolSearchConfig>,
 
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
