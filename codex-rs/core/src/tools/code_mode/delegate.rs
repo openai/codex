@@ -14,18 +14,23 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::call_nested_tool;
+use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
 
+type CellHostSender = watch::Sender<Option<Arc<CoreRequestHost>>>;
+type CellHostMap = Mutex<HashMap<CellId, CellHostSender>>;
+
 pub(super) struct CodeModeDispatchBroker {
     dispatch_tx: async_channel::Sender<DispatchMessage>,
     dispatch_rx: async_channel::Receiver<DispatchMessage>,
-    dispatch_gates: Arc<Mutex<HashMap<CellId, watch::Sender<bool>>>>,
+    dispatch_hosts: Arc<CellHostMap>,
+    // New cells copy this host so yielded work keeps the same tools and environment.
+    active_host: Arc<Mutex<Option<Arc<CoreRequestHost>>>>,
 }
 
 impl CodeModeDispatchBroker {
@@ -34,30 +39,44 @@ impl CodeModeDispatchBroker {
         Self {
             dispatch_tx,
             dispatch_rx,
-            dispatch_gates: Arc::new(Mutex::new(HashMap::new())),
+            dispatch_hosts: Arc::new(Mutex::new(HashMap::new())),
+            active_host: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub(super) fn mark_cell_ready_for_dispatch(&self, cell_id: &CellId) {
-        dispatch_gate(&self.dispatch_gates, cell_id).send_replace(true);
+    pub(super) fn bind_cell_to_active_host(&self, cell_id: &CellId) -> Result<(), String> {
+        let host = match self.active_host.lock() {
+            Ok(active_host) => active_host.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+        .ok_or_else(|| "code mode tool dispatcher is unavailable".to_string())?;
+        cell_host(&self.dispatch_hosts, cell_id).send_replace(Some(host));
+        Ok(())
     }
 
     pub(super) fn close_cell(&self, cell_id: &CellId) {
-        remove_dispatch_gate(&self.dispatch_gates, cell_id);
+        remove_cell_host(&self.dispatch_hosts, cell_id);
     }
 
     pub(super) fn start_turn_worker(
         &self,
-        exec: ExecContext,
+        session: Arc<Session>,
         router: Arc<ToolRouter>,
         step_context: Arc<StepContext>,
         tracker: SharedTurnDiffTracker,
     ) -> CodeModeDispatchWorker {
         let tool_runtime =
-            ToolCallRuntime::new(router, Arc::clone(&exec.session), step_context, tracker);
-        let host = Arc::new(CoreTurnHost { exec, tool_runtime });
+            ToolCallRuntime::new(router, Arc::clone(&session), step_context, tracker);
+        let host = Arc::new(CoreRequestHost {
+            session,
+            tool_runtime,
+        });
+        match self.active_host.lock() {
+            Ok(mut active_host) => *active_host = Some(Arc::clone(&host)),
+            Err(poisoned) => *poisoned.into_inner() = Some(Arc::clone(&host)),
+        }
         let dispatch_rx = self.dispatch_rx.clone();
-        let dispatch_gates = Arc::clone(&self.dispatch_gates);
+        let dispatch_hosts = Arc::clone(&self.dispatch_hosts);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         tokio::spawn(async move {
             loop {
@@ -76,16 +95,12 @@ impl CodeModeDispatchBroker {
                         cancellation_token,
                         response_tx,
                     } => {
-                        let response = if wait_until_cell_ready_for_dispatch(
-                            &dispatch_gates,
-                            &cell_id,
-                            &cancellation_token,
-                        )
-                        .await
+                        let response = if let Some(host) =
+                            wait_for_cell_host(&dispatch_hosts, &cell_id, &cancellation_token).await
                         {
                             host.notify(call_id, cell_id, text).await
                         } else {
-                            remove_dispatch_gate(&dispatch_gates, &cell_id);
+                            remove_cell_host(&dispatch_hosts, &cell_id);
                             Err("code mode notification cancelled".to_string())
                         };
                         let _ = response_tx.send(response);
@@ -96,17 +111,13 @@ impl CodeModeDispatchBroker {
                         response_tx,
                     } => {
                         let cell_id = invocation.cell_id.clone();
-                        if !wait_until_cell_ready_for_dispatch(
-                            &dispatch_gates,
-                            &cell_id,
-                            &cancellation_token,
-                        )
-                        .await
-                        {
-                            remove_dispatch_gate(&dispatch_gates, &cell_id);
+                        let Some(host) =
+                            wait_for_cell_host(&dispatch_hosts, &cell_id, &cancellation_token)
+                                .await
+                        else {
+                            remove_cell_host(&dispatch_hosts, &cell_id);
                             continue;
-                        }
-                        let host = Arc::clone(&host);
+                        };
                         tokio::spawn(async move {
                             let response = tokio::select! {
                                 response = host.invoke_tool(
@@ -123,55 +134,51 @@ impl CodeModeDispatchBroker {
         });
         CodeModeDispatchWorker {
             shutdown_tx: Some(shutdown_tx),
+            active_host: Arc::clone(&self.active_host),
+            host,
         }
     }
 }
 
-fn dispatch_gate(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
-    cell_id: &CellId,
-) -> watch::Sender<bool> {
-    let mut dispatch_gates = match dispatch_gates.lock() {
-        Ok(dispatch_gates) => dispatch_gates,
+fn cell_host(dispatch_hosts: &CellHostMap, cell_id: &CellId) -> CellHostSender {
+    let mut dispatch_hosts = match dispatch_hosts.lock() {
+        Ok(dispatch_hosts) => dispatch_hosts,
         Err(poisoned) => poisoned.into_inner(),
     };
-    dispatch_gates
+    dispatch_hosts
         .entry(cell_id.clone())
-        .or_insert_with(|| watch::channel(false).0)
+        .or_insert_with(|| watch::channel(None).0)
         .clone()
 }
 
-fn remove_dispatch_gate(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
-    cell_id: &CellId,
-) {
-    let mut dispatch_gates = match dispatch_gates.lock() {
-        Ok(dispatch_gates) => dispatch_gates,
+fn remove_cell_host(dispatch_hosts: &CellHostMap, cell_id: &CellId) {
+    let mut dispatch_hosts = match dispatch_hosts.lock() {
+        Ok(dispatch_hosts) => dispatch_hosts,
         Err(poisoned) => poisoned.into_inner(),
     };
-    dispatch_gates.remove(cell_id);
+    dispatch_hosts.remove(cell_id);
 }
 
-async fn wait_until_cell_ready_for_dispatch(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+async fn wait_for_cell_host(
+    dispatch_hosts: &CellHostMap,
     cell_id: &CellId,
     cancellation_token: &CancellationToken,
-) -> bool {
+) -> Option<Arc<CoreRequestHost>> {
     if cancellation_token.is_cancelled() {
-        return false;
+        return None;
     }
-    let mut ready_rx = dispatch_gate(dispatch_gates, cell_id).subscribe();
+    let mut host_rx = cell_host(dispatch_hosts, cell_id).subscribe();
     loop {
-        if *ready_rx.borrow_and_update() {
-            return true;
+        if let Some(host) = host_rx.borrow_and_update().clone() {
+            return Some(host);
         }
         tokio::select! {
-            changed = ready_rx.changed() => {
+            changed = host_rx.changed() => {
                 if changed.is_err() {
-                    return false;
+                    return None;
                 }
             }
-            _ = cancellation_token.cancelled() => return false,
+            _ = cancellation_token.cancelled() => return None,
         }
     }
 }
@@ -259,43 +266,49 @@ enum DispatchMessage {
 
 pub(crate) struct CodeModeDispatchWorker {
     shutdown_tx: Option<oneshot::Sender<()>>,
+    active_host: Arc<Mutex<Option<Arc<CoreRequestHost>>>>,
+    host: Arc<CoreRequestHost>,
 }
 
 impl Drop for CodeModeDispatchWorker {
     fn drop(&mut self) {
+        let mut active_host = match self.active_host.lock() {
+            Ok(active_host) => active_host,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if active_host
+            .as_ref()
+            .is_some_and(|active_host| Arc::ptr_eq(active_host, &self.host))
+        {
+            *active_host = None;
+        }
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
     }
 }
 
-struct CoreTurnHost {
-    exec: ExecContext,
+struct CoreRequestHost {
+    session: Arc<Session>,
     tool_runtime: ToolCallRuntime,
 }
 
-impl CoreTurnHost {
+impl CoreRequestHost {
     async fn invoke_tool(
         &self,
         invocation: CodeModeNestedToolCall,
         cancellation_token: CancellationToken,
     ) -> Result<JsonValue, String> {
-        call_nested_tool(
-            self.exec.clone(),
-            self.tool_runtime.clone(),
-            invocation,
-            cancellation_token,
-        )
-        .await
-        .map_err(|error| error.to_string())
+        call_nested_tool(self.tool_runtime.clone(), invocation, cancellation_token)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn notify(&self, call_id: String, cell_id: CellId, text: String) -> Result<(), String> {
         if text.trim().is_empty() {
             return Ok(());
         }
-        self.exec
-            .session
+        self.session
             .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
                 id: None,
                 call_id,
