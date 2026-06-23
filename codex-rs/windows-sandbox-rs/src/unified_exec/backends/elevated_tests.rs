@@ -176,7 +176,7 @@ fn retry_uses_original_unified_exec_request_and_stops_after_second_failure() {
                 cwd: request.cwd.clone(),
                 username: "refreshed".to_string(),
                 password: "new".to_string(),
-                logs_base_dir: request.logs_base_dir.clone(),
+                logs_base_dir: request.logs_base_dir,
                 spawn_request: expected_spawn_request,
             },
         ],
