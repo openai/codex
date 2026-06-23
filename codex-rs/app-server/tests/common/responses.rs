@@ -1,4 +1,6 @@
+use core_test_support::TestEnvironment;
 use core_test_support::responses;
+use core_test_support::test_environment;
 use serde_json::json;
 use std::path::Path;
 
@@ -42,7 +44,7 @@ pub fn create_apply_patch_sse_response(
 }
 
 pub fn create_exec_command_sse_response(call_id: &str) -> anyhow::Result<String> {
-    let (cmd, args) = if cfg!(windows) {
+    let (cmd, args) = if cfg!(windows) || matches!(test_environment(), TestEnvironment::WineExec) {
         ("cmd.exe", vec!["/d", "/c", "echo hi"])
     } else {
         ("/bin/sh", vec!["-c", "echo hi"])

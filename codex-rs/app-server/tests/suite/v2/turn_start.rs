@@ -2352,6 +2352,12 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_exec_approval_decline_v2() -> Result<()> {
+    // TODO(anp): Stage the approval workspace in the selected environment and pass its
+    // target-native cwd on turn/start.
+    skip_if_wine_exec!(
+        Ok(()),
+        "uses a host-local approval workspace as the turn cwd"
+    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -2497,6 +2503,9 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
+    // TODO(anp): Create both turn workspaces in the selected environment and send target-native
+    // cwd/environment pairs when changing settings between turns.
+    skip_if_wine_exec!(Ok(()), "uses host-local cwd overrides for both turns");
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -3144,6 +3153,9 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_does_not_stream_apply_patch_change_updates_without_feature_v2() -> Result<()> {
+    // TODO(anp): Stage the patch workspace in the selected environment and pass its target-native
+    // cwd on turn/start.
+    skip_if_wine_exec!(Ok(()), "uses a host-local patch workspace as the turn cwd");
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -3242,6 +3254,9 @@ async fn turn_start_does_not_stream_apply_patch_change_updates_without_feature_v
 
 #[tokio::test]
 async fn turn_start_streams_apply_patch_change_updates_v2() -> Result<()> {
+    // TODO(anp): Stage the patch workspace in the selected environment and pass its target-native
+    // cwd on turn/start.
+    skip_if_wine_exec!(Ok(()), "uses a host-local patch workspace as the turn cwd");
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -4147,6 +4162,12 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
 
 #[tokio::test]
 async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
+    // TODO(anp): Stage the approval workspace in the selected environment and pass its
+    // target-native cwd on turn/start.
+    skip_if_wine_exec!(
+        Ok(()),
+        "uses a host-local approval workspace as the turn cwd"
+    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -4440,6 +4461,9 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> Result<()> {
+    // TODO(anp): Exercise the trust override with an explicit target-native project environment.
+    skip_if_wine_exec!(Ok(()), "uses a host-local project path as the turn cwd");
+
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 

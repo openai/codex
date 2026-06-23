@@ -83,9 +83,11 @@ use codex_rollout::read_session_meta_line;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
+use core_test_support::TestEnvironment;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
+use core_test_support::test_environment;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs::FileTimes;
@@ -3004,18 +3006,24 @@ async fn thread_resume_can_skip_turns_when_thread_is_running() -> Result<()> {
 
 #[tokio::test]
 async fn thread_resume_replays_pending_command_execution_request_approval() -> Result<()> {
+    let command = if cfg!(windows) || matches!(test_environment(), TestEnvironment::WineExec) {
+        vec![
+            "cmd.exe".to_string(),
+            "/d".to_string(),
+            "/c".to_string(),
+            "echo".to_string(),
+            "42".to_string(),
+        ]
+    } else {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            "print(42)".to_string(),
+        ]
+    };
     let responses = vec![
         create_final_assistant_message_sse_response("seeded")?,
-        create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
-            /*workdir*/ None,
-            Some(5000),
-            "call-1",
-        )?,
+        create_shell_command_sse_response(command, /*workdir*/ None, Some(5000), "call-1")?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
@@ -3142,6 +3150,10 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
 
 #[tokio::test]
 async fn thread_resume_replays_pending_file_change_request_approval() -> Result<()> {
+    // TODO(anp): Stage the pending patch workspace in the selected environment and pass its
+    // target-native cwd when starting the turn.
+    skip_if_wine_exec!(Ok(()), "uses a host-local patch workspace as the turn cwd");
+
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;

@@ -213,6 +213,9 @@ async fn turn_interrupt_rejects_completed_turn() -> Result<()> {
 
 #[tokio::test]
 async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()> {
+    // TODO(anp): Give the approval fixture a target-native command, cwd, and explicit environment.
+    skip_if_wine_exec!(Ok(()), "overrides turn cwd with a host-local path");
+
     #[cfg(target_os = "windows")]
     let shell_command = vec![
         "powershell".to_string(),

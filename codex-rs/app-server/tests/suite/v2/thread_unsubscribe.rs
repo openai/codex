@@ -28,6 +28,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use core_test_support::responses;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
@@ -87,6 +88,9 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
 
 #[tokio::test]
 async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
+    // TODO(anp): Give the active-turn fixture an explicit target-native cwd and environment.
+    skip_if_wine_exec!(Ok(()), "overrides turn cwd with a host-local path");
+
     let call_id = "deterministic-wait-call";
     let tool_name = "deterministic_wait";
     let tool_args = json!({});

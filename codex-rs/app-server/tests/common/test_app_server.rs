@@ -1128,6 +1128,18 @@ impl TestAppServer {
         &mut self,
         params: TurnStartParams,
     ) -> anyhow::Result<i64> {
+        if matches!(test_environment(), TestEnvironment::WineExec)
+            && params.cwd.is_some()
+            && params.environments.is_none()
+        {
+            panic!(
+                "Wine-exec app-server tests cannot override `turn/start.cwd` without explicit \
+                 target-native environments. App-server would otherwise rebuild its default \
+                 remote selection from the Linux host path and silently stop exercising the \
+                 intended Windows cwd. Add a `skip_if_wine_exec!` guard with a TODO describing \
+                 how to supply a cross-OS cwd, or provide explicit `turn/start.environments`."
+            );
+        }
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/start", params).await
     }
