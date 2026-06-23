@@ -102,6 +102,7 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
             network: None,
             sandbox_policy_cwd: &cwd_uri,
             codex_linux_sandbox_exe: None,
+            use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
         })
@@ -157,6 +158,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             network: None,
             sandbox_policy_cwd: &cwd_uri,
             codex_linux_sandbox_exe: None,
+            use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
         })
@@ -227,6 +229,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             network: None,
             sandbox_policy_cwd: &cwd_uri,
             codex_linux_sandbox_exe: None,
+            use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
         })
@@ -300,9 +303,8 @@ fn managed_mitm_ca_bundle_becomes_readable_for_restricted_sandbox() {
 }
 
 #[cfg(target_os = "linux")]
-fn transform_linux_request(
+fn transform_linux_seccomp_request(
     codex_linux_sandbox_exe: &std::path::Path,
-    sandbox: SandboxType,
 ) -> super::SandboxExecRequest {
     let manager = SandboxManager::new();
     let cwd = AbsolutePathBuf::current_dir().expect("current dir");
@@ -319,12 +321,13 @@ fn transform_linux_request(
                 additional_permissions: None,
             },
             permissions: &permissions,
-            sandbox,
+            sandbox: SandboxType::LinuxSeccomp,
             enforce_managed_network: false,
             environment_id: None,
             network: None,
             sandbox_policy_cwd: &cwd_uri,
             codex_linux_sandbox_exe: Some(codex_linux_sandbox_exe),
+            use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
         })
@@ -402,10 +405,9 @@ fn wsl1_allows_non_bubblewrap_linux_paths() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn transform_linux_bubblewrap_preserves_helper_path_in_arg0_when_available() {
+fn transform_linux_seccomp_preserves_helper_path_in_arg0_when_available() {
     let codex_linux_sandbox_exe = std::path::PathBuf::from("/tmp/codex-linux-sandbox");
-    let exec_request =
-        transform_linux_request(&codex_linux_sandbox_exe, SandboxType::LinuxBubblewrap);
+    let exec_request = transform_linux_seccomp_request(&codex_linux_sandbox_exe);
 
     assert_eq!(
         exec_request.arg0,
@@ -415,10 +417,9 @@ fn transform_linux_bubblewrap_preserves_helper_path_in_arg0_when_available() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn transform_linux_bubblewrap_uses_helper_alias_when_launcher_is_not_helper_path() {
+fn transform_linux_seccomp_uses_helper_alias_when_launcher_is_not_helper_path() {
     let codex_linux_sandbox_exe = std::path::PathBuf::from("/tmp/codex");
-    let exec_request =
-        transform_linux_request(&codex_linux_sandbox_exe, SandboxType::LinuxBubblewrap);
+    let exec_request = transform_linux_seccomp_request(&codex_linux_sandbox_exe);
 
     assert_eq!(exec_request.arg0, Some("codex-linux-sandbox".to_string()));
 }
@@ -519,6 +520,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                     network: None,
                     sandbox_policy_cwd: &cwd_uri,
                     codex_linux_sandbox_exe: None,
+                    use_legacy_landlock: false,
                     windows_sandbox_level: WindowsSandboxLevel::Elevated,
                     windows_sandbox_private_desktop: false,
                 },
@@ -580,20 +582,4 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
         Some(std::ffi::OsStr::new(".sandbox-bin"))
     );
     assert!(materialized_helper.exists());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn transform_linux_landlock_uses_legacy_backend() {
-    let exec_request = transform_linux_request(
-        std::path::Path::new("/tmp/codex-linux-sandbox"),
-        SandboxType::LinuxLegacyLandlock,
-    );
-
-    assert_eq!(exec_request.sandbox, SandboxType::LinuxLegacyLandlock);
-    assert!(
-        exec_request
-            .command
-            .contains(&"--use-legacy-landlock".to_string())
-    );
 }

@@ -37,7 +37,7 @@ fn classifies_legacy_denial_keywords() {
         let output = make_exec_output(/*exit_code*/ 1, "", keyword, "");
 
         assert!(
-            classify_filesystem_sandbox_violation(SandboxType::LinuxBubblewrap, &output).is_some(),
+            classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output).is_some(),
             "{keyword}"
         );
     }
@@ -49,7 +49,7 @@ fn normalizes_backend_keywords_as_policy_denied() {
         let output = make_exec_output(/*exit_code*/ 1, "", keyword, "");
 
         assert_eq!(
-            classify_filesystem_sandbox_violation(SandboxType::LinuxBubblewrap, &output),
+            classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output),
             Some(FileSystemSandboxViolation {
                 backend: SandboxViolationBackend::Bubblewrap,
                 reason: FileSystemSandboxViolationReason::PolicyDenied,
@@ -73,24 +73,21 @@ fn preserves_legacy_denial_ordering() {
 
     assert!(
         classify_filesystem_sandbox_violation(
-            SandboxType::LinuxBubblewrap,
+            SandboxType::LinuxSeccomp,
             &quick_reject_without_keyword
         )
         .is_none()
     );
     assert!(
         classify_filesystem_sandbox_violation(
-            SandboxType::LinuxBubblewrap,
+            SandboxType::LinuxSeccomp,
             &quick_reject_with_keyword
         )
         .is_some()
     );
     assert!(
-        classify_filesystem_sandbox_violation(
-            SandboxType::LinuxBubblewrap,
-            &zero_exit_with_keyword
-        )
-        .is_none()
+        classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &zero_exit_with_keyword)
+            .is_none()
     );
     assert!(
         classify_filesystem_sandbox_violation(SandboxType::None, &non_sandbox_with_keyword)
@@ -169,26 +166,15 @@ fn classifies_linux_sigsys_exit() {
         "",
     );
 
-    for (sandbox_type, backend) in [
-        (
-            SandboxType::LinuxBubblewrap,
-            SandboxViolationBackend::Bubblewrap,
-        ),
-        (
-            SandboxType::LinuxLegacyLandlock,
-            SandboxViolationBackend::LegacyLandlock,
-        ),
-    ] {
-        assert_eq!(
-            classify_filesystem_sandbox_violation(sandbox_type, &output),
-            Some(FileSystemSandboxViolation {
-                backend,
-                reason: FileSystemSandboxViolationReason::SignalSyscall,
-                path: None,
-                output_snippet: String::new(),
-            })
-        );
-    }
+    assert_eq!(
+        classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output),
+        Some(FileSystemSandboxViolation {
+            backend: SandboxViolationBackend::Bubblewrap,
+            reason: FileSystemSandboxViolationReason::SignalSyscall,
+            path: None,
+            output_snippet: String::new(),
+        })
+    );
 }
 
 #[test]

@@ -47,7 +47,6 @@ pub enum SandboxViolationEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SandboxViolationBackend {
     Bubblewrap,
-    LegacyLandlock,
     ManagedNetworkProxy,
     Seatbelt,
     WindowsSandbox,
@@ -57,7 +56,6 @@ impl SandboxViolationBackend {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Bubblewrap => "bubblewrap",
-            Self::LegacyLandlock => "legacy_landlock",
             Self::ManagedNetworkProxy => "managed_network_proxy",
             Self::Seatbelt => "seatbelt",
             Self::WindowsSandbox => "windows_sandbox",
@@ -143,8 +141,7 @@ fn classify_filesystem_sandbox_violation(
     let backend = match sandbox_type {
         SandboxType::None => return None,
         SandboxType::MacosSeatbelt => SandboxViolationBackend::Seatbelt,
-        SandboxType::LinuxBubblewrap => SandboxViolationBackend::Bubblewrap,
-        SandboxType::LinuxLegacyLandlock => SandboxViolationBackend::LegacyLandlock,
+        SandboxType::LinuxSeccomp => SandboxViolationBackend::Bubblewrap,
         SandboxType::WindowsRestrictedToken => SandboxViolationBackend::WindowsSandbox,
     };
 
@@ -163,10 +160,8 @@ fn classify_filesystem_sandbox_violation(
 
     #[cfg(unix)]
     {
-        if matches!(
-            sandbox_type,
-            SandboxType::LinuxBubblewrap | SandboxType::LinuxLegacyLandlock
-        ) && exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + libc::SIGSYS
+        if sandbox_type == SandboxType::LinuxSeccomp
+            && exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + libc::SIGSYS
         {
             return Some(FileSystemSandboxViolation {
                 backend,

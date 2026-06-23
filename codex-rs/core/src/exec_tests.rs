@@ -30,7 +30,7 @@ fn make_exec_output(
 fn sandbox_detection_requires_keywords() {
     let output = make_exec_output(/*exit_code*/ 1, "", "", "");
     assert!(!is_likely_sandbox_denied(
-        SandboxType::LinuxBubblewrap,
+        SandboxType::LinuxSeccomp,
         &output
     ));
 }
@@ -38,17 +38,14 @@ fn sandbox_detection_requires_keywords() {
 #[test]
 fn sandbox_detection_identifies_keyword_in_stderr() {
     let output = make_exec_output(/*exit_code*/ 1, "", "Operation not permitted", "");
-    assert!(is_likely_sandbox_denied(
-        SandboxType::LinuxBubblewrap,
-        &output
-    ));
+    assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
 }
 
 #[test]
 fn sandbox_detection_respects_quick_reject_exit_codes() {
     let output = make_exec_output(/*exit_code*/ 127, "", "command not found", "");
     assert!(!is_likely_sandbox_denied(
-        SandboxType::LinuxBubblewrap,
+        SandboxType::LinuxSeccomp,
         &output
     ));
 }
@@ -94,7 +91,7 @@ fn sandbox_detection_ignores_network_policy_text_with_zero_exit_code() {
     );
 
     assert!(!is_likely_sandbox_denied(
-        SandboxType::LinuxBubblewrap,
+        SandboxType::LinuxSeccomp,
         &output
     ));
 }
@@ -1030,12 +1027,7 @@ fn build_exec_request_preserves_windows_workspace_roots() -> Result<()> {
 fn sandbox_detection_flags_sigsys_exit_code() {
     let exit_code = EXIT_CODE_SIGNAL_BASE + libc::SIGSYS;
     let output = make_exec_output(exit_code, "", "", "");
-    for sandbox_type in [
-        SandboxType::LinuxBubblewrap,
-        SandboxType::LinuxLegacyLandlock,
-    ] {
-        assert!(is_likely_sandbox_denied(sandbox_type, &output));
-    }
+    assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
 }
 
 #[cfg(unix)]

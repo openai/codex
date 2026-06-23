@@ -917,8 +917,7 @@ pub struct Config {
     pub codex_self_exe: Option<PathBuf>,
 
     /// Path to the `codex-linux-sandbox` executable. This must be set if
-    /// [`codex_sandboxing::SandboxType::LinuxBubblewrap`] or
-    /// [`codex_sandboxing::SandboxType::LinuxLegacyLandlock`] is used. Note that this
+    /// [`codex_sandboxing::SandboxType::LinuxSeccomp`] is used. Note that this
     /// cannot be set in the config file: it must be set in code via
     /// [`ConfigOverrides`].
     ///
