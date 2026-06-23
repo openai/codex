@@ -309,19 +309,6 @@ fn prepare_codex_apps_tools_for_model(
     tools
 }
 
-/// Adds server-scoped plugin names to regular MCP tools without changing their input schemas.
-fn prepare_regular_mcp_tools_for_model(
-    mut tools: Vec<ToolInfo>,
-    tool_plugin_provenance: &ToolPluginProvenance,
-) -> Vec<ToolInfo> {
-    for tool in &mut tools {
-        let plugin_names = tool_plugin_provenance
-            .plugin_display_names_for_mcp_server_name(tool.server_name.as_str());
-        add_plugin_provenance_to_tool(tool, plugin_names);
-    }
-    tools
-}
-
 /// Stores plugin names on the tool and appends a model-visible plugin membership note.
 fn add_plugin_provenance_to_tool(tool: &mut ToolInfo, plugin_names: &[String]) {
     tool.plugin_display_names = plugin_names.to_vec();
@@ -355,6 +342,19 @@ fn add_plugin_provenance_to_tool(tool: &mut ToolInfo, plugin_names: &[String]) {
         format!("{description}. {plugin_source_note}")
     };
     tool.tool.description = Some(Cow::Owned(annotated_description));
+}
+
+/// Adds server-scoped plugin names to regular MCP tools without changing their input schemas.
+fn prepare_regular_mcp_tools_for_model(
+    mut tools: Vec<ToolInfo>,
+    tool_plugin_provenance: &ToolPluginProvenance,
+) -> Vec<ToolInfo> {
+    for tool in &mut tools {
+        let plugin_names = tool_plugin_provenance
+            .plugin_display_names_for_mcp_server_name(tool.server_name.as_str());
+        add_plugin_provenance_to_tool(tool, plugin_names);
+    }
+    tools
 }
 
 #[derive(Debug, Clone, thiserror::Error)]

@@ -131,6 +131,52 @@ pub(crate) fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
     tool
 }
 
+fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {
+    let Some(properties) = input_schema
+        .as_object_mut()
+        .and_then(|schema| schema.get_mut("properties"))
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return;
+    };
+
+    for field_name in file_params {
+        let Some(property_schema) = properties.get_mut(field_name) else {
+            continue;
+        };
+        rewrite_input_property_schema_as_local_file_path(property_schema);
+    }
+}
+
+fn rewrite_input_property_schema_as_local_file_path(schema: &mut JsonValue) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+
+    let mut description = object
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .unwrap_or_default();
+    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
+    if description.is_empty() {
+        description = guidance.to_string();
+    } else if !description.contains(guidance) {
+        description = format!("{description} {guidance}");
+    }
+
+    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
+        || object.get("items").is_some();
+    object.clear();
+    object.insert("description".to_string(), JsonValue::String(description));
+    if is_array {
+        object.insert("type".to_string(), JsonValue::String("array".to_string()));
+        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
+    } else {
+        object.insert("type".to_string(), JsonValue::String("string".to_string()));
+    }
+}
+
 pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
     tools
         .into_iter()
@@ -267,52 +313,6 @@ fn callable_namespace_with_prefix(namespace: &str, prefix_mcp_tool_names: bool) 
         namespace.to_string()
     } else {
         format!("{LEGACY_MCP_TOOL_NAME_PREFIX}{namespace}")
-    }
-}
-
-fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {
-    let Some(properties) = input_schema
-        .as_object_mut()
-        .and_then(|schema| schema.get_mut("properties"))
-        .and_then(JsonValue::as_object_mut)
-    else {
-        return;
-    };
-
-    for field_name in file_params {
-        let Some(property_schema) = properties.get_mut(field_name) else {
-            continue;
-        };
-        rewrite_input_property_schema_as_local_file_path(property_schema);
-    }
-}
-
-fn rewrite_input_property_schema_as_local_file_path(schema: &mut JsonValue) {
-    let Some(object) = schema.as_object_mut() else {
-        return;
-    };
-
-    let mut description = object
-        .get("description")
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
-    if description.is_empty() {
-        description = guidance.to_string();
-    } else if !description.contains(guidance) {
-        description = format!("{description} {guidance}");
-    }
-
-    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
-        || object.get("items").is_some();
-    object.clear();
-    object.insert("description".to_string(), JsonValue::String(description));
-    if is_array {
-        object.insert("type".to_string(), JsonValue::String("array".to_string()));
-        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
-    } else {
-        object.insert("type".to_string(), JsonValue::String("string".to_string()));
     }
 }
 
