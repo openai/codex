@@ -3048,6 +3048,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-protocol",
  "codex-utils-output-truncation",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "sha2 0.10.9",
