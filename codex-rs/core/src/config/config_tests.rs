@@ -4466,15 +4466,20 @@ fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
 }
 
 #[test]
-fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
+fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_matcher_rules() {
     const MATCHED_SERVER: &str = "matched-should-allow";
     const MISMATCHED_SERVER: &str = "mismatched-should-disable";
+    const MATCHER_MISMATCHED_SERVER: &str = "matcher-mismatched-should-disable";
     const UNLISTED_SERVER: &str = "unlisted-should-disable";
     const GOOD_CMD: &str = "good-cmd";
 
     let mut servers = HashMap::from([
         (MATCHED_SERVER.to_string(), stdio_mcp(GOOD_CMD)),
         (MISMATCHED_SERVER.to_string(), stdio_mcp("bad-cmd")),
+        (
+            MATCHER_MISMATCHED_SERVER.to_string(),
+            stdio_mcp_with_args(GOOD_CMD, &["unexpected"]),
+        ),
         (
             UNLISTED_SERVER.to_string(),
             http_mcp("https://example.com/mcp"),
@@ -4502,13 +4507,52 @@ fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
                             },
                         },
                     ),
+                    (
+                        MATCHER_MISMATCHED_SERVER.to_string(),
+                        McpServerRequirement {
+                            identity: McpServerIdentity::Command {
+                                command: GOOD_CMD.to_string(),
+                            },
+                        },
+                    ),
                 ])),
             },
         )]),
         source.clone(),
     );
+    let matchers = Sourced::new(
+        BTreeMap::from([
+            (
+                MATCHED_SERVER.to_string(),
+                McpServerMatcher::Command(McpServerCommandMatcher {
+                    command: GOOD_CMD.to_string(),
+                    args: Vec::new(),
+                }),
+            ),
+            (
+                MISMATCHED_SERVER.to_string(),
+                McpServerMatcher::Command(McpServerCommandMatcher {
+                    command: "bad-cmd".to_string(),
+                    args: Vec::new(),
+                }),
+            ),
+            (
+                MATCHER_MISMATCHED_SERVER.to_string(),
+                McpServerMatcher::Command(McpServerCommandMatcher {
+                    command: GOOD_CMD.to_string(),
+                    args: Vec::new(),
+                }),
+            ),
+        ]),
+        source.clone(),
+    );
 
-    filter_plugin_mcp_servers_by_requirements("sample@test", &mut servers, Some(&requirements));
+    filter_plugin_mcp_servers_by_requirements(
+        "sample@test",
+        &mut servers,
+        Some(&requirements),
+        Some(&matchers),
+    );
 
     let reason = Some(McpServerDisabledReason::Requirements { source });
     assert_eq!(
@@ -4522,6 +4566,10 @@ fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
         HashMap::from([
             (MATCHED_SERVER.to_string(), (true, None)),
             (MISMATCHED_SERVER.to_string(), (false, reason.clone())),
+            (
+                MATCHER_MISMATCHED_SERVER.to_string(),
+                (false, reason.clone()),
+            ),
             (UNLISTED_SERVER.to_string(), (false, reason)),
         ])
     );
@@ -4548,7 +4596,12 @@ fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
         source.clone(),
     );
 
-    filter_plugin_mcp_servers_by_requirements("sample@test", &mut servers, Some(&requirements));
+    filter_plugin_mcp_servers_by_requirements(
+        "sample@test",
+        &mut servers,
+        Some(&requirements),
+        /*mcp_matchers*/ None,
+    );
 
     assert_eq!(
         servers
@@ -4565,6 +4618,65 @@ fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
                 Some(McpServerDisabledReason::Requirements { source })
             )
         )])
+    );
+}
+
+#[test]
+fn filter_plugin_mcp_servers_by_matchers_enforces_name_and_invocation() {
+    const MATCHED_SERVER: &str = "matched";
+    const MISMATCHED_SERVER: &str = "mismatched";
+    const UNLISTED_SERVER: &str = "unlisted";
+
+    let mut servers = HashMap::from([
+        (
+            MATCHED_SERVER.to_string(),
+            stdio_mcp_with_args("forge", &["approved"]),
+        ),
+        (
+            MISMATCHED_SERVER.to_string(),
+            stdio_mcp_with_args("forge", &["rejected"]),
+        ),
+        (
+            UNLISTED_SERVER.to_string(),
+            stdio_mcp_with_args("forge", &["approved"]),
+        ),
+    ]);
+    let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+    let matcher = McpServerMatcher::Command(McpServerCommandMatcher {
+        command: "forge".to_string(),
+        args: vec![McpServerValueMatcher::Exact {
+            value: "approved".to_string(),
+        }],
+    });
+    let matchers = Sourced::new(
+        BTreeMap::from([
+            (MATCHED_SERVER.to_string(), matcher.clone()),
+            (MISMATCHED_SERVER.to_string(), matcher),
+        ]),
+        source.clone(),
+    );
+
+    filter_plugin_mcp_servers_by_requirements(
+        "sample@test",
+        &mut servers,
+        /*plugin_requirements*/ None,
+        Some(&matchers),
+    );
+
+    let reason = Some(McpServerDisabledReason::Requirements { source });
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([
+            (MATCHED_SERVER.to_string(), (true, None)),
+            (MISMATCHED_SERVER.to_string(), (false, reason.clone())),
+            (UNLISTED_SERVER.to_string(), (false, reason)),
+        ])
     );
 }
 

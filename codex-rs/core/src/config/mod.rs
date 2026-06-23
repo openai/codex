@@ -1489,24 +1489,22 @@ impl Config {
         plugin_id: &str,
         mcp_servers: &mut HashMap<String, McpServerConfig>,
     ) {
+        let requirements = self.config_layer_stack.requirements();
         filter_plugin_mcp_servers_by_requirements(
             plugin_id,
             mcp_servers,
-            self.config_layer_stack.requirements().plugins.as_ref(),
+            requirements.plugins.as_ref(),
+            requirements.mcp_server_matchers.as_ref(),
         );
-        let empty_mcp_allowlist = self
-            .config_layer_stack
-            .requirements()
+        let empty_mcp_allowlist = requirements
             .mcp_servers
             .as_ref()
             .filter(|requirements| requirements.value.is_empty());
-        let empty_mcp_matchers = self
-            .config_layer_stack
-            .requirements()
-            .mcp_server_matchers
-            .as_ref()
-            .filter(|requirements| requirements.value.is_empty());
-        filter_mcp_servers_by_requirements(mcp_servers, empty_mcp_allowlist, empty_mcp_matchers);
+        filter_mcp_servers_by_requirements(
+            mcp_servers,
+            empty_mcp_allowlist,
+            /*mcp_matchers*/ None,
+        );
     }
 
     pub async fn to_mcp_config(
@@ -1915,20 +1913,38 @@ fn filter_plugin_mcp_servers_by_requirements(
     plugin_config_name: &str,
     mcp_servers: &mut HashMap<String, McpServerConfig>,
     plugin_requirements: Option<&Sourced<BTreeMap<String, PluginRequirementsToml>>>,
+    mcp_matchers: Option<&Sourced<BTreeMap<String, McpServerMatcher>>>,
 ) {
-    let Some(requirements) = plugin_requirements else {
+    if plugin_requirements.is_none() && mcp_matchers.is_none() {
         return;
-    };
-    let source = requirements.source.clone();
-    let plugin_mcp_requirements = requirements
-        .value
-        .get(plugin_config_name)
+    }
+
+    let source = RequirementSource::composite(
+        plugin_requirements
+            .iter()
+            .map(|requirements| requirements.source.clone())
+            .chain(
+                mcp_matchers
+                    .iter()
+                    .map(|requirements| requirements.source.clone()),
+            ),
+    );
+    let plugin_mcp_requirements = plugin_requirements
+        .and_then(|requirements| requirements.value.get(plugin_config_name))
         .and_then(|plugin| plugin.mcp_servers.as_ref());
 
     for (name, server) in mcp_servers.iter_mut() {
-        let allowed = plugin_mcp_requirements
-            .and_then(|mcp_requirements| mcp_requirements.get(name))
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+        let allowed_by_plugin_requirement = plugin_requirements.is_none()
+            || plugin_mcp_requirements
+                .and_then(|mcp_requirements| mcp_requirements.get(name))
+                .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+        let allowed_by_matcher = mcp_matchers.is_none_or(|matchers| {
+            matchers
+                .value
+                .get(name)
+                .is_some_and(|matcher| matcher.matches(server))
+        });
+        let allowed = allowed_by_plugin_requirement && allowed_by_matcher;
         if allowed {
             server.disabled_reason = None;
         } else {
