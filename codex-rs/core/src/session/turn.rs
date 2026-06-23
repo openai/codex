@@ -39,6 +39,7 @@ use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::session::NewContextWindowMode;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -124,6 +125,20 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
+
+#[derive(Clone, Copy, Debug)]
+enum AutoCompactFollowUpState {
+    ActiveModelFollowUp,
+    NoActiveModelFollowUp,
+}
+
+#[derive(Debug)]
+struct AutoCompactRequest {
+    initial_context_injection: InitialContextInjection,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+    follow_up_state: AutoCompactFollowUpState,
+}
 
 /// Takes initial turn input and runs a loop where, at each sampling request,
 /// the model replies with either:
@@ -333,7 +348,11 @@ pub(crate) async fn run_turn(
                 .await;
 
                 let started_new_context_window = sess
-                    .maybe_start_new_context_window(turn_context.as_ref(), Arc::clone(&world_state))
+                    .start_new_context_window(
+                        turn_context.as_ref(),
+                        Arc::clone(&world_state),
+                        NewContextWindowMode::StartIfRequested,
+                    )
                     .await
                     .is_some();
                 if started_new_context_window && needs_follow_up {
@@ -349,13 +368,24 @@ pub(crate) async fn run_turn(
                     && token_limit_reached
                     && needs_follow_up
                 {
+                    let follow_up_state = if model_needs_follow_up {
+                        AutoCompactFollowUpState::ActiveModelFollowUp
+                    } else {
+                        AutoCompactFollowUpState::NoActiveModelFollowUp
+                    };
                     if let Err(err) = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),
                         &mut client_session,
-                        InitialContextInjection::BeforeLastUserMessage(Arc::clone(&world_state)),
-                        CompactionReason::ContextLimit,
-                        CompactionPhase::MidTurn,
+                        AutoCompactRequest {
+                            initial_context_injection:
+                                InitialContextInjection::BeforeLastUserMessage(Arc::clone(
+                                    &world_state,
+                                )),
+                            reason: CompactionReason::ContextLimit,
+                            phase: CompactionPhase::MidTurn,
+                            follow_up_state,
+                        },
                     )
                     .await
                     {
@@ -819,9 +849,12 @@ async fn run_pre_sampling_compact(
             sess,
             step_context,
             client_session,
-            InitialContextInjection::DoNotInject,
-            CompactionReason::ContextLimit,
-            CompactionPhase::PreTurn,
+            AutoCompactRequest {
+                initial_context_injection: InitialContextInjection::DoNotInject,
+                reason: CompactionReason::ContextLimit,
+                phase: CompactionPhase::PreTurn,
+                follow_up_state: AutoCompactFollowUpState::NoActiveModelFollowUp,
+            },
         )
         .await?;
     }
@@ -859,16 +892,24 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     if should_compact_for_comp_hash_change {
+        let compact_turn_context = if turn_context.config.features.enabled(Feature::TokenBudget) {
+            turn_context
+        } else {
+            &previous_model_turn_context
+        };
         let step_context = sess
-            .capture_step_context(Arc::clone(&previous_model_turn_context))
+            .capture_step_context(Arc::clone(compact_turn_context))
             .await;
         run_auto_compact(
             sess,
             step_context,
             client_session,
-            InitialContextInjection::DoNotInject,
-            CompactionReason::CompHashChanged,
-            CompactionPhase::PreTurn,
+            AutoCompactRequest {
+                initial_context_injection: InitialContextInjection::DoNotInject,
+                reason: CompactionReason::CompHashChanged,
+                phase: CompactionPhase::PreTurn,
+                follow_up_state: AutoCompactFollowUpState::NoActiveModelFollowUp,
+            },
         )
         .await?;
         return Ok(());
@@ -899,16 +940,24 @@ async fn maybe_run_previous_model_inline_compact(
         && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if should_run {
+        let compact_turn_context = if turn_context.config.features.enabled(Feature::TokenBudget) {
+            turn_context
+        } else {
+            &previous_model_turn_context
+        };
         let step_context = sess
-            .capture_step_context(Arc::clone(&previous_model_turn_context))
+            .capture_step_context(Arc::clone(compact_turn_context))
             .await;
         run_auto_compact(
             sess,
             step_context,
             client_session,
-            InitialContextInjection::DoNotInject,
-            CompactionReason::ModelDownshift,
-            CompactionPhase::PreTurn,
+            AutoCompactRequest {
+                initial_context_injection: InitialContextInjection::DoNotInject,
+                reason: CompactionReason::ModelDownshift,
+                phase: CompactionPhase::PreTurn,
+                follow_up_state: AutoCompactFollowUpState::NoActiveModelFollowUp,
+            },
         )
         .await?;
     }
@@ -918,17 +967,47 @@ async fn maybe_run_previous_model_inline_compact(
 #[instrument(
     level = "trace",
     skip_all,
-    fields(reason = ?reason, phase = ?phase)
+    fields(reason = ?request.reason, phase = ?request.phase)
 )]
 async fn run_auto_compact(
     sess: &Arc<Session>,
     step_context: Arc<StepContext>,
     client_session: &mut ModelClientSession,
-    initial_context_injection: InitialContextInjection,
-    reason: CompactionReason,
-    phase: CompactionPhase,
+    request: AutoCompactRequest,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
+    if turn_context.config.features.enabled(Feature::TokenBudget) {
+        if matches!(request.phase, CompactionPhase::MidTurn)
+            && matches!(
+                request.follow_up_state,
+                AutoCompactFollowUpState::ActiveModelFollowUp
+            )
+        {
+            // A token-budget reset clears the current-window history. Preserve active tool-call
+            // continuation state first; pre-turn compaction will reset the window before the next
+            // user turn if the budget is still exhausted.
+            return Ok(());
+        }
+        // Compaction is the reset request, so force a new context window
+        // instead of consuming a pending `new_context` tool request.
+        let world_state = match &request.initial_context_injection {
+            InitialContextInjection::BeforeLastUserMessage(world_state) => Arc::clone(world_state),
+            InitialContextInjection::DoNotInject => Arc::new(
+                sess.build_world_state_for_environments(
+                    turn_context.as_ref(),
+                    &step_context.environments,
+                )
+                .await,
+            ),
+        };
+        crate::compact_token_budget::run_inline_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            world_state,
+        )
+        .await?;
+        return Ok(());
+    }
     if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context
             .config
@@ -944,9 +1023,9 @@ async fn run_auto_compact(
                 Arc::clone(sess),
                 step_context,
                 client_session,
-                initial_context_injection,
-                reason,
-                phase,
+                request.initial_context_injection,
+                request.reason,
+                request.phase,
             )
             .await?;
             return Ok(());
@@ -960,9 +1039,9 @@ async fn run_auto_compact(
             Arc::clone(sess),
             step_context,
             client_session.turn_state(),
-            initial_context_injection,
-            reason,
-            phase,
+            request.initial_context_injection,
+            request.reason,
+            request.phase,
         )
         .await?;
     } else {
@@ -974,9 +1053,9 @@ async fn run_auto_compact(
         run_inline_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
-            initial_context_injection,
-            reason,
-            phase,
+            request.initial_context_injection,
+            request.reason,
+            request.phase,
         )
         .await?;
     }
