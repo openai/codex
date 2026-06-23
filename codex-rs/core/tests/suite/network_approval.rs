@@ -109,13 +109,7 @@ async fn guardian_receives_all_possible_triggers_for_concurrent_network_requests
                 ev_response_created("resp-network-guardian"),
                 ev_assistant_message(
                     "msg-network-guardian",
-                    &json!({
-                        "risk_level": "high",
-                        "user_authorization": "low",
-                        "outcome": "deny",
-                        "rationale": denial_rationale,
-                    })
-                    .to_string(),
+                    &json!({"outcome": "deny", "rationale": denial_rationale}).to_string(),
                 ),
                 ev_completed("resp-network-guardian"),
             ]),
@@ -184,11 +178,12 @@ async fn guardian_receives_all_possible_triggers_for_concurrent_network_requests
             .contains("Approve if at least one candidate")
     );
     assert!(responses.requests().into_iter().any(|request| {
-        request.message_input_texts("developer").iter().any(|text| {
-            text.contains("<guardian_network_access_denied>")
-                && text.contains(NETWORK_TEST_TARGET)
-                && text.contains(denial_rationale)
-        })
+        request.body_json()["client_metadata"]["x-openai-subagent"].as_str() != Some("guardian")
+            && request.message_input_texts("developer").iter().any(|text| {
+                text.contains("<guardian_network_access_denied>")
+                    && text.contains(NETWORK_TEST_TARGET)
+                    && text.contains(denial_rationale)
+            })
     }));
 
     Ok(())
