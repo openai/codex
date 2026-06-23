@@ -28,4 +28,7 @@ pub struct UpdateCheckResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct UpdateInstallResponse {}
+pub struct UpdateInstallResponse {
+    pub installed_version: String,
+    pub success: bool,
+}

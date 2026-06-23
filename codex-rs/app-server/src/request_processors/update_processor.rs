@@ -79,7 +79,44 @@ impl UpdateRequestProcessor {
             )));
         }
 
-        Ok(Some(UpdateInstallResponse {}.into()))
+        let version_output = Command::new("codex")
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "Codex update succeeded, but the installed version could not be read: {err}"
+                ))
+            })?;
+        if !version_output.status.success() {
+            return Err(internal_error(format!(
+                "Codex update succeeded, but `codex --version` failed with status {}",
+                version_output.status
+            )));
+        }
+        let version_stdout = String::from_utf8(version_output.stdout).map_err(|err| {
+            internal_error(format!(
+                "Codex update succeeded, but `codex --version` returned invalid UTF-8: {err}"
+            ))
+        })?;
+        let installed_version = version_stdout
+            .trim()
+            .strip_prefix("codex-cli ")
+            .filter(|version| !version.is_empty())
+            .ok_or_else(|| {
+                internal_error(format!(
+                    "Codex update succeeded, but `codex --version` returned an unexpected value: {version_stdout:?}"
+                ))
+            })?
+            .to_string();
+
+        Ok(Some(
+            UpdateInstallResponse {
+                installed_version,
+                success: true,
+            }
+            .into(),
+        ))
     }
 }
 

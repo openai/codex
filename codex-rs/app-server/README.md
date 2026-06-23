@@ -202,7 +202,7 @@ Example with notification opt-out:
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with model-advertised string reasoning effort options in the catalog's intended progression order, `additionalSpeedTiers`, `serviceTiers`, optional `defaultServiceTier`, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata. Clients should preserve the `supportedReasoningEfforts` array order rather than deriving order from the effort names.
 - `modelProvider/capabilities/read` — read provider-level capabilities for the currently configured model provider.
 - `update/check` — force a fresh update check and return the current version, latest version available through the detected distribution channel, installation method, and whether app-server can apply the update automatically.
-- `update/install` — run the updater associated with the detected installation method; returns `{}` after the updater exits successfully.
+- `update/install` — run the updater associated with the detected installation method; returns the installed version and whether installation succeeded.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. Pass `threadId` when showing feature state for an existing loaded thread so `enabled` is computed from that thread's refreshed config, including project-local config for the thread's cwd; if omitted, the server uses its default config resolution context. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `permissionProfile/list` — beta; list available permission profile ids with optional display `description` text and an `allowed` flag reflecting effective requirements, using cursor pagination. Pass `cwd` when the caller needs project-local `[permissions.<id>]` entries to be included in the current catalog view.
 - `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for currently supported feature keys. For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default. Invalid keys will be ignored.
@@ -1920,7 +1920,8 @@ request has no params:
 `installationMethod` is one of `npm`, `bun`, `brew`, `standaloneUnix`,
 `standaloneWindows`, or `other`. npm and Bun checks require the latest GitHub
 release to be ready under npm's `latest` tag. Homebrew checks the cask version;
-standalone and other installations check the latest GitHub release.
+standalone and other installations check the latest GitHub release. The
+`latestVersion` field is the version that an available update would install.
 
 When `canAutoUpdate` is `true`, call `update/install` to run the
 corresponding npm, Bun, Homebrew, or standalone installer. The updater's output
@@ -1930,11 +1931,15 @@ installed version.
 
 ```json
 { "method": "update/install", "id": 51 }
-{ "id": 51, "result": {} }
+{ "id": 51, "result": {
+    "installedVersion": "1.3.0",
+    "success": true
+} }
 ```
 
 For `installationMethod: "other"`, `update/install` returns an invalid-request
-error because app-server cannot determine a safe updater command.
+error because app-server cannot determine a safe updater command. Installer or
+post-install version-check failures return a JSON-RPC error instead of a result.
 
 ## Auth endpoints
 
