@@ -144,9 +144,6 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
         .entry("PIP_DISABLE_PIP_VERSION_CHECK".into())
         .or_insert_with(|| "1".into());
     env_map
-        .entry("NPM_CONFIG_OFFLINE".into())
-        .or_insert_with(|| "true".into());
-    env_map
         .entry("CARGO_NET_OFFLINE".into())
         .or_insert_with(|| "true".into());
     env_map
@@ -174,4 +171,32 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     prepend_path(env_map, &base.to_string_lossy());
     reorder_pathext_for_stubs(env_map);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_no_network_to_env;
+    use std::collections::HashMap;
+
+    #[test]
+    fn no_network_env_keeps_general_guards_without_forcing_npm_offline() {
+        let mut env_map = HashMap::new();
+
+        apply_no_network_to_env(&mut env_map).expect("apply no-network env");
+
+        assert_eq!(env_map.get("SBX_NONET_ACTIVE").map(String::as_str), Some("1"));
+        assert_eq!(
+            env_map.get("HTTP_PROXY").map(String::as_str),
+            Some("http://127.0.0.1:9")
+        );
+        assert_eq!(env_map.get("PIP_NO_INDEX").map(String::as_str), Some("1"));
+        assert_eq!(
+            env_map.get("CARGO_NET_OFFLINE").map(String::as_str),
+            Some("true")
+        );
+        assert!(
+            !env_map.contains_key("NPM_CONFIG_OFFLINE"),
+            "npm should fail through the generic network denial path instead of package-manager offline mode"
+        );
+    }
 }
