@@ -35,19 +35,17 @@ const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &["USERNAME", "USER
 pub enum SandboxType {
     None,
     MacosSeatbelt,
-    LinuxBubblewrap,
-    LinuxLegacyLandlock,
+    LinuxSeccomp,
     WindowsRestrictedToken,
 }
 
 impl SandboxType {
-    pub const fn as_metric_tag(self) -> &'static str {
+    pub fn as_metric_tag(self) -> &'static str {
         match self {
-            Self::None => "none",
-            Self::MacosSeatbelt => "seatbelt",
-            Self::LinuxBubblewrap => "bubblewrap",
-            Self::LinuxLegacyLandlock => "legacy_landlock",
-            Self::WindowsRestrictedToken => "windows_sandbox",
+            SandboxType::None => "none",
+            SandboxType::MacosSeatbelt => "seatbelt",
+            SandboxType::LinuxSeccomp => "seccomp",
+            SandboxType::WindowsRestrictedToken => "windows_sandbox",
         }
     }
 }
@@ -63,7 +61,7 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     if cfg!(target_os = "macos") {
         Some(SandboxType::MacosSeatbelt)
     } else if cfg!(target_os = "linux") {
-        Some(SandboxType::LinuxBubblewrap)
+        Some(SandboxType::LinuxSeccomp)
     } else if cfg!(target_os = "windows") {
         if windows_sandbox_enabled {
             Some(SandboxType::WindowsRestrictedToken)
@@ -141,6 +139,7 @@ pub struct SandboxTransformRequest<'a> {
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a PathUri,
     pub codex_linux_sandbox_exe: Option<&'a Path>,
+    pub use_legacy_landlock: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
 }
@@ -332,10 +331,10 @@ impl SandboxManager {
             network,
             sandbox_policy_cwd,
             codex_linux_sandbox_exe,
+            use_legacy_landlock,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         } = request;
-        let use_legacy_landlock = sandbox == SandboxType::LinuxLegacyLandlock;
         #[cfg(target_os = "macos")]
         let managed_network = command.managed_network.as_ref();
         let additional_permissions = command.additional_permissions.take();
@@ -383,7 +382,7 @@ impl SandboxManager {
             }
             #[cfg(not(target_os = "macos"))]
             SandboxType::MacosSeatbelt => return Err(SandboxTransformError::SeatbeltUnavailable),
-            SandboxType::LinuxBubblewrap | SandboxType::LinuxLegacyLandlock => {
+            SandboxType::LinuxSeccomp => {
                 let pending = pending_sandboxed_request?;
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;

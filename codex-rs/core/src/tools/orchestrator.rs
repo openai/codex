@@ -260,13 +260,6 @@ impl ToolOrchestrator {
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.config.features.use_legacy_landlock();
-        let initial_sandbox =
-            if use_legacy_landlock && initial_sandbox == SandboxType::LinuxBubblewrap {
-                SandboxType::LinuxLegacyLandlock
-            } else {
-                initial_sandbox
-            };
-
         #[allow(deprecated)]
         let sandbox_policy_cwd = tool
             .sandbox_cwd(req)
@@ -451,12 +444,6 @@ impl ToolOrchestrator {
                 } else {
                     SandboxType::None
                 };
-                let retry_sandbox =
-                    if use_legacy_landlock && retry_sandbox == SandboxType::LinuxBubblewrap {
-                        SandboxType::LinuxLegacyLandlock
-                    } else {
-                        retry_sandbox
-                    };
                 let retry_codex_linux_sandbox_exe = if unsandboxed_allowed {
                     None
                 } else {

@@ -13,7 +13,6 @@ use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
-use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
@@ -104,16 +103,13 @@ impl FileSystemSandboxRunner {
         let helper = &self.runtime_paths.codex_self_exe;
         let sandbox_manager = SandboxManager::new();
         let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
-        let mut sandbox = sandbox_manager.select_initial(
+        let sandbox = sandbox_manager.select_initial(
             &file_system_policy,
             network_policy,
             SandboxablePreference::Auto,
             sandbox_context.windows_sandbox_level,
             /*has_managed_network_requirements*/ false,
         );
-        if sandbox_context.use_legacy_landlock && sandbox == SandboxType::LinuxBubblewrap {
-            sandbox = SandboxType::LinuxLegacyLandlock;
-        }
         let command = SandboxCommand {
             program: helper.as_path().as_os_str().to_owned(),
             args: vec![CODEX_FS_HELPER_ARG1.to_string()],
@@ -146,6 +142,7 @@ impl FileSystemSandboxRunner {
                     network: None,
                     sandbox_policy_cwd: &cwd.uri,
                     codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
+                    use_legacy_landlock: sandbox_context.use_legacy_landlock,
                     windows_sandbox_level: sandbox_context.windows_sandbox_level,
                     windows_sandbox_private_desktop: sandbox_context
                         .windows_sandbox_private_desktop,

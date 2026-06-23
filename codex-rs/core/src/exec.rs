@@ -42,7 +42,6 @@ use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::WindowsSandboxFilesystemOverrides;
-use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub(crate) use codex_sandboxing::is_likely_sandbox_denied;
 #[cfg(test)]
 use codex_sandboxing::permission_profile_supports_windows_restricted_token_sandbox;
@@ -349,15 +348,12 @@ pub fn build_exec_request(
     let enforce_managed_network = network.is_some();
     let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
-    let mut sandbox_type = select_process_exec_tool_sandbox_type(
+    let sandbox_type = select_process_exec_tool_sandbox_type(
         &file_system_sandbox_policy,
         network_sandbox_policy,
         windows_sandbox_level,
         enforce_managed_network,
     );
-    if use_legacy_landlock && sandbox_type == SandboxType::LinuxBubblewrap {
-        sandbox_type = SandboxType::LinuxLegacyLandlock;
-    }
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 
     if let Some(network) = network.as_ref() {
@@ -399,6 +395,7 @@ pub fn build_exec_request(
             network: network.as_ref(),
             sandbox_policy_cwd: &sandbox_policy_cwd_uri,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_deref(),
+            use_legacy_landlock,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         })
