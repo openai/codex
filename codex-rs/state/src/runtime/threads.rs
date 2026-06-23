@@ -379,7 +379,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
             },
         );
         builder.push(
-            " AND CASE WHEN threads.name_state = 'explicit' THEN threads.name ELSE threads.title END = ",
+            " AND CASE WHEN threads.name_state = 'explicit' THEN threads.name WHEN threads.name_state = 'cleared' AND threads.title_state <> 'derived' THEN NULL ELSE threads.title END = ",
         );
         builder.push_bind(title);
         if let Some(cwd) = cwd {
@@ -580,6 +580,7 @@ INSERT INTO threads (
     cli_version,
     title,
     title_snapshot,
+    title_state,
     name,
     name_state,
     preview,
@@ -593,7 +594,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -627,6 +628,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
         .bind(metadata.title.as_str())
+        .bind("derived")
         .bind(metadata.name.explicit())
         .bind(metadata.name.state_str())
         .bind(preview)
@@ -668,10 +670,29 @@ ON CONFLICT(id) DO NOTHING
         let name_state = if name.is_some() {
             "explicit"
         } else {
-            "unnamed"
+            "cleared"
         };
         let result = sqlx::query(
-            "UPDATE threads SET title = '', title_snapshot = '', name = ?, name_state = ? WHERE id = ?",
+            r#"
+UPDATE threads
+SET
+    title = CASE
+        WHEN title <> title_snapshot THEN ''
+        WHEN title_state = 'derived' THEN title
+        WHEN name_state = 'explicit' AND title = name THEN ''
+        ELSE title
+    END,
+    title_snapshot = CASE
+        WHEN title <> title_snapshot THEN ''
+        WHEN title_state = 'derived' THEN title_snapshot
+        WHEN name_state = 'explicit' AND title = name THEN ''
+        ELSE title_snapshot
+    END,
+    title_state = CASE WHEN title <> title_snapshot THEN 'legacy_unknown' ELSE title_state END,
+    name = ?,
+    name_state = ?
+WHERE id = ?
+            "#,
         )
         .bind(name)
         .bind(name_state)
@@ -890,6 +911,7 @@ INSERT INTO threads (
     cli_version,
     title,
     title_snapshot,
+    title_state,
     name,
     name_state,
     preview,
@@ -903,7 +925,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -923,31 +945,20 @@ ON CONFLICT(id) DO UPDATE SET
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
     name = CASE
-        WHEN threads.title <> ''
-            AND threads.title <> excluded.title
-            AND (
-                threads.name_state = 'legacy_unknown'
-                OR threads.title <> threads.title_snapshot
-            )
-        THEN threads.title
+        WHEN threads.title <> threads.title_snapshot THEN NULLIF(threads.title, '')
         WHEN threads.name_state <> 'legacy_unknown' THEN threads.name
         WHEN excluded.name_state = 'legacy_unknown' THEN NULL
         ELSE excluded.name
     END,
     name_state = CASE
-        WHEN threads.title <> ''
-            AND threads.title <> excluded.title
-            AND (
-                threads.name_state = 'legacy_unknown'
-                OR threads.title <> threads.title_snapshot
-            )
-        THEN 'explicit'
+        WHEN threads.title <> threads.title_snapshot THEN CASE WHEN threads.title = '' THEN 'cleared' ELSE 'explicit' END
         WHEN threads.name_state <> 'legacy_unknown' THEN threads.name_state
         WHEN excluded.name_state = 'legacy_unknown' THEN 'unnamed'
         ELSE excluded.name_state
     END,
     title = excluded.title,
     title_snapshot = excluded.title_snapshot,
+    title_state = excluded.title_state,
     preview = COALESCE(NULLIF(excluded.preview, ''), threads.preview),
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
@@ -990,6 +1001,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
         .bind(metadata.title.as_str())
+        .bind("derived")
         .bind(metadata.name.explicit())
         .bind(metadata.name.state_str())
         .bind(preview)

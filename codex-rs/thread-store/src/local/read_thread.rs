@@ -310,6 +310,7 @@ async fn stored_thread_from_sqlite_metadata(
 ) -> StoredThread {
     let name = match thread_metadata_name(&metadata) {
         Some(ThreadMetadataName::Explicit(name) | ThreadMetadataName::Legacy(name)) => Some(name),
+        Some(ThreadMetadataName::Cleared) => None,
         None => find_thread_name_by_id(store.config.codex_home.as_path(), &metadata.id)
             .await
             .ok()

@@ -47,6 +47,8 @@ pub enum ThreadName {
     LegacyUnknown,
     /// The thread has no explicit user-assigned name.
     Unnamed,
+    /// The thread had an explicit user-assigned name cleared by a provenance-aware writer.
+    Cleared,
     /// The thread has an explicit user-assigned name.
     Explicit(String),
 }
@@ -56,7 +58,7 @@ impl ThreadName {
     pub fn explicit(&self) -> Option<&str> {
         match self {
             Self::Explicit(name) => Some(name),
-            Self::LegacyUnknown | Self::Unnamed => None,
+            Self::LegacyUnknown | Self::Unnamed | Self::Cleared => None,
         }
     }
 
@@ -64,6 +66,7 @@ impl ThreadName {
         match self {
             Self::LegacyUnknown => "legacy_unknown",
             Self::Unnamed => "unnamed",
+            Self::Cleared => "cleared",
             Self::Explicit(_) => "explicit",
         }
     }
@@ -72,6 +75,7 @@ impl ThreadName {
         match state {
             "legacy_unknown" => Ok(Self::LegacyUnknown),
             "unnamed" => Ok(Self::Unnamed),
+            "cleared" => Ok(Self::Cleared),
             "explicit" => name
                 .filter(|name| !name.is_empty())
                 .map(Self::Explicit)

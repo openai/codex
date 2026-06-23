@@ -228,6 +228,7 @@ impl ExternalAgentSessionImporter {
         let metadata = ThreadMetadataPatch {
             name: name.map(Some),
             preview: first_user_message.clone(),
+            title: first_user_message.clone(),
             model_provider: Some(model_provider),
             created_at: Some(now),
             updated_at: Some(now),
