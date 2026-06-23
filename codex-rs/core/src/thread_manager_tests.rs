@@ -68,45 +68,38 @@ fn developer_interrupted_marker() -> ResponseItem {
 }
 
 #[test]
-fn work_service_name_overrides_env_originator() {
-    assert_eq!(
-        effective_originator_value(
+fn effective_originator_prefers_thread_scoped_sources_before_env_originator() {
+    for (metrics_service_name, persisted_originator, inherited_originator, expected_originator) in [
+        (
             Some("codex_work_desktop"),
-            Some("Codex Desktop".to_string()),
-            Some("persisted_originator".to_string()),
-            Some("inherited_originator".to_string()),
-            "codex_cli_rs".to_string(),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "codex_work_desktop",
         ),
-        "codex_work_desktop"
-    );
-}
-
-#[test]
-fn persisted_originator_overrides_env_originator() {
-    assert_eq!(
-        effective_originator_value(
-            /*metrics_service_name*/ None,
-            Some("Codex Desktop".to_string()),
-            Some("persisted_originator".to_string()),
-            Some("inherited_originator".to_string()),
-            "codex_cli_rs".to_string(),
+        (
+            None,
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "persisted_originator",
         ),
-        "persisted_originator"
-    );
-}
-
-#[test]
-fn inherited_originator_overrides_env_originator() {
-    assert_eq!(
-        effective_originator_value(
-            /*metrics_service_name*/ None,
-            Some("Codex Desktop".to_string()),
-            /*persisted_originator*/ None,
-            Some("inherited_originator".to_string()),
-            "codex_cli_rs".to_string(),
+        (
+            None,
+            None,
+            Some("inherited_originator"),
+            "inherited_originator",
         ),
-        "inherited_originator"
-    );
+    ] {
+        assert_eq!(
+            effective_originator_value(
+                metrics_service_name,
+                Some("Codex Desktop".to_string()),
+                persisted_originator.map(str::to_string),
+                inherited_originator.map(str::to_string),
+                "codex_cli_rs".to_string(),
+            ),
+            expected_originator
+        );
+    }
 }
 
 #[test]

@@ -25,6 +25,7 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -140,6 +141,33 @@ impl AgentControlHarness {
             .expect("start thread");
         (new_thread.thread_id, new_thread.thread)
     }
+}
+
+async fn persisted_originator(thread: &CodexThread) -> String {
+    thread.ensure_rollout_materialized().await;
+    thread
+        .flush_rollout()
+        .await
+        .expect("thread rollout should flush");
+    let stored_thread = thread
+        .read_thread(
+            /*include_archived*/ true, /*include_history*/ true,
+        )
+        .await
+        .expect("thread should be readable");
+    let history = stored_thread.history.expect("history should be loaded");
+    history
+        .items
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.originator.clone()),
+            RolloutItem::ResponseItem(_)
+            | RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::EventMsg(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_) => None,
+        })
+        .expect("session metadata should be persisted")
 }
 
 fn has_subagent_notification(history_items: &[ResponseItem]) -> bool {
@@ -2222,8 +2250,8 @@ async fn spawn_thread_subagent_inherits_parent_originator_without_fork() {
         })
         .await
         .expect("parent thread should start");
-    let parent_snapshot = parent.thread.config_snapshot().await;
-    assert!(!parent_snapshot.originator.is_empty());
+    let parent_originator = persisted_originator(&parent.thread).await;
+    assert_eq!(parent_originator, "codex_work_desktop");
 
     let child_thread_id = harness
         .control
@@ -2246,8 +2274,8 @@ async fn spawn_thread_subagent_inherits_parent_originator_without_fork() {
         .get_thread(child_thread_id)
         .await
         .expect("child thread should be registered");
-    let child_snapshot = child_thread.config_snapshot().await;
-    assert_eq!(child_snapshot.originator, parent_snapshot.originator);
+    let child_originator = persisted_originator(&child_thread).await;
+    assert_eq!(child_originator, parent_originator);
 }
 
 #[tokio::test]
@@ -2270,8 +2298,8 @@ async fn spawn_thread_subagent_fork_last_n_turns_inherits_parent_originator_with
         })
         .await
         .expect("parent thread should start");
-    let parent_snapshot = parent.thread.config_snapshot().await;
-    assert!(!parent_snapshot.originator.is_empty());
+    let parent_originator = persisted_originator(&parent.thread).await;
+    assert_eq!(parent_originator, "codex_work_desktop");
 
     let child = harness
         .control
@@ -2299,8 +2327,8 @@ async fn spawn_thread_subagent_fork_last_n_turns_inherits_parent_originator_with
         .get_thread(child.thread_id)
         .await
         .expect("child thread should be registered");
-    let child_snapshot = child_thread.config_snapshot().await;
-    assert_eq!(child_snapshot.originator, parent_snapshot.originator);
+    let child_originator = persisted_originator(&child_thread).await;
+    assert_eq!(child_originator, parent_originator);
 }
 
 #[tokio::test]
