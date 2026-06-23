@@ -305,15 +305,14 @@ impl UnifiedExecProcess {
             ..Default::default()
         };
         let likely_sandbox_denial = is_likely_sandbox_denied(sandbox_type, &exec_output);
-        if likely_sandbox_denial {
-            if let Some(violation) = record_filesystem_sandbox_violation(sandbox_type, &exec_output)
-            {
-                crate::security_events::record_sandbox_violation_audit(
-                    self.sandbox_violation_context.as_ref(),
-                    &codex_sandboxing::SandboxViolationEvent::FileSystem(violation),
-                )
-                .await;
-            }
+        if likely_sandbox_denial
+            && let Some(violation) = record_filesystem_sandbox_violation(sandbox_type, &exec_output)
+        {
+            crate::security_events::record_sandbox_violation_audit(
+                self.sandbox_violation_context.as_ref(),
+                &codex_sandboxing::SandboxViolationEvent::FileSystem(violation),
+            )
+            .await;
         }
         if executor_reported_denial || likely_sandbox_denial {
             let snippet = formatted_truncate_text(
