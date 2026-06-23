@@ -46,7 +46,6 @@ use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::SessionPickerViewMode;
-use codex_config::types::ToolSearchConfig;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
@@ -1073,9 +1072,6 @@ pub struct Config {
 
     /// Configured discoverable tools for tool suggestions.
     pub tool_suggest: ToolSuggestConfig,
-
-    /// MCP tools to expose directly instead of discovering through tool_search.
-    pub tool_search: ToolSearchConfig,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
@@ -3019,7 +3015,6 @@ impl Config {
         }
 
         let tool_suggest = resolve_tool_suggest_config(&cfg, &config_layer_stack);
-        let tool_search = cfg.tool_search.clone().unwrap_or_default();
         let feature_overrides = FeatureOverrides {
             web_search_request: override_tools_web_search_request,
         };
@@ -3931,7 +3926,6 @@ impl Config {
                 .and_then(|feedback| feedback.enabled)
                 .unwrap_or(true),
             tool_suggest,
-            tool_search,
             tui_notifications: cfg
                 .tui
                 .as_ref()

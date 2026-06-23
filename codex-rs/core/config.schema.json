@@ -2884,20 +2884,6 @@
       },
       "type": "object"
     },
-    "ToolSearchConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "preloaded_tools": {
-          "default": [],
-          "description": "Raw MCP tool names to expose directly while leaving other MCP tools deferred.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -5449,14 +5435,6 @@
       "format": "uint",
       "minimum": 0.0,
       "type": "integer"
-    },
-    "tool_search": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ToolSearchConfig"
-        }
-      ],
-      "description": "MCP tools to expose directly instead of discovering through tool_search."
     },
     "tool_suggest": {
       "allOf": [

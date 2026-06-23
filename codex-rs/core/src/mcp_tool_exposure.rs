@@ -22,9 +22,9 @@ pub(crate) fn build_mcp_tool_exposure(
     config: &Config,
     search_tool_enabled: bool,
 ) -> McpToolExposure {
-    let mut eligible_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
+    let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
     if let Some(connectors) = connectors {
-        eligible_tools.extend(filter_codex_apps_mcp_tools(
+        deferred_tools.extend(filter_codex_apps_mcp_tools(
             all_mcp_tools,
             connectors,
             config,
@@ -33,21 +33,13 @@ pub(crate) fn build_mcp_tool_exposure(
 
     if !search_tool_enabled {
         return McpToolExposure {
-            direct_tools: eligible_tools,
+            direct_tools: deferred_tools,
             deferred_tools: None,
         };
     }
 
-    let (direct_tools, deferred_tools) = eligible_tools.into_iter().partition(|tool| {
-        config
-            .tool_search
-            .preloaded_tools
-            .iter()
-            .any(|name| name == tool.tool.name.as_ref())
-    });
-
     McpToolExposure {
-        direct_tools,
+        direct_tools: Vec::new(),
         deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
     }
 }

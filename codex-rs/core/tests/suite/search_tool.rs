@@ -218,58 +218,6 @@ async fn small_app_tool_sets_are_deferred_by_default() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn preloaded_app_tool_stays_direct_when_other_tools_are_deferred() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
-    let mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-
-    let mut builder =
-        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
-            config.tool_search.preloaded_tools = vec!["calendar_create_event".to_string()];
-        });
-    let test = builder.build(&server).await?;
-
-    test.submit_turn_with_approval_and_permission_profile(
-        "list tools",
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
-    )
-    .await?;
-
-    let body = mock.single_request().body_json();
-    let tools = tool_names(&body);
-    assert!(
-        tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "tool_search should remain available for deferred tools: {tools:?}"
-    );
-    assert!(
-        namespace_child_tool(
-            &body,
-            SEARCH_CALENDAR_NAMESPACE,
-            SEARCH_CALENDAR_CREATE_TOOL,
-        )
-        .is_some(),
-        "preloaded app tool should be directly exposed: {tools:?}"
-    );
-    assert!(
-        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_none(),
-        "non-preloaded app tools should remain deferred: {tools:?}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
