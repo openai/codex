@@ -133,6 +133,7 @@ pub struct GitInfo {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Thread {
+    /// Identifier for this thread. Codex-generated thread IDs are UUIDv7.
     pub id: String,
     /// Session id shared by threads that belong to the same session tree.
     pub session_id: String,
@@ -186,6 +187,7 @@ pub struct Thread {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Turn {
+    /// Identifier for this turn. Codex-generated turn IDs are UUIDv7.
     pub id: String,
     /// Thread items currently included in this turn payload.
     pub items: Vec<ThreadItem>,

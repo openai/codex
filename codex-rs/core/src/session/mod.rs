@@ -724,7 +724,7 @@ impl Codex {
         op: Op,
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
-        let id = Uuid::now_v7().to_string();
+        let id = new_submission_id();
         let sub = Submission {
             id: id.clone(),
             op,
@@ -742,7 +742,7 @@ impl Codex {
         client_user_message_id: Option<String>,
     ) -> CodexResult<String> {
         debug_assert!(matches!(op, Op::UserInput { .. }));
-        let id = Uuid::now_v7().to_string();
+        let id = new_submission_id();
         let sub = Submission {
             id: id.clone(),
             op,
@@ -867,6 +867,15 @@ impl Codex {
     pub(crate) fn enabled(&self, feature: Feature) -> bool {
         self.session.enabled(feature)
     }
+}
+
+/// Generate a core submission ID. App-server exposes submission IDs that
+/// create turns as a public-facing turn ID.
+///
+/// Some use cases take advantage of the fact that these are UUID7 which
+/// encodes a timestamp, so think carefully before changing this.
+fn new_submission_id() -> String {
+    Uuid::now_v7().to_string()
 }
 
 fn get_service_tier(
