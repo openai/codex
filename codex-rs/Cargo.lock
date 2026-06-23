@@ -2526,6 +2526,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-code-mode-protocol-test-support"
+version = "0.0.0"
+dependencies = [
+ "codex-code-mode-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "codex-collaboration-mode-templates"
 version = "0.0.0"
 
