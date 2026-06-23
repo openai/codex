@@ -544,7 +544,7 @@ mod tests {
         let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor));
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
         let expected_path = crate::stream_events_utils::image_generation_artifact_path(
-            &turn.config.codex_home,
+            &turn.config.image_generation_artifacts_dir,
             &session.thread_id.to_string(),
             "call-image",
         );

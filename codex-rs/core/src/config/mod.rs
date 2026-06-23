@@ -880,6 +880,9 @@ pub struct Config {
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
 
+    /// Directory where Codex writes generated image artifacts.
+    pub image_generation_artifacts_dir: AbsolutePathBuf,
+
     /// Directory where Codex writes effective session config lock files.
     pub config_lock_export_dir: Option<AbsolutePathBuf>,
 
@@ -3634,6 +3637,10 @@ impl Config {
             .map(AbsolutePathBuf::to_path_buf)
             .or_else(|| resolve_sqlite_home_env(&resolved_cwd))
             .unwrap_or_else(|| codex_home.to_path_buf());
+        let image_generation_artifacts_dir = cfg
+            .image_generation_artifacts_dir
+            .clone()
+            .unwrap_or_else(|| codex_home.join("generated_images"));
         let original_permission_profile = permission_profile.clone();
         apply_requirement_constrained_value(
             "approval_policy",
@@ -3827,6 +3834,7 @@ impl Config {
             codex_home,
             sqlite_home,
             log_dir,
+            image_generation_artifacts_dir,
             config_lock_export_dir: cfg
                 .debug
                 .as_ref()

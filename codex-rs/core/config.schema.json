@@ -5103,6 +5103,14 @@
       ],
       "description": "Lifecycle hooks configured inline in TOML plus user-level overrides."
     },
+    "image_generation_artifacts_dir": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Directory where Codex writes generated image artifacts. Defaults to `$CODEX_HOME/generated_images`."
+    },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",
       "type": "boolean"

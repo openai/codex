@@ -8288,7 +8288,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_records_message";
     let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
+        &turn_context.config.image_generation_artifacts_dir,
         &session.thread_id.to_string(),
         call_id,
     );
@@ -8316,7 +8316,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
 
     let history = session.clone_history().await;
     let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
+        &turn_context.config.image_generation_artifacts_dir,
         &session.thread_id.to_string(),
         "<image_id>",
     );
@@ -8345,7 +8345,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_no_message";
     let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
+        &turn_context.config.image_generation_artifacts_dir,
         &session.thread_id.to_string(),
         call_id,
     );

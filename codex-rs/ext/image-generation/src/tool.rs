@@ -51,7 +51,7 @@ const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
-    codex_home: AbsolutePathBuf,
+    artifacts_dir: AbsolutePathBuf,
     thread_id: String,
 }
 
@@ -59,12 +59,12 @@ impl ImageGenerationTool {
     /// Creates an image-generation tool backed by an image API executor.
     pub(crate) fn new(
         backend: CodexImagesBackend,
-        codex_home: AbsolutePathBuf,
+        artifacts_dir: AbsolutePathBuf,
         thread_id: String,
     ) -> Self {
         Self {
             backend,
-            codex_home,
+            artifacts_dir,
             thread_id,
         }
     }
@@ -155,10 +155,10 @@ impl ImageGenerationTool {
             }))
             .await;
         let output_path =
-            image_generation_artifact_path(&self.codex_home, &self.thread_id, &call.call_id);
+            image_generation_artifact_path(&self.artifacts_dir, &self.thread_id, &call.call_id);
         let output_dir = output_path
             .parent()
-            .unwrap_or_else(|| self.codex_home.clone());
+            .unwrap_or_else(|| self.artifacts_dir.clone());
         let output_hint =
             extension_image_generation_output_hint(output_dir.display(), output_path.display());
         Ok(Box::new(GeneratedImageOutput {
