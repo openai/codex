@@ -1222,6 +1222,7 @@ fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
     let server = EffectiveMcpServer::configured(crate::codex_apps_mcp_server_config(
         "https://chatgpt.com",
         /*apps_mcp_product_sku*/ None,
+        /*plugin_service_preview*/ false,
     ));
     manager.server_metadata.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),

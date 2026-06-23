@@ -1343,6 +1343,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         codex_mcp::EffectiveMcpServer::configured(codex_mcp::codex_apps_mcp_server_config(
             "https://chatgpt.com",
             /*apps_mcp_product_sku*/ None,
+            /*plugin_service_preview*/ false,
         )),
     )]);
     let manager = codex_mcp::McpConnectionManager::new(
