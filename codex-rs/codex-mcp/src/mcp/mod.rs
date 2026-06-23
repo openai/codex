@@ -473,7 +473,7 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     mcp_server_config_for_url(
         format!("{base_url}/ps/mcp"),
         apps_mcp_product_sku,
-        /*use_chatgpt_auth*/ false,
+        /*use_chatgpt_auth*/ true,
     )
 }
 
