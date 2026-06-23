@@ -150,7 +150,6 @@ const MANAGED_MITM_CA_DIR: &str = "proxy";
 const MANAGED_MITM_CA_ARTIFACT_LOCK: &str = ".artifacts.lock";
 const MANAGED_MITM_CA_CERT_PREFIX: &str = "ca";
 const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
-const MAX_RETAINED_MANAGED_MITM_CAS: usize = 8;
 pub(crate) const SSL_CERT_DIR_ENV_KEY: &str = "SSL_CERT_DIR";
 
 // Best-effort compatibility set for common child toolchains that accept a CA bundle path.
@@ -525,11 +524,6 @@ fn persist_managed_ca_certificate(proxy_dir: &Path, cert_pem: &str) -> Result<Pa
     Ok(cert_path)
 }
 
-struct ManagedCaArtifact {
-    path: PathBuf,
-    modified: SystemTime,
-}
-
 fn lock_managed_ca_certificate(certificate_path: &Path) -> Result<File> {
     let lock_path = managed_ca_certificate_lock_path(certificate_path)
         .ok_or_else(|| anyhow!("managed MITM CA certificate path is missing a file name"))?;
@@ -576,21 +570,22 @@ fn open_managed_ca_lock(path: &Path) -> Result<File> {
 }
 
 fn prune_managed_ca_artifacts(proxy_dir: &Path) {
-    let mut certificates = generated_managed_ca_artifacts(proxy_dir, MANAGED_MITM_CA_CERT_PREFIX);
-    certificates.sort_by_key(|artifact| std::cmp::Reverse(artifact.modified));
-    for certificate in certificates.iter().skip(MAX_RETAINED_MANAGED_MITM_CAS) {
-        remove_inactive_managed_ca_certificate(&certificate.path);
+    for certificate_path in
+        generated_managed_ca_artifact_paths(proxy_dir, MANAGED_MITM_CA_CERT_PREFIX)
+    {
+        remove_inactive_managed_ca_certificate(&certificate_path);
     }
 
     let remaining_certificates =
-        generated_managed_ca_artifacts(proxy_dir, MANAGED_MITM_CA_CERT_PREFIX)
+        generated_managed_ca_artifact_paths(proxy_dir, MANAGED_MITM_CA_CERT_PREFIX)
             .into_iter()
-            .filter_map(|artifact| fs::read(artifact.path).ok())
+            .filter_map(|path| fs::read(path).ok())
             .filter(|certificate| !certificate.is_empty())
             .collect::<Vec<_>>();
-    let bundles = generated_managed_ca_artifacts(proxy_dir, MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX);
-    for bundle in bundles {
-        let Ok(contents) = fs::read(&bundle.path) else {
+    let bundle_paths =
+        generated_managed_ca_artifact_paths(proxy_dir, MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX);
+    for bundle_path in bundle_paths {
+        let Ok(contents) = fs::read(&bundle_path) else {
             continue;
         };
         if remaining_certificates.iter().any(|certificate| {
@@ -600,18 +595,18 @@ fn prune_managed_ca_artifacts(proxy_dir: &Path) {
         }) {
             continue;
         }
-        if let Err(err) = fs::remove_file(&bundle.path)
+        if let Err(err) = fs::remove_file(&bundle_path)
             && err.kind() != std::io::ErrorKind::NotFound
         {
             warn!(
-                path = %bundle.path.display(),
+                path = %bundle_path.display(),
                 "failed to prune stale managed MITM CA trust bundle: {err}"
             );
         }
     }
 }
 
-fn generated_managed_ca_artifacts(proxy_dir: &Path, prefix: &str) -> Vec<ManagedCaArtifact> {
+fn generated_managed_ca_artifact_paths(proxy_dir: &Path, prefix: &str) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(proxy_dir) else {
         return Vec::new();
     };
@@ -622,8 +617,7 @@ fn generated_managed_ca_artifacts(proxy_dir: &Path, prefix: &str) -> Vec<Managed
             if !is_generated_managed_ca_artifact_path(&path, proxy_dir, prefix) {
                 return None;
             }
-            let modified = entry.metadata().ok()?.modified().ok()?;
-            Some(ManagedCaArtifact { path, modified })
+            Some(path)
         })
         .collect()
 }
@@ -813,8 +807,6 @@ mod tests {
 
     use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
     use pretty_assertions::assert_eq;
-    use std::fs::FileTimes;
-    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -843,12 +835,11 @@ mod tests {
     }
 
     #[test]
-    fn managed_ca_artifact_pruning_preserves_active_and_recent_certificates() {
+    fn managed_ca_artifact_pruning_preserves_only_active_certificates() {
         let dir = tempdir().unwrap();
-        let modified_base = UNIX_EPOCH + Duration::from_secs(1);
         let mut artifacts = Vec::new();
         let mut active_lease = None;
-        for index in 0..MAX_RETAINED_MANAGED_MITM_CAS + 2 {
+        for index in 0..3 {
             let certificate = format!("certificate {index}\n");
             let certificate_path =
                 persist_managed_ca_certificate(dir.path(), &certificate).unwrap();
@@ -863,15 +854,6 @@ mod tests {
                 &format!("roots\n{certificate}"),
             )
             .unwrap();
-            let modified = modified_base + Duration::from_secs(index as u64);
-            File::open(&certificate_path)
-                .unwrap()
-                .set_times(FileTimes::new().set_modified(modified))
-                .unwrap();
-            File::open(&bundle_path)
-                .unwrap()
-                .set_times(FileTimes::new().set_modified(modified))
-                .unwrap();
             artifacts.push((certificate_path, bundle_path));
         }
         let unrelated_path = dir.path().join("ca-user.pem");
@@ -880,23 +862,22 @@ mod tests {
         prune_managed_ca_artifacts(dir.path());
 
         let remaining_certificate_count =
-            generated_managed_ca_artifacts(dir.path(), MANAGED_MITM_CA_CERT_PREFIX).len();
-        assert_eq!(
-            remaining_certificate_count,
-            MAX_RETAINED_MANAGED_MITM_CAS + 1
-        );
+            generated_managed_ca_artifact_paths(dir.path(), MANAGED_MITM_CA_CERT_PREFIX).len();
+        assert_eq!(remaining_certificate_count, 1);
         assert!(artifacts[0].0.exists());
         assert!(artifacts[0].1.exists());
         assert!(!artifacts[1].0.exists());
         assert!(!artifacts[1].1.exists());
+        assert!(!artifacts[2].0.exists());
+        assert!(!artifacts[2].1.exists());
         assert!(unrelated_path.exists());
 
         drop(active_lease.take());
         prune_managed_ca_artifacts(dir.path());
 
         let remaining_certificates =
-            generated_managed_ca_artifacts(dir.path(), MANAGED_MITM_CA_CERT_PREFIX);
-        assert_eq!(remaining_certificates.len(), MAX_RETAINED_MANAGED_MITM_CAS);
+            generated_managed_ca_artifact_paths(dir.path(), MANAGED_MITM_CA_CERT_PREFIX);
+        assert!(remaining_certificates.is_empty());
         assert!(!artifacts[0].0.exists());
         assert!(!artifacts[0].1.exists());
     }
