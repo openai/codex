@@ -17,6 +17,8 @@ use crate::ResumeThreadParams;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
+const ROLLOUT_SIZE_BYTES_METRIC: &str = "codex.rollout.size_bytes";
+
 pub(super) async fn create_thread(
     store: &LocalThreadStore,
     params: CreateThreadParams,
@@ -128,8 +130,15 @@ pub(super) async fn shutdown_thread(
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
     let recorder = store.live_recorder(thread_id).await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
     recorder.shutdown().await.map_err(thread_store_io_error)?;
     sync_materialized_rollout_path(store, thread_id).await?;
+    if let Some(metrics) = codex_otel::global()
+        && let Ok(metadata) = tokio::fs::metadata(rollout_path).await
+    {
+        let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+        let _ = metrics.histogram(ROLLOUT_SIZE_BYTES_METRIC, size_bytes, &[]);
+    }
     store.live_recorders.lock().await.remove(&thread_id);
     Ok(())
 }

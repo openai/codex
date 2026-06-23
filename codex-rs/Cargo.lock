@@ -4006,6 +4006,7 @@ dependencies = [
  "codex-git-utils",
  "codex-install-context",
  "codex-internal-extra-config",
+ "codex-otel",
  "codex-protocol",
  "codex-rollout",
  "codex-state",
