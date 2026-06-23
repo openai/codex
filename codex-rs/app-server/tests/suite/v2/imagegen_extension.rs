@@ -151,8 +151,10 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
 #[tokio::test]
 async fn basic_image_generation_stays_in_conversation() -> Result<()> {
     let call_id = "image-run-conversation-only";
+    let rejected_call_id = "image-run-with-path";
     let server = responses::start_mock_server().await;
     mount_image_response(&server).await;
+    let codex_home = TempDir::new()?;
     let response_mock = responses::mount_sse_sequence(
         &server,
         vec![
@@ -167,14 +169,29 @@ async fn basic_image_generation_stays_in_conversation() -> Result<()> {
                 responses::ev_completed("resp-1"),
             ]),
             responses::sse(vec![
-                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_response_created("resp-2"),
+                responses::ev_function_call_with_namespace(
+                    rejected_call_id,
+                    "image_gen",
+                    "imagegen",
+                    &json!({
+                        "prompt": "paint a red fox",
+                        "referenced_image_paths": [
+                            codex_home.path().join("reference.png").display().to_string()
+                        ],
+                    })
+                    .to_string(),
+                ),
                 responses::ev_completed("resp-2"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-3"),
             ]),
         ],
     )
     .await;
 
-    let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), ImagegenTestMode::Basic)?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -210,7 +227,7 @@ async fn basic_image_generation_stays_in_conversation() -> Result<()> {
     assert!(!codex_home.path().join("generated_images").exists());
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     let tool = requests[0]
         .tool_by_name("image_gen", "imagegen")
         .context("basic imagegen tool should be sent to the model")?;
@@ -234,6 +251,12 @@ async fn basic_image_generation_stays_in_conversation() -> Result<()> {
             "image_url": format!("data:image/png;base64,{RESULT}"),
             "detail": "high",
         }])
+    );
+    assert_eq!(
+        requests[2]
+            .function_call_output_text(rejected_call_id)
+            .as_deref(),
+        Some("`referenced_image_paths` is unavailable for this image generation tool")
     );
 
     Ok(())

@@ -109,6 +109,12 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
 impl ImageGenerationTool {
     async fn handle_call(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
+        if self.basic && args.referenced_image_paths.is_some() {
+            return Err(FunctionCallError::RespondToModel(
+                "`referenced_image_paths` is unavailable for this image generation tool"
+                    .to_string(),
+            ));
+        }
         let request =
             request_for_call_args(&args, call.conversation_history.items(), &call.environments)
                 .await?;
