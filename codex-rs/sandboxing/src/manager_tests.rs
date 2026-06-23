@@ -499,6 +499,8 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
         .transform_for_direct_spawn_with_codex_home(
             SandboxDirectSpawnTransformRequest {
                 workspace_roots: workspace_roots.as_slice(),
+                windows_sandbox_proxy_settings_mode:
+                    codex_windows_sandbox::WindowsSandboxProxySettingsMode::Preserve,
                 transform: SandboxTransformRequest {
                     command: SandboxCommand {
                         program: configured_helper.as_os_str().to_owned(),
@@ -543,6 +545,12 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
             .command
             .iter()
             .any(|arg| arg == "--run-as-windows-sandbox")
+    );
+    assert!(
+        exec_request
+            .command
+            .iter()
+            .any(|arg| arg == "--preserve-proxy-settings")
     );
     assert!(
         exec_request

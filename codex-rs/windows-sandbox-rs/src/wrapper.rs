@@ -26,6 +26,7 @@ const DENY_WRITE_PATHS_JSON_FLAG: &str = "--deny-write-paths-json";
 const ENV_JSON_FLAG: &str = "--env-json";
 const PERMISSION_PROFILE_FLAG: &str = "--permission-profile";
 const PRIVATE_DESKTOP_FLAG: &str = "--windows-sandbox-private-desktop";
+const PRESERVE_PROXY_SETTINGS_FLAG: &str = "--preserve-proxy-settings";
 const PROXY_ENFORCED_FLAG: &str = "--proxy-enforced";
 const READ_ROOTS_INCLUDE_PLATFORM_DEFAULTS_FLAG: &str = "--read-roots-include-platform-defaults";
 const READ_ROOTS_JSON_FLAG: &str = "--read-roots-json";
@@ -43,6 +44,7 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
     windows_sandbox_level: WindowsSandboxLevel,
     windows_sandbox_private_desktop: bool,
     proxy_enforced: bool,
+    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
     write_roots_override: Option<&[PathBuf]>,
@@ -81,6 +83,9 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
     }
     if proxy_enforced {
         args.push(PROXY_ENFORCED_FLAG.to_string());
+    }
+    if proxy_settings_mode == crate::WindowsSandboxProxySettingsMode::Preserve {
+        args.push(PRESERVE_PROXY_SETTINGS_FLAG.to_string());
     }
     if let Some(read_roots_override) = read_roots_override {
         push_json_arg(&mut args, READ_ROOTS_JSON_FLAG, &read_roots_override);
@@ -154,6 +159,7 @@ struct WindowsSandboxWrapperRequest {
     windows_sandbox_level: WindowsSandboxLevel,
     windows_sandbox_private_desktop: bool,
     proxy_enforced: bool,
+    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
     read_roots_override: Option<Vec<PathBuf>>,
     read_roots_include_platform_defaults: bool,
     write_roots_override: Option<Vec<PathBuf>>,
@@ -176,6 +182,7 @@ async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperReque
             env_map: request.env_map,
             windows_sandbox_level: request.windows_sandbox_level,
             proxy_enforced: request.proxy_enforced,
+            proxy_settings_mode: request.proxy_settings_mode,
             timeout_ms: None,
             read_roots_override: request.read_roots_override.as_deref(),
             read_roots_include_platform_defaults: request.read_roots_include_platform_defaults,
@@ -201,6 +208,7 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
     let mut windows_sandbox_level = None;
     let mut windows_sandbox_private_desktop = false;
     let mut proxy_enforced = false;
+    let mut proxy_settings_mode = crate::WindowsSandboxProxySettingsMode::Reconcile;
     let mut read_roots_override = None;
     let mut read_roots_include_platform_defaults = false;
     let mut write_roots_override = None;
@@ -240,6 +248,9 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
                 windows_sandbox_level = Some(parse_windows_sandbox_level(&value)?);
             }
             PRIVATE_DESKTOP_FLAG => windows_sandbox_private_desktop = true,
+            PRESERVE_PROXY_SETTINGS_FLAG => {
+                proxy_settings_mode = crate::WindowsSandboxProxySettingsMode::Preserve;
+            }
             PROXY_ENFORCED_FLAG => proxy_enforced = true,
             READ_ROOTS_INCLUDE_PLATFORM_DEFAULTS_FLAG => {
                 read_roots_include_platform_defaults = true;
@@ -282,6 +293,7 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
             .ok_or_else(|| anyhow!("missing required {SANDBOX_LEVEL_FLAG}"))?,
         windows_sandbox_private_desktop,
         proxy_enforced,
+        proxy_settings_mode,
         read_roots_override,
         read_roots_include_platform_defaults,
         write_roots_override,

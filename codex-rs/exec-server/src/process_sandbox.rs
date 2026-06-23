@@ -107,6 +107,8 @@ pub(crate) fn prepare_exec_request(
     let request = sandbox_manager
         .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
             workspace_roots,
+            windows_sandbox_proxy_settings_mode:
+                codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
             transform: SandboxTransformRequest {
                 // TODO(jif): Preserve params.arg0 for the inner command across the sandbox
                 // wrapper, or reject sandboxed requests with a custom arg0.

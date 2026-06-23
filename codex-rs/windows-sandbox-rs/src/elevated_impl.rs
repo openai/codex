@@ -150,6 +150,7 @@ mod windows_impl {
             &deny_read_paths_override,
             &deny_write_paths_override,
             proxy_enforced,
+            crate::WindowsSandboxProxySettingsMode::Reconcile,
         )?;
         // Build capability SID for ACL grants.
         let caps = load_or_create_cap_sids(codex_home)?;
@@ -214,6 +215,7 @@ mod windows_impl {
                         &deny_read_paths_override,
                         &deny_write_paths_override,
                         proxy_enforced,
+                        crate::WindowsSandboxProxySettingsMode::Reconcile,
                     )?;
                     spawn_runner_transport(
                         codex_home,
