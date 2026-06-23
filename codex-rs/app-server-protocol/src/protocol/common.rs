@@ -641,12 +641,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadTurnsListResponse,
     },
-    #[experimental("thread/turns/items/list")]
-    ThreadTurnsItemsList => "thread/turns/items/list" {
-        params: v2::ThreadTurnsItemsListParams,
+    #[experimental("thread/items/list")]
+    ThreadItemsList => "thread/items/list" {
+        params: v2::ThreadItemsListParams,
         // Explicitly concurrent: this primarily reads append-only rollout storage.
         serialization: None,
-        response: v2::ThreadTurnsItemsListResponse,
+        response: v2::ThreadItemsListResponse,
     },
     /// Append raw Responses API items to the thread history without starting a user turn.
     ThreadInjectItems => "thread/inject_items" {
@@ -2090,17 +2090,17 @@ mod tests {
         };
         assert_eq!(thread_turns_list.serialization_scope(), None);
 
-        let thread_turns_items_list = ClientRequest::ThreadTurnsItemsList {
+        let thread_items_list = ClientRequest::ThreadItemsList {
             request_id: request_id(),
-            params: v2::ThreadTurnsItemsListParams {
+            params: v2::ThreadItemsListParams {
                 thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
+                turn_id: None,
                 cursor: None,
                 limit: None,
                 sort_direction: None,
             },
         };
-        assert_eq!(thread_turns_items_list.serialization_scope(), None);
+        assert_eq!(thread_items_list.serialization_scope(), None);
 
         let mcp_resource_read = ClientRequest::McpResourceRead {
             request_id: request_id(),
