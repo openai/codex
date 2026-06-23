@@ -844,7 +844,7 @@ mod tests {
             supports_parallel_tool_calls: false,
             server_origin: None,
             callable_name: "capture_file_upload".to_string(),
-            callable_namespace: "codex_apps__Gmail".to_string(),
+            callable_namespace: "codex_apps__gmail".to_string(),
             namespace_description: Some("Mail connector".to_string()),
             tool: expected_tool,
             connector_id: Some("connector_gmail".to_string()),
