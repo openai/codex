@@ -216,10 +216,6 @@ impl Default for InProcessCodeModeSession {
 }
 
 impl CodeModeSession for InProcessCodeModeSession {
-    fn is_alive(&self) -> bool {
-        self.runtime.is_alive()
-    }
-
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,
