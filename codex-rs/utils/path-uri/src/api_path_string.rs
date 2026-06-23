@@ -93,7 +93,7 @@ impl LegacyAppPathString {
     /// API spelling.
     pub fn render_for_ui(&self) -> String {
         self.to_inferred_path_uri()
-            .map(|path| path.render_for_ui())
+            .map(|path| path.inferred_native_path_string())
             .unwrap_or_else(|| self.0.clone())
     }
 

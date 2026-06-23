@@ -151,7 +151,6 @@ fn inferred_native_path_string_uses_the_inferred_convention() {
             expected,
             "rendering {uri}"
         );
-        assert_eq!(path.render_for_ui(), expected, "rendering {uri} for UI");
         assert_eq!(
             LegacyAppPathString::from(path).as_str(),
             expected,

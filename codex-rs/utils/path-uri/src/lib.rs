@@ -188,15 +188,6 @@ impl PathUri {
             .unwrap_or_else(|| self.to_string())
     }
 
-    /// Renders this URI for display in a user interface.
-    ///
-    /// The path uses its inferred native convention even when that convention
-    /// is foreign to the current host. If it cannot be rendered as an inferred
-    /// native path, its canonical URI spelling is returned instead.
-    pub fn render_for_ui(&self) -> String {
-        self.inferred_native_path_string()
-    }
-
     /// Returns the decoded final URI path segment, or `None` for the URI root
     /// or an opaque fallback URI created by [`Self::from_abs_path`].
     ///

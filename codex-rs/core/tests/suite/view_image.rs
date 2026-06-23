@@ -1266,6 +1266,9 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     } = &test;
 
     let rel_path = "missing/example.png";
+    // Under wine-exec, the executor cwd is stored as a host-compatible `/C:/...`
+    // projection. Reconstruct its `PathUri` so the expected error uses the selected
+    // environment's native Windows spelling, matching the handler.
     let expected_path = PathUri::from_abs_path(test.executor_environment().cwd())
         .join(rel_path)?
         .inferred_native_path_string();
