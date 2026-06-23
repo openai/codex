@@ -4235,12 +4235,12 @@ fn read_compacted_resume_rollout_items(
     expected_thread_id: ThreadId,
     byte_len: u64,
 ) -> std::io::Result<Option<Vec<RolloutItem>>> {
+    let Some(mut suffix_items) = read_compacted_resume_suffix_items(path, byte_len)? else {
+        return Ok(None);
+    };
     let Some(mut prefix_items) =
         read_compacted_resume_prefix_items(path, expected_thread_id, byte_len)?
     else {
-        return Ok(None);
-    };
-    let Some(mut suffix_items) = read_compacted_resume_suffix_items(path, byte_len)? else {
         return Ok(None);
     };
 
@@ -4566,7 +4566,10 @@ fn rollout_item_starts_explicit_turn(item: &RolloutItem) -> bool {
 }
 
 fn rollout_item_disables_recent_not_loaded_fast_path(item: &RolloutItem) -> bool {
-    matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)))
+    matches!(
+        item,
+        RolloutItem::Compacted(_) | RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))
+    )
 }
 
 fn build_recent_not_loaded_turns_page_response(
