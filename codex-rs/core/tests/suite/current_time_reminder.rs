@@ -37,6 +37,7 @@ use serde_json::json;
 
 const FIRST_REMINDER: &str = "It is 2026-06-17 17:34:15 UTC.";
 const SECOND_REMINDER: &str = "It is 2026-06-17 17:35:15 UTC.";
+const THIRD_REMINDER: &str = "It is 2026-06-17 17:36:15 UTC.";
 const FIRST_TIME_UNIX_SECONDS: i64 = 1_781_717_655;
 
 struct TestTimeProvider(AtomicI64);
@@ -83,13 +84,13 @@ fn enable_current_time_reminder(
         .enable(Feature::CurrentTimeReminder)
         .expect("test config should allow current-time reminders");
     config.current_time_reminder = Some(CurrentTimeReminderConfig {
-        reminder_interval_model_requests: interval,
+        reminder_interval_seconds: interval,
         clock_source,
     });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn current_time_reminders_follow_request_interval_and_persist_in_history() -> Result<()> {
+async fn current_time_reminders_follow_time_interval_and_persist_in_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -120,7 +121,7 @@ async fn current_time_reminders_follow_request_interval_and_persist_in_history()
     .await;
     let test = test_codex()
         .with_config(|config| {
-            enable_current_time_reminder(config, /*interval*/ 2, CurrentTimeSource::External)
+            enable_current_time_reminder(config, /*interval*/ 120, CurrentTimeSource::External)
         })
         .with_external_time_provider(Arc::new(TestTimeProvider::default()))
         .build(&server)
@@ -136,7 +137,7 @@ async fn current_time_reminders_follow_request_interval_and_persist_in_history()
     assert_eq!(current_time_reminders(&requests[1]), vec![FIRST_REMINDER]);
     assert_eq!(
         current_time_reminders(&requests[2]),
-        vec![FIRST_REMINDER, SECOND_REMINDER]
+        vec![FIRST_REMINDER, THIRD_REMINDER]
     );
     Ok(())
 }
@@ -195,7 +196,11 @@ async fn current_time_reminder_is_refreshed_after_compaction() -> Result<()> {
     let test = test_codex()
         .with_config(move |config| {
             config.model_provider = model_provider;
-            enable_current_time_reminder(config, /*interval*/ 50, CurrentTimeSource::External);
+            enable_current_time_reminder(
+                config,
+                /*interval*/ 3_000,
+                CurrentTimeSource::External,
+            );
         })
         .with_external_time_provider(Arc::new(TestTimeProvider::default()))
         .build(&server)
@@ -295,7 +300,11 @@ async fn current_time_tool_returns_the_latest_time() -> Result<()> {
     .await;
     let test = test_codex()
         .with_config(|config| {
-            enable_current_time_reminder(config, /*interval*/ 50, CurrentTimeSource::External)
+            enable_current_time_reminder(
+                config,
+                /*interval*/ 3_000,
+                CurrentTimeSource::External,
+            )
         })
         .with_external_time_provider(Arc::new(TestTimeProvider::default()))
         .build(&server)

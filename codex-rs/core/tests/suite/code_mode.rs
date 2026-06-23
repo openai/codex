@@ -881,7 +881,7 @@ text(JSON.stringify(result));
                 .enable(Feature::CurrentTimeReminder)
                 .expect("test config should allow current-time reminders");
             config.current_time_reminder = Some(CurrentTimeReminderConfig {
-                reminder_interval_model_requests: 50,
+                reminder_interval_seconds: 3_000,
                 clock_source: CurrentTimeSource::System,
             });
         },

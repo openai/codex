@@ -115,7 +115,7 @@ model_provider = "mock_provider"
 
 [features.current_time_reminder]
 enabled = true
-reminder_interval_model_requests = 1
+reminder_interval_seconds = 1
 clock_source = "external"
 
 [model_providers.mock_provider]
