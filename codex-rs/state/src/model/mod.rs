@@ -36,6 +36,7 @@ pub use thread_metadata::ThreadListItem;
 pub use thread_metadata::ThreadListPage;
 pub use thread_metadata::ThreadMetadata;
 pub use thread_metadata::ThreadMetadataBuilder;
+pub use thread_metadata::ThreadName;
 pub use thread_metadata::ThreadsPage;
 
 pub(crate) use agent_job::AgentJobItemRow;

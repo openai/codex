@@ -18,6 +18,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
 use codex_state::ThreadMetadata;
+use codex_state::ThreadName;
 
 use crate::StoredThread;
 use crate::ThreadStoreError;
@@ -184,16 +185,15 @@ pub(super) enum ThreadMetadataName {
 }
 
 pub(super) fn thread_metadata_name(metadata: &ThreadMetadata) -> Option<ThreadMetadataName> {
-    if let Some(name) = metadata.name.as_deref() {
-        let name = name.trim();
-        return Some(if name.is_empty() {
-            ThreadMetadataName::Cleared
-        } else {
-            ThreadMetadataName::Explicit(name.to_string())
-        });
+    match &metadata.name {
+        ThreadName::Explicit(name) => {
+            return Some(ThreadMetadataName::Explicit(name.clone()));
+        }
+        ThreadName::Unnamed => return Some(ThreadMetadataName::Cleared),
+        ThreadName::LegacyUnknown => {}
     }
 
-    // Preserve display names from rows written before explicit names had their own column.
+    // Preserve display names from rows that have not yet reconciled the legacy mixed title.
     let legacy_title = metadata.title.trim();
     if legacy_title.is_empty()
         || metadata.first_user_message.as_deref().map(str::trim) == Some(legacy_title)

@@ -707,7 +707,7 @@ mod tests {
         builder.cwd = home.path().to_path_buf();
         builder.cli_version = Some("test_version".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        metadata.name = Some("Saved title".to_string());
+        metadata.name = codex_state::ThreadName::Explicit("Saved title".to_string());
         metadata.first_user_message = Some("Hello from user".to_string());
         runtime
             .upsert_thread(&metadata)
@@ -858,7 +858,7 @@ mod tests {
         builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().join("sqlite-workspace");
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        metadata.name = Some("Saved title".to_string());
+        metadata.name = codex_state::ThreadName::Explicit("Saved title".to_string());
         metadata.first_user_message = Some("Hello from sqlite".to_string());
         metadata.sandbox_policy = "workspace-write".to_string();
         runtime
@@ -962,7 +962,7 @@ mod tests {
         builder.cwd = home.path().join("workspace");
         builder.cli_version = Some("sqlite-cli".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        metadata.name = Some("Command-only thread".to_string());
+        metadata.name = codex_state::ThreadName::Explicit("Command-only thread".to_string());
         runtime
             .upsert_thread(&metadata)
             .await

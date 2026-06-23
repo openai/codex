@@ -26,6 +26,7 @@ SELECT
     threads.cli_version,
     threads.title,
     threads.name,
+    threads.name_state,
     threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
@@ -377,7 +378,9 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 search_term: None,
             },
         );
-        builder.push(" AND COALESCE(threads.name, threads.title) = ");
+        builder.push(
+            " AND CASE WHEN threads.name_state = 'explicit' THEN threads.name ELSE threads.title END = ",
+        );
         builder.push_bind(title);
         if let Some(cwd) = cwd {
             builder.push(" AND threads.cwd = ");
@@ -576,7 +579,9 @@ INSERT INTO threads (
     cwd,
     cli_version,
     title,
+    title_snapshot,
     name,
+    name_state,
     preview,
     sandbox_policy,
     approval_mode,
@@ -588,7 +593,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -621,7 +626,9 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
-        .bind(metadata.name.as_deref())
+        .bind(metadata.title.as_str())
+        .bind(metadata.name.explicit())
+        .bind(metadata.name.state_str())
         .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
@@ -658,21 +665,19 @@ ON CONFLICT(id) DO NOTHING
         thread_id: ThreadId,
         name: Option<&str>,
     ) -> anyhow::Result<bool> {
-        let result = match name {
-            Some(name) => sqlx::query(
-                "UPDATE threads SET title = CASE WHEN name IS NOT NULL AND title = name THEN '' ELSE title END, name = ? WHERE id = ?",
-            )
-            .bind(name)
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
-            .await?,
-            None => sqlx::query(
-                "UPDATE threads SET title = CASE WHEN name IS NOT NULL AND title = name THEN '' ELSE title END, name = '' WHERE id = ?",
-            )
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
-            .await?,
+        let name_state = if name.is_some() {
+            "explicit"
+        } else {
+            "unnamed"
         };
+        let result = sqlx::query(
+            "UPDATE threads SET title = '', title_snapshot = '', name = ?, name_state = ? WHERE id = ?",
+        )
+        .bind(name)
+        .bind(name_state)
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -884,7 +889,9 @@ INSERT INTO threads (
     cwd,
     cli_version,
     title,
+    title_snapshot,
     name,
+    name_state,
     preview,
     sandbox_policy,
     approval_mode,
@@ -896,7 +903,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -915,17 +922,32 @@ ON CONFLICT(id) DO UPDATE SET
     reasoning_effort = excluded.reasoning_effort,
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
-    name = COALESCE(
-        threads.name,
-        CASE
-            WHEN threads.title <> ''
-                AND (threads.first_user_message = '' OR trim(threads.title) <> trim(threads.first_user_message))
-                AND threads.title <> excluded.title
-            THEN threads.title
-            ELSE excluded.name
-        END
-    ),
+    name = CASE
+        WHEN threads.title <> ''
+            AND threads.title <> excluded.title
+            AND (
+                threads.name_state = 'legacy_unknown'
+                OR threads.title <> threads.title_snapshot
+            )
+        THEN threads.title
+        WHEN threads.name_state <> 'legacy_unknown' THEN threads.name
+        WHEN excluded.name_state = 'legacy_unknown' THEN NULL
+        ELSE excluded.name
+    END,
+    name_state = CASE
+        WHEN threads.title <> ''
+            AND threads.title <> excluded.title
+            AND (
+                threads.name_state = 'legacy_unknown'
+                OR threads.title <> threads.title_snapshot
+            )
+        THEN 'explicit'
+        WHEN threads.name_state <> 'legacy_unknown' THEN threads.name_state
+        WHEN excluded.name_state = 'legacy_unknown' THEN 'unnamed'
+        ELSE excluded.name_state
+    END,
     title = excluded.title,
+    title_snapshot = excluded.title_snapshot,
     preview = COALESCE(NULLIF(excluded.preview, ''), threads.preview),
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
@@ -967,7 +989,9 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
-        .bind(metadata.name.as_deref())
+        .bind(metadata.title.as_str())
+        .bind(metadata.name.explicit())
+        .bind(metadata.name.state_str())
         .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
@@ -1292,6 +1316,7 @@ SELECT
     threads.cli_version,
     threads.title,
     threads.name,
+    threads.name_state,
     threads.preview,
     threads.first_user_message,
     threads.git_sha,
@@ -1322,6 +1347,7 @@ SELECT
     threads.cli_version,
     threads.title,
     threads.name,
+    threads.name_state,
     threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
@@ -1536,7 +1562,10 @@ fn thread_list_item_from_row(
         cwd: PathBuf::from(row.try_get::<String, _>("cwd")?),
         cli_version: row.try_get("cli_version")?,
         title: row.try_get("title")?,
-        name: row.try_get("name")?,
+        name: crate::ThreadName::from_db(
+            row.try_get::<String, _>("name_state")?.as_str(),
+            row.try_get("name")?,
+        )?,
         preview: (!preview.is_empty()).then_some(preview),
         first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
         git_sha: row.try_get("git_sha")?,

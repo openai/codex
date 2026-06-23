@@ -122,7 +122,7 @@ async fn reconcile_rollout_preserves_existing_explicit_name() -> anyhow::Result<
             .metadata;
     assert_eq!(metadata.title, "Hey");
     assert_eq!(metadata.first_user_message.as_deref(), Some("Hey"));
-    metadata.name = Some("math".to_string());
+    metadata.name = codex_state::ThreadName::Explicit("math".to_string());
     runtime.upsert_thread(&metadata).await?;
 
     reconcile_rollout(
@@ -141,7 +141,7 @@ async fn reconcile_rollout_preserves_existing_explicit_name() -> anyhow::Result<
         .await?
         .expect("thread should exist");
     assert_eq!(persisted.title, "Hey");
-    assert_eq!(persisted.name.as_deref(), Some("math"));
+    assert_eq!(persisted.name.explicit(), Some("math"));
     assert_eq!(persisted.first_user_message.as_deref(), Some("Hey"));
     Ok(())
 }
