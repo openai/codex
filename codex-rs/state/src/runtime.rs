@@ -12,6 +12,9 @@ use crate::LogQuery;
 use crate::LogRow;
 use crate::MEMORIES_DB_FILENAME;
 use crate::STATE_DB_FILENAME;
+use crate::SecurityEvent;
+use crate::SecurityEventCreateParams;
+use crate::SecurityEventQuery;
 use crate::SortKey;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
@@ -66,6 +69,7 @@ mod logs;
 mod memories;
 mod recovery;
 mod remote_control;
+mod security_events;
 #[cfg(test)]
 mod test_support;
 mod threads;
@@ -96,6 +100,8 @@ pub use threads::ThreadFilterOptions;
 // metadata, rather than the exact sum of all persisted SQLite column bytes.
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
 const LOG_PARTITION_ROW_LIMIT: i64 = 1_000;
+const SECURITY_EVENT_RETENTION_DAYS: i64 = 10;
+const SECURITY_EVENT_PARTITION_ROW_LIMIT: i64 = 1_000;
 
 #[derive(Clone, Copy)]
 struct RuntimeDbSpec {
@@ -304,6 +310,12 @@ impl StateRuntime {
             thread_updated_at_millis: Arc::new(AtomicI64::new(thread_updated_at_millis)),
             thread_recency_at_millis: Arc::new(AtomicI64::new(thread_recency_at_millis)),
         });
+        if let Err(err) = runtime.run_security_events_startup_maintenance().await {
+            warn!(
+                "failed to run startup maintenance for state db at {}: {err}",
+                state_path.display(),
+            );
+        }
         if let Err(err) = runtime.run_logs_startup_maintenance().await {
             warn!(
                 "failed to run startup maintenance for logs db at {}: {err}",

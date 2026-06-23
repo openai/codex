@@ -101,6 +101,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     let options = ExecOptions {
         expiration: ExecExpiration::DefaultTimeout,
         capture_policy: ExecCapturePolicy::ShellTool,
+        sandbox_violation_context: None,
     };
     let permissions = PermissionProfile::Disabled;
     let manager = SandboxManager::new();

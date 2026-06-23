@@ -320,6 +320,9 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let options = ExecOptions {
             expiration,
             capture_policy: ExecCapturePolicy::ShellTool,
+            sandbox_violation_context: Some(
+                crate::security_events::SandboxViolationAuditContext::from_tool_ctx(ctx),
+            ),
         };
         let env = attempt
             .env_for(

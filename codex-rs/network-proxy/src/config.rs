@@ -285,6 +285,13 @@ pub enum NetworkMode {
 }
 
 impl NetworkMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Limited => "limited",
+            Self::Full => "full",
+        }
+    }
+
     pub fn allows_method(self, method: &str) -> bool {
         match self {
             Self::Full => true,
