@@ -1255,6 +1255,16 @@ mod thread_processor_behavior_tests {
             )
             .await
             .expect("connection should be live");
+        let connection_ids = manager
+            .subscribe_to_connection_ids(thread_id)
+            .await
+            .expect("thread should have a connection-ids watcher");
+        let has_connections = manager
+            .subscribe_to_has_connections(thread_id)
+            .await
+            .expect("thread should have a has-connections watcher");
+        assert_eq!(connection_ids.borrow().as_ref(), &[connection]);
+        assert!(*has_connections.borrow());
         {
             let state = manager.thread_state(thread_id).await;
             let mut state = state.lock().await;
@@ -1273,6 +1283,8 @@ mod thread_processor_behavior_tests {
 
         manager.remove_thread_state(thread_id).await;
         assert_eq!(cancel_rx.await, Ok(()));
+        assert!(connection_ids.borrow().is_empty());
+        assert!(!*has_connections.borrow());
 
         let state = manager.thread_state(thread_id).await;
         let subscribed_connection_ids = manager.subscribed_connection_ids(thread_id).await;
@@ -1328,8 +1340,8 @@ mod thread_processor_behavior_tests {
         );
 
         assert_eq!(
-            manager.subscribed_connection_ids(thread_id).await,
-            vec![connection_b]
+            manager.subscribed_connection_ids(thread_id).await.as_ref(),
+            &[connection_b]
         );
         Ok(())
     }
@@ -1382,6 +1394,69 @@ mod thread_processor_behavior_tests {
             .expect("timed out waiting for subscriber update")
             .expect("has-connections watcher should remain open");
         assert!(*has_connections.borrow());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn connection_ids_watcher_replaces_immutable_snapshots() -> Result<()> {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+        let connection = ConnectionId(1);
+        let _thread_state = manager.thread_state(thread_id).await;
+        let mut connection_ids = manager
+            .subscribe_to_connection_ids(thread_id)
+            .await
+            .expect("thread should have a connection-ids watcher");
+        let empty_snapshot = connection_ids.borrow().clone();
+        assert!(empty_snapshot.is_empty());
+
+        manager
+            .connection_initialized(connection, ConnectionCapabilities::default())
+            .await;
+        assert!(
+            manager
+                .try_add_connection_to_thread(thread_id, connection)
+                .await
+        );
+        tokio::time::timeout(Duration::from_secs(1), connection_ids.changed())
+            .await
+            .expect("timed out waiting for subscriber snapshot")
+            .expect("connection-ids watcher should remain open");
+        let subscribed_snapshot = connection_ids.borrow().clone();
+        assert_eq!(subscribed_snapshot.as_ref(), &[connection]);
+        assert!(empty_snapshot.is_empty());
+
+        assert!(
+            manager
+                .unsubscribe_connection_from_thread(thread_id, connection)
+                .await
+        );
+        tokio::time::timeout(Duration::from_secs(1), connection_ids.changed())
+            .await
+            .expect("timed out waiting for empty subscriber snapshot")
+            .expect("connection-ids watcher should remain open");
+        assert!(connection_ids.borrow().is_empty());
+        assert_eq!(subscribed_snapshot.as_ref(), &[connection]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn connection_ids_watcher_does_not_recreate_missing_thread_state() -> Result<()> {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+
+        assert!(
+            manager
+                .subscribe_to_connection_ids(thread_id)
+                .await
+                .is_none()
+        );
+        assert!(
+            manager
+                .subscribe_to_has_connections(thread_id)
+                .await
+                .is_none()
+        );
         Ok(())
     }
 

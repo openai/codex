@@ -256,17 +256,10 @@ async fn enqueue_incoming_message(
 }
 
 fn serialize_outgoing_message(outgoing_message: OutgoingMessage) -> Option<String> {
-    let value = match serde_json::to_value(outgoing_message) {
-        Ok(value) => value,
-        Err(err) => {
-            error!("Failed to convert OutgoingMessage to JSON value: {err}");
-            return None;
-        }
-    };
-    match serde_json::to_string(&value) {
+    match serde_json::to_string(&outgoing_message) {
         Ok(json) => Some(json),
         Err(err) => {
-            error!("Failed to serialize JSONRPCMessage: {err}");
+            error!("Failed to serialize OutgoingMessage: {err}");
             None
         }
     }
@@ -275,12 +268,15 @@ fn serialize_outgoing_message(outgoing_message: OutgoingMessage) -> Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outgoing_message::OutgoingResponse;
     use codex_app_server_protocol::ConfigWarningNotification;
+    use codex_app_server_protocol::CurrentTimeReadParams;
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::JSONRPCRequest;
     use codex_app_server_protocol::JSONRPCResponse;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ServerRequest;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::time::Duration;
@@ -292,6 +288,47 @@ mod tests {
             AppServerTransport::from_listen_url("off"),
             Ok(AppServerTransport::Off)
         );
+    }
+
+    #[test]
+    fn direct_outgoing_serialization_preserves_json_values() {
+        let messages = [
+            OutgoingMessage::Request(ServerRequest::CurrentTimeRead {
+                request_id: RequestId::Integer(1),
+                params: CurrentTimeReadParams {
+                    thread_id: "thread-1".to_string(),
+                },
+            }),
+            OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                ConfigWarningNotification {
+                    summary: "warning".to_string(),
+                    details: Some("details".to_string()),
+                    path: None,
+                    range: None,
+                },
+            )),
+            OutgoingMessage::Response(OutgoingResponse {
+                id: RequestId::Integer(2),
+                result: json!({"ok": true}),
+            }),
+            OutgoingMessage::Error(OutgoingError {
+                id: RequestId::Integer(3),
+                error: JSONRPCErrorError {
+                    code: -32000,
+                    message: "error".to_string(),
+                    data: Some(json!({"retryable": false})),
+                },
+            }),
+        ];
+
+        for message in messages {
+            let expected = serde_json::to_value(&message).expect("message should serialize");
+            let serialized =
+                serialize_outgoing_message(message).expect("message should serialize directly");
+            let actual: serde_json::Value =
+                serde_json::from_str(&serialized).expect("message should be valid JSON");
+            assert_eq!(actual, expected);
+        }
     }
 
     #[tokio::test]

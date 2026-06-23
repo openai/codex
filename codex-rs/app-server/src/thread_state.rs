@@ -250,6 +250,7 @@ mod tests {
 struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
+    connection_ids_watcher: watch::Sender<Arc<[ConnectionId]>>,
     has_connections_watcher: watch::Sender<bool>,
 }
 
@@ -258,13 +259,33 @@ impl Default for ThreadEntry {
         Self {
             state: Arc::new(Mutex::new(ThreadState::default())),
             connection_ids: HashSet::new(),
+            connection_ids_watcher: watch::channel(Arc::from([])).0,
             has_connections_watcher: watch::channel(false).0,
         }
     }
 }
 
 impl ThreadEntry {
-    fn update_has_connections(&self) {
+    fn insert_connection(&mut self, connection_id: ConnectionId) {
+        if self.connection_ids.insert(connection_id) {
+            self.publish_connections();
+        }
+    }
+
+    fn remove_connection(&mut self, connection_id: ConnectionId) {
+        if self.connection_ids.remove(&connection_id) {
+            self.publish_connections();
+        }
+    }
+
+    fn publish_connections(&self) {
+        self.connection_ids_watcher.send_replace(
+            self.connection_ids
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .into(),
+        );
         let _ = self.has_connections_watcher.send_if_modified(|current| {
             let prev = *current;
             *current = !self.connection_ids.is_empty();
@@ -348,13 +369,27 @@ impl ThreadStateManager {
         }
     }
 
-    pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
+    pub(crate) async fn subscribed_connection_ids(
+        &self,
+        thread_id: ThreadId,
+    ) -> Arc<[ConnectionId]> {
         let state = self.state.lock().await;
         state
             .threads
             .get(&thread_id)
-            .map(|thread_entry| thread_entry.connection_ids.iter().copied().collect())
+            .map(|thread_entry| thread_entry.connection_ids_watcher.borrow().clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) async fn subscribe_to_connection_ids(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<watch::Receiver<Arc<[ConnectionId]>>> {
+        let state = self.state.lock().await;
+        state
+            .threads
+            .get(&thread_id)
+            .map(|thread_entry| thread_entry.connection_ids_watcher.subscribe())
     }
 
     pub(crate) async fn thread_state(&self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
@@ -394,10 +429,14 @@ impl ThreadStateManager {
     pub(crate) async fn remove_thread_state(&self, thread_id: ThreadId) {
         let thread_state = {
             let mut state = self.state.lock().await;
-            let thread_state = state
-                .threads
-                .remove(&thread_id)
-                .map(|thread_entry| thread_entry.state);
+            let thread_state = state.threads.remove(&thread_id).map(|mut thread_entry| {
+                // Watch receivers retain their last value after the sender is dropped. Publish
+                // a terminal empty snapshot so an in-flight listener cannot dispatch to stale
+                // subscribers while teardown cancellation is being observed.
+                thread_entry.connection_ids.clear();
+                thread_entry.publish_connections();
+                thread_entry.state
+            });
             state.thread_ids_by_connection.retain(|_, thread_ids| {
                 thread_ids.remove(&thread_id);
                 !thread_ids.is_empty()
@@ -469,8 +508,7 @@ impl ThreadStateManager {
                 }
             }
             if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
-                thread_entry.connection_ids.remove(&connection_id);
-                thread_entry.update_has_connections();
+                thread_entry.remove_connection(connection_id);
             }
         };
 
@@ -504,8 +542,7 @@ impl ThreadStateManager {
                 .or_default()
                 .insert(thread_id);
             let thread_entry = state.threads.entry(thread_id).or_default();
-            thread_entry.connection_ids.insert(connection_id);
-            thread_entry.update_has_connections();
+            thread_entry.insert_connection(connection_id);
             thread_entry.state.clone()
         };
         {
@@ -532,8 +569,7 @@ impl ThreadStateManager {
             .or_default()
             .insert(thread_id);
         let thread_entry = state.threads.entry(thread_id).or_default();
-        thread_entry.connection_ids.insert(connection_id);
-        thread_entry.update_has_connections();
+        thread_entry.insert_connection(connection_id);
         true
     }
 
@@ -547,8 +583,7 @@ impl ThreadStateManager {
                 .unwrap_or_default();
             for thread_id in &thread_ids {
                 if let Some(thread_entry) = state.threads.get_mut(thread_id) {
-                    thread_entry.connection_ids.remove(&connection_id);
-                    thread_entry.update_has_connections();
+                    thread_entry.remove_connection(connection_id);
                 }
             }
             thread_ids

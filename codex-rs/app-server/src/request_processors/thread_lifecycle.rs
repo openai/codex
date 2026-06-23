@@ -227,6 +227,15 @@ pub(super) async fn ensure_listener_task_running(
             "thread {conversation_id} is closing; retry after the thread is closed"
         )));
     };
+    let Some(connection_ids_rx) = listener_task_context
+        .thread_state_manager
+        .subscribe_to_connection_ids(conversation_id)
+        .await
+    else {
+        return Err(invalid_request(format!(
+            "thread {conversation_id} is closing; retry after the thread is closed"
+        )));
+    };
     let config = conversation.config().await;
     let environments = conversation.environment_selections().await;
     let watch_registration = listener_task_context
@@ -315,9 +324,7 @@ pub(super) async fn ensure_listener_task_running(
                         thread_state.track_current_turn_event(&event.id, &event.msg);
                         thread_state.experimental_raw_events
                     };
-                    let subscribed_connection_ids = thread_state_manager
-                        .subscribed_connection_ids(conversation_id)
-                        .await;
+                    let subscribed_connection_ids = connection_ids_rx.borrow().clone();
                     let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
                         outgoing_for_task.clone(),
                         subscribed_connection_ids,
@@ -338,15 +345,15 @@ pub(super) async fn ensure_listener_task_running(
                     }
 
                     apply_bespoke_event_handling(
-                        event.clone(),
+                        event,
                         conversation_id,
-                        conversation.clone(),
-                        thread_manager.clone(),
+                        &conversation,
+                        &thread_manager,
                         thread_outgoing,
-                        thread_state.clone(),
-                        thread_watch_manager.clone(),
-                        thread_list_state_permit.clone(),
-                        fallback_model_provider.clone(),
+                        &thread_state,
+                        &thread_watch_manager,
+                        &thread_list_state_permit,
+                        &fallback_model_provider,
                     )
                     .await;
                 }

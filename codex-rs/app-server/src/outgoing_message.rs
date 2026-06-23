@@ -107,7 +107,7 @@ pub(crate) struct OutgoingMessageSender {
 #[derive(Clone)]
 pub(crate) struct ThreadScopedOutgoingMessageSender {
     outgoing: Arc<OutgoingMessageSender>,
-    connection_ids: Arc<Vec<ConnectionId>>,
+    connection_ids: Arc<[ConnectionId]>,
     thread_id: ThreadId,
 }
 
@@ -120,12 +120,12 @@ struct PendingCallbackEntry {
 impl ThreadScopedOutgoingMessageSender {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
-        connection_ids: Vec<ConnectionId>,
+        connection_ids: impl Into<Arc<[ConnectionId]>>,
         thread_id: ThreadId,
     ) -> Self {
         Self {
             outgoing,
-            connection_ids: Arc::new(connection_ids),
+            connection_ids: connection_ids.into(),
             thread_id,
         }
     }
@@ -136,7 +136,7 @@ impl ThreadScopedOutgoingMessageSender {
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
         self.outgoing
             .send_request_to_connections(
-                Some(self.connection_ids.as_slice()),
+                Some(self.connection_ids.as_ref()),
                 payload,
                 Some(self.thread_id),
             )
@@ -160,12 +160,12 @@ impl ThreadScopedOutgoingMessageSender {
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
         self.outgoing
             .analytics_events_client
-            .track_notification(notification.clone());
+            .track_notification(&notification);
         if self.connection_ids.is_empty() {
             return;
         }
         self.outgoing
-            .send_server_notification_to_connections(self.connection_ids.as_slice(), notification)
+            .send_server_notification_to_connections(self.connection_ids.as_ref(), notification)
             .await;
     }
 
@@ -564,7 +564,7 @@ impl OutgoingMessageSender {
             targeted_connections = connection_ids.len(),
             "app-server event: {notification}"
         );
-        let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
+        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
         if connection_ids.is_empty() {
             if let Err(err) = self
                 .sender
@@ -577,7 +577,10 @@ impl OutgoingMessageSender {
             }
             return;
         }
-        for connection_id in connection_ids {
+        let Some((last_connection_id, other_connection_ids)) = connection_ids.split_last() else {
+            return;
+        };
+        for connection_id in other_connection_ids {
             if let Err(err) = self
                 .sender
                 .send(OutgoingEnvelope::ToConnection {
@@ -590,6 +593,17 @@ impl OutgoingMessageSender {
                 warn!("failed to send server notification to client: {err:?}");
             }
         }
+        if let Err(err) = self
+            .sender
+            .send(OutgoingEnvelope::ToConnection {
+                connection_id: *last_connection_id,
+                message: outgoing_message,
+                write_complete_tx: None,
+            })
+            .await
+        {
+            warn!("failed to send server notification to client: {err:?}");
+        }
     }
 
     pub(crate) async fn send_server_notification_to_connection_and_wait(
@@ -598,7 +612,7 @@ impl OutgoingMessageSender {
         notification: ServerNotification,
     ) {
         tracing::trace!("app-server event: {notification}");
-        let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
+        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
         let (write_complete_tx, write_complete_rx) = oneshot::channel();
         if let Err(err) = self
             .sender
@@ -1113,6 +1127,43 @@ mod tests {
                 assert_eq!(outgoing_error.error, error);
             }
             other => panic!("expected targeted error envelope, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_server_notification_fanout_preserves_connection_order() {
+        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing =
+            OutgoingMessageSender::new(tx, codex_analytics::AnalyticsEventsClient::disabled());
+
+        outgoing
+            .send_server_notification_to_connections(
+                &[ConnectionId(3), ConnectionId(5), ConnectionId(8)],
+                ServerNotification::ModelRerouted(ModelReroutedNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    from_model: "gpt-5.3-codex".to_string(),
+                    to_model: "gpt-5.2".to_string(),
+                    reason: ModelRerouteReason::HighRiskCyberActivity,
+                }),
+            )
+            .await;
+
+        for expected_connection_id in [ConnectionId(3), ConnectionId(5), ConnectionId(8)] {
+            let envelope = rx.recv().await.expect("fanout should queue one envelope");
+            let OutgoingEnvelope::ToConnection {
+                connection_id,
+                message,
+                ..
+            } = envelope
+            else {
+                panic!("expected targeted server notification envelope");
+            };
+            assert_eq!(connection_id, expected_connection_id);
+            assert!(matches!(
+                message,
+                OutgoingMessage::AppServerNotification(ServerNotification::ModelRerouted(_))
+            ));
         }
     }
 

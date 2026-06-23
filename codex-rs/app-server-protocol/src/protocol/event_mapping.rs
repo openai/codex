@@ -432,7 +432,10 @@ pub fn item_event_to_server_notification(
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let item_id = exec_command_output_delta_event.call_id;
-            let delta = String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
+            let delta = match String::from_utf8(exec_command_output_delta_event.chunk) {
+                Ok(delta) => delta,
+                Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+            };
             ServerNotification::CommandExecutionOutputDelta(
                 CommandExecutionOutputDeltaNotification {
                     thread_id,
@@ -605,6 +608,29 @@ mod tests {
                 turn_id: "turn-1".to_string(),
                 item_id: "call-1".to_string(),
                 delta: "hello".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn exec_command_output_delta_preserves_lossy_utf8_mapping() {
+        let notification = item_event_to_server_notification(
+            EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                call_id: "call-1".to_string(),
+                stream: ExecOutputStream::Stdout,
+                chunk: b"hello\xFFworld".to_vec(),
+            }),
+            "thread-1",
+            "turn-1",
+        );
+
+        assert_command_execution_output_delta_server_notification(
+            notification,
+            CommandExecutionOutputDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-1".to_string(),
+                delta: "hello\u{FFFD}world".to_string(),
             },
         );
     }
