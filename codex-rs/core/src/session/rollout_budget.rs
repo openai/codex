@@ -30,7 +30,7 @@ impl Session {
             .rollout_budget()
             .record_usage(usage)
         {
-            return Err(CodexErr::TurnAborted);
+            return Err(CodexErr::RolloutBudgetExceeded);
         }
         Ok(())
     }
