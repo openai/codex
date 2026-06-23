@@ -621,6 +621,7 @@ fn guardian_elicitation_review_request(
                 meta,
                 MCP_ELICITATION_CONNECTOR_DESCRIPTION_KEY,
             ),
+            connected_account_email: None,
             tool_title: metadata_owned_string(meta, MCP_ELICITATION_TOOL_TITLE_KEY),
             tool_description: metadata_owned_string(meta, MCP_ELICITATION_TOOL_DESCRIPTION_KEY),
             annotations: None,

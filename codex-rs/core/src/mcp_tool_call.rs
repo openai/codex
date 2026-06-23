@@ -997,6 +997,7 @@ pub(crate) struct McpToolApprovalMetadata {
     link_id: Option<String>,
     connector_name: Option<String>,
     connector_description: Option<String>,
+    connected_account_email: Option<String>,
     plugin_id: Option<String>,
     tool_title: Option<String>,
     tool_description: Option<String>,
@@ -1010,6 +1011,7 @@ const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_LINK_ID_META_KEY: &str = "link_id";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const MCP_TOOL_CONNECTED_ACCOUNT_EMAIL_META_KEY: &str = "connected_account_email";
 
 async fn custom_mcp_tool_approval_mode(
     sess: &Session,
@@ -1418,6 +1420,9 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
         connector_id: metadata.and_then(|metadata| metadata.connector_id.clone()),
         connector_name: metadata.and_then(|metadata| metadata.connector_name.clone()),
         connector_description: metadata.and_then(|metadata| metadata.connector_description.clone()),
+        connected_account_email: (invocation.server == CODEX_APPS_MCP_SERVER_NAME)
+            .then(|| metadata.and_then(|metadata| metadata.connected_account_email.clone()))
+            .flatten(),
         tool_title: metadata.and_then(|metadata| metadata.tool_title.clone()),
         tool_description: metadata.and_then(|metadata| metadata.tool_description.clone()),
         annotations: metadata
@@ -1488,6 +1493,25 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         None
     };
 
+    let codex_apps_meta = tool_info
+        .tool
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+        .and_then(serde_json::Value::as_object)
+        .cloned();
+    let connected_account_email = if server == CODEX_APPS_MCP_SERVER_NAME {
+        codex_apps_meta
+            .as_ref()
+            .and_then(|meta| meta.get(MCP_TOOL_CONNECTED_ACCOUNT_EMAIL_META_KEY))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|email| !email.is_empty())
+            .map(str::to_string)
+    } else {
+        None
+    };
+
     Some(McpToolApprovalMetadata {
         annotations: tool_info.tool.annotations,
         connector_id: tool_info.connector_id,
@@ -1500,17 +1524,12 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             .map(str::to_string),
         connector_name: tool_info.connector_name,
         connector_description,
+        connected_account_email,
         plugin_id,
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
         mcp_app_resource_uri: get_mcp_app_resource_uri(tool_info.tool.meta.as_deref()),
-        codex_apps_meta: tool_info
-            .tool
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
-            .and_then(serde_json::Value::as_object)
-            .cloned(),
+        codex_apps_meta,
         // Disallow custom MCPs from uploading files via fileParams.
         openai_file_input_params: openai_file_input_params_for_server(
             server,
