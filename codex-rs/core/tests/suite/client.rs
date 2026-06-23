@@ -2303,6 +2303,13 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     );
     pretty_assertions::assert_eq!(
         request_body
+            .get("stream_options")
+            .and_then(|options| options.get("summary_delivery"))
+            .and_then(|value| value.as_str()),
+        Some("parallel_truncated")
+    );
+    pretty_assertions::assert_eq!(
+        request_body
             .get("reasoning")
             .and_then(|reasoning| reasoning.get("context")),
         None
@@ -2478,6 +2485,48 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
             .and_then(|reasoning| reasoning.get("summary")),
         None
     );
+    pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_summary_delivery_is_omitted_for_minimal_effort() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::Minimal);
+            config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
+    pretty_assertions::assert_eq!(request_body["reasoning"]["effort"], json!("minimal"));
+    pretty_assertions::assert_eq!(request_body["reasoning"]["summary"], json!("concise"));
+    pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
 
     Ok(())
 }
@@ -2946,6 +2995,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     assert_eq!(body["store"], serde_json::Value::Bool(true));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
+    assert_eq!(body.get("stream_options"), None);
     assert_eq!(body["input"].as_array().map(Vec::len), Some(8));
     assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
     assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));

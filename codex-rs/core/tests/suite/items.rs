@@ -3,6 +3,7 @@
 use anyhow::Ok;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
@@ -23,9 +24,12 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
+use core_test_support::responses::ev_output_text_delta_for_item;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::ev_reasoning_summary_text_delta;
+use core_test_support::responses::ev_reasoning_summary_text_delta_for_item;
+use core_test_support::responses::ev_reasoning_summary_text_done_for_item;
 use core_test_support::responses::ev_reasoning_text_delta;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_web_search_call_added_partial;
@@ -1130,6 +1134,132 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
     .await;
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "step one");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_reasoning_summary = Some(ReasoningSummary::Auto);
+        })
+        .build(&server)
+        .await?;
+
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_reasoning_item_added("reasoning-1", &[""]),
+        ev_reasoning_summary_text_delta_for_item("reasoning-1", 0, "**Inspecting"),
+        ev_reasoning_summary_text_done_for_item("reasoning-1", 0, "**Inspecting files**"),
+        ev_reasoning_summary_text_done_for_item("reasoning-1", 1, "**Planning checks**"),
+        ev_message_item_added("message-1", ""),
+        ev_output_text_delta_for_item("message-1", "Final"),
+        ev_reasoning_item_added("reasoning-2", &[""]),
+        ev_output_text_delta_for_item("message-1", " answer"),
+        ev_reasoning_summary_text_done_for_item("reasoning-1", 2, "stale summary"),
+        ev_reasoning_summary_text_done_for_item("reasoning-2", 0, "**Checking result**"),
+        ev_assistant_message("message-1", "Final answer"),
+        ev_reasoning_item(
+            "reasoning-1",
+            &["**Inspecting files**", "**Planning checks**"],
+            &[],
+        ),
+        ev_reasoning_item("reasoning-2", &["**Checking result**"], &[]),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "reason through it".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let mut started_item_ids = Vec::new();
+    let mut completed_item_ids = Vec::new();
+    let mut message_deltas = Vec::new();
+    let mut summary_deltas = Vec::new();
+    let mut summary_section_breaks = Vec::new();
+    loop {
+        let event = codex.next_event().await?;
+        match event.msg {
+            EventMsg::ItemStarted(ItemStartedEvent { item, .. })
+                if matches!(
+                    item.id().as_str(),
+                    "reasoning-1" | "message-1" | "reasoning-2"
+                ) =>
+            {
+                started_item_ids.push(item.id());
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent { item, .. })
+                if matches!(
+                    item.id().as_str(),
+                    "reasoning-1" | "message-1" | "reasoning-2"
+                ) =>
+            {
+                completed_item_ids.push(item.id());
+            }
+            EventMsg::AgentMessageContentDelta(event) => {
+                message_deltas.push((event.item_id, event.delta));
+            }
+            EventMsg::ReasoningContentDelta(event) => {
+                summary_deltas.push((event.item_id, event.summary_index, event.delta));
+            }
+            EventMsg::AgentReasoningSectionBreak(event) => {
+                summary_section_breaks.push((event.item_id, event.summary_index));
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        started_item_ids,
+        vec!["reasoning-1", "message-1", "reasoning-2"]
+    );
+    assert_eq!(
+        completed_item_ids,
+        vec!["message-1", "reasoning-1", "reasoning-2"]
+    );
+    assert_eq!(
+        message_deltas,
+        vec![
+            ("message-1".to_string(), "Final".to_string()),
+            ("message-1".to_string(), " answer".to_string()),
+        ]
+    );
+    assert_eq!(
+        summary_deltas,
+        vec![
+            (
+                "reasoning-1".to_string(),
+                0,
+                "**Inspecting files**".to_string(),
+            ),
+            (
+                "reasoning-1".to_string(),
+                1,
+                "**Planning checks**".to_string(),
+            ),
+            (
+                "reasoning-2".to_string(),
+                0,
+                "**Checking result**".to_string(),
+            ),
+        ]
+    );
+    assert_eq!(summary_section_breaks, vec![("reasoning-1".to_string(), 1)]);
 
     Ok(())
 }

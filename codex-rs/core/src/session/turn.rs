@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
+use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -41,6 +42,7 @@ use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::active_turn_items::ActiveTurnItems;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -1907,11 +1909,18 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
+    let uses_parallel_reasoning_summaries = ModelClient::uses_parallel_reasoning_summaries(
+        turn_context.provider.info(),
+        &turn_context.model_info,
+        turn_context.reasoning_effort.as_ref(),
+        turn_context.reasoning_summary,
+    );
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut active_item: Option<TurnItem> = None;
+    let mut active_items = ActiveTurnItems::default();
+    let mut parallel_summary_items_with_content = HashSet::new();
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -1924,7 +1933,6 @@ async fn try_run_sampling_request(
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
-    let mut active_item_is_streaming_to_client = false;
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -1975,13 +1983,11 @@ async fn try_run_sampling_request(
                 {
                     sess.send_event(&turn_context, event).await;
                 }
-                let previously_active_item = active_item.take();
-                let previously_streamed_item = if active_item_is_streaming_to_client {
-                    previously_active_item
-                } else {
-                    None
-                };
-                active_item_is_streaming_to_client = false;
+                let response_item_id = item.id().map(str::to_owned);
+                let previously_streamed_item = active_items
+                    .take(response_item_id.as_deref())
+                    .filter(|active| active.streams_to_client)
+                    .map(|active| active.item);
                 if let Some(previous) = previously_streamed_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
                 {
@@ -2064,6 +2070,8 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
+                let response_item_id = item.id().map(str::to_owned);
+                active_items.mark_started(response_item_id.as_deref());
                 if let ResponseItem::CustomToolCall { call_id, name, .. } = &item {
                     let tool_name = ToolName::plain(name.as_str());
                     active_tool_argument_diff_consumer = tool_runtime
@@ -2131,8 +2139,11 @@ async fn try_run_sampling_request(
                             .await;
                         }
                     }
-                    active_item = Some(turn_item);
-                    active_item_is_streaming_to_client = stream_item_to_client;
+                    active_items.insert(
+                        response_item_id.as_deref(),
+                        turn_item,
+                        stream_item_to_client,
+                    );
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
@@ -2215,15 +2226,15 @@ async fn try_run_sampling_request(
                     last_agent_message,
                 });
             }
-            ResponseEvent::OutputTextDelta(delta) => {
+            ResponseEvent::OutputTextDelta { delta, item_id } => {
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if let Some(active) = active_items.get(item_id.as_deref()) {
+                    if !active.streams_to_client {
                         continue;
                     }
-                    let item_id = active.id();
-                    if matches!(active, TurnItem::AgentMessage(_)) {
+                    let item_id = active.item.id();
+                    if matches!(&active.item, TurnItem::AgentMessage(_)) {
                         let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
                         emit_streamed_assistant_text_delta(
                             &sess,
@@ -2268,15 +2279,25 @@ async fn try_run_sampling_request(
             ResponseEvent::ReasoningSummaryDelta {
                 delta,
                 summary_index,
+                item_id,
             } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if uses_parallel_reasoning_summaries {
+                    continue;
+                }
+                if item_id
+                    .as_deref()
+                    .is_some_and(|item_id| !active_items.is_current(item_id))
+                {
+                    continue;
+                }
+                if let Some(active) = active_items.get(item_id.as_deref()) {
+                    if !active.streams_to_client {
                         continue;
                     }
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id: active.item.id(),
                         delta,
                         summary_index,
                     };
@@ -2286,14 +2307,71 @@ async fn try_run_sampling_request(
                     error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
             }
-            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+            ResponseEvent::ReasoningSummaryDone {
+                text,
+                summary_index,
+                item_id,
+            } => {
+                // Parallel delivery can cut off partial deltas at the next output item. Present
+                // only atomic, completed summary parts that still belong to the current item.
+                if !uses_parallel_reasoning_summaries {
+                    continue;
+                }
+                let Some(response_item_id) = item_id.as_deref() else {
+                    error_or_panic("ReasoningSummaryDone without item_id".to_string());
+                    continue;
+                };
+                if !active_items.is_current(response_item_id) {
+                    continue;
+                }
+                let Some(active) = active_items.get(Some(response_item_id)) else {
+                    error_or_panic("ReasoningSummaryDone without active item".to_string());
+                    continue;
+                };
+                if !active.streams_to_client {
+                    continue;
+                }
+                let item_id = active.item.id();
+                if !parallel_summary_items_with_content.insert(response_item_id.to_string()) {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
+                            item_id: item_id.clone(),
+                            summary_index,
+                        }),
+                    )
+                    .await;
+                }
+                let event = ReasoningContentDeltaEvent {
+                    thread_id: sess.thread_id.to_string(),
+                    turn_id: turn_context.sub_id.clone(),
+                    item_id,
+                    delta: text,
+                    summary_index,
+                };
+                sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
+                    .await;
+            }
+            ResponseEvent::ReasoningSummaryPartAdded {
+                summary_index,
+                item_id,
+            } => {
+                if uses_parallel_reasoning_summaries {
+                    continue;
+                }
+                if item_id
+                    .as_deref()
+                    .is_some_and(|item_id| !active_items.is_current(item_id))
+                {
+                    continue;
+                }
+                if let Some(active) = active_items.get(item_id.as_deref()) {
+                    if !active.streams_to_client {
                         continue;
                     }
                     let event =
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
-                            item_id: active.id(),
+                            item_id: active.item.id(),
                             summary_index,
                         });
                     sess.send_event(&turn_context, event).await;
@@ -2304,15 +2382,16 @@ async fn try_run_sampling_request(
             ResponseEvent::ReasoningContentDelta {
                 delta,
                 content_index,
+                item_id,
             } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if let Some(active) = active_items.get(item_id.as_deref()) {
+                    if !active.streams_to_client {
                         continue;
                     }
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id: active.item.id(),
                         delta,
                         content_index,
                     };

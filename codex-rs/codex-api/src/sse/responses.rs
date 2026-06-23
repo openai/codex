@@ -167,6 +167,7 @@ pub struct ResponsesStreamEvent {
     item_id: Option<String>,
     call_id: Option<String>,
     delta: Option<String>,
+    text: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
     safety_buffering: Option<Value>,
@@ -326,7 +327,10 @@ pub fn process_responses_event(
         }
         "response.output_text.delta" => {
             if let Some(delta) = event.delta {
-                return Ok(Some(ResponseEvent::OutputTextDelta(delta)));
+                return Ok(Some(ResponseEvent::OutputTextDelta {
+                    delta,
+                    item_id: event.item_id,
+                }));
             }
         }
         "response.custom_tool_call_input.delta" => {
@@ -345,6 +349,16 @@ pub fn process_responses_event(
                 return Ok(Some(ResponseEvent::ReasoningSummaryDelta {
                     delta,
                     summary_index,
+                    item_id: event.item_id,
+                }));
+            }
+        }
+        "response.reasoning_summary_text.done" => {
+            if let (Some(text), Some(summary_index)) = (event.text, event.summary_index) {
+                return Ok(Some(ResponseEvent::ReasoningSummaryDone {
+                    text,
+                    summary_index,
+                    item_id: event.item_id,
                 }));
             }
         }
@@ -353,6 +367,7 @@ pub fn process_responses_event(
                 return Ok(Some(ResponseEvent::ReasoningContentDelta {
                     delta,
                     content_index,
+                    item_id: event.item_id,
                 }));
             }
         }
@@ -437,6 +452,7 @@ pub fn process_responses_event(
             if let Some(summary_index) = event.summary_index {
                 return Ok(Some(ResponseEvent::ReasoningSummaryPartAdded {
                     summary_index,
+                    item_id: event.item_id,
                 }));
             }
         }
@@ -882,6 +898,32 @@ mod tests {
             } if item_id == "ctc_1" && call_id == "call_1" && delta == "*** Begin"
         );
         assert_matches!(&events[1], ResponseEvent::Completed { .. });
+    }
+
+    #[tokio::test]
+    async fn parses_reasoning_summary_done() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.reasoning_summary_text.done",
+                "item_id": "reasoning-1",
+                "summary_index": 2,
+                "text": "**Checking result**",
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::ReasoningSummaryDone {
+                text,
+                summary_index: 2,
+                item_id: Some(item_id),
+            } if text == "**Checking result**" && item_id == "reasoning-1"
+        );
     }
 
     #[tokio::test]
@@ -1383,13 +1425,19 @@ mod tests {
             ResponseEvent::SafetyBuffering(buffering)
                 if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
         );
-        assert_matches!(&events[2], ResponseEvent::OutputTextDelta(delta) if delta == "hello");
+        assert_matches!(
+            &events[2],
+            ResponseEvent::OutputTextDelta { delta, .. } if delta == "hello"
+        );
         assert_matches!(
             &events[3],
             ResponseEvent::SafetyBuffering(buffering)
                 if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
         );
-        assert_matches!(&events[4], ResponseEvent::OutputTextDelta(delta) if delta == " world");
+        assert_matches!(
+            &events[4],
+            ResponseEvent::OutputTextDelta { delta, .. } if delta == " world"
+        );
         assert_matches!(
             &events[5],
             ResponseEvent::SafetyBuffering(buffering)

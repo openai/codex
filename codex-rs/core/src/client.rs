@@ -55,6 +55,8 @@ use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::ResponsesWsRequest;
 use codex_api::SharedAuthProvider;
 use codex_api::SseTelemetry;
+use codex_api::StreamOptions;
+use codex_api::SummaryDelivery;
 use codex_api::TransportError;
 use codex_api::WebsocketTelemetry;
 use codex_api::auth_header_telemetry;
@@ -297,6 +299,7 @@ fn responses_request_properties_match(
         reasoning: previous_reasoning,
         store: previous_store,
         stream: previous_stream,
+        stream_options: previous_stream_options,
         include: previous_include,
         service_tier: previous_service_tier,
         prompt_cache_key: previous_prompt_cache_key,
@@ -313,6 +316,7 @@ fn responses_request_properties_match(
         reasoning: current_reasoning,
         store: current_store,
         stream: current_stream,
+        stream_options: current_stream_options,
         include: current_include,
         service_tier: current_service_tier,
         prompt_cache_key: current_prompt_cache_key,
@@ -328,6 +332,7 @@ fn responses_request_properties_match(
         && previous_reasoning == current_reasoning
         && previous_store == current_store
         && previous_stream == current_stream
+        && previous_stream_options == current_stream_options
         && previous_include == current_include
         && previous_service_tier == current_service_tier
         && previous_prompt_cache_key == current_prompt_cache_key
@@ -378,6 +383,21 @@ fn sideband_websocket_auth_headers(api_auth: &dyn AuthProvider) -> ApiHeaderMap 
 }
 
 impl ModelClient {
+    pub(crate) fn uses_parallel_reasoning_summaries(
+        provider_info: &ModelProviderInfo,
+        model_info: &ModelInfo,
+        effort: Option<&ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+    ) -> bool {
+        provider_info.is_openai()
+            && model_info.supports_reasoning_summaries
+            && summary != ReasoningSummaryConfig::None
+            && !matches!(
+                effort.or(model_info.default_reasoning_level.as_ref()),
+                Some(ReasoningEffortConfig::None | ReasoningEffortConfig::Minimal)
+            )
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Creates a new session-scoped `ModelClient`.
     ///
@@ -825,6 +845,15 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
+        let stream_options = Self::uses_parallel_reasoning_summaries(
+            self.state.provider.info(),
+            model_info,
+            effort.as_ref(),
+            summary,
+        )
+        .then_some(StreamOptions {
+            summary_delivery: SummaryDelivery::ParallelTruncated,
+        });
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
@@ -859,6 +888,7 @@ impl ModelClient {
             reasoning,
             store: provider.is_azure_responses_endpoint(),
             stream: true,
+            stream_options,
             include,
             service_tier,
             prompt_cache_key,

@@ -291,7 +291,7 @@ impl MemoryStartupContext {
         let mut token_usage = None;
         while let Some(message) = stream.next().await.transpose()? {
             match message {
-                ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
+                ResponseEvent::OutputTextDelta { delta, .. } => result.push_str(&delta),
                 ResponseEvent::OutputItemDone(item) => {
                     if result.is_empty()
                         && let codex_protocol::models::ResponseItem::Message { content, .. } = item

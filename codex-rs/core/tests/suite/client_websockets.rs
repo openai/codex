@@ -629,7 +629,10 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
     ]])
     .await;
 
-    let harness = websocket_harness(&server).await;
+    let mut provider = websocket_provider(&server);
+    provider.name = "OpenAI".to_string();
+    let harness =
+        websocket_harness_with_provider_options(provider, /*runtime_metrics_enabled*/ false).await;
     let mut normal_model_info = harness.model_info.clone();
     normal_model_info.supports_reasoning_summaries = true;
     let mut lite_model_info = normal_model_info.clone();
@@ -671,6 +674,7 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
                     "responses_lite": body["client_metadata"]
                         .get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY),
                     "reasoning_context": body["reasoning"].get("context"),
+                    "summary_delivery": body["stream_options"].get("summary_delivery"),
                     "parallel_tool_calls": body["parallel_tool_calls"],
                 })
             })
@@ -679,16 +683,19 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
             json!({
                 "responses_lite": null,
                 "reasoning_context": null,
+                "summary_delivery": "parallel_truncated",
                 "parallel_tool_calls": false,
             }),
             json!({
                 "responses_lite": "true",
                 "reasoning_context": "all_turns",
+                "summary_delivery": "parallel_truncated",
                 "parallel_tool_calls": false,
             }),
             json!({
                 "responses_lite": null,
                 "reasoning_context": null,
+                "summary_delivery": "parallel_truncated",
                 "parallel_tool_calls": false,
             }),
         ]
