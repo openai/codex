@@ -12,6 +12,7 @@ use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
 use anyhow::Context;
+use anyhow::ensure;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientInfo;
@@ -107,11 +108,19 @@ use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
+use codex_exec_server::CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR;
+use codex_exec_server::CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR;
+use codex_exec_server::CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR;
+use codex_exec_server::CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR;
+use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+use core_test_support::test_codex::TestEnv;
+use core_test_support::test_codex::test_env;
 use tokio::process::Command;
 
 pub struct TestAppServer {
@@ -124,6 +133,7 @@ pub struct TestAppServer {
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     pending_messages: VecDeque<JSONRPCMessage>,
+    auto_env: Option<TestEnv>,
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
@@ -137,6 +147,59 @@ impl TestAppServer {
 
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env_and_args(codex_home, &[], &[DISABLE_PLUGIN_STARTUP_TASKS_ARG]).await
+    }
+
+    /// Starts an app server with the standard test environment and retains it
+    /// for the server's lifetime.
+    ///
+    /// Local test runs explicitly remove `CODEX_EXEC_SERVER_URL`; Docker- and
+    /// Wine-backed runs set it to the remote fixture URL. Use
+    /// [`Self::auto_env_params`] or
+    /// [`Self::send_thread_start_request_with_auto_env`] to select the matching
+    /// target-native cwd in a thread. Because `environments.toml` overrides the
+    /// URL-based configuration, this helper rejects a `codex_home` containing
+    /// that file.
+    pub async fn new_with_auto_env(codex_home: &Path) -> anyhow::Result<Self> {
+        let environments_toml = codex_home.join("environments.toml");
+        ensure!(
+            !environments_toml
+                .try_exists()
+                .with_context(|| format!("check whether {} exists", environments_toml.display()))?,
+            "new_with_auto_env cannot be used when {} exists",
+            environments_toml.display()
+        );
+
+        let auto_env = test_env().await?;
+        // Noise registry configuration takes precedence over the URL-based
+        // provider, so clear inherited values to keep the selection hermetic.
+        let env_overrides = [
+            (
+                CODEX_EXEC_SERVER_URL_ENV_VAR,
+                auto_env.environment().exec_server_url(),
+            ),
+            (CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR, None),
+            (CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR, None),
+            (CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR, None),
+            (CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR, None),
+        ];
+        let mut app_server = Self::new_with_env(codex_home, &env_overrides).await?;
+        app_server.auto_env = Some(auto_env);
+        Ok(app_server)
+    }
+
+    /// Returns app-server protocol parameters for the automatically selected
+    /// test environment. Returns an error unless this server was created with
+    /// [`Self::new_with_auto_env`].
+    pub fn auto_env_params(&self) -> anyhow::Result<TurnEnvironmentParams> {
+        let selection = self
+            .auto_env
+            .as_ref()
+            .context("auto environment is unavailable; use TestAppServer::new_with_auto_env")?
+            .selection();
+        Ok(TurnEnvironmentParams {
+            environment_id: selection.environment_id.clone(),
+            cwd: selection.cwd.clone().into(),
+        })
     }
 
     pub async fn new_without_managed_config(codex_home: &Path) -> anyhow::Result<Self> {
@@ -273,6 +336,7 @@ impl TestAppServer {
             stdin: Some(stdin),
             stdout,
             pending_messages: VecDeque::new(),
+            auto_env: None,
         })
     }
 
@@ -447,6 +511,21 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/start", params).await
+    }
+
+    /// Sends a `thread/start` request selecting the environment provisioned by
+    /// [`Self::new_with_auto_env`]. Returns an error if `params` already select
+    /// environments so the caller cannot accidentally override the fixture.
+    pub async fn send_thread_start_request_with_auto_env(
+        &mut self,
+        mut params: ThreadStartParams,
+    ) -> anyhow::Result<i64> {
+        ensure!(
+            params.environments.is_none(),
+            "send_thread_start_request_with_auto_env requires params.environments to be omitted"
+        );
+        params.environments = Some(vec![self.auto_env_params()?]);
+        self.send_thread_start_request(params).await
     }
 
     /// Send a `thread/resume` JSON-RPC request.
