@@ -186,7 +186,7 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
                 Some("Starter"),
                 Some("Included by default."),
                 /*installed*/ false,
-                /*enabled*/ true,
+                /*enabled*/ false,
                 PluginInstallPolicy::InstalledByDefault,
             ),
         ]),

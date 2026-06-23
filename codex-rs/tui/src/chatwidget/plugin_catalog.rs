@@ -1856,6 +1856,9 @@ fn plugin_status_label(plugin: &PluginSummary) -> &'static str {
     if plugin.availability == PluginAvailability::DisabledByAdmin {
         return "Disabled";
     }
+    if !plugin.installed && plugin.install_policy == PluginInstallPolicy::InstalledByDefault {
+        return "Admin assigned";
+    }
     if plugin_shows_as_installed(plugin) {
         if plugin.enabled {
             "Installed"
