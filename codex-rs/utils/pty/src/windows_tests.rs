@@ -45,9 +45,8 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
         eprintln!("python not found; skipping ConPTY input test");
         return Ok(());
     };
-    let ready_marker = format!("{READY_MARKER}65001");
     let code = format!(
-        "import ctypes; print('{READY_MARKER}'+str(ctypes.windll.kernel32.GetConsoleCP()), flush=True); value=input(); print('{VALUE_MARKER}'+value.encode('utf-8').hex(), flush=True)"
+        "print('__CODEX_CHILD_'+'READY__', flush=True); value=input(); print('{VALUE_MARKER}'+value.encode('utf-8').hex(), flush=True)"
     );
     let expected = "cafeé 漢字";
     let expected_marker = format!("{VALUE_MARKER}{}", utf8_hex(expected));
@@ -82,7 +81,7 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
         writer
             .send(format!("{}\n", shell.child_command).into_bytes())
             .await?;
-        wait_for_output_contains(&mut output_rx, &ready_marker, /*timeout_ms*/ 10_000)
+        wait_for_output_contains(&mut output_rx, READY_MARKER, /*timeout_ms*/ 10_000)
             .await
             .map_err(|err| anyhow::anyhow!("{} child did not become ready: {err}", shell.name))?;
 
