@@ -59,6 +59,7 @@ use rmcp::transport::auth::InMemoryCredentialStore;
 use rmcp::transport::auth::StoredCredentials;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tokio::time::timeout;
 
 use codex_utils_home_dir::find_codex_home;
 
@@ -66,7 +67,9 @@ const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
 const REFRESH_LOCK_DIR: &str = "mcp-oauth-refresh-locks";
+const REFRESH_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(60);
 const REFRESH_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(50);
+const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {
@@ -135,7 +138,7 @@ pub(crate) fn load_oauth_tokens_with_source(
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<Option<LoadedOAuthTokens>> {
     let keyring_store = DefaultKeyringStore;
-    load_oauth_tokens_with_keyring_store(
+    load_oauth_tokens_with_source_and_keyring_store(
         &keyring_store,
         server_name,
         url,
@@ -144,7 +147,7 @@ pub(crate) fn load_oauth_tokens_with_source(
     )
 }
 
-fn load_oauth_tokens_with_keyring_store<K: KeyringStore + Clone + 'static>(
+fn load_oauth_tokens_with_source_and_keyring_store<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     server_name: &str,
     url: &str,
@@ -175,6 +178,28 @@ fn load_oauth_tokens_with_keyring_store<K: KeyringStore + Clone + 'static>(
             tokens,
             store: ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind),
         })),
+    }
+}
+
+pub(crate) fn load_oauth_tokens_from_resolved_store(
+    server_name: &str,
+    url: &str,
+    store: ResolvedOAuthCredentialStore,
+) -> Result<Option<StoredOAuthTokens>> {
+    match store {
+        ResolvedOAuthCredentialStore::File => load_oauth_tokens_from_file(server_name, url)
+            .context("failed to read OAuth tokens from resolved file storage"),
+        ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind) => {
+            load_oauth_tokens_from_keyring(
+                &DefaultKeyringStore,
+                keyring_backend_kind,
+                server_name,
+                url,
+            )
+            .context(
+                "failed to read OAuth tokens from resolved keyring storage; refusing file fallback",
+            )
+        }
     }
 }
 
@@ -237,7 +262,11 @@ fn load_oauth_tokens_from_keyring_with_fallback_to_file<K: KeyringStore + Clone 
     url: &str,
 ) -> Result<Option<LoadedOAuthTokens>> {
     // Auto remains keyring-first at lifecycle startup. The returned source is then pinned by the
-    // per-server OAuth persistor so later refresh work cannot hot-switch stores.
+    // client transport recipe and OAuth persistor so retries, recovery, and refresh work cannot
+    // hot-switch stores.
+    // TODO(stevenlee): Different processes can still resolve Auto to different stores when
+    // keyring availability differs. Solving that safely requires durable backend selection or
+    // reconciliation of legacy entries and is intentionally outside this stack.
     match load_oauth_tokens_from_keyring(keyring_store, keyring_backend_kind, server_name, url) {
         Ok(Some(tokens)) => Ok(Some(LoadedOAuthTokens {
             tokens,
@@ -378,6 +407,10 @@ fn save_oauth_tokens_with_keyring<K: KeyringStore + Clone + 'static>(
     }
 }
 
+/// Saves to the selected keyring backend, then best-effort removes the fallback file entry.
+///
+/// A cleanup failure does not change the current client's selected authority, but it can leave
+/// legacy residue that a different `Auto` process may discover if keyring availability changes.
 fn save_oauth_tokens_with_keyring_and_cleanup_file<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     keyring_backend_kind: AuthKeyringBackendKind,
@@ -678,13 +711,25 @@ impl OAuthPersistor {
             .await
     }
 
+    async fn refresh_if_needed_with_keyring_store<K: KeyringStore + Clone + 'static>(
+        &self,
+        keyring_store: &K,
+    ) -> Result<()> {
+        self.refresh_if_needed_with_keyring_store_and_timeout(
+            keyring_store,
+            REFRESH_REQUEST_TIMEOUT,
+        )
+        .await
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "AuthorizationManager async access must be serialized through its mutex"
     )]
-    async fn refresh_if_needed_with_keyring_store<K: KeyringStore + Clone + 'static>(
+    async fn refresh_if_needed_with_keyring_store_and_timeout<K: KeyringStore + Clone + 'static>(
         &self,
         keyring_store: &K,
+        refresh_request_timeout: Duration,
     ) -> Result<()> {
         let expires_at = {
             let guard = self.inner.last_credentials.lock().await;
@@ -751,14 +796,24 @@ impl OAuthPersistor {
         {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
-                format!(
-                    "failed to refresh OAuth tokens for server {}",
+            match timeout(refresh_request_timeout, guard.refresh_token()).await {
+                Ok(result) => {
+                    result.with_context(|| {
+                        format!(
+                            "failed to refresh OAuth tokens for server {}",
+                            self.inner.server_name
+                        )
+                    })?;
+                }
+                Err(_) => anyhow::bail!(
+                    "timed out after {refresh_request_timeout:?} refreshing OAuth tokens for server {}",
                     self.inner.server_name
-                )
-            })?;
+                ),
+            }
         }
 
+        // Once the provider returns a rotated token, persistence must finish before the credential
+        // lock is released. In particular, caller startup deadlines must not cancel this step.
         self.persist_if_needed_with_keyring_store(keyring_store)
             .await
     }
@@ -783,6 +838,10 @@ struct RefreshCredentialLock {
 
 impl RefreshCredentialLock {
     async fn acquire(store_key: &str) -> Result<Self> {
+        Self::acquire_with_timeout(store_key, REFRESH_LOCK_ACQUIRE_TIMEOUT).await
+    }
+
+    async fn acquire_with_timeout(store_key: &str, acquire_timeout: Duration) -> Result<Self> {
         let path = refresh_lock_path(store_key)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -796,18 +855,32 @@ impl RefreshCredentialLock {
             .open(&path)
             .with_context(|| format!("failed to open OAuth refresh lock {}", path.display()))?;
 
-        loop {
-            match file.try_lock() {
-                Ok(()) => break,
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    sleep(REFRESH_LOCK_RETRY_SLEEP).await;
-                }
-                Err(error) => {
-                    return Err(std::io::Error::from(error)).with_context(|| {
-                        format!("failed to lock OAuth refresh lock {}", path.display())
-                    });
+        // Bound every contender, but keep the acquired lock for the full provider request and
+        // persistence transaction. Releasing it while awaiting the provider would allow concurrent
+        // use of a rotating refresh token.
+        match timeout(acquire_timeout, async {
+            loop {
+                match file.try_lock() {
+                    Ok(()) => return Ok(()),
+                    Err(std::fs::TryLockError::WouldBlock) => {
+                        sleep(REFRESH_LOCK_RETRY_SLEEP).await;
+                    }
+                    Err(error) => return Err(std::io::Error::from(error)),
                 }
             }
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(error).with_context(|| {
+                    format!("failed to lock OAuth refresh lock {}", path.display())
+                });
+            }
+            Err(_) => anyhow::bail!(
+                "timed out after {acquire_timeout:?} waiting for OAuth refresh lock {}",
+                path.display()
+            ),
         }
 
         Ok(Self { _file: file })
@@ -831,6 +904,9 @@ async fn install_tokens_in_manager(
     let manager = authorization_manager.clone();
     let mut guard = manager.lock().await;
     guard.set_credential_store(store);
+    // TODO(stevenlee): RMCP's `initialize_from_store` updates the credential store and client ID
+    // but not its private `current_scopes`. Credential adoption can therefore leave scope-upgrade
+    // state stale until RMCP exposes an adoption API that synchronizes both.
     guard
         .initialize_from_store()
         .await
@@ -1039,6 +1115,8 @@ fn refresh_lock_path(store_key: &str) -> Result<PathBuf> {
     // Credential coordination is deliberately scoped to the active CODEX_HOME, alongside File
     // and Secrets state. Coordinating the process-global Direct keyring across distinct homes
     // would require a separately defined global lock namespace and is outside this transaction.
+    // TODO(stevenlee): define a safe per-user, cross-platform rendezvous before extending Direct
+    // keyring coordination across distinct CODEX_HOME values.
     let mut hasher = Sha256::new();
     hasher.update(store_key.as_bytes());
     let digest = hasher.finalize();
@@ -1250,7 +1328,7 @@ mod tests {
             &keyring_tokens,
         )?;
 
-        let loaded = super::load_oauth_tokens_with_keyring_store(
+        let loaded = super::load_oauth_tokens_with_source_and_keyring_store(
             &store,
             &keyring_tokens.server_name,
             &keyring_tokens.url,
@@ -1398,6 +1476,35 @@ mod tests {
         )?;
 
         assert!(loaded.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_lock_acquisition_times_out_without_stealing() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store_key = "test-store-key";
+        let held_lock =
+            RefreshCredentialLock::acquire_with_timeout(store_key, Duration::from_millis(100))
+                .await?;
+
+        let error =
+            match RefreshCredentialLock::acquire_with_timeout(store_key, Duration::from_millis(50))
+                .await
+            {
+                Ok(_) => panic!("contending lock acquisition should time out"),
+                Err(error) => error,
+            };
+        assert!(
+            error
+                .to_string()
+                .contains("timed out after 50ms waiting for OAuth refresh lock"),
+            "unexpected error: {error:#}"
+        );
+
+        drop(held_lock);
+        let _reacquired =
+            RefreshCredentialLock::acquire_with_timeout(store_key, Duration::from_millis(100))
+                .await?;
         Ok(())
     }
 

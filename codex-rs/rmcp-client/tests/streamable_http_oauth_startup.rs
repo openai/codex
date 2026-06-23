@@ -1,5 +1,7 @@
 mod streamable_http_test_support;
 
+use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -33,19 +35,22 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use streamable_http_test_support::initialize_client;
+use streamable_http_test_support::initialize_client_with_timeout;
 
 const SERVER_NAME: &str = "test-streamable-http-oauth-startup";
 const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
 const REFRESH_TOKEN: &str = "valid-refresh-token";
 const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
 const ROTATED_REFRESH_TOKEN: &str = "rotated-refresh-token";
+const CHILD_READY_FILE_ENV: &str = "MCP_TEST_OAUTH_STARTUP_READY_FILE";
+const CHILD_RELEASE_FILE_ENV: &str = "MCP_TEST_OAUTH_STARTUP_RELEASE_FILE";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
 const UNREFRESHABLE_SERVER_URL: &str = "https://unrefreshable.example/mcp";
 const UNEXPIRED_SERVER_URL: &str = "https://unexpired.example/mcp";
 const REFRESHABLE_SERVER_URL: &str = "https://refreshable.example/mcp";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result<()> {
+async fn startup_refresh_does_not_consume_handshake_timeout() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
@@ -63,12 +68,18 @@ async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result
         .and(body_string_contains(format!(
             "refresh_token={REFRESH_TOKEN}"
         )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "access_token": REFRESHED_ACCESS_TOKEN,
-            "token_type": "Bearer",
-            "expires_in": 7200,
-            "refresh_token": REFRESH_TOKEN,
-        })))
+        // The provider takes longer than the configured MCP handshake timeout. Refresh has its own
+        // bound, so this delay must not leave the subsequent handshake with an expired budget.
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(1_500))
+                .set_body_json(json!({
+                    "access_token": REFRESHED_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 7200,
+                    "refresh_token": REFRESH_TOKEN,
+                })),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -150,6 +161,8 @@ async fn concurrent_file_mode_startup_refreshes_once() -> anyhow::Result<()> {
                     "refresh_token": ROTATED_REFRESH_TOKEN,
                 })),
         )
+        // This exact expectation proves that the two child processes issue one serialized provider
+        // refresh rather than both replaying the same rotating refresh token.
         .expect(1)
         .mount(&server)
         .await;
@@ -199,17 +212,36 @@ async fn concurrent_file_mode_startup_refreshes_once() -> anyhow::Result<()> {
         "OAuth concurrency seed child failed: {seed_status}"
     );
 
-    let first_status = Command::new(std::env::current_exe()?)
+    let release_file = codex_home.path().join("oauth-clients.release");
+    let first_ready_file = codex_home.path().join("oauth-client-first.ready");
+    let second_ready_file = codex_home.path().join("oauth-client-second.ready");
+    let mut first_child = Command::new(std::env::current_exe()?)
         .args(["oauth_concurrency_client_child", "--exact", "--ignored"])
         .env("CODEX_HOME", codex_home.path())
         .env(CHILD_SERVER_URL_ENV, &server_url)
-        .status();
-    let second_status = Command::new(std::env::current_exe()?)
+        .env(CHILD_READY_FILE_ENV, &first_ready_file)
+        .env(CHILD_RELEASE_FILE_ENV, &release_file)
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut second_child = Command::new(std::env::current_exe()?)
         .args(["oauth_concurrency_client_child", "--exact", "--ignored"])
         .env("CODEX_HOME", codex_home.path())
         .env(CHILD_SERVER_URL_ENV, &server_url)
-        .status();
-    let (first_status, second_status) = tokio::try_join!(first_status, second_status)?;
+        .env(CHILD_READY_FILE_ENV, &second_ready_file)
+        .env(CHILD_RELEASE_FILE_ENV, &release_file)
+        .kill_on_drop(true)
+        .spawn()?;
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !first_ready_file.exists() || !second_ready_file.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("OAuth concurrency children did not become ready"))?;
+    fs::write(&release_file, b"release")?;
+
+    let (first_status, second_status) = tokio::try_join!(first_child.wait(), second_child.wait())?;
     assert!(
         first_status.success(),
         "first OAuth concurrency child failed: {first_status}"
@@ -335,7 +367,7 @@ async fn auth_status(server_url: &str) -> anyhow::Result<McpAuthStatus> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-#[ignore = "spawned by refreshes_expired_persisted_token_before_initialize"]
+#[ignore = "spawned by startup_refresh_does_not_consume_handshake_timeout"]
 async fn oauth_startup_child() -> anyhow::Result<()> {
     let server_url = std::env::var(CHILD_SERVER_URL_ENV)?;
 
@@ -378,7 +410,7 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
     )
     .await?;
 
-    initialize_client(&client).await?;
+    initialize_client_with_timeout(&client, Duration::from_secs(1)).await?;
     Ok(())
 }
 
@@ -394,6 +426,8 @@ async fn oauth_concurrency_seed_child() -> anyhow::Result<()> {
 #[ignore = "spawned by concurrent_file_mode_startup_refreshes_once"]
 async fn oauth_concurrency_client_child() -> anyhow::Result<()> {
     let server_url = std::env::var(CHILD_SERVER_URL_ENV)?;
+    let ready_file = PathBuf::from(std::env::var(CHILD_READY_FILE_ENV)?);
+    let release_file = PathBuf::from(std::env::var(CHILD_RELEASE_FILE_ENV)?);
     let client = RmcpClient::new_streamable_http_client(
         SERVER_NAME,
         &server_url,
@@ -407,6 +441,12 @@ async fn oauth_concurrency_client_child() -> anyhow::Result<()> {
     )
     .await?;
 
+    // Both processes must construct their OAuth client from the same expired snapshot before
+    // either begins refresh. This removes process scheduling from the contention setup.
+    fs::write(ready_file, b"ready")?;
+    while !release_file.exists() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     initialize_client(&client).await?;
     Ok(())
 }

@@ -28,6 +28,7 @@ impl RmcpClient {
         initial_transport: PendingTransport,
         client_service: ElicitationClientService,
         timeout: Option<Duration>,
+        initialize_deadline: &mut Option<Instant>,
     ) -> Result<(
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
@@ -37,7 +38,6 @@ impl RmcpClient {
             PendingTransport::StreamableHttp { .. }
             | PendingTransport::StreamableHttpWithOAuth { .. } => true,
         };
-        let retry_deadline = timeout.map(|duration| Instant::now() + duration);
         let mut pending_transport = Some(initial_transport);
 
         for (attempt, retry_delay_ms) in STREAMABLE_HTTP_RETRY_DELAYS_MS
@@ -50,7 +50,7 @@ impl RmcpClient {
             let transport = match pending_transport.take() {
                 Some(transport) => transport,
                 None => {
-                    let remaining = remaining_initialize_timeout(timeout, retry_deadline)?;
+                    let remaining = remaining_initialize_timeout(timeout, *initialize_deadline)?;
                     match remaining {
                         Some(remaining) => time::timeout(
                             remaining,
@@ -62,12 +62,11 @@ impl RmcpClient {
                     }
                 }
             };
-            let attempt_timeout = remaining_initialize_timeout(timeout, retry_deadline)?;
-
             match Self::connect_pending_transport(
                 transport,
                 client_service.clone(),
-                attempt_timeout,
+                timeout,
+                initialize_deadline,
             )
             .await
             {
@@ -84,7 +83,7 @@ impl RmcpClient {
                         error = %error,
                         "streamable HTTP MCP initialize failed with a retryable error; retrying"
                     );
-                    if !sleep_with_retry_deadline(delay, retry_deadline).await {
+                    if !sleep_with_retry_deadline(delay, *initialize_deadline).await {
                         let duration = timeout.unwrap_or(delay);
                         return Err(anyhow!(
                             "timed out handshaking with MCP server after {duration:?}"
