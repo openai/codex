@@ -37,6 +37,7 @@ use tokio::time::sleep;
 const CHILD_MODEL: &str = "test-multi-agent-child";
 const ROOT_MODEL: &str = "test-multi-agent-root";
 const ROOT_PROMPT: &str = "spawn a child";
+const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 const UNSUPPORTED_CODE_MODE_WARNING: &str = "does not advertise Code Mode support";
 
 struct RemoteModelResponse {
@@ -335,7 +336,7 @@ async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
             .expect("test config should allow feature update");
     })
     .await?;
-    assert!(tool_names(&v2_body).contains(&"send_message".to_string()));
+    assert!(tool_names(&v2_body).contains(&MULTI_AGENT_V2_NAMESPACE.to_string()));
 
     let mut disabled_model = remote_model("test-multi-agent-disabled");
     disabled_model.multi_agent_version = Some(MultiAgentVersion::Disabled);
@@ -349,7 +350,12 @@ async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
     let disabled_tools = tool_names(&disabled_body);
     assert!(disabled_tools.iter().all(|name| !matches!(
         name.as_str(),
-        "multi_agent_v1" | "spawn_agent" | "send_message" | "wait_agent" | "list_agents"
+        "multi_agent_v1"
+            | MULTI_AGENT_V2_NAMESPACE
+            | "spawn_agent"
+            | "send_message"
+            | "wait_agent"
+            | "list_agents"
     )));
 
     Ok(())
@@ -432,7 +438,7 @@ async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> 
                     .expect("expected response request")
                     .body_json(),
             )
-            .contains(&"send_message".to_string()),
+            .contains(&MULTI_AGENT_V2_NAMESPACE.to_string()),
         ),
         (1, Some(MultiAgentVersion::V2), true)
     );

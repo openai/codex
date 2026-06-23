@@ -5,7 +5,7 @@ use crate::codex_apps::load_startup_cached_codex_apps_server_info;
 use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
 use crate::codex_apps::read_cached_codex_apps_tools;
 use crate::codex_apps::write_cached_codex_apps_tools;
-use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
+use crate::codex_apps::write_codex_apps_tools_cache;
 use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::elicitation_is_rejected_by_policy;
@@ -723,12 +723,7 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
         "calendar_search",
     )];
     let server_info = create_test_server_info("Codex Apps");
-    write_cached_codex_apps_tools_if_needed(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-        &server_info,
-        &cached_tools,
-    );
+    write_codex_apps_tools_cache(Some(&cache_context), &server_info, &cached_tools);
 
     let startup_tools = load_startup_cached_codex_apps_tools_snapshot(Some(&cache_context))
         .expect("expected startup snapshot to load from cache");
@@ -777,8 +772,7 @@ fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
         Some("user-one"),
     );
     let server_info = create_test_server_info("Codex Apps");
-    write_cached_codex_apps_tools_if_needed(
-        CODEX_APPS_MCP_SERVER_NAME,
+    write_codex_apps_tools_cache(
         Some(&cache_context),
         &server_info,
         &[create_test_tool(
@@ -1201,6 +1195,41 @@ fn server_metadata_preserves_tool_approval_policy() {
         metadata.tool_approval_mode("search"),
         AppToolApproval::Approve
     );
+}
+
+#[test]
+fn host_owned_codex_apps_requires_server_metadata() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+
+    assert!(!manager.is_host_owned_codex_apps_server(CODEX_APPS_MCP_SERVER_NAME));
+}
+
+#[test]
+fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    let server = EffectiveMcpServer::configured(crate::codex_apps_mcp_server_config(
+        "https://chatgpt.com",
+        /*apps_mcp_product_sku*/ None,
+    ));
+    manager.server_metadata.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        McpServerMetadata::from(&server),
+    );
+
+    assert!(manager.is_host_owned_codex_apps_server(CODEX_APPS_MCP_SERVER_NAME));
+    assert!(!manager.is_host_owned_codex_apps_server("docs"));
 }
 
 #[tokio::test]
