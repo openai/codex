@@ -8,11 +8,10 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
 
+use crate::image_url::REMOTE_IMAGE_URL_ERROR;
+use crate::image_url::is_remote_image_url;
 use crate::outgoing_message::ClientRequestResult;
 use crate::server_request_error::is_turn_transition_server_request_error;
-
-const REMOTE_IMAGE_URL_ERROR: &str =
-    "remote image URLs are not supported; use an inline data URL instead";
 
 pub(crate) async fn on_call_response(
     call_id: String,
@@ -78,12 +77,6 @@ fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option
             fallback_response("dynamic tool response was invalid")
         }
     }
-}
-
-fn is_remote_image_url(image_url: &str) -> bool {
-    image_url.split_once(':').is_some_and(|(scheme, _)| {
-        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
-    })
 }
 
 fn fallback_response(message: &str) -> (DynamicToolCallResponse, Option<String>) {

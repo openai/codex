@@ -8,12 +8,13 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 
+use crate::image_url::REMOTE_IMAGE_URL_ERROR;
+use crate::image_url::is_remote_image_url;
+
 const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
-const REMOTE_IMAGE_URL_ERROR: &str =
-    "remote image URLs are not supported; use an inline data URL instead";
 
-fn validate_user_input(input: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
+fn validate_user_input_image_urls(input: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
     if input.iter().any(|item| {
         matches!(
             item,
@@ -25,7 +26,7 @@ fn validate_user_input(input: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
     Ok(())
 }
 
-fn validate_response_items(items: &[ResponseItem]) -> Result<(), JSONRPCErrorError> {
+fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONRPCErrorError> {
     if items.iter().any(|item| match item {
         ResponseItem::Message { content, .. } => content.iter().any(|item| {
             matches!(
@@ -62,12 +63,6 @@ fn validate_response_items(items: &[ResponseItem]) -> Result<(), JSONRPCErrorErr
         return Err(invalid_request(REMOTE_IMAGE_URL_ERROR));
     }
     Ok(())
-}
-
-fn is_remote_image_url(image_url: &str) -> bool {
-    image_url.split_once(':').is_some_and(|(scheme, _)| {
-        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
-    })
 }
 
 #[derive(Clone)]
@@ -166,7 +161,7 @@ impl TurnRequestProcessor {
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        validate_user_input(&params.input)?;
+        validate_user_input_image_urls(&params.input)?;
         self.turn_start_inner(
             request_id,
             params,
@@ -202,7 +197,7 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: TurnSteerParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        validate_user_input(&params.input)?;
+        validate_user_input_image_urls(&params.input)?;
         self.turn_steer_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
@@ -827,7 +822,7 @@ impl TurnRequestProcessor {
             })
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(invalid_request)?;
-        validate_response_items(&items)?;
+        validate_response_item_image_urls(&items)?;
 
         thread
             .inject_response_items(items)
