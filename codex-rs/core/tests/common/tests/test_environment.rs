@@ -82,8 +82,21 @@ async fn selected_execution_environment_runs_target_native_command() -> Result<(
 
     let output = String::from_utf8(output)?;
     let output = output.replace("\r\n", "\n");
-    let expected_output = format!("{EXPECTED_EXEC_OUTPUT}\n{}", execution.environment_cwd());
-    assert_eq!(output.trim_end(), expected_output);
+    let mut output_lines = output.trim_end().lines();
+    assert_eq!(output_lines.next(), Some(EXPECTED_EXEC_OUTPUT));
+    let actual_cwd = output_lines
+        .next()
+        .context("selected executor should report its cwd")?;
+    assert_eq!(output_lines.next(), None);
+    match test_environment() {
+        TestEnvironment::Local => assert_eq!(
+            std::fs::canonicalize(actual_cwd)?,
+            std::fs::canonicalize(execution.cwd().as_path())?,
+        ),
+        TestEnvironment::Docker { .. } | TestEnvironment::WineExec => {
+            assert_eq!(actual_cwd, execution.environment_cwd().as_str());
+        }
+    }
     assert_eq!(exit_code, Some(0));
     Ok(())
 }
