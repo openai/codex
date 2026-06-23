@@ -123,12 +123,15 @@ pub struct SafetyBuffering {
     pub show_buffering_ui: bool,
     #[serde(skip)]
     pub faster_model: Option<String>,
+    #[serde(skip)]
+    pub learn_more_link: Option<String>,
 }
 
 impl SafetyBuffering {
     pub(crate) fn with_treatment(mut self, treatment: &SafetyBufferingTreatment) -> Self {
         self.show_buffering_ui = treatment.show_buffering_ui;
         self.faster_model.clone_from(&treatment.faster_model);
+        self.learn_more_link.clone_from(&treatment.learn_more_link);
         self
     }
 }
@@ -137,6 +140,7 @@ impl SafetyBuffering {
 pub(crate) struct SafetyBufferingTreatment {
     pub show_buffering_ui: bool,
     pub faster_model: Option<String>,
+    pub learn_more_link: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]

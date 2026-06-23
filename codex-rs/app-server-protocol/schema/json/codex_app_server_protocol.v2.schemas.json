@@ -9052,6 +9052,12 @@
             "null"
           ]
         },
+        "learnMoreLink": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "model": {
           "type": "string"
         },

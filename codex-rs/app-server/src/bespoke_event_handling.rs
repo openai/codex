@@ -361,6 +361,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 reasons: event.reasons,
                 show_buffering_ui: event.show_buffering_ui,
                 faster_model: event.faster_model,
+                learn_more_link: event.learn_more_link,
             };
             outgoing
                 .send_server_notification(ServerNotification::ModelSafetyBufferingUpdated(

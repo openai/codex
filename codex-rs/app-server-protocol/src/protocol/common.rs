@@ -3397,6 +3397,7 @@ mod tests {
                 reasons: vec!["user_risk".to_string()],
                 show_buffering_ui: true,
                 faster_model: Some("faster-model".to_string()),
+                learn_more_link: Some("https://example.com/safety".to_string()),
             },
         );
         assert_eq!(
@@ -3409,7 +3410,8 @@ mod tests {
                     "useCases": ["cyber"],
                     "reasons": ["user_risk"],
                     "showBufferingUi": true,
-                    "fasterModel": "faster-model"
+                    "fasterModel": "faster-model",
+                    "learnMoreLink": "https://example.com/safety"
                 }
             }),
             serde_json::to_value(&notification)?,

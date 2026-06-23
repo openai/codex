@@ -174,4 +174,5 @@ pub struct ModelSafetyBufferingUpdatedNotification {
     pub reasons: Vec<String>,
     pub show_buffering_ui: bool,
     pub faster_model: Option<String>,
+    pub learn_more_link: Option<String>,
 }

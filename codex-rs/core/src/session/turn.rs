@@ -2237,6 +2237,7 @@ async fn try_run_sampling_request(
                         reasons: buffering.reasons,
                         show_buffering_ui: buffering.show_buffering_ui,
                         faster_model: buffering.faster_model,
+                        learn_more_link: buffering.learn_more_link,
                     }),
                 )
                 .await;

@@ -17,6 +17,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 const FASTER_MODEL: &str = "faster-model";
+const LEARN_MORE_LINK: &str = "https://example.com/safety";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn emits_safety_buffering_with_the_requested_model() -> anyhow::Result<()> {
@@ -32,7 +33,8 @@ async fn emits_safety_buffering_with_the_requested_model() -> anyhow::Result<()>
         &server,
         sse_response(sse(vec![created, ev_completed("resp-1")]))
             .insert_header("x-codex-safety-buffering-enabled", "true")
-            .insert_header("x-codex-safety-buffering-faster-model", FASTER_MODEL),
+            .insert_header("x-codex-safety-buffering-faster-model", FASTER_MODEL)
+            .insert_header("x-codex-safety-buffering-learn-more-link", LEARN_MORE_LINK),
     )
     .await;
 
@@ -63,6 +65,7 @@ async fn emits_safety_buffering_with_the_requested_model() -> anyhow::Result<()>
             reasons: vec!["policy-check".to_string()],
             show_buffering_ui: true,
             faster_model: Some(FASTER_MODEL.to_string()),
+            learn_more_link: Some(LEARN_MORE_LINK.to_string()),
         }
     );
     wait_for_event(&test.codex, |event| {
