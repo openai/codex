@@ -18,7 +18,7 @@ impl NetworkProxy {
         #[cfg(not(target_os = "linux"))]
         {
             let _ = (environment_id, execution_id);
-            return Ok(self.clone());
+            Ok(self.clone())
         }
 
         #[cfg(target_os = "linux")]
