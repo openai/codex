@@ -458,6 +458,7 @@ fn converts_absolute_api_paths_using_the_inferred_convention() {
             path.to_inferred_path_uri(),
             Some(PathUri::parse(expected_uri).expect("expected URI should parse")),
         );
+        assert_eq!(path.render_for_ui(), raw_path);
         assert_eq!(
             PathUri::try_from(path.clone()),
             path.to_path_uri(convention)

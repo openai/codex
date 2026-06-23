@@ -863,6 +863,21 @@ async fn view_image_tool_call_adds_history_cell() {
 }
 
 #[tokio::test]
+async fn view_image_tool_call_preserves_foreign_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let image_path: LegacyAppPathString =
+        serde_json::from_value(json!(r"C:\workspace\assets\example.png"))
+            .expect("valid legacy app path string");
+
+    handle_view_image_tool_call(&mut chat, "call-image", image_path);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single history cell");
+    let combined = lines_to_single_string(&cells[0]);
+    assert_chatwidget_snapshot!("foreign_image_attachment_history_snapshot", combined);
+}
+
+#[tokio::test]
 async fn image_generation_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -2574,14 +2574,14 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
 
     let image_view_item = TurnItem::ImageView(ImageViewItem {
         id: "view-image-1".to_string(),
-        path: test_path_buf("/tmp/view-image.png").abs(),
+        path: PathUri::from_abs_path(&test_path_buf("/tmp/view-image.png").abs()),
     });
 
     assert_eq!(
         ThreadItem::from(image_view_item),
         ThreadItem::ImageView {
             id: "view-image-1".to_string(),
-            path: test_path_buf("/tmp/view-image.png").abs(),
+            path: LegacyAppPathString::from_abs_path(&test_path_buf("/tmp/view-image.png").abs()),
         }
     );
 
