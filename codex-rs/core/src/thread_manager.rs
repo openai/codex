@@ -217,6 +217,35 @@ fn effective_originator_value(
         .unwrap_or(default_originator)
 }
 
+fn apply_managed_new_thread_defaults(
+    config: &mut Config,
+    initial_history: &InitialHistory,
+    session_source: &SessionSource,
+) {
+    if session_source.is_non_root_agent()
+        || !matches!(
+            initial_history,
+            InitialHistory::New | InitialHistory::Cleared
+        )
+    {
+        return;
+    }
+
+    let Some(defaults) = config
+        .config_layer_stack
+        .requirements_toml()
+        .models
+        .as_ref()
+        .and_then(|models| models.new_thread.as_ref())
+    else {
+        return;
+    };
+
+    if let Some(model) = defaults.model.as_ref() {
+        config.model = Some(model.clone());
+    }
+}
+
 pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) config: Config,
     pub(crate) initial_history: InitialHistory,
@@ -1498,7 +1527,7 @@ impl ThreadManagerState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread_with_source(
         &self,
-        config: Config,
+        mut config: Config,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
@@ -1539,6 +1568,7 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
+        apply_managed_new_thread_defaults(&mut config, &initial_history, &session_source);
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;

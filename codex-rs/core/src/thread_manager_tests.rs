@@ -78,6 +78,50 @@ impl codex_agent_graph_store::AgentGraphStore for FakeAgentGraphStore {
     }
 }
 
+#[tokio::test]
+async fn managed_new_thread_defaults_only_apply_to_root_new_threads() {
+    let mut base_config = test_config().await;
+    base_config.model = Some("local-model".to_string());
+    base_config.config_layer_stack = codex_config::ConfigLayerStack::new(
+        Vec::new(),
+        codex_config::ConfigRequirements::default(),
+        codex_config::ConfigRequirementsToml {
+            models: Some(codex_config::ModelsRequirementsToml {
+                new_thread: Some(codex_config::NewThreadModelDefaultsToml {
+                    model: Some("managed-model".to_string()),
+                }),
+            }),
+            ..Default::default()
+        },
+    )
+    .expect("build managed requirements stack");
+
+    let cases = [
+        (InitialHistory::New, SessionSource::VSCode, "managed-model"),
+        (
+            InitialHistory::Cleared,
+            SessionSource::VSCode,
+            "managed-model",
+        ),
+        (
+            InitialHistory::Forked(Vec::new()),
+            SessionSource::VSCode,
+            "local-model",
+        ),
+        (
+            InitialHistory::New,
+            SessionSource::SubAgent(SubAgentSource::Review),
+            "local-model",
+        ),
+    ];
+
+    for (history, source, expected) in cases {
+        let mut config = base_config.clone();
+        apply_managed_new_thread_defaults(&mut config, &history, &source);
+        assert_eq!(config.model.as_deref(), Some(expected));
+    }
+}
+
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
