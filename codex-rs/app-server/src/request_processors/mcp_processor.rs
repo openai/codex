@@ -230,7 +230,7 @@ impl McpRequestProcessor {
         let environment_manager = self.thread_manager.environment_manager();
         // This status path has no turn-selected environment. Use config cwd
         // as the local stdio fallback; named environment stdio MCPs must
-        // declare their own absolute cwd.
+        // declare their own file URI cwd.
         let runtime_context =
             McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
 
@@ -383,7 +383,7 @@ impl McpRequestProcessor {
         let environment_manager = self.thread_manager.environment_manager();
         // This threadless resource-read path has no turn cwd or turn-selected
         // environment. Use config cwd only as the local stdio fallback; named
-        // environment stdio MCPs must declare their own absolute cwd.
+        // environment stdio MCPs must declare their own file URI cwd.
         let runtime_context =
             McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
         let request_id = request_id.clone();

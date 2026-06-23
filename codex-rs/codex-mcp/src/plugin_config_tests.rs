@@ -1,6 +1,6 @@
 use super::PluginMcpConfigParseOutcome;
 use super::PluginMcpServerParseError;
-use super::PluginMcpServerPlacement;
+use super::parse_executor_plugin_mcp_config;
 use super::parse_plugin_mcp_config;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::McpServerConfig;
@@ -8,6 +8,7 @@ use codex_config::McpServerEnvVar;
 use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerTransportConfig;
 use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -20,10 +21,14 @@ fn plugin_root() -> PathBuf {
         .join("plugin-root")
 }
 
+fn plugin_root_uri(plugin_root: &Path) -> PathUri {
+    PathUri::from_host_native_path(plugin_root).expect("plugin root URI")
+}
+
 fn stdio_server(
     command: &str,
     environment_id: &str,
-    cwd: &Path,
+    cwd: LegacyAppPathString,
     env_vars: Vec<McpServerEnvVar>,
 ) -> McpServerConfig {
     McpServerConfig {
@@ -32,7 +37,7 @@ fn stdio_server(
             args: Vec::new(),
             env: None,
             env_vars,
-            cwd: Some(LegacyAppPathString::from_path(cwd)),
+            cwd: Some(cwd),
         },
         environment_id: environment_id.to_string(),
         enabled: true,
@@ -56,8 +61,8 @@ fn declared_placement_preserves_local_plugin_normalization() {
     let plugin_root = plugin_root();
     let expected_stdio = stdio_server(
         "demo-mcp",
-        "configured-environment",
-        &plugin_root.join("scripts"),
+        DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
+        LegacyAppPathString::from_path(&plugin_root.join("scripts")),
         Vec::new(),
     );
     let expected_http = McpServerConfig {
@@ -91,7 +96,6 @@ fn declared_placement_preserves_local_plugin_normalization() {
             "demo": {
                 "type": "stdio",
                 "command": "demo-mcp",
-                "environment_id": "configured-environment",
                 "cwd": "scripts"
             },
             "hosted": {
@@ -100,7 +104,6 @@ fn declared_placement_preserves_local_plugin_normalization() {
                 "oauth": {"clientId": "client-id", "callbackPort": 9876}
             }
         }"#,
-        PluginMcpServerPlacement::Declared,
     )
     .expect("parse plugin MCP config");
 
@@ -119,8 +122,9 @@ fn declared_placement_preserves_local_plugin_normalization() {
 #[test]
 fn environment_placement_forces_authority_and_defaults_null_cwd() {
     let plugin_root = plugin_root();
-    let outcome = parse_plugin_mcp_config(
-        &plugin_root,
+    let plugin_root_uri = plugin_root_uri(&plugin_root);
+    let outcome = parse_executor_plugin_mcp_config(
+        &plugin_root_uri,
         r#"{
             "$schema":"https://example.com/plugin-mcp.schema.json",
             "mcpServers":{"demo":{
@@ -130,9 +134,7 @@ fn environment_placement_forces_authority_and_defaults_null_cwd() {
                 "env_vars":["EXECUTOR_TOKEN", {"name":"OTHER_TOKEN"}]
             }}
         }"#,
-        PluginMcpServerPlacement::Environment {
-            environment_id: "executor-1",
-        },
+        "executor-1",
     )
     .expect("parse plugin MCP config");
 
@@ -144,7 +146,7 @@ fn environment_placement_forces_authority_and_defaults_null_cwd() {
                 stdio_server(
                     "demo-mcp",
                     "executor-1",
-                    &plugin_root,
+                    plugin_root_uri.into(),
                     vec![
                         McpServerEnvVar::Config {
                             name: "EXECUTOR_TOKEN".to_string(),
@@ -165,12 +167,11 @@ fn environment_placement_forces_authority_and_defaults_null_cwd() {
 #[test]
 fn environment_placement_resolves_relative_cwd_beneath_plugin_root() {
     let plugin_root = plugin_root();
-    let outcome = parse_plugin_mcp_config(
-        &plugin_root,
+    let plugin_root_uri = plugin_root_uri(&plugin_root);
+    let outcome = parse_executor_plugin_mcp_config(
+        &plugin_root_uri,
         r#"{"demo":{"command":"demo-mcp","cwd":"scripts"}}"#,
-        PluginMcpServerPlacement::Environment {
-            environment_id: "executor-1",
-        },
+        "executor-1",
     )
     .expect("parse plugin MCP config");
 
@@ -182,7 +183,39 @@ fn environment_placement_resolves_relative_cwd_beneath_plugin_root() {
                 stdio_server(
                     "demo-mcp",
                     "executor-1",
-                    &plugin_root.join("scripts"),
+                    plugin_root_uri
+                        .join("scripts")
+                        .expect("plugin cwd URI")
+                        .into(),
+                    Vec::new(),
+                ),
+            )]),
+            errors: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn executor_environment_placement_resolves_foreign_uri_cwd() {
+    let plugin_root = PathUri::parse("file:///C:/plugins/demo").expect("plugin root URI");
+    let outcome = parse_executor_plugin_mcp_config(
+        &plugin_root,
+        r#"{"demo":{"command":"demo-mcp","cwd":"scripts"}}"#,
+        "executor-1",
+    )
+    .expect("parse plugin MCP config");
+
+    assert_eq!(
+        outcome,
+        PluginMcpConfigParseOutcome {
+            servers: BTreeMap::from([(
+                "demo".to_string(),
+                stdio_server(
+                    "demo-mcp",
+                    "executor-1",
+                    LegacyAppPathString::from(
+                        plugin_root.join("scripts").expect("executor cwd URI"),
+                    ),
                     Vec::new(),
                 ),
             )]),
@@ -194,12 +227,11 @@ fn environment_placement_resolves_relative_cwd_beneath_plugin_root() {
 #[test]
 fn environment_placement_rejects_relative_cwd_that_escapes_package() {
     let plugin_root = plugin_root();
-    let outcome = parse_plugin_mcp_config(
-        &plugin_root,
+    let plugin_root_uri = plugin_root_uri(&plugin_root);
+    let outcome = parse_executor_plugin_mcp_config(
+        &plugin_root_uri,
         r#"{"demo":{"command":"demo-mcp","cwd":"../outside"}}"#,
-        PluginMcpServerPlacement::Environment {
-            environment_id: "executor-1",
-        },
+        "executor-1",
     )
     .expect("parse plugin MCP config");
 
@@ -210,8 +242,7 @@ fn environment_placement_rejects_relative_cwd_that_escapes_package() {
             errors: vec![PluginMcpServerParseError {
                 name: "demo".to_string(),
                 message: format!(
-                    "relative cwd `../outside` must remain within plugin root `{}`",
-                    plugin_root.display()
+                    "cwd `../outside` must remain within plugin root `{plugin_root_uri}`"
                 ),
             }],
         }
@@ -221,12 +252,10 @@ fn environment_placement_rejects_relative_cwd_that_escapes_package() {
 #[test]
 fn environment_placement_rejects_orchestrator_env_vars() {
     let plugin_root = plugin_root();
-    let outcome = parse_plugin_mcp_config(
-        &plugin_root,
+    let outcome = parse_executor_plugin_mcp_config(
+        &plugin_root_uri(&plugin_root),
         r#"{"demo":{"command":"demo-mcp","env_vars":[{"name":"TOKEN","source":"local"}]}}"#,
-        PluginMcpServerPlacement::Environment {
-            environment_id: "executor-1",
-        },
+        "executor-1",
     )
     .expect("parse plugin MCP config");
 
@@ -247,12 +276,11 @@ fn environment_placement_rejects_orchestrator_env_vars() {
 #[test]
 fn local_environment_placement_preserves_local_env_vars() {
     let plugin_root = plugin_root();
-    let outcome = parse_plugin_mcp_config(
-        &plugin_root,
+    let plugin_root_uri = plugin_root_uri(&plugin_root);
+    let outcome = parse_executor_plugin_mcp_config(
+        &plugin_root_uri,
         r#"{"demo":{"command":"demo-mcp","env_vars":["TOKEN",{"name":"OTHER","source":"local"}]}}"#,
-        PluginMcpServerPlacement::Environment {
-            environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
-        },
+        DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
     )
     .expect("parse plugin MCP config");
 
@@ -264,7 +292,7 @@ fn local_environment_placement_preserves_local_env_vars() {
                 stdio_server(
                     "demo-mcp",
                     DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
-                    &plugin_root,
+                    plugin_root_uri.into(),
                     vec![
                         McpServerEnvVar::Name("TOKEN".to_string()),
                         McpServerEnvVar::Config {
@@ -282,12 +310,10 @@ fn local_environment_placement_preserves_local_env_vars() {
 #[test]
 fn local_environment_placement_rejects_remote_env_vars() {
     let plugin_root = plugin_root();
-    let outcome = parse_plugin_mcp_config(
-        &plugin_root,
+    let outcome = parse_executor_plugin_mcp_config(
+        &plugin_root_uri(&plugin_root),
         r#"{"demo":{"command":"demo-mcp","env_vars":[{"name":"TOKEN","source":"remote"}]}}"#,
-        PluginMcpServerPlacement::Environment {
-            environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
-        },
+        DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
     )
     .expect("parse plugin MCP config");
 
