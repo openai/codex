@@ -120,6 +120,7 @@ mod tests {
                     base_instructions: BaseInstructions::default(),
                     dynamic_tools: Vec::new(),
                     multi_agent_version: None,
+                    initial_window_id: uuid::Uuid::now_v7().to_string(),
                     metadata: ThreadPersistenceMetadata {
                         cwd: None,
                         model_provider: "test-provider".to_string(),
@@ -248,6 +249,7 @@ impl InMemoryThreadStore {
             memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
                 .then_some("disabled".to_string()),
             multi_agent_version: params.multi_agent_version,
+            context_window: Some(params.initial_window_id.clone()),
             ..SessionMeta::default()
         };
         state

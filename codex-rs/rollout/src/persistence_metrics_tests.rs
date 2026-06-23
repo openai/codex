@@ -98,7 +98,12 @@ fn thread_sampling_is_stable_and_selects_whole_threads() {
 fn mixed_batch_reports_exact_policy_counts_and_bytes() {
     let kept = retained_message("hello");
     let dropped = RolloutItem::ResponseItem(ResponseItem::Other);
-    let items = vec![kept.clone(), dropped.clone()];
+    let additional_tools = RolloutItem::ResponseItem(ResponseItem::AdditionalTools {
+        id: Some("tools".to_string()),
+        role: "system".to_string(),
+        tools: Vec::new(),
+    });
+    let items = vec![kept.clone(), dropped.clone(), additional_tools.clone()];
 
     let (persisted, measurement) = measure_and_filter_rollout_items(&items);
     let kept_bytes = serde_json::to_vec(&kept)
@@ -107,22 +112,33 @@ fn mixed_batch_reports_exact_policy_counts_and_bytes() {
     let dropped_bytes = serde_json::to_vec(&dropped)
         .expect("serialize dropped item")
         .len() as u64;
+    let additional_tools_bytes = serde_json::to_vec(&additional_tools)
+        .expect("serialize additional tools item")
+        .len() as u64;
 
     assert_eq!(
         serde_json::to_value(persisted).expect("serialize persisted items"),
         serde_json::to_value([kept]).expect("serialize expected items")
     );
-    assert_eq!(measurement.pre_filter.items, 2);
+    assert_eq!(measurement.pre_filter.items, 3);
     assert_eq!(
         measurement.pre_filter.payload_bytes,
-        kept_bytes + dropped_bytes
+        kept_bytes + dropped_bytes + additional_tools_bytes
     );
     assert_eq!(measurement.post_filter.items, 1);
     assert_eq!(measurement.post_filter.payload_bytes, kept_bytes);
     assert_eq!(measurement.items[0].payload_bytes, Some(kept_bytes));
     assert_eq!(measurement.items[1].payload_bytes, Some(dropped_bytes));
+    assert_eq!(
+        measurement.items[2].payload_bytes,
+        Some(additional_tools_bytes)
+    );
     assert_eq!(measurement.items[0].rollout_item_type, "response.message");
     assert_eq!(measurement.items[1].rollout_item_type, "response.other");
+    assert_eq!(
+        measurement.items[2].rollout_item_type,
+        "response.additional_tools"
+    );
 }
 
 #[test]

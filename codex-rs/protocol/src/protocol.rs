@@ -2971,6 +2971,10 @@ pub struct SessionMeta {
     pub memory_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// UUIDv7 identity of the initial context window for consumers that tail rollout JSONL before
+    /// compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<String>,
 }
 
 impl Default for SessionMeta {
@@ -2995,6 +2999,7 @@ impl Default for SessionMeta {
             dynamic_tools: None,
             memory_mode: None,
             multi_agent_version: None,
+            context_window: None,
         }
     }
 }

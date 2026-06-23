@@ -113,6 +113,28 @@ impl Session {
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
         // are both known; then replay only the buffered surviving tail forward to preserve exact
         // history semantics.
+        let thread_id = self.thread_id();
+        let initial_window = rollout_items.iter().find_map(|item| match item {
+            RolloutItem::SessionMeta(session_meta) if session_meta.meta.id == thread_id => {
+                session_meta
+                    .meta
+                    .context_window
+                    .as_deref()
+                    .and_then(reconstructed_window_from_session_context_window_id)
+            }
+            _ => None,
+        });
+        let has_legacy_compaction_without_window_number = rollout_items.iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::Compacted(compacted) if compacted.window_number.is_none()
+            )
+        });
+        let initial_window = if has_legacy_compaction_without_window_number {
+            None
+        } else {
+            initial_window
+        };
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
@@ -348,7 +370,7 @@ impl Session {
             reference_context_item
         };
 
-        let window = window.unwrap_or(ReconstructedWindow {
+        let window = window.or(initial_window).unwrap_or(ReconstructedWindow {
             number: fallback_window_number,
             first_id: None,
             previous_id: None,
@@ -370,4 +392,16 @@ fn parse_uuid_v7(value: &str) -> Option<Uuid> {
     Uuid::parse_str(value)
         .ok()
         .filter(|uuid| uuid.get_version_num() == 7)
+}
+
+fn reconstructed_window_from_session_context_window_id(
+    context_window: &str,
+) -> Option<ReconstructedWindow> {
+    let id = parse_uuid_v7(context_window)?;
+    Some(ReconstructedWindow {
+        number: 0,
+        first_id: Some(id),
+        previous_id: None,
+        id: Some(id),
+    })
 }
