@@ -16,6 +16,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::TurnItemContributorPolicy;
+use crate::stream_events_utils::apply_turn_item_contributors;
 use crate::stream_events_utils::finalize_turn_item;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -93,7 +94,16 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
                 return;
             };
             let item = match item {
-                ExtensionTurnItem::ImageGeneration(item) => TurnItem::ImageGeneration(item),
+                ExtensionTurnItem::ImageGeneration(item) => {
+                    let mut item = TurnItem::ImageGeneration(item);
+                    apply_turn_item_contributors(
+                        session.as_ref(),
+                        turn.extension_data.as_ref(),
+                        &mut item,
+                    )
+                    .await;
+                    item
+                }
                 ExtensionTurnItem::WebSearch(item) => {
                     let mut item = TurnItem::WebSearch(item);
                     finalize_turn_item(
@@ -453,7 +463,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extension_completion_runs_turn_item_contributors() {
+    async fn image_generation_completion_runs_turn_item_contributors() {
         let (mut session, turn) = crate::session::tests::make_session_and_context().await;
         let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
         builder.turn_item_contributor(Arc::new(RecordExtensionTurnItemContributor));
@@ -467,10 +477,12 @@ mod tests {
 
         codex_tools::TurnItemEmitter::emit_completed(
             &emitter,
-            ExtensionTurnItem::WebSearch(WebSearchItem {
-                id: "search-1".to_string(),
-                query: "contributors".to_string(),
-                action: WebSearchAction::Other,
+            ExtensionTurnItem::ImageGeneration(codex_protocol::items::ImageGenerationItem {
+                id: "image-1".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: None,
+                result: String::new(),
+                saved_path: None,
             }),
         )
         .await;
