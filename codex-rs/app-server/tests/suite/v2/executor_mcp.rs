@@ -4,7 +4,9 @@ use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use axum::Json;
 use axum::Router;
+use axum::body::Bytes;
 use axum::routing::get;
+use axum::routing::post;
 use codex_app_server_protocol::CapabilityRootLocation;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -43,6 +45,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(20);
@@ -74,9 +77,10 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
         Arc::new(LocalSessionManager::default()),
         http_server_config,
     );
+    let (token_request_tx, mut token_request_rx) = mpsc::unbounded_channel();
     let oauth_metadata = json!({
         "authorization_endpoint": "https://oauth-only.invalid/authorize",
-        "token_endpoint": "https://oauth-only.invalid/token",
+        "token_endpoint": "http://oauth-only.invalid/token",
         "scopes_supported": ["read", "write"],
         "response_types_supported": ["code"],
         "code_challenge_methods_supported": ["S256"],
@@ -87,6 +91,21 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
             get(move || {
                 let metadata = oauth_metadata.clone();
                 async move { Json(metadata) }
+            }),
+        )
+        .route(
+            "/token",
+            post(move |body: Bytes| {
+                let token_request_tx = token_request_tx.clone();
+                async move {
+                    let _ = token_request_tx.send(String::from_utf8_lossy(&body).into_owned());
+                    Json(json!({
+                        "access_token": "executor-access-token",
+                        "token_type": "Bearer",
+                        "expires_in": 3600,
+                        "refresh_token": "executor-refresh-token",
+                    }))
+                }
             }),
         )
         .nest_service("/mcp", http_mcp_service)
@@ -199,7 +218,7 @@ startup_timeout_sec = 10
             Some(json!({
                 "name": OAUTH_MCP_SERVER_NAME,
                 "threadId": selected_thread.clone(),
-                "timeoutSecs": 1,
+                "timeoutSecs": 10,
             })),
         )
         .await?;
@@ -219,6 +238,33 @@ startup_timeout_sec = 10
             .authorization_url
             .contains("client_id=executor-oauth-client")
     );
+    let authorization_url = reqwest::Url::parse(&response.authorization_url)?;
+    let state = authorization_url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .expect("authorization URL should include state");
+    let redirect_uri = authorization_url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "redirect_uri").then(|| value.into_owned()))
+        .expect("authorization URL should include redirect_uri");
+    let mut callback_url = reqwest::Url::parse(&redirect_uri)?;
+    callback_url
+        .query_pairs_mut()
+        .append_pair("code", "executor-test-code")
+        .append_pair("state", &state);
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()?
+        .get(callback_url)
+        .send()
+        .await?
+        .error_for_status()?;
+    let token_request = timeout(DEFAULT_READ_TIMEOUT, token_request_rx.recv())
+        .await?
+        .expect("executor token endpoint should receive a request");
+    assert!(token_request.contains("grant_type=authorization_code"));
+    assert!(token_request.contains("code=executor-test-code"));
+    assert!(token_request.contains("code_verifier="));
     let notification = timeout(
         DEFAULT_READ_TIMEOUT,
         app_server.read_stream_until_notification_message("mcpServer/oauthLogin/completed"),
@@ -227,8 +273,13 @@ startup_timeout_sec = 10
     let completed: McpServerOauthLoginCompletedNotification =
         serde_json::from_value(notification.params.expect("notification params"))?;
     assert_eq!(
-        completed.thread_id.as_deref(),
-        Some(selected_thread.as_str())
+        completed,
+        McpServerOauthLoginCompletedNotification {
+            name: OAUTH_MCP_SERVER_NAME.to_string(),
+            thread_id: Some(selected_thread.clone()),
+            success: true,
+            error: None,
+        }
     );
 
     let namespace = format!("mcp__{MCP_SERVER_NAME}");
