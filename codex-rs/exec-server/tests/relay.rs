@@ -169,6 +169,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
         .fs_read_file(FsReadFileParams {
             path: PathUri::from_host_native_path(large_file_path)?,
             sandbox: None,
+            max_bytes: None,
         })
         .await?;
     assert_eq!(

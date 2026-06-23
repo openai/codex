@@ -27,10 +27,10 @@ use crate::sandboxed_file_system::SandboxedFileSystem;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
-fn file_too_large_error() -> io::Error {
+fn file_too_large_error(max_bytes: u64) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
-        format!("file is too large to read: limit is {MAX_READ_FILE_BYTES} bytes"),
+        format!("file is too large to read: limit is {max_bytes} bytes"),
     )
 }
 
@@ -88,6 +88,24 @@ impl LocalFileSystem {
             Ok((&self.unsandboxed, sandbox))
         }
     }
+
+    pub(crate) async fn read_file_with_limit(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+        max_bytes: u64,
+    ) -> FileSystemResult<Vec<u8>> {
+        let max_bytes = max_bytes.min(MAX_READ_FILE_BYTES);
+        if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
+            self.sandboxed()?
+                .read_file_with_limit(path, sandbox, max_bytes)
+                .await
+        } else {
+            self.unsandboxed
+                .read_file_with_limit(path, sandbox, max_bytes)
+                .await
+        }
+    }
 }
 
 impl LocalFileSystem {
@@ -119,8 +137,8 @@ impl LocalFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
-        file_system.read_file(path, sandbox).await
+        self.read_file_with_limit(path, sandbox, MAX_READ_FILE_BYTES)
+            .await
     }
 
     async fn read_file_stream(
@@ -307,8 +325,20 @@ impl UnsandboxedFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
+        self.read_file_with_limit(path, sandbox, MAX_READ_FILE_BYTES)
+            .await
+    }
+
+    async fn read_file_with_limit(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+        max_bytes: u64,
+    ) -> FileSystemResult<Vec<u8>> {
         reject_platform_sandbox_context(sandbox)?;
-        self.file_system.read_file(path, /*sandbox*/ None).await
+        self.file_system
+            .read_file_with_limit(path, /*sandbox*/ None, max_bytes)
+            .await
     }
 
     async fn read_file_stream(
@@ -514,17 +544,26 @@ impl DirectFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
+        self.read_file_with_limit(path, sandbox, MAX_READ_FILE_BYTES)
+            .await
+    }
+
+    pub(crate) async fn read_file_with_limit(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+        max_bytes: u64,
+    ) -> FileSystemResult<Vec<u8>> {
+        let max_bytes = max_bytes.min(MAX_READ_FILE_BYTES);
         let file = self.open_file_for_read(path, sandbox).await?;
         let metadata = file.metadata().await?;
-        if metadata.len() > MAX_READ_FILE_BYTES {
-            return Err(file_too_large_error());
+        if metadata.len() > max_bytes {
+            return Err(file_too_large_error(max_bytes));
         }
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.take(MAX_READ_FILE_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .await?;
-        if bytes.len() as u64 > MAX_READ_FILE_BYTES {
-            return Err(file_too_large_error());
+        file.take(max_bytes + 1).read_to_end(&mut bytes).await?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(file_too_large_error(max_bytes));
         }
         Ok(bytes)
     }
@@ -896,6 +935,33 @@ fn system_time_to_unix_ms(time: SystemTime) -> i64 {
 #[cfg(all(test, any(unix, windows)))]
 #[path = "local_file_system_path_uri_tests.rs"]
 mod path_uri_tests;
+
+#[cfg(test)]
+mod bounded_read_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn direct_read_file_with_limit_rejects_bytes_past_the_boundary() -> io::Result<()> {
+        let temp_dir = tempfile::TempDir::new()?;
+        let path = temp_dir.path().join("bounded.txt");
+        tokio::fs::write(&path, b"four").await?;
+        let path = PathUri::from_path(&path).expect("temporary path should be absolute");
+        let file_system = DirectFileSystem;
+
+        let error = file_system
+            .read_file_with_limit(&path, /*sandbox*/ None, /*max_bytes*/ 3)
+            .await
+            .expect_err("file should exceed the requested byte boundary");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            file_system
+                .read_file_with_limit(&path, /*sandbox*/ None, /*max_bytes*/ 4)
+                .await?,
+            b"four"
+        );
+        Ok(())
+    }
+}
 
 #[cfg(all(test, unix))]
 mod tests {

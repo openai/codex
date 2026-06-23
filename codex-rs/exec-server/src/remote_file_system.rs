@@ -69,6 +69,7 @@ impl RemoteFileSystem {
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
                 sandbox: remote_sandbox_context(sandbox),
+                max_bytes: None,
             })
             .await
             .map_err(map_remote_error)?;

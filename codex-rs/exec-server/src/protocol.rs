@@ -215,6 +215,8 @@ pub struct TerminateResponse {
 pub struct FsReadFileParams {
     pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -533,6 +535,7 @@ mod tests {
         let expected = FsReadFileParams {
             path: PathUri::from_host_native_path(legacy_path).expect("path URI"),
             sandbox: Some(expected_sandbox.clone()),
+            max_bytes: None,
         };
 
         assert_eq!(params, expected);
