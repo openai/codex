@@ -212,10 +212,8 @@ where
         );
     }
 
-    pub(crate) fn request_route(&self, method: &str) -> Option<(&'static str, &RequestRoute<S>)> {
-        self.request_routes
-            .get_key_value(method)
-            .map(|(&method, route)| (method, route))
+    pub(crate) fn request_route(&self, method: &str) -> Option<&RequestRoute<S>> {
+        self.request_routes.get(method)
     }
 
     pub(crate) fn notification_route(&self, method: &str) -> Option<&NotificationRoute<S>> {

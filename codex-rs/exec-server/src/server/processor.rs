@@ -101,30 +101,26 @@ async fn run_connection(
             }
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
-                    if let Some((method, route)) = router.request_route(request.method.as_str()) {
-                        let request_span = request_span(method, &request);
+                    if let Some(route) = router.request_route(request.method.as_str()) {
+                        let request_span = request_span(&request);
                         let message = tokio::select! {
                             message = route(Arc::clone(&handler), request).instrument(request_span.clone()) => message,
                             _ = disconnected_rx.changed() => {
                                 request_span.record("result", "disconnected");
-                                drop(request_span);
                                 debug!("exec-server transport disconnected while handling request");
                                 break;
                             }
                         };
                         let result = request_result(&message);
                         request_span.record("result", result);
-                        drop(request_span);
                         if let Some(message) = message
                             && outgoing_tx.send(message).await.is_err()
                         {
                             break;
                         }
                     } else {
-                        let method = "unknown";
-                        let request_span = request_span(method, &request);
+                        let request_span = request_span(&request);
                         request_span.record("result", "error");
-                        drop(request_span);
                         if outgoing_tx
                             .send(RpcServerOutboundMessage::Error {
                                 request_id: request.id,
@@ -197,10 +193,8 @@ async fn run_connection(
     let _ = outbound_task.await;
 }
 
-fn request_span(
-    method: &'static str,
-    request: &codex_exec_server_protocol::JSONRPCRequest,
-) -> tracing::Span {
+fn request_span(request: &codex_exec_server_protocol::JSONRPCRequest) -> tracing::Span {
+    let method = request.method.as_str();
     let span = tracing::info_span!(
         "codex.exec_server.request",
         otel.kind = "server",
@@ -279,19 +273,7 @@ mod tests {
     use crate::server::session_registry::SessionRegistry;
 
     #[test]
-    fn request_routes_return_bounded_protocol_method_names() {
-        let router = crate::server::registry::build_router();
-        assert_eq!(
-            router
-                .request_route(EXEC_TERMINATE_METHOD)
-                .map(|(method, _)| method),
-            Some(EXEC_TERMINATE_METHOD)
-        );
-        assert!(router.request_route("custom/method").is_none());
-    }
-
-    #[test]
-    fn request_span_uses_inbound_trace_parent() {
+    fn request_span_uses_wire_method_and_inbound_trace_parent() {
         let span_exporter = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()
             .with_simple_exporter(span_exporter.clone())
@@ -309,9 +291,16 @@ mod tests {
             tracestate: None,
         };
 
+        let method = "custom/method";
         tracing::subscriber::with_default(subscriber, || {
             tracing::callsite::rebuild_interest_cache();
-            let request_span = request_span(INITIALIZE_METHOD, &test_request(Some(trace)));
+            let request = JSONRPCRequest {
+                id: RequestId::Integer(1),
+                method: method.to_string(),
+                params: None,
+                trace: Some(trace),
+            };
+            let request_span = request_span(&request);
             request_span.in_scope(|| {});
             drop(request_span);
         });
@@ -320,19 +309,10 @@ mod tests {
         let spans = span_exporter.get_finished_spans().expect("span export");
         let request_span = spans
             .iter()
-            .find(|span| span.name.as_ref() == INITIALIZE_METHOD)
-            .expect("initialize span");
+            .find(|span| span.name.as_ref() == method)
+            .expect("custom method span");
         assert_eq!(request_span.span_context.trace_id(), trace_id);
         assert_eq!(request_span.parent_span_id, parent_span_id);
-    }
-
-    fn test_request(trace: Option<codex_protocol::protocol::W3cTraceContext>) -> JSONRPCRequest {
-        JSONRPCRequest {
-            id: RequestId::Integer(1),
-            method: INITIALIZE_METHOD.to_string(),
-            params: None,
-            trace,
-        }
     }
 
     #[tokio::test]
