@@ -187,16 +187,14 @@ impl SessionState {
         self.auto_compact_window.request_new_context_window();
     }
 
-    pub(crate) fn start_new_context_window_if_requested(
-        &mut self,
-    ) -> Option<(u64, AutoCompactWindowIds)> {
-        if !self.auto_compact_window.take_new_context_window_request() {
-            return None;
-        }
+    pub(crate) fn take_new_context_window_request(&mut self) -> bool {
+        self.auto_compact_window.take_new_context_window_request()
+    }
 
+    pub(crate) fn start_new_context_window(&mut self) -> (u64, AutoCompactWindowIds) {
         let window = self.auto_compact_window.advance();
         self.auto_compact_window.clear_prefill();
-        Some(window)
+        window
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {

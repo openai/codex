@@ -5,20 +5,27 @@ use codex_core::config::TokenBudgetConfig;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -27,11 +34,13 @@ use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
@@ -94,6 +103,62 @@ fn ev_completed_with_usage(id: &str, input_tokens: i64, output_tokens: i64) -> V
             }
         }
     })
+}
+
+fn python_hook_command(script_path: &Path) -> String {
+    format!("python3 \"{}\"", script_path.display())
+}
+
+fn write_token_budget_compact_hooks(home: &Path) {
+    let script_path = home.join("token_budget_compact_hook.py");
+    std::fs::write(
+        &script_path,
+        "import json\nimport sys\njson.load(sys.stdin)\n",
+    )
+    .expect("write compact hook script");
+    let hooks = json!({
+        "hooks": {
+            "PreCompact": [{
+                "matcher": "manual",
+                "hooks": [{
+                    "type": "command",
+                    "command": python_hook_command(&script_path),
+                }]
+            }],
+            "PostCompact": [{
+                "matcher": "manual",
+                "hooks": [{
+                    "type": "command",
+                    "command": python_hook_command(&script_path),
+                }]
+            }]
+        }
+    });
+    std::fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks.json");
+}
+
+async fn assert_context_compaction_item_lifecycle(codex: &std::sync::Arc<codex_core::CodexThread>) {
+    let mut saw_compaction_started = false;
+    let mut saw_compaction_completed = false;
+
+    loop {
+        let event = codex.next_event().await.expect("next event");
+        match event.msg {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            }) => saw_compaction_started = true,
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            }) => saw_compaction_completed = true,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(saw_compaction_started, "compaction item should start");
+    assert!(saw_compaction_completed, "compaction item should complete");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -540,19 +605,18 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
     let responses = mount_sse_sequence(
         &server,
         vec![
-            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
             sse(vec![
-                ev_response_created("resp-compact"),
-                ev_assistant_message("msg-compact", "compact summary"),
-                ev_completed("resp-compact"),
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "assistant before compact"),
+                ev_completed("resp-1"),
             ]),
             sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
         ],
     )
     .await;
+    let compact = mount_compact_json_once(&server, json!({ "output": [] })).await;
 
     let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
-    model_provider.name = "OpenAI-compatible test provider".to_string();
     model_provider.base_url = Some(format!("{}/v1", server.uri()));
     model_provider.supports_websockets = false;
 
@@ -570,21 +634,22 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
 
     test.submit_turn("before compact").await?;
     test.codex.submit(Op::Compact).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    assert_context_compaction_item_lifecycle(&test.codex).await;
     test.submit_turn("after compact").await?;
 
     let requests = responses.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 2);
+    assert!(
+        compact.requests().is_empty(),
+        "token budget compaction should not call server-side compaction"
+    );
 
     let thread_id = test.session_configured.thread_id;
     let initial_token_budget = token_budget_contexts(&requests[0]);
     assert_eq!(initial_token_budget.len(), 1);
     let (initial_first_window_id, initial_previous_window_id, initial_window_id) =
         token_budget_window_ids(&initial_token_budget[0], thread_id);
-    let post_compaction_token_budget = token_budget_contexts(&requests[2]);
+    let post_compaction_token_budget = token_budget_contexts(&requests[1]);
     assert_eq!(post_compaction_token_budget.len(), 1);
     let (
         post_compaction_first_window_id,
@@ -599,6 +664,147 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
         Some(initial_window_id.as_str())
     );
     assert_ne!(post_compaction_window_id, initial_window_id);
+    assert!(
+        !requests[1].body_contains_text("before compact"),
+        "token budget compaction should drop prior user messages"
+    );
+    assert!(
+        !requests[1].body_contains_text("assistant before compact"),
+        "token budget compaction should drop prior assistant messages"
+    );
+    assert!(
+        requests[1].body_contains_text("after compact"),
+        "follow-up should still include the new turn input"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_compaction_runs_compact_hooks() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_pre_build_hook(write_token_budget_compact_hooks)
+        .with_config(|config| {
+            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+            trust_discovered_hooks(config);
+        })
+        .build(&server)
+        .await?;
+
+    test.codex.submit(Op::Compact).await?;
+
+    let pre_compact = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::HookCompleted(completed)
+            if completed.run.event_name == HookEventName::PreCompact =>
+        {
+            Some(completed.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(pre_compact.run.status, HookRunStatus::Completed);
+
+    let post_compact = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::HookCompleted(completed)
+            if completed.run.event_name == HookEventName::PostCompact =>
+        {
+            Some(completed.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(post_compact.run.status, HookRunStatus::Completed);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_mid_turn_auto_compaction_resets_before_active_follow_up() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "remaining-call";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "get_context_remaining", "{}"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 9_500),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    model_provider.name = "OpenAI (test)".into();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    model_provider.supports_websockets = false;
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.model_context_window = Some(10_000);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("trigger mid-turn auto compaction").await?;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "token-budget auto-compaction should reset locally before the continuation"
+    );
+    assert!(
+        !requests[1].input().iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        }),
+        "fresh token-budget windows should drop active tool output with the prior history"
+    );
+
+    let thread_id = test.session_configured.thread_id;
+    let initial_token_budget = token_budget_contexts(&requests[0]);
+    assert_eq!(initial_token_budget.len(), 1);
+    let (initial_first_window_id, _, initial_window_id) =
+        token_budget_window_ids(&initial_token_budget[0], thread_id);
+    let follow_up_token_budget = token_budget_contexts(&requests[1]);
+    assert_eq!(follow_up_token_budget.len(), 1);
+    let (follow_up_first_window_id, follow_up_previous_window_id, follow_up_window_id) =
+        token_budget_window_ids(&follow_up_token_budget[0], thread_id);
+    assert_eq!(follow_up_first_window_id, initial_first_window_id);
+    assert_eq!(
+        follow_up_previous_window_id.as_deref(),
+        Some(initial_window_id.as_str())
+    );
+    assert!(
+        !requests[1].body_contains_text("trigger mid-turn auto compaction"),
+        "fresh token-budget windows should drop prior user messages"
+    );
+    assert_ne!(
+        follow_up_window_id, initial_window_id,
+        "mid-turn token-budget auto-compaction should reset the context window"
+    );
 
     Ok(())
 }

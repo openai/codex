@@ -331,22 +331,14 @@ pub(crate) async fn run_turn(
                 )
                 .await;
 
-                let started_new_context_window = sess
-                    .maybe_start_new_context_window(turn_context.as_ref(), Arc::clone(&world_state))
-                    .await
-                    .is_some();
-                if started_new_context_window && needs_follow_up {
-                    can_drain_pending_input = !model_needs_follow_up;
-                    continue;
-                }
-
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if turn_context
+                let auto_compact_needed = turn_context
                     .config
                     .features
                     .enabled(Feature::AutoCompaction)
-                    && token_limit_reached
-                    && needs_follow_up
+                    && token_limit_reached;
+                if needs_follow_up
+                    && (sess.take_new_context_window_request().await || auto_compact_needed)
                 {
                     if let Err(err) = run_auto_compact(
                         &sess,
@@ -928,6 +920,18 @@ async fn run_auto_compact(
     phase: CompactionPhase,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
+    if turn_context.config.features.enabled(Feature::TokenBudget) {
+        // Compaction is the reset request, so force a new context window
+        // instead of consuming a pending `new_context` tool request.
+        crate::compact_token_budget::run_inline_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            initial_context_injection,
+        )
+        .await?;
+        return Ok(());
+    }
+
     if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context
             .config

@@ -7,6 +7,7 @@ use super::emit_compact_metric;
 use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
+use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
@@ -31,6 +32,11 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
         let session = session.clone_session();
+        if ctx.config.features.enabled(Feature::TokenBudget) {
+            crate::compact_token_budget::run_manual_compact_task(session, ctx).await?;
+            return Ok(None);
+        }
+
         let result = if crate::compact::should_use_remote_compact_task(ctx.provider.info()) {
             if ctx
                 .config
