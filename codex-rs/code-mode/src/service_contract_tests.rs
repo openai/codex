@@ -288,8 +288,23 @@ async fn observed_natural_completion_wins_over_termination() {
     );
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if service.inner.stored_values.lock().await.get("finished")
-                == Some(&serde_json::json!(true))
+            let response = service
+                .execute(ExecuteRequest {
+                    yield_time_ms: Some(60_000),
+                    ..execute_request(r#"text(String(load("finished")));"#)
+                })
+                .await
+                .unwrap()
+                .initial_response()
+                .await
+                .unwrap();
+            let RuntimeResponse::Result { content_items, .. } = response else {
+                panic!("expected stored-value probe to complete");
+            };
+            if content_items
+                == vec![FunctionCallOutputContentItem::InputText {
+                    text: "true".to_string(),
+                }]
             {
                 break;
             }

@@ -24,8 +24,9 @@ impl ChatWidget {
                 {
                     return;
                 }
-                let should_submit_now =
-                    self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                let should_submit_now = self.is_session_configured()
+                    && !self.is_plan_streaming_in_tui()
+                    && !self.input_queue.suppress_queue_autosend;
                 if should_submit_now {
                     if self.only_user_shell_commands_running()
                         && !user_message.text.starts_with('!')
@@ -69,6 +70,20 @@ impl ChatWidget {
         self.refresh_plan_mode_nudge();
     }
 
+    pub(super) fn defer_input_until_settings_applied(&mut self) {
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            self.input_queue.suppress_queue_autosend = true;
+        }
+    }
+
+    pub(super) fn on_modal_or_popup_closed(&mut self) {
+        if self.input_queue.suppress_queue_autosend {
+            self.app_event_tx.send(AppEvent::SettingsSelectionClosed);
+        } else {
+            self.maybe_send_next_queued_input();
+        }
+    }
+
     pub(super) fn queue_user_message(&mut self, user_message: UserMessage) {
         self.queue_user_message_with_options(user_message, QueuedInputAction::Plain, Vec::new());
     }
@@ -84,7 +99,10 @@ impl ChatWidget {
         action: QueuedInputAction,
         pending_pastes: Vec<(String, String)>,
     ) {
-        if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
+        if !self.is_session_configured()
+            || self.is_user_turn_pending_or_running()
+            || self.input_queue.suppress_queue_autosend
+        {
             self.input_queue
                 .queued_user_messages
                 .push_back(QueuedUserMessage {

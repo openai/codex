@@ -74,6 +74,8 @@ struct RawPluginManifestInterface {
     #[serde(default)]
     logo: Option<String>,
     #[serde(default)]
+    logo_dark: Option<String>,
+    #[serde(default)]
     screenshots: Vec<String>,
 }
 
@@ -175,6 +177,7 @@ pub(crate) fn parse_plugin_manifest(
             brand_color,
             composer_icon,
             logo,
+            logo_dark,
             screenshots,
         } = interface;
 
@@ -196,6 +199,11 @@ pub(crate) fn parse_plugin_manifest(
                 composer_icon.as_deref(),
             ),
             logo: resolve_interface_asset_path(plugin_root, "interface.logo", logo.as_deref()),
+            logo_dark: resolve_interface_asset_path(
+                plugin_root,
+                "interface.logoDark",
+                logo_dark.as_deref(),
+            ),
             screenshots: screenshots
                 .iter()
                 .filter_map(|screenshot| {
@@ -221,6 +229,7 @@ pub(crate) fn parse_plugin_manifest(
             || interface.brand_color.is_some()
             || interface.composer_icon.is_some()
             || interface.logo.is_some()
+            || interface.logo_dark.is_some()
             || !interface.screenshots.is_empty();
 
         has_fields.then_some(interface)
@@ -592,6 +601,32 @@ mod tests {
         let interface = manifest.interface.expect("plugin interface");
 
         assert_eq!(interface.default_prompt, None);
+    }
+
+    #[test]
+    fn plugin_interface_reads_dark_logo_path() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_manifest(
+            &plugin_root,
+            /*version*/ None,
+            r#"{
+    "logoDark": "./assets/logo-dark.svg"
+  }"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+        let interface = manifest.interface.expect("plugin interface");
+
+        assert_eq!(
+            interface.logo_dark,
+            Some(
+                AbsolutePathBuf::from_absolute_path_checked(
+                    plugin_root.join("assets/logo-dark.svg"),
+                )
+                .expect("absolute dark logo path")
+            )
+        );
     }
 
     #[test]

@@ -224,6 +224,7 @@ fn sample_thread_start_response(
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
     })
 }
 
@@ -288,6 +289,7 @@ fn sample_thread_resume_response_with_source(
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
         initial_turns_page: None,
     })
 }
@@ -3502,10 +3504,11 @@ async fn reducer_ingests_plugin_install_failed_fact() {
 async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
-    let mut plugin = PluginTelemetryMetadata::from_plugin_id(
-        &PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
-    );
-    plugin.remote_plugin_id = Some("plugins~Plugin_00000000000000000000000000000000".to_string());
+    let plugin = PluginTelemetryMetadata {
+        plugin_id: PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
+        remote_plugin_id: Some("plugins~Plugin_00000000000000000000000000000000".to_string()),
+        capability_summary: None,
+    };
 
     reducer
         .ingest(
@@ -4121,6 +4124,7 @@ async fn turn_event_counts_completed_tool_items() {
         tool: "search".to_string(),
         status,
         arguments: json!({}),
+        app_context: None,
         mcp_app_resource_uri: None,
         plugin_id: Some("sample@test".to_string()),
         result: None,

@@ -10,7 +10,11 @@ use std::time::Duration;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::shell_environment;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::is_likely_sandbox_denied;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
 use codex_utils_pty::TerminalSize;
@@ -26,9 +30,11 @@ use crate::ExecProcessEvent;
 use crate::ExecProcessEventReceiver;
 use crate::ExecProcessFuture;
 use crate::ExecServerError;
+use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::process::ExecProcessEventLog;
+use crate::process_sandbox::prepare_exec_request;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecEnvPolicy;
@@ -85,6 +91,8 @@ struct RunningProcess {
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
+    sandbox: SandboxType,
+    sandbox_denied: bool,
 }
 
 /// Bounded cache of stdin write ids that have already been accepted for one process.
@@ -133,6 +141,7 @@ struct Inner {
 #[derive(Clone)]
 pub(crate) struct LocalProcess {
     inner: Arc<Inner>,
+    runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
 struct LocalExecProcess {
@@ -144,20 +153,39 @@ struct LocalExecProcess {
 
 impl Default for LocalProcess {
     fn default() -> Self {
-        let (outgoing_tx, mut outgoing_rx) =
-            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
-        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::new(RpcNotificationSender::new(outgoing_tx))
+        Self::with_discarded_notifications(/*runtime_paths*/ None)
     }
 }
 
 impl LocalProcess {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn with_local_runtime_paths(runtime_paths: ExecServerRuntimePaths) -> Self {
+        Self::with_discarded_notifications(Some(runtime_paths))
+    }
+
+    fn with_discarded_notifications(runtime_paths: Option<ExecServerRuntimePaths>) -> Self {
+        let (outgoing_tx, mut outgoing_rx) =
+            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
+        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
+        Self::with_runtime_paths(RpcNotificationSender::new(outgoing_tx), runtime_paths)
+    }
+
+    pub(crate) fn new(
+        notifications: RpcNotificationSender,
+        runtime_paths: ExecServerRuntimePaths,
+    ) -> Self {
+        Self::with_runtime_paths(notifications, Some(runtime_paths))
+    }
+
+    fn with_runtime_paths(
+        notifications: RpcNotificationSender,
+        runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 processes: Mutex::new(HashMap::new()),
             }),
+            runtime_paths,
         }
     }
 
@@ -191,16 +219,12 @@ impl LocalProcess {
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
-        let (program, args) = params
-            .argv
+        let prepared =
+            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref())?;
+        let (program, args) = prepared
+            .command
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
-        let native_cwd = params.cwd.to_abs_path().map_err(|err| {
-            invalid_params(format!(
-                "cwd URI `{}` is not valid on this exec-server host: {err}",
-                params.cwd
-            ))
-        })?;
 
         let start = Arc::new(ProcessStart);
         {
@@ -216,14 +240,13 @@ impl LocalProcess {
             );
         }
 
-        let env = child_env(&params);
         let spawned_result = if params.tty {
             codex_utils_pty::spawn_pty_process(
                 program,
                 args,
-                native_cwd.as_path(),
-                &env,
-                &params.arg0,
+                prepared.cwd.as_path(),
+                &prepared.env,
+                &prepared.arg0,
                 TerminalSize::default(),
             )
             .await
@@ -231,18 +254,18 @@ impl LocalProcess {
             codex_utils_pty::spawn_pipe_process(
                 program,
                 args,
-                native_cwd.as_path(),
-                &env,
-                &params.arg0,
+                prepared.cwd.as_path(),
+                &prepared.env,
+                &prepared.arg0,
             )
             .await
         } else {
             codex_utils_pty::spawn_pipe_process_no_stdin(
                 program,
                 args,
-                native_cwd.as_path(),
-                &env,
-                &params.arg0,
+                prepared.cwd.as_path(),
+                &prepared.env,
+                &prepared.arg0,
             )
             .await
         };
@@ -296,6 +319,8 @@ impl LocalProcess {
                     output_notify: Arc::clone(&output_notify),
                     open_streams: 2,
                     closed: false,
+                    sandbox: prepared.sandbox,
+                    sandbox_denied: false,
                 })),
             );
         }
@@ -390,6 +415,7 @@ impl LocalProcess {
                         exit_code: process.exit_code,
                         closed: process.closed,
                         failure: None,
+                        sandbox_denied: process.sandbox_denied,
                     },
                     Arc::clone(&process.output_notify),
                 )
@@ -780,12 +806,46 @@ async fn watch_exit(
     output_notify: Arc<Notify>,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
+    let sandboxed = {
+        let processes = inner.processes.lock().await;
+        matches!(
+            processes.get(&process_id),
+            Some(ProcessEntry::Running(process)) if process.sandbox != SandboxType::None
+        )
+    };
+    if sandboxed {
+        let _ = tokio::time::timeout(Duration::from_millis(20), output_notify.notified()).await;
+    }
     let notification = {
         let mut processes = inner.processes.lock().await;
         if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
             let seq = process.next_seq;
             process.next_seq += 1;
             process.exit_code = Some(exit_code);
+            if process.sandbox != SandboxType::None {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                let mut aggregated = Vec::new();
+                for chunk in &process.output {
+                    match chunk.stream {
+                        ExecOutputStream::Stdout | ExecOutputStream::Pty => {
+                            stdout.extend_from_slice(&chunk.chunk);
+                        }
+                        ExecOutputStream::Stderr => stderr.extend_from_slice(&chunk.chunk),
+                    }
+                    aggregated.extend_from_slice(&chunk.chunk);
+                }
+                let exec_output = ExecToolCallOutput {
+                    exit_code,
+                    stdout: StreamOutput::new(String::from_utf8_lossy(&stdout).into_owned()),
+                    stderr: StreamOutput::new(String::from_utf8_lossy(&stderr).into_owned()),
+                    aggregated_output: StreamOutput::new(
+                        String::from_utf8_lossy(&aggregated).into_owned(),
+                    ),
+                    ..Default::default()
+                };
+                process.sandbox_denied = is_likely_sandbox_denied(process.sandbox, &exec_output);
+            }
             let _ = process.wake_tx.send(seq);
             process
                 .events
@@ -896,12 +956,15 @@ mod tests {
         ExecParams {
             process_id: ProcessId::from("env-test"),
             argv: vec!["true".to_string()],
-            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
+            cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
+                .expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            sandbox: None,
+            enforce_managed_network: false,
         }
     }
 
@@ -981,6 +1044,7 @@ mod tests {
                 exit_code: Some(0),
                 closed: false,
                 failure: None,
+                sandbox_denied: false,
             }
         );
 
@@ -1105,6 +1169,8 @@ mod tests {
                 output_notify: Arc::clone(&output_notify),
                 open_streams: 2,
                 closed: false,
+                sandbox: SandboxType::None,
+                sandbox_denied: false,
             })),
         );
         assert!(previous.is_none());

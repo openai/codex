@@ -75,9 +75,12 @@ pub(super) async fn spawn_review_thread(
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
-    let forked_from_thread_id = {
+    let (forked_from_thread_id, thread_source) = {
         let state = sess.state.lock().await;
-        state.session_configuration.forked_from_thread_id
+        (
+            state.session_configuration.forked_from_thread_id,
+            state.session_configuration.thread_source.clone(),
+        )
     };
 
     let per_turn_config = Arc::new(per_turn_config);
@@ -88,6 +91,7 @@ pub(super) async fn spawn_review_thread(
         forked_from_thread_id,
         parent_turn_context.parent_thread_id,
         &session_source,
+        thread_source,
         review_turn_id.clone(),
         #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
@@ -123,6 +127,7 @@ pub(super) async fn spawn_review_thread(
         developer_instructions: None,
         user_instructions: None,
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
+        multi_agent_mode: parent_turn_context.multi_agent_mode,
         multi_agent_version: MultiAgentVersion::Disabled,
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),

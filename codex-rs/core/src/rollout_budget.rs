@@ -40,13 +40,15 @@ impl RolloutBudget {
         });
     }
 
-    pub(crate) fn record_usage(&self, usage: &TokenUsage) {
+    /// Returns true once the configured budget is exhausted, including on later calls.
+    pub(crate) fn record_usage(&self, usage: &TokenUsage) -> bool {
         let Some(mut state) = self.lock() else {
-            return;
+            return false;
         };
         state.weighted_tokens_used += usage.output_tokens.max(0) as f64
             * state.config.sampling_token_weight
             + usage.non_cached_input() as f64 * state.config.prefill_token_weight;
+        state.weighted_tokens_used >= state.config.limit_tokens as f64
     }
 
     pub(crate) fn pending_reminder(
@@ -55,18 +57,22 @@ impl RolloutBudget {
         window_id: &str,
     ) -> Option<RolloutBudgetReminder> {
         let state = self.lock()?;
-        let reminder_index = (state.weighted_tokens_used
-            / state.config.reminder_interval_tokens as f64)
+        let remaining_tokens = (state.config.limit_tokens as f64 - state.weighted_tokens_used)
+            .max(0.0)
             .floor() as i64;
+        let reminder_index = state
+            .config
+            .reminder_at_remaining_tokens
+            .iter()
+            .filter(|&&threshold| remaining_tokens <= threshold)
+            .count() as i64;
         if state.deliveries.get(&thread_id).is_some_and(|delivery| {
             delivery.window_id.as_str() == window_id && delivery.reminder_index >= reminder_index
         }) {
             return None;
         }
         Some(RolloutBudgetReminder {
-            remaining_tokens: (state.config.limit_tokens as f64 - state.weighted_tokens_used)
-                .max(0.0)
-                .floor() as i64,
+            remaining_tokens,
             reminder_index,
         })
     }

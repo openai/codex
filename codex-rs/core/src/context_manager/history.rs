@@ -1,3 +1,5 @@
+use crate::context::ContextualUserFragment;
+use crate::context::world_state::WorldState;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
@@ -27,6 +29,7 @@ use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 use codex_utils_output_truncation::truncate_text;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 /// Transcript of thread history
@@ -48,6 +51,8 @@ pub(crate) struct ContextManager {
     /// also clear this when it trims a mixed initial-context developer bundle
     /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
+    /// World state most recently appended to model-visible history.
+    world_state_baseline: Option<Arc<WorldState>>,
 }
 
 impl ContextManager {
@@ -59,6 +64,7 @@ impl ContextManager {
                 &None, &None, /*model_context_window*/ None,
             ),
             reference_context_item: None,
+            world_state_baseline: None,
         }
     }
 
@@ -76,6 +82,22 @@ impl ContextManager {
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
         self.reference_context_item.clone()
+    }
+
+    pub(crate) fn update_world_state(
+        &mut self,
+        world_state: WorldState,
+    ) -> Vec<Box<dyn ContextualUserFragment>> {
+        let fragments = self.world_state_baseline.as_deref().map_or_else(
+            || world_state.render_full(),
+            |previous| world_state.render_diff(previous),
+        );
+        self.world_state_baseline = Some(Arc::new(world_state));
+        fragments
+    }
+
+    pub(crate) fn set_world_state_baseline(&mut self, world_state: WorldState) {
+        self.world_state_baseline = Some(Arc::new(world_state));
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -163,12 +185,14 @@ impl ContextManager {
             // its corresponding counterpart to keep the invariants intact without
             // running a full normalization pass.
             normalize::remove_corresponding_for(&mut self.items, &removed);
+            self.world_state_baseline = None;
         }
     }
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
         self.history_version = self.history_version.saturating_add(1);
+        self.world_state_baseline = None;
     }
 
     /// Replace image content in the last turn if it originated from a tool output.
@@ -342,25 +366,25 @@ impl ContextManager {
                 id,
                 call_id,
                 output,
-                metadata,
+                internal_chat_message_metadata_passthrough: metadata,
             } => ResponseItem::FunctionCallOutput {
                 id: id.clone(),
                 call_id: call_id.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
-                metadata: metadata.clone(),
+                internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::CustomToolCallOutput {
                 id,
                 call_id,
                 name,
                 output,
-                metadata,
+                internal_chat_message_metadata_passthrough: metadata,
             } => ResponseItem::CustomToolCallOutput {
                 id: id.clone(),
                 call_id: call_id.clone(),
                 name: name.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
-                metadata: metadata.clone(),
+                internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::Message { .. }
             | ResponseItem::AgentMessage { .. }

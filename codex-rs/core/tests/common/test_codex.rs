@@ -17,6 +17,7 @@ use codex_config::CloudConfigBundleLoader;
 use codex_core::CodexThread;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
+use codex_core::TimeProvider;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_core::shell::Shell;
@@ -57,6 +58,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::TempDirExt;
+use crate::TestEnvironment;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cloud_config_bundle;
@@ -178,7 +180,20 @@ pub async fn test_env() -> Result<TestEnv> {
                     /*sandbox*/ None,
                 )
                 .await?;
-            let cwd = cwd_uri.to_abs_path()?;
+            let cwd = if remote_env == TestEnvironment::WineExec {
+                // TODO(anp): Convert `Config::cwd` to `LegacyAppPathString` and remove this
+                // compatibility projection.
+                // `Config::cwd` still requires `AbsolutePathBuf`. Preserve the test harness's
+                // Linux-absolute `/C:/...` compatibility spelling so converting it back to a
+                // `PathUri` recovers the remote Windows convention. Production conversions stay
+                // strict: `PathUri::to_abs_path` intentionally rejects foreign paths.
+                let path = cwd_uri.to_url().to_file_path().map_err(|()| {
+                    anyhow!("remote test cwd URI cannot be projected onto the host: {cwd_uri}")
+                })?;
+                AbsolutePathBuf::try_from(path)?
+            } else {
+                cwd_uri.to_abs_path()?
+            };
             Ok(TestEnv {
                 environment,
                 exec_server_url: Some(websocket_url),
@@ -261,6 +276,7 @@ pub struct TestCodexBuilder {
     extensions: Arc<ExtensionRegistry<Config>>,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
     supports_openai_form_elicitation: bool,
+    external_time_provider: Option<Arc<dyn TimeProvider>>,
 }
 
 impl TestCodexBuilder {
@@ -359,6 +375,11 @@ impl TestCodexBuilder {
 
     pub fn with_openai_form_elicitation(mut self) -> Self {
         self.supports_openai_form_elicitation = true;
+        self
+    }
+
+    pub fn with_external_time_provider(mut self, provider: Arc<dyn TimeProvider>) -> Self {
+        self.external_time_provider = Some(provider);
         self
     }
 
@@ -568,6 +589,7 @@ impl TestCodexBuilder {
             state_db.clone(),
             installation_id,
             /*attestation_provider*/ None,
+            /*external_time_provider*/ self.external_time_provider.clone(),
         );
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
@@ -619,6 +641,7 @@ impl TestCodexBuilder {
                         thread_source: None,
                         dynamic_tools: Vec::new(),
                         metrics_service_name: None,
+                        multi_agent_mode: None,
                         parent_trace: None,
                         environments,
                         thread_extension_init: Default::default(),
@@ -975,7 +998,7 @@ impl TestCodexHarness {
     ) -> Result<()> {
         let abs_path = self.path_abs(rel);
         if let Some(parent) = abs_path.parent() {
-            let parent_uri = PathUri::from_path(&parent)?;
+            let parent_uri = PathUri::from_host_native_path(&parent)?;
             self.test
                 .fs()
                 .create_directory(
@@ -985,7 +1008,7 @@ impl TestCodexHarness {
                 )
                 .await?;
         }
-        let abs_path_uri = PathUri::from_path(&abs_path)?;
+        let abs_path_uri = PathUri::from_host_native_path(&abs_path)?;
         self.test
             .fs()
             .write_file(
@@ -999,7 +1022,7 @@ impl TestCodexHarness {
 
     pub async fn read_file_text(&self, rel: impl AsRef<Path>) -> Result<String> {
         let path = self.path_abs(rel);
-        let path_uri = PathUri::from_path(&path)?;
+        let path_uri = PathUri::from_host_native_path(&path)?;
         Ok(self
             .test
             .fs()
@@ -1009,7 +1032,7 @@ impl TestCodexHarness {
 
     pub async fn create_dir_all(&self, rel: impl AsRef<Path>) -> Result<()> {
         let path = self.path_abs(rel);
-        let path_uri = PathUri::from_path(&path)?;
+        let path_uri = PathUri::from_host_native_path(&path)?;
         self.test
             .fs()
             .create_directory(
@@ -1172,6 +1195,7 @@ pub fn test_codex() -> TestCodexBuilder {
         extensions: empty_extension_registry(),
         user_instructions_provider: None,
         supports_openai_form_elicitation: false,
+        external_time_provider: None,
     }
 }
 

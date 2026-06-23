@@ -28,6 +28,7 @@ use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
+use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
@@ -751,6 +752,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
@@ -1084,14 +1086,11 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
         .pop()
         .expect("child request");
     assert_eq!(
-        child_request.inputs_of_type("agent_message"),
-        vec![json!({
+        strip_metadata_from_json(Value::Array(child_request.inputs_of_type("agent_message"))),
+        Value::Array(vec![json!({
             "type": "agent_message",
             "author": "/root",
             "recipient": "/root/worker",
-            "metadata": {
-                "source_call_id": SPAWN_CALL_ID,
-            },
             "content": [
                 {
                     "type": "input_text",
@@ -1102,7 +1101,7 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
                     "encrypted_content": encrypted_message,
                 },
             ],
-        })]
+        })])
     );
 
     Ok(())
@@ -1230,8 +1229,8 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
         .pop()
         .expect("agent message request");
     assert_eq!(
-        request.inputs_of_type("agent_message"),
-        vec![json!({
+        strip_metadata_from_json(Value::Array(request.inputs_of_type("agent_message"))),
+        Value::Array(vec![json!({
             "type": "agent_message",
             "author": "/root/worker",
             "recipient": "/root",
@@ -1239,7 +1238,7 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
                 "type": "input_text",
                 "text": notification,
             }],
-        })]
+        })])
     );
 
     Ok(())

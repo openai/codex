@@ -138,6 +138,11 @@ impl LiveThread {
         })
     }
 
+    #[tracing::instrument(
+        level = "trace",
+        skip_all,
+        fields(item_count = items.len())
+    )]
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
         // Empty appends are intentionally ignored rather than represented as zero-sized batches.
         if items.is_empty() {
