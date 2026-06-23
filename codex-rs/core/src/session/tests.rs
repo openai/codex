@@ -8,6 +8,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
 use crate::environment_selection::ThreadEnvironments;
 use crate::function_tool::FunctionCallError;
+use crate::session::step_context::StepContext;
 use crate::shell::default_user_shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillRenderSideEffects;
@@ -181,6 +182,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration as StdDuration;
+
+impl StepContext {
+    pub(crate) fn for_test(turn: Arc<TurnContext>) -> Arc<Self> {
+        let environments = turn.environments.clone();
+        Arc::new(Self::new(turn, environments))
+    }
+}
 
 mod guardian_tests;
 
@@ -608,8 +616,9 @@ async fn preview_session_start_hooks(
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
-    let router = Arc::new(ToolRouter::from_turn_context(
-        &turn_context,
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let router = Arc::new(ToolRouter::from_context(
+        step_context.as_ref(),
         crate::tools::router::ToolRouterParams {
             tool_suggest_candidates: None,
             mcp_tools: None,
@@ -620,7 +629,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         &Default::default(),
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    ToolCallRuntime::new(router, session, turn_context, tracker)
+    ToolCallRuntime::new(router, session, step_context, tracker)
 }
 
 fn make_connector(id: &str, name: &str) -> AppInfo {
@@ -5903,15 +5912,18 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
     let call_id = "call-1".to_string();
     let handler = RequestPermissionsHandler;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let handle = tokio::spawn({
         let session = Arc::clone(&session);
         let turn_context = Arc::clone(&turn_context);
+        let step_context = Arc::clone(&step_context);
         let tracker = Arc::clone(&tracker);
         let call_id = call_id.clone();
         async move {
             handler
                 .handle(ToolInvocation {
                     session,
+                    step_context,
                     turn: turn_context,
                     cancellation_token: CancellationToken::new(),
                     tracker,
@@ -5983,10 +5995,13 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
 #[tokio::test]
 async fn request_permissions_tool_rejects_unknown_environment_id() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let result = RequestPermissionsHandler
         .handle(ToolInvocation {
             session: Arc::new(session),
-            turn: Arc::new(turn_context),
+            step_context,
+            turn: turn_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "call-1".to_string(),
@@ -9911,8 +9926,9 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             .await
     };
     let deferred_mcp_tools = Some(tools.clone());
-    let router = ToolRouter::from_turn_context(
-        &turn_context,
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let router = ToolRouter::from_context(
+        step_context.as_ref(),
         crate::tools::router::ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools,
@@ -9938,7 +9954,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let err = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::clone(&session),
-            Arc::clone(&turn_context),
+            step_context,
             CancellationToken::new(),
             tracker,
             call,
@@ -10151,6 +10167,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         .expect("test setup should allow updating approval policy");
     let session = Arc::new(session);
     let mut turn_context = Arc::new(turn_context_raw);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
 
     let command_script = "echo hi";
     let timeout_ms = 1000;
@@ -10168,6 +10185,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&turn_diff_tracker),
             call_id,
@@ -10314,6 +10332,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
         .expect("test setup should allow updating approval policy");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
     let handler = ExecCommandHandler::default();
@@ -10321,6 +10340,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),

@@ -348,6 +348,7 @@ impl ApplyPatchHandler {
         let ToolInvocation {
             session,
             turn,
+            step_context,
             tracker,
             call_id,
             tool_name,
@@ -372,8 +373,10 @@ impl ApplyPatchHandler {
             require_environment_id(args.environment_id.as_deref(), self.multi_environment)?;
 
         // Verify the parsed patch against the selected environment filesystem.
-        let Some(turn_environment) =
-            resolve_tool_environment(turn.as_ref(), selected_environment_id.as_deref())?
+        let Some(turn_environment) = resolve_tool_environment(
+            &step_context.environments,
+            selected_environment_id.as_deref(),
+        )?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "apply_patch is unavailable in this session".to_string(),

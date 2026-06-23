@@ -1,6 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -58,12 +58,12 @@ pub(crate) struct ToolSuggestCandidates {
 }
 
 impl ToolRouter {
-    pub(crate) fn from_turn_context(
-        turn_context: &TurnContext,
+    pub(crate) fn from_context(
+        step_context: &StepContext,
         params: ToolRouterParams<'_>,
         tool_search_handler_cache: &ToolSearchHandlerCache,
     ) -> Self {
-        build_tool_router(turn_context, params, tool_search_handler_cache)
+        build_tool_router(step_context, params, tool_search_handler_cache)
     }
 
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
@@ -164,7 +164,7 @@ impl ToolRouter {
     pub async fn dispatch_tool_call_with_code_mode_result(
         &self,
         session: Arc<Session>,
-        turn: Arc<TurnContext>,
+        step_context: Arc<StepContext>,
         cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
@@ -172,7 +172,7 @@ impl ToolRouter {
     ) -> Result<AnyToolResult, FunctionCallError> {
         self.dispatch_tool_call_with_code_mode_result_inner(
             session,
-            turn,
+            step_context,
             cancellation_token,
             tracker,
             call,
@@ -187,7 +187,7 @@ impl ToolRouter {
     pub(crate) async fn dispatch_tool_call_with_terminal_outcome(
         &self,
         session: Arc<Session>,
-        turn: Arc<TurnContext>,
+        step_context: Arc<StepContext>,
         cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
@@ -196,7 +196,7 @@ impl ToolRouter {
     ) -> Result<AnyToolResult, FunctionCallError> {
         self.dispatch_tool_call_with_code_mode_result_inner(
             session,
-            turn,
+            step_context,
             cancellation_token,
             tracker,
             call,
@@ -210,7 +210,7 @@ impl ToolRouter {
     async fn dispatch_tool_call_with_code_mode_result_inner(
         &self,
         session: Arc<Session>,
-        turn: Arc<TurnContext>,
+        step_context: Arc<StepContext>,
         cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
@@ -223,9 +223,12 @@ impl ToolRouter {
             payload,
         } = call;
 
+        // Keep the legacy ToolInvocation.turn field tied to the same request state until handlers migrate.
+        let turn = Arc::clone(&step_context.turn);
         let invocation = ToolInvocation {
             session,
             turn,
+            step_context,
             cancellation_token,
             tracker,
             call_id,
