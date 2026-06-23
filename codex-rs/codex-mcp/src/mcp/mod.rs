@@ -396,6 +396,39 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     snapshot
 }
 
+/// Collects status from one installed manager generation.
+///
+/// Latest config is used only to refresh authentication status for servers
+/// that are actually present in the manager's callable client map.
+pub async fn collect_mcp_server_status_snapshot_from_manager_with_detail(
+    mcp_connection_manager: &McpConnectionManager,
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+    detail: McpSnapshotDetail,
+) -> McpServerStatusSnapshot {
+    let server_names = mcp_connection_manager.server_names();
+    let installed_servers = server_names.iter().cloned().collect::<HashSet<_>>();
+    let mcp_servers = effective_mcp_servers(config, auth)
+        .into_iter()
+        .filter(|(name, _)| installed_servers.contains(name))
+        .collect::<HashMap<_, _>>();
+    let auth_status_entries = compute_auth_statuses(
+        mcp_servers.iter(),
+        config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind,
+        auth,
+    )
+    .await;
+
+    collect_mcp_server_status_snapshot_from_manager(
+        mcp_connection_manager,
+        auth_status_entries,
+        server_names,
+        detail,
+    )
+    .await
+}
+
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// MCP server/tool names are user-controlled, so sanitize the fully-qualified
 /// name we expose to the model by replacing any disallowed character with `_`.

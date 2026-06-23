@@ -593,6 +593,29 @@ impl CodexThread {
         self.codex.session.runtime_mcp_config(config).await
     }
 
+    /// Returns the MCP inventory installed for this thread.
+    pub async fn mcp_server_status_snapshot(
+        &self,
+        config: &crate::config::Config,
+        detail: codex_mcp::McpSnapshotDetail,
+    ) -> codex_mcp::McpServerStatusSnapshot {
+        let mcp_config = self.runtime_mcp_config(config).await;
+        let auth = self.codex.session.services.auth_manager.auth().await;
+        let manager = self
+            .codex
+            .session
+            .services
+            .mcp_connection_manager
+            .load_full();
+        codex_mcp::collect_mcp_server_status_snapshot_from_manager_with_detail(
+            manager.as_ref(),
+            &mcp_config,
+            auth.as_ref(),
+            detail,
+        )
+        .await
+    }
+
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
         self.codex.session.multi_agent_version()
     }
