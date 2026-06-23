@@ -9,6 +9,7 @@ use crate::tools::handlers::get_context_remaining_spec::GET_CONTEXT_REMAINING_TO
 use crate::tools::handlers::get_context_remaining_spec::create_get_context_remaining_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::models::ResponseInputItem;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -75,19 +76,34 @@ impl ToolExecutor<ToolInvocation> for GetContextRemainingHandler {
                 ));
             }
 
-            let Some(model_context_window) = invocation.turn.model_context_window() else {
-                return Ok(boxed_tool_output(GetContextRemainingOutput::new(
-                    /*tokens_left*/ None,
-                )));
-            };
-            let active_context_tokens = invocation.session.get_total_token_usage().await.max(0);
-            let tokens_left = model_context_window
-                .saturating_sub(active_context_tokens)
-                .max(0);
+            let token_status = crate::session::context_window::context_window_token_status(
+                invocation.session.as_ref(),
+                invocation.turn.as_ref(),
+            )
+            .await;
 
-            Ok(boxed_tool_output(GetContextRemainingOutput::new(Some(
+            let tokens_left = match invocation.turn.config.model_auto_compact_token_limit_scope {
+                AutoCompactTokenLimitScope::Total => {
+                    invocation.turn.model_context_window().map(|limit| {
+                        limit
+                            .saturating_sub(token_status.active_context_tokens.max(0))
+                            .max(0)
+                    })
+                }
+                AutoCompactTokenLimitScope::BodyAfterPrefix => {
+                    let scope_limit = invocation
+                        .turn
+                        .config
+                        .model_auto_compact_token_limit
+                        .or_else(|| invocation.turn.model_info.auto_compact_token_limit());
+                    (scope_limit.is_some() || token_status.full_context_window_limit.is_some())
+                        .then_some(token_status.tokens_until_compaction)
+                }
+            };
+
+            Ok(boxed_tool_output(GetContextRemainingOutput::new(
                 tokens_left,
-            ))))
+            )))
         })
     }
 }
