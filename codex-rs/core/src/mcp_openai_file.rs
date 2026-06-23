@@ -8,8 +8,8 @@
 //!   and rewrite only the declared arguments into the provided-file payload
 //!   shape expected by the downstream Apps tool.
 //!
-//! Model-visible schema masking is owned by `codex-mcp` alongside MCP tool
-//! inventory, so this module only handles the execution-time argument rewrite.
+//! The model-facing local-path schema is owned by `codex-mcp` alongside MCP tool inventory, so this
+//! module only handles uploading the files and rewriting the execution-time arguments.
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
