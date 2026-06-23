@@ -312,13 +312,19 @@ fn run_mutation_sequence(
                 state_err
             }
         })?;
+        wait_for_remote_plugin_event(
+            capture_path,
+            &expected.remote_plugin_id,
+            "codex_plugin_uninstalled",
+        )?;
 
         let captured_events =
             read_events_for_remote_plugin(capture_path, &expected.remote_plugin_id)?;
         let events = validate_mutation_events(
             captured_events,
             PluginEventIdentity {
-                plugin_id: &expected.remote_plugin_id,
+                plugin_id: &expected.plugin_id,
+                remote_plugin_id: &expected.remote_plugin_id,
                 plugin_name: &expected.plugin_name,
                 marketplace_name: &expected.marketplace_name,
             },

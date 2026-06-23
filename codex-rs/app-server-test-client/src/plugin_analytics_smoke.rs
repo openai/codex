@@ -159,6 +159,7 @@ fn wait_for_plugin_usage(
 #[derive(Debug)]
 struct ExpectedPlugin {
     plugin_id: String,
+    remote_plugin_id: String,
     plugin_name: String,
     marketplace_name: String,
 }
@@ -208,13 +209,15 @@ fn expected_plugin(response: &PluginInstalledResponse, plugin_id: &str) -> Resul
             plugin.availability
         );
     }
-    plugin
+    let remote_plugin_id = plugin
         .remote_plugin_id
         .as_ref()
-        .with_context(|| format!("plugin `{plugin_id}` does not have a remote plugin id"))?;
+        .with_context(|| format!("plugin `{plugin_id}` does not have a remote plugin id"))?
+        .clone();
 
     Ok(ExpectedPlugin {
         plugin_id: plugin.id.clone(),
+        remote_plugin_id,
         plugin_name: plugin.name.clone(),
         marketplace_name: marketplace.name.clone(),
     })
@@ -444,6 +447,7 @@ fn event_count(events: &[Value], event_type: &str) -> usize {
 fn validate_identity(event: &Value, expected: &ExpectedPlugin) -> Result<()> {
     let params = &event["event_params"];
     require_string(params, "plugin_id", &expected.plugin_id)?;
+    require_string(params, "remote_plugin_id", &expected.remote_plugin_id)?;
     require_string(params, "plugin_name", &expected.plugin_name)?;
     require_string(params, "marketplace_name", &expected.marketplace_name)
 }
