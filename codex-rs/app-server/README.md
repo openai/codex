@@ -2158,4 +2158,8 @@ For server-initiated request payloads, annotate the field the same way so schema
 
    ```bash
    just test -p codex-app-server-protocol
+   just check-app-server-protocol-compatibility
    ```
+
+   The compatibility check compares the stable generated protocol against
+   `origin/main`. Experimental methods and fields are excluded.
