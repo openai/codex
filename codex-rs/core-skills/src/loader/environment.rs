@@ -14,7 +14,6 @@ use super::SKILLS_METADATA_DIR;
 use super::SKILLS_METADATA_FILENAME;
 use super::SkillMetadataFile;
 use super::SymlinkPolicy;
-use super::canonicalize_uri_for_skill_identity;
 use super::discover_skills_under_root;
 use super::parse_skill_frontmatter_metadata_inner;
 use super::resolve_dependencies;
@@ -52,6 +51,35 @@ impl EnvironmentSkillMetadata {
             None => true,
         }
     }
+
+    async fn parse(file_system: &dyn ExecutorFileSystem, path: &PathUri) -> Result<Self, String> {
+        let contents = file_system
+            .read_file_text(path, /*sandbox*/ None)
+            .await
+            .map_err(|err| format!("failed to read file: {err}"))?;
+        let ParsedSkillFrontmatter {
+            name: base_name,
+            description,
+            short_description,
+        } = parse_skill_frontmatter_metadata_inner(&contents, || default_skill_name(path))
+            .map_err(|err| err.to_string())?;
+        let name = plugin_namespace_for_skill_uri(file_system, path)
+            .await
+            .map(|namespace| format!("{namespace}:{base_name}"))
+            .unwrap_or(base_name);
+        validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")
+            .map_err(|err| err.to_string())?;
+        let (dependencies, policy) = load_skill_metadata(file_system, path).await;
+
+        Ok(Self {
+            path_to_skills_md: path.clone(),
+            name,
+            description,
+            short_description,
+            dependencies,
+            policy,
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -67,12 +95,11 @@ pub async fn load_environment_skills_from_root(
     restriction_product: Option<Product>,
 ) -> EnvironmentSkillLoadOutcome {
     let mut outcome = EnvironmentSkillLoadOutcome::default();
-    let root = canonicalize_uri_for_skill_identity(file_system, root).await;
     let discovery =
-        discover_skills_under_root(file_system, &root, SymlinkPolicy::FollowDirectories).await;
+        discover_skills_under_root(file_system, root, SymlinkPolicy::FollowDirectories).await;
     outcome.warnings.extend(discovery.warnings);
     for path in discovery.skill_files {
-        match parse_environment_skill_file(file_system, &path).await {
+        match EnvironmentSkillMetadata::parse(file_system, &path).await {
             Ok(skill) if skill.matches_product_restriction(restriction_product) => {
                 outcome.skills.push(skill);
             }
@@ -90,38 +117,6 @@ pub async fn load_environment_skills_from_root(
         })
     });
     outcome
-}
-
-async fn parse_environment_skill_file(
-    file_system: &dyn ExecutorFileSystem,
-    path: &PathUri,
-) -> Result<EnvironmentSkillMetadata, String> {
-    let contents = file_system
-        .read_file_text(path, /*sandbox*/ None)
-        .await
-        .map_err(|err| format!("failed to read file: {err}"))?;
-    let ParsedSkillFrontmatter {
-        name: base_name,
-        description,
-        short_description,
-    } = parse_skill_frontmatter_metadata_inner(&contents, || default_skill_name(path))
-        .map_err(|err| err.to_string())?;
-    let name = plugin_namespace_for_skill_uri(file_system, path)
-        .await
-        .map(|namespace| format!("{namespace}:{base_name}"))
-        .unwrap_or(base_name);
-    validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name").map_err(|err| err.to_string())?;
-    let (dependencies, policy) = load_skill_metadata(file_system, path).await;
-    let path_to_skills_md = canonicalize_uri_for_skill_identity(file_system, path).await;
-
-    Ok(EnvironmentSkillMetadata {
-        path_to_skills_md,
-        name,
-        description,
-        short_description,
-        dependencies,
-        policy,
-    })
 }
 
 async fn load_skill_metadata(

@@ -46,18 +46,33 @@ impl SyntheticFileSystem {
             .map_err(io::Error::other)
     }
 
+    fn alias_path(&self, relative_path: &str) -> io::Result<PathUri> {
+        self.alias_root
+            .join(relative_path)
+            .map_err(io::Error::other)
+    }
+
     async fn canonicalize(&self, path: &PathUri) -> io::Result<PathUri> {
         if path == &self.alias_root {
             return Ok(self.canonical_root.clone());
+        }
+        if path == &self.alias_path("skill")? {
+            return self.path("skill");
+        }
+        if path == &self.alias_path("skill/SKILL.md")? {
+            return self.path("skill/SKILL.md");
         }
         self.metadata(path)?;
         Ok(path.clone())
     }
 
     async fn read_file(&self, path: &PathUri) -> io::Result<Vec<u8>> {
-        if path == &self.path("skill/SKILL.md")? {
+        if path == &self.path("skill/SKILL.md")? || path == &self.alias_path("skill/SKILL.md")? {
             Ok(SKILL_CONTENTS.as_bytes().to_vec())
-        } else if self.has_plugin_manifest && path == &self.path(".claude-plugin/plugin.json")? {
+        } else if self.has_plugin_manifest
+            && (path == &self.path(".claude-plugin/plugin.json")?
+                || path == &self.alias_path(".claude-plugin/plugin.json")?)
+        {
             Ok(PLUGIN_MANIFEST.as_bytes().to_vec())
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
@@ -65,13 +80,13 @@ impl SyntheticFileSystem {
     }
 
     async fn read_directory(&self, path: &PathUri) -> io::Result<Vec<ReadDirectoryEntry>> {
-        if path == &self.canonical_root {
+        if path == &self.canonical_root || path == &self.alias_root {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "skill".to_string(),
                 is_directory: true,
                 is_file: false,
             }])
-        } else if path == &self.path("skill")? {
+        } else if path == &self.path("skill")? || path == &self.alias_path("skill")? {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
@@ -84,11 +99,21 @@ impl SyntheticFileSystem {
 
     fn metadata(&self, path: &PathUri) -> io::Result<FileMetadata> {
         let skill_dir = self.path("skill")?;
+        let alias_skill_dir = self.alias_path("skill")?;
         let skill_path = self.path("skill/SKILL.md")?;
+        let alias_skill_path = self.alias_path("skill/SKILL.md")?;
         let manifest_path = self.path(".claude-plugin/plugin.json")?;
-        let (is_directory, is_file) = if path == &self.canonical_root || path == &skill_dir {
+        let alias_manifest_path = self.alias_path(".claude-plugin/plugin.json")?;
+        let (is_directory, is_file) = if path == &self.canonical_root
+            || path == &self.alias_root
+            || path == &skill_dir
+            || path == &alias_skill_dir
+        {
             (true, false)
-        } else if path == &skill_path || self.has_plugin_manifest && path == &manifest_path {
+        } else if path == &skill_path
+            || path == &alias_skill_path
+            || self.has_plugin_manifest && (path == &manifest_path || path == &alias_manifest_path)
+        {
             (false, true)
         } else {
             return Err(io::Error::new(io::ErrorKind::NotFound, "not found"));
@@ -252,7 +277,7 @@ async fn environment_skill_loading_reads_foreign_uris_through_executor_file_syst
     assert_eq!(
         outcome.skills,
         vec![EnvironmentSkillMetadata {
-            path_to_skills_md: canonical_root.join("skill/SKILL.md").expect("skill URI"),
+            path_to_skills_md: alias_root.join("skill/SKILL.md").expect("skill URI"),
             name: "synthetic-plugin:synthetic".to_string(),
             description: "Synthetic executor skill.".to_string(),
             short_description: None,
@@ -270,16 +295,11 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
         "root-identity"
     };
     let test_root = create_local_skill_root(root_label).expect("create local skill root");
-    let canonical_root = AbsolutePathBuf::from_absolute_path_checked(&test_root)
-        .expect("absolute skill root")
-        .canonicalize()
-        .expect("canonicalize skill root")
-        .to_string_lossy()
-        .into_owned();
-    let canonical_root = if cfg!(windows) {
-        canonical_root.replace('\\', "/")
+    let selected_root = test_root.to_string_lossy().into_owned();
+    let selected_root = if cfg!(windows) {
+        selected_root.replace('\\', "/")
     } else {
-        canonical_root
+        selected_root
     };
     let provider = ExecutorSkillProvider::new_with_restriction_product(
         Arc::new(EnvironmentManager::default_for_tests()),
@@ -321,14 +341,14 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
                 "root-a".to_string(),
                 format!(
                     "skill://root-a/{}/skill/SKILL.md",
-                    canonical_root.trim_start_matches('/')
+                    selected_root.trim_start_matches('/')
                 ),
             ),
             (
                 "root-b".to_string(),
                 format!(
                     "skill://root-b/{}/skill/SKILL.md",
-                    canonical_root.trim_start_matches('/')
+                    selected_root.trim_start_matches('/')
                 ),
             ),
         ]

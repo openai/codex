@@ -48,12 +48,10 @@ policy:
     let outcome =
         load_environment_skills_from_root(LOCAL_FS.as_ref(), &root_uri, Some(Product::Codex)).await;
 
-    let canonical_skill_dir = skill_dir.canonicalize().expect("canonical skill dir");
     assert_eq!(
         outcome.skills,
         vec![EnvironmentSkillMetadata {
-            path_to_skills_md:
-                PathUri::from_host_native_path(canonical_skill_dir.join("SKILL.md"),).unwrap(),
+            path_to_skills_md: PathUri::from_host_native_path(skill_dir.join("SKILL.md"),).unwrap(),
             name: "demo-plugin:deploy".to_string(),
             description: "Deploy the service.".to_string(),
             short_description: None,

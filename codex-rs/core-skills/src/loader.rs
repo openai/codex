@@ -613,12 +613,11 @@ async fn discover_skills_under_root(
             }
 
             if metadata.is_directory {
-                let resolved_dir = canonicalize_uri_for_skill_identity(fs, &path).await;
                 enqueue_dir(
                     &mut queue,
                     &mut visited_dirs,
                     &mut truncated_by_dir_limit,
-                    resolved_dir,
+                    path,
                     depth + 1,
                 );
                 continue;
