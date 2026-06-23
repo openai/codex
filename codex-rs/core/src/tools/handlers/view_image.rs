@@ -316,12 +316,13 @@ mod tests {
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::read_only();
+        let turn = Arc::new(turn);
 
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {
                 session: Arc::new(session),
-                step_context: Arc::new(StepContext::from_turn_context(&turn)),
-                turn: Arc::new(turn),
+                step_context: StepContext::for_test(Arc::clone(&turn)),
+                turn,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-view-image".to_string(),
@@ -345,12 +346,13 @@ mod tests {
     #[tokio::test]
     async fn handle_rejects_unsupported_detail() {
         let (session, turn) = make_session_and_context().await;
+        let turn = Arc::new(turn);
 
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {
                 session: Arc::new(session),
-                step_context: Arc::new(StepContext::from_turn_context(&turn)),
-                turn: Arc::new(turn),
+                step_context: StepContext::for_test(Arc::clone(&turn)),
+                turn,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-view-image".to_string(),
@@ -381,12 +383,13 @@ mod tests {
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::Disabled;
+        let turn = Arc::new(turn);
 
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {
                 session: Arc::new(session),
-                step_context: Arc::new(StepContext::from_turn_context(&turn)),
-                turn: Arc::new(turn),
+                step_context: StepContext::for_test(Arc::clone(&turn)),
+                turn,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-view-image".to_string(),

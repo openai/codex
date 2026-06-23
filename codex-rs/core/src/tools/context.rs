@@ -54,6 +54,7 @@ pub enum ToolCallSource {
 #[derive(Clone)]
 pub struct ToolInvocation {
     pub session: Arc<Session>,
+    // TODO(sayan): Remove this compatibility field once handlers use `step_context.turn`.
     pub turn: Arc<TurnContext>,
     pub(crate) step_context: Arc<StepContext>,
     pub cancellation_token: CancellationToken,

@@ -40,6 +40,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::skills::SkillRenderSideEffects;
@@ -2773,10 +2774,11 @@ impl Session {
 
     pub(crate) async fn record_step_environment_context_if_changed(
         &self,
-        turn_context: &TurnContext,
         previous_world_state: &Arc<WorldState>,
         step_context: &step_context::StepContext,
     ) -> Arc<WorldState> {
+        let turn_context = step_context.turn.as_ref();
+        // Render model-visible state from the same step used to build and run tools.
         let world_state = Arc::new(
             self.build_world_state_for_environments(turn_context, &step_context.environments)
                 .await,
@@ -2799,20 +2801,19 @@ impl Session {
 
     pub(crate) async fn capture_step_context(
         &self,
-        turn_context: &TurnContext,
+        turn_context: Arc<TurnContext>,
     ) -> Arc<StepContext> {
-        let step_context = if turn_context
+        // Keep the old turn-frozen view unless deferred executors are explicitly enabled.
+        let environments = if turn_context
             .config
             .features
             .enabled(Feature::DeferredExecutor)
         {
-            StepContext {
-                environments: self.services.turn_environments.snapshot().await,
-            }
+            self.services.turn_environments.snapshot().await
         } else {
-            StepContext::from_turn_context(turn_context)
+            turn_context.environments.clone()
         };
-        Arc::new(step_context)
+        Arc::new(StepContext::new(turn_context, environments))
     }
 
     pub(crate) async fn record_inter_agent_communication(

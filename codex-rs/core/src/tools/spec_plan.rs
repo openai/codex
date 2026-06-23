@@ -145,7 +145,6 @@ impl PlannedTools {
 
 #[derive(Clone, Copy)]
 struct CoreToolPlanContext<'a> {
-    turn_context: &'a TurnContext,
     step_context: &'a StepContext,
     mcp_tools: Option<&'a [ToolInfo]>,
     deferred_mcp_tools: Option<&'a [ToolInfo]>,
@@ -159,27 +158,22 @@ struct CoreToolPlanContext<'a> {
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn build_tool_router(
-    turn_context: &TurnContext,
-    step_context: Arc<StepContext>,
+    step_context: &StepContext,
     params: ToolRouterParams<'_>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> ToolRouter {
-    let (model_visible_specs, registry) = build_tool_specs_and_registry(
-        turn_context,
-        &step_context,
-        params,
-        tool_search_handler_cache,
-    );
-    ToolRouter::from_parts(registry, model_visible_specs, step_context)
+    let (model_visible_specs, registry) =
+        build_tool_specs_and_registry(step_context, params, tool_search_handler_cache);
+    ToolRouter::from_parts(registry, model_visible_specs)
 }
 
 #[instrument(level = "trace", skip_all)]
 fn build_tool_specs_and_registry(
-    turn_context: &TurnContext,
     step_context: &StepContext,
     params: ToolRouterParams<'_>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> (Vec<ToolSpec>, ToolRegistry) {
+    let turn_context = step_context.turn.as_ref();
     let ToolRouterParams {
         mcp_tools,
         deferred_mcp_tools,
@@ -190,7 +184,6 @@ fn build_tool_specs_and_registry(
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let context = CoreToolPlanContext {
-        turn_context,
         step_context,
         mcp_tools: mcp_tools.as_deref(),
         deferred_mcp_tools: deferred_mcp_tools.as_deref(),
@@ -299,7 +292,7 @@ fn spec_for_model_request(
 
 #[instrument(level = "trace", skip_all)]
 fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
-    let turn_context = context.turn_context;
+    let turn_context = context.step_context.turn.as_ref();
     // Responses Lite accepts schemas for client-executed tools, not hosted Responses tools.
     if turn_context.model_info.use_responses_lite {
         return Vec::new();
@@ -653,7 +646,7 @@ fn tool_environment_mode(step_context: &StepContext) -> ToolEnvironmentMode {
 
 #[instrument(level = "trace", skip_all)]
 fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
-    let turn_context = context.turn_context;
+    let turn_context = context.step_context.turn.as_ref();
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.step_context);
     if !environment_mode.has_environment() {
@@ -720,7 +713,7 @@ fn add_mcp_resource_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 
 #[instrument(level = "trace", skip_all)]
 fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
-    let turn_context = context.turn_context;
+    let turn_context = context.step_context.turn.as_ref();
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.step_context);
 
@@ -735,7 +728,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         );
     }
 
-    if features.enabled(Feature::RequestPermissionsTool) {
+    if environment_mode.has_environment() && features.enabled(Feature::RequestPermissionsTool) {
         planned_tools.add(RequestPermissionsHandler);
     }
 
@@ -798,7 +791,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 
 #[instrument(level = "trace", skip_all)]
 fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
-    let turn_context = context.turn_context;
+    let turn_context = context.step_context.turn.as_ref();
     if collab_tools_enabled(turn_context) {
         if multi_agent_v2_enabled(turn_context) {
             let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {
@@ -962,7 +955,7 @@ fn add_extension_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Pl
     // Extension ToolContributor implementations are resolved into executors
     // before planning. Core only adapts those executors into its runtime set.
     append_extension_tool_executors(
-        context.turn_context,
+        context.step_context.turn.as_ref(),
         context.extension_tool_executors,
         planned_tools,
     );
@@ -973,7 +966,7 @@ fn append_tool_search_executor(
     context: &CoreToolPlanContext<'_>,
     planned_tools: &mut PlannedTools,
 ) {
-    let turn_context = context.turn_context;
+    let turn_context = context.step_context.turn.as_ref();
     if !search_tool_enabled(turn_context) {
         return;
     }
@@ -996,7 +989,7 @@ fn prepend_code_mode_executors(
     context: &CoreToolPlanContext<'_>,
     planned_tools: &mut PlannedTools,
 ) {
-    let turn_context = context.turn_context;
+    let turn_context = context.step_context.turn.as_ref();
     let code_mode_executors = build_code_mode_executors(turn_context, planned_tools.runtimes());
     planned_tools.runtimes.splice(0..0, code_mode_executors);
 }

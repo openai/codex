@@ -270,9 +270,10 @@ fn test_invocation_with_payload(
     source: ToolCallSource,
     payload: ToolPayload,
 ) -> ToolInvocation {
+    let step_context = StepContext::for_test(Arc::clone(&turn));
     ToolInvocation {
         session,
-        step_context: Arc::new(StepContext::from_turn_context(turn.as_ref())),
+        step_context,
         turn,
         cancellation_token: CancellationToken::new(),
         tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
