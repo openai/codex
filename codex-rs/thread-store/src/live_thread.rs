@@ -100,12 +100,13 @@ impl LiveThread {
 
     pub async fn resume(
         thread_store: Arc<dyn ThreadStore>,
-        mut params: ResumeThreadParams,
+        params: ResumeThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
         let should_load_history = params.history.is_none();
         let include_archived = params.include_archived;
-        thread_store.resume_thread(params.clone()).await?;
+        let mut metadata_sync = ThreadMetadataSync::for_resume(&params);
+        thread_store.resume_thread(params).await?;
         if should_load_history {
             match thread_store
                 .load_history(LoadThreadHistoryParams {
@@ -114,7 +115,7 @@ impl LiveThread {
                 })
                 .await
             {
-                Ok(history) => params.history = Some(history.items),
+                Ok(history) => metadata_sync.record_resume_history(&history.items),
                 Err(err) => {
                     if let Err(discard_err) = thread_store.discard_thread(thread_id).await {
                         warn!(
@@ -125,7 +126,6 @@ impl LiveThread {
                 }
             }
         }
-        let metadata_sync = ThreadMetadataSync::for_resume(&params);
         Ok(Self {
             thread_id,
             thread_store,

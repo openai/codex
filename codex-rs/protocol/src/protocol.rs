@@ -10,6 +10,7 @@ use std::ops::Mul;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use strum_macros::EnumIter;
@@ -2460,7 +2461,7 @@ pub struct ConversationPathResponseEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ResumedHistory {
     pub conversation_id: ThreadId,
-    pub history: Vec<RolloutItem>,
+    pub history: Arc<Vec<RolloutItem>>,
     pub rollout_path: Option<PathBuf>,
 }
 
@@ -2505,11 +2506,11 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
+    pub fn get_rollout_items(&self) -> &[RolloutItem] {
         match self {
-            InitialHistory::New | InitialHistory::Cleared => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed.history.clone(),
-            InitialHistory::Forked(items) => items.clone(),
+            InitialHistory::New | InitialHistory::Cleared => &[],
+            InitialHistory::Resumed(resumed) => &resumed.history,
+            InitialHistory::Forked(items) => items,
         }
     }
 

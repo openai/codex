@@ -2604,8 +2604,8 @@ impl ThreadRequestProcessor {
             self.resume_thread_from_history(history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
-        } else if let Some(stored_thread) = stored_thread_from_running_probe {
-            self.stored_thread_to_initial_history(&stored_thread)
+        } else if let Some(mut stored_thread) = stored_thread_from_running_probe {
+            self.stored_thread_to_initial_history(&mut stored_thread)
                 .await
                 .map(|thread_history| (thread_history, Some(*stored_thread)))
         } else {
@@ -2758,7 +2758,7 @@ impl ThreadRequestProcessor {
                 let token_usage_thread = include_turns.then(|| thread.clone());
                 let mut initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
                     match build_thread_resume_initial_turns_page(
-                        &response_history.get_rollout_items(),
+                        response_history.get_rollout_items(),
                         thread.status.clone(),
                         /*has_live_running_thread*/ false,
                         /*active_turn*/ None,
@@ -2803,7 +2803,7 @@ impl ThreadRequestProcessor {
                 // rebuilding history only to attribute a replayed usage update.
                 if let Some(token_usage_thread) = token_usage_thread {
                     let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                        &response_history.get_rollout_items(),
+                        response_history.get_rollout_items(),
                         token_usage_thread.turns.as_slice(),
                     );
                     // The client needs restored usage before it starts another turn.
@@ -2901,7 +2901,7 @@ impl ThreadRequestProcessor {
             }
         };
 
-        if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
+        if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
             let existing_thread_rollout_path = existing_thread.rollout_path();
             let active_path = existing_thread_rollout_path
                 .as_ref()
@@ -2963,8 +2963,8 @@ impl ThreadRequestProcessor {
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
             let history_items = source_thread
                 .history
-                .as_ref()
-                .map(|history| history.items.clone())
+                .take()
+                .map(|history| history.items)
                 .ok_or_else(|| {
                     internal_error(format!(
                         "thread {existing_thread_id} did not include persisted history"
@@ -2988,10 +2988,8 @@ impl ThreadRequestProcessor {
             )
             .await?;
 
-            let mut summary_source_thread = source_thread;
-            summary_source_thread.history = None;
             let mut thread_summary = self.stored_thread_to_api_thread(
-                summary_source_thread,
+                source_thread,
                 config_snapshot.model_provider_id.as_str(),
                 /*include_turns*/ false,
             );
@@ -3060,11 +3058,11 @@ impl ThreadRequestProcessor {
         thread_id: &str,
         path: Option<&PathBuf>,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
-        let stored_thread = self
+        let mut stored_thread = self
             .read_stored_thread_for_resume(thread_id, path, /*include_history*/ true)
             .await?;
         let history = self
-            .stored_thread_to_initial_history(&stored_thread)
+            .stored_thread_to_initial_history(&mut stored_thread)
             .await?;
         Ok((history, stored_thread))
     }
@@ -3112,13 +3110,13 @@ impl ThreadRequestProcessor {
     #[tracing::instrument(level = "trace", skip_all)]
     async fn stored_thread_to_initial_history(
         &self,
-        stored_thread: &StoredThread,
+        stored_thread: &mut StoredThread,
     ) -> Result<InitialHistory, JSONRPCErrorError> {
         let thread_id = stored_thread.thread_id;
         let history = stored_thread
             .history
-            .as_ref()
-            .map(|history| history.items.clone())
+            .take()
+            .map(|history| history.items)
             .ok_or_else(|| {
                 internal_error(format!(
                     "thread {thread_id} did not include persisted history"
@@ -3126,7 +3124,7 @@ impl ThreadRequestProcessor {
             })?;
         Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
-            history,
+            history: Arc::new(history),
             rollout_path: stored_thread.rollout_path.clone(),
         }))
     }
@@ -3255,7 +3253,7 @@ impl ThreadRequestProcessor {
             let history_items = thread_history.get_rollout_items();
             populate_thread_turns_from_history(
                 &mut thread,
-                &history_items,
+                history_items,
                 /*active_turn*/ None,
             );
         }
@@ -3313,7 +3311,7 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
-        let source_thread = self
+        let mut source_thread = self
             .read_stored_thread_for_resume(&thread_id, path.as_ref(), /*include_history*/ true)
             .await?;
         let source_thread_id = source_thread.thread_id;
@@ -3323,8 +3321,8 @@ impl ThreadRequestProcessor {
             .and_then(codex_core::util::normalize_thread_name);
         let history_items = source_thread
             .history
-            .as_ref()
-            .map(|history| history.items.clone())
+            .take()
+            .map(|history| Arc::new(history.items))
             .ok_or_else(|| {
                 internal_error(format!(
                     "thread {source_thread_id} did not include persisted history"
@@ -3391,7 +3389,7 @@ impl ThreadRequestProcessor {
                 config,
                 InitialHistory::Resumed(ResumedHistory {
                     conversation_id: source_thread_id,
-                    history: history_items.clone(),
+                    history: Arc::clone(&history_items),
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
                 thread_source.map(Into::into),

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -108,11 +110,15 @@ impl ThreadMetadataSync {
             defer_resume_update_until_append: false,
         };
         if let Some(history) = params.history.as_deref() {
-            let update = sync.observe_resume_history(history);
-            sync.merge_pending_update(update);
-            sync.defer_resume_update_until_append = sync.pending_update.is_some();
+            sync.record_resume_history(history);
         }
         sync
+    }
+
+    pub(crate) fn record_resume_history(&mut self, history: &[RolloutItem]) {
+        let update = self.observe_resume_history(history);
+        self.merge_pending_update(update);
+        self.defer_resume_update_until_append = self.pending_update.is_some();
     }
 
     pub(crate) fn take_pending_update(&self) -> Option<PendingThreadMetadataPatch> {
@@ -555,7 +561,7 @@ mod tests {
         ResumeThreadParams {
             thread_id,
             rollout_path: None,
-            history: Some(history),
+            history: Some(Arc::new(history)),
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
