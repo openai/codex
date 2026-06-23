@@ -13,6 +13,7 @@ pub(crate) struct ContextWindowTokenStatus {
     pub(crate) auto_compact_window_prefill_tokens: Option<i64>,
     pub(crate) full_context_window_limit_reached: bool,
     pub(crate) token_limit_reached: bool,
+    pub(crate) context_remaining_tokens: Option<i64>,
 }
 
 impl ContextWindowTokenStatus {
@@ -33,6 +34,7 @@ pub(crate) async fn context_window_token_status(
 ) -> ContextWindowTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
     let mut auto_compact_window_prefill_tokens = None;
+    let mut has_context_remaining_limit = false;
     let (auto_compact_scope_tokens, auto_compact_scope_limit, full_context_window_limit) =
         match turn_context.config.model_auto_compact_token_limit_scope {
             AutoCompactTokenLimitScope::Total => (
@@ -47,14 +49,17 @@ pub(crate) async fn context_window_token_status(
                 let window = sess.auto_compact_window_snapshot().await;
                 auto_compact_window_prefill_tokens = window.prefill_input_tokens;
                 let baseline = window.prefill_input_tokens.unwrap_or(active_context_tokens);
+                let scope_limit = turn_context
+                    .config
+                    .model_auto_compact_token_limit
+                    .or_else(|| turn_context.model_info.auto_compact_token_limit());
+                let full_context_window_limit = turn_context.model_context_window();
+                has_context_remaining_limit =
+                    scope_limit.is_some() || full_context_window_limit.is_some();
                 (
                     active_context_tokens.saturating_sub(baseline),
-                    turn_context
-                        .config
-                        .model_auto_compact_token_limit
-                        .or_else(|| turn_context.model_info.auto_compact_token_limit())
-                        .unwrap_or(i64::MAX),
-                    turn_context.model_context_window(),
+                    scope_limit.unwrap_or(i64::MAX),
+                    full_context_window_limit,
                 )
             }
         };
@@ -64,7 +69,7 @@ pub(crate) async fn context_window_token_status(
         });
     let token_limit_reached =
         auto_compact_scope_tokens >= auto_compact_scope_limit || full_context_window_limit_reached;
-    ContextWindowTokenStatus {
+    let mut status = ContextWindowTokenStatus {
         active_context_tokens,
         auto_compact_scope_tokens,
         auto_compact_scope_limit,
@@ -72,5 +77,17 @@ pub(crate) async fn context_window_token_status(
         auto_compact_window_prefill_tokens,
         full_context_window_limit_reached,
         token_limit_reached,
-    }
+        context_remaining_tokens: None,
+    };
+    let context_remaining_limit_scope = turn_context.config.model_auto_compact_token_limit_scope;
+    status.context_remaining_tokens = match context_remaining_limit_scope {
+        AutoCompactTokenLimitScope::Total => turn_context
+            .model_context_window()
+            .map(|limit| limit.saturating_sub(active_context_tokens).max(0)),
+        AutoCompactTokenLimitScope::BodyAfterPrefix if has_context_remaining_limit => {
+            Some(status.tokens_until_compaction())
+        }
+        AutoCompactTokenLimitScope::BodyAfterPrefix => None,
+    };
+    status
 }
