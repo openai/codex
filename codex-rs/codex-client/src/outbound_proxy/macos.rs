@@ -197,7 +197,18 @@ fn proxy_entry_decision(
         else {
             return ProxyEntryDecision::Unavailable;
         };
-        return pac_decision(execute_pac_script(&script, target_url), target_url, origin);
+        return pac_decision(
+            execute_pac(|callback, context| unsafe {
+                CFNetworkExecuteProxyAutoConfigurationScript(
+                    script.as_concrete_TypeRef(),
+                    target_url.as_concrete_TypeRef(),
+                    callback,
+                    context,
+                )
+            }),
+            target_url,
+            origin,
+        );
     }
 
     ProxyEntryDecision::Unavailable
@@ -230,20 +241,6 @@ fn execute_pac_url(pac_url: &CFURL, target_url: &CFURL) -> Result<ProxyArray, Ro
     execute_pac(|callback, context| unsafe {
         CFNetworkExecuteProxyAutoConfigurationURL(
             pac_url.as_concrete_TypeRef(),
-            target_url.as_concrete_TypeRef(),
-            callback,
-            context,
-        )
-    })
-}
-
-fn execute_pac_script(
-    script: &CFString,
-    target_url: &CFURL,
-) -> Result<ProxyArray, RouteFailureClass> {
-    execute_pac(|callback, context| unsafe {
-        CFNetworkExecuteProxyAutoConfigurationScript(
-            script.as_concrete_TypeRef(),
             target_url.as_concrete_TypeRef(),
             callback,
             context,
