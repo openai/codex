@@ -5,9 +5,12 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::HookErrorInfo;
 use codex_app_server_protocol::HooksListEntry;
 use codex_app_server_protocol::HooksListResponse;
+use codex_app_server_protocol::MarketplaceLoadErrorInfo;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginShareContext;
+use codex_app_server_protocol::PluginShareDiscoverability;
+use codex_app_server_protocol::PluginSource;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
@@ -197,7 +200,8 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
             PluginInstallPolicy::Available,
         )]),
     ]);
-    let popup = render_loaded_plugins_popup(&mut chat, response);
+    render_loaded_plugins_popup(&mut chat, response);
+    let popup = render_bottom_popup(&chat, /*width*/ 320);
     assert_chatwidget_snapshot!("plugins_popup_curated_marketplace", popup);
     assert!(
         popup.contains("Hidden Repo Plugin"),
@@ -211,6 +215,27 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
             && plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
                 < plugins_test_popup_row_position(&popup, "Starter"),
         "expected /plugins rows to sort installed plugins first, then alphabetically, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_keeps_loaded_marketplace_state_with_load_errors() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let mut response = plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]);
+    response
+        .marketplace_load_errors
+        .push(MarketplaceLoadErrorInfo {
+            marketplace_path: plugins_test_absolute_path("marketplaces/broken"),
+            message: "failed to load marketplace manifest".to_string(),
+        });
+
+    let popup = render_loaded_plugins_popup(&mut chat, response);
+    assert!(
+        popup.contains("No marketplace plugins available")
+            && !popup.contains("Marketplace unavailable"),
+        "expected /plugins to keep the loaded marketplace state, got:\n{popup}"
     );
 }
 
@@ -272,14 +297,14 @@ async fn plugins_popup_add_marketplace_tab_opens_prompt_and_submits_source() {
     );
 
     while rx.try_recv().is_ok() {}
-    for _ in 0..3 {
-        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
-    }
-
-    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let popup = select_plugins_tab_containing(
+        &mut chat,
+        /*width*/ 100,
+        "Add a marketplace from a Git repo or local root.",
+    );
     assert!(
         popup.contains("Add a marketplace from a Git repo or local root."),
-        "expected Add Marketplace tab, got:\n{popup}"
+        "expected Add marketplace tab, got:\n{popup}"
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -349,11 +374,7 @@ async fn plugins_popup_upgrades_user_configured_git_marketplace_from_marketplace
     );
 
     while rx.try_recv().is_ok() {}
-    for _ in 0..3 {
-        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
-    }
-
-    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let popup = select_plugins_tab_containing(&mut chat, /*width*/ 100, "Repo Marketplace.");
     assert!(
         popup.contains("Repo Marketplace.")
             && popup.contains("ctrl + u upgrade")
@@ -513,10 +534,8 @@ async fn plugins_popup_removes_user_configured_marketplace_flow() {
     );
     while rx.try_recv().is_ok() {}
 
-    for _ in 0..3 {
-        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
-    }
-    let repo_tab = render_bottom_popup(&chat, /*width*/ 100);
+    let repo_tab =
+        select_plugins_tab_containing(&mut chat, /*width*/ 100, "Repo Marketplace.");
     assert!(
         repo_tab.contains("Repo Marketplace.")
             && repo_tab.contains("ctrl + u upgrade")
@@ -839,31 +858,23 @@ async fn plugin_detail_remote_uninstall_uses_remote_plugin_id() {
     let cwd = chat.config.cwd.clone();
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
-        Ok(plugins_test_response(vec![PluginMarketplaceEntry {
-            name: "workspace-shared-with-me-private".to_string(),
-            path: None,
-            interface: Some(MarketplaceInterface {
-                display_name: Some("Shared with me".to_string()),
-            }),
-            plugins: vec![summary.clone()],
-        }])),
+        Ok(plugins_test_response(vec![
+            plugins_test_remote_marketplace(
+                "workspace-shared-with-me-private",
+                "Shared with me",
+                vec![summary.clone()],
+            ),
+        ])),
     );
     chat.add_plugins_output();
     chat.on_plugin_detail_loaded(
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
-            plugin: PluginDetail {
-                marketplace_name: "workspace-shared-with-me-private".to_string(),
-                marketplace_path: None,
+            plugin: plugins_test_remote_detail(
+                "workspace-shared-with-me-private",
                 summary,
-                share_url: None,
-                description: Some("Installed shared Linear plugin.".to_string()),
-                skills: Vec::new(),
-                hooks: Vec::new(),
-                apps: Vec::new(),
-                app_templates: Vec::new(),
-                mcp_servers: Vec::new(),
-            },
+                Some("Installed shared Linear plugin."),
+            ),
         }),
     );
 
@@ -894,7 +905,7 @@ async fn plugin_detail_remote_uninstall_uses_remote_plugin_id() {
 
 #[tokio::test]
 async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let summary = PluginSummary {
@@ -912,31 +923,23 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
     let cwd = chat.config.cwd.clone();
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
-        Ok(plugins_test_response(vec![PluginMarketplaceEntry {
-            name: "workspace-shared-with-me-private".to_string(),
-            path: None,
-            interface: Some(MarketplaceInterface {
-                display_name: Some("Shared with me".to_string()),
-            }),
-            plugins: vec![summary.clone()],
-        }])),
+        Ok(plugins_test_response(vec![
+            plugins_test_remote_marketplace(
+                "workspace-shared-with-me-private",
+                "Shared with me",
+                vec![summary.clone()],
+            ),
+        ])),
     );
     chat.add_plugins_output();
     chat.on_plugin_detail_loaded(
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
-            plugin: PluginDetail {
-                marketplace_name: "workspace-shared-with-me-private".to_string(),
-                marketplace_path: None,
+            plugin: plugins_test_remote_detail(
+                "workspace-shared-with-me-private",
                 summary,
-                share_url: None,
-                description: Some("Installed shared Linear plugin.".to_string()),
-                skills: Vec::new(),
-                hooks: Vec::new(),
-                apps: Vec::new(),
-                app_templates: Vec::new(),
-                mcp_servers: Vec::new(),
-            },
+                Some("Installed shared Linear plugin."),
+            ),
         }),
     );
 
@@ -947,15 +950,58 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
         "expected missing remote ID to disable uninstall, got:\n{popup}"
     );
 
-    while rx.try_recv().is_ok() {}
-    assert!(
-        rx.try_recv().is_err(),
-        "expected no action after rendering disabled uninstall state"
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    assert_eq!(
+        render_bottom_popup(&chat, /*width*/ 120),
+        popup,
+        "expected navigation to skip the disabled uninstall row"
     );
 }
 
 #[tokio::test]
-async fn plugin_detail_admin_disabled_plugin_blocks_install() {
+async fn plugin_detail_popup_shows_local_share_context_as_read_only_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        share_context: Some(PluginShareContext {
+            remote_plugin_id: "plugins~Plugin_docs".to_string(),
+            remote_version: Some("7".to_string()),
+            discoverability: Some(PluginShareDiscoverability::Private),
+            share_url: Some("https://chatgpt.com/codex/plugins/share/docs".to_string()),
+            creator_account_user_id: None,
+            creator_name: Some("Test User".to_string()),
+            share_principals: None,
+        }),
+        ..plugins_test_summary(
+            "plugin-docs",
+            "docs",
+            Some("Docs"),
+            Some("Workspace docs."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    let mut detail = plugins_test_detail(summary, Some("Workspace docs."), &[], &[], &[], &[]);
+    detail.marketplace_path = Some(plugins_test_personal_marketplace_path());
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin: detail }));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert_chatwidget_snapshot!(
+        "plugin_detail_popup_local_share_read_only",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_shows_admin_disabled_status_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
@@ -984,10 +1030,17 @@ async fn plugin_detail_admin_disabled_plugin_blocks_install() {
         }),
     );
 
-    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    let status_row = popup
+        .lines()
+        .find(|line| line.contains("Disabled by admin"))
+        .expect("expected admin-disabled status row");
+    insta::assert_snapshot!(
+        status_row,
+        @"  Admin Blocked · Disabled by admin · ChatGPT Marketplace"
+    );
     assert!(
-        popup.contains("Admin Blocked · Disabled by admin")
-            && popup.contains("This plugin is disabled by your workspace admin.")
+        popup.contains("This plugin is disabled by your workspace admin.")
             && !popup.contains("Install this plugin now."),
         "expected admin-disabled detail to block install, got:\n{popup}"
     );
@@ -1021,18 +1074,18 @@ async fn plugins_popup_admin_disabled_installed_plugin_has_no_toggle_hint() {
         plugins_test_response(vec![plugins_test_curated_marketplace(vec![summary])]),
     );
 
-    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
         popup.contains("Disabled by admin")
             && popup.contains("Press Enter to view plugin details.")
             && !popup.contains("Space to disable"),
-        "expected admin-disabled installed plugin to omit toggle hint, got:\n{popup}"
+        "expected admin-disabled installed row to omit toggle hint, got:\n{popup}"
     );
 
     while rx.try_recv().is_ok() {}
-    let before = render_bottom_popup(&chat, /*width*/ 100);
+    let before = render_bottom_popup(&chat, /*width*/ 120);
     chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-    let after = render_bottom_popup(&chat, /*width*/ 100);
+    let after = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
         rx.try_recv().is_err(),
         "space should not toggle admin-disabled installed plugins"
@@ -1230,6 +1283,14 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
             && all_plugins_row.contains("Installed")
             && !all_plugins_row.contains("Available"),
         "expected installed remote duplicate to win over local mapped share, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    let installed_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        installed_popup.contains("Showing 1 installed plugins.")
+            && installed_popup.contains("Docs"),
+        "expected installed remote duplicate in the Installed tab, got:\n{installed_popup}"
     );
 
     while rx.try_recv().is_ok() {}
@@ -1765,7 +1826,14 @@ async fn plugins_popup_refresh_preserves_duplicate_marketplace_tab_by_path() {
     chat.on_plugins_loaded(cwd.clone(), Ok(response.clone()));
     chat.add_plugins_output();
 
-    for _ in 0..4 {
+    for _ in 0..10 {
+        let popup = render_bottom_popup(&chat, /*width*/ 100);
+        if popup.contains("Duplicate Marketplace (2/2).")
+            && popup.contains("Repo Plugin")
+            && !popup.contains("Home Plugin")
+        {
+            break;
+        }
         chat.handle_key_event(KeyEvent::from(KeyCode::Right));
     }
 

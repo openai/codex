@@ -74,7 +74,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
-    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
     test.fs()
         .create_directory(
             &remote_cwd_uri,

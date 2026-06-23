@@ -432,7 +432,8 @@ mod tests {
         ExecParams {
             process_id,
             argv: sleep_then_print_argv(),
-            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
+            cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
+                .expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,
