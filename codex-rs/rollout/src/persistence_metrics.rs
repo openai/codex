@@ -256,6 +256,7 @@ fn turn_item_type(item: &TurnItem) -> &'static str {
 fn response_item_type(item: &ResponseItem) -> &'static str {
     match item {
         ResponseItem::Message { .. } => "response.message",
+        ResponseItem::AdditionalTools { .. } => "response.additional_tools",
         ResponseItem::AgentMessage { .. } => "response.agent_message",
         ResponseItem::Reasoning { .. } => "response.reasoning",
         ResponseItem::LocalShellCall { .. } => "response.local_shell_call",
