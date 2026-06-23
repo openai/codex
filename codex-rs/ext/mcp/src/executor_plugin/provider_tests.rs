@@ -156,7 +156,8 @@ async fn reads_declared_config_only_through_executor_file_system() {
         reads: Mutex::new(Vec::new()),
     };
 
-    let servers = load_from_file_system(&plugin, &plugin_root, &file_system)
+    let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
+    let servers = load_from_file_system(&plugin, &plugin_root_uri, &file_system)
         .await
         .expect("load executor MCP config");
 
@@ -210,7 +211,8 @@ async fn reads_manifest_object_config_without_executor_file_system_access() {
         reads: Mutex::new(Vec::new()),
     };
 
-    let servers = load_from_file_system(&plugin, &plugin_root, &file_system)
+    let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
+    let servers = load_from_file_system(&plugin, &plugin_root_uri, &file_system)
         .await
         .expect("load manifest object executor MCP config");
 
@@ -259,7 +261,8 @@ async fn missing_default_config_is_empty() {
         reads: Mutex::new(Vec::new()),
     };
 
-    let servers = load_from_file_system(&plugin, &plugin_root, &file_system)
+    let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
+    let servers = load_from_file_system(&plugin, &plugin_root_uri, &file_system)
         .await
         .expect("missing default config should be ignored");
 
@@ -283,7 +286,8 @@ async fn malformed_declared_config_is_an_error() {
         reads: Mutex::new(Vec::new()),
     };
 
-    let err = load_from_file_system(&plugin, &plugin_root, &file_system)
+    let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
+    let err = load_from_file_system(&plugin, &plugin_root_uri, &file_system)
         .await
         .expect_err("malformed declared config should fail");
 
@@ -297,20 +301,70 @@ async fn malformed_declared_config_is_an_error() {
     };
     assert_eq!(
         (plugin_id, path),
-        ("selected-root".to_string(), config_path.clone())
+        (
+            "selected-root".to_string(),
+            PathUri::from_abs_path(&config_path)
+        )
     );
     assert_eq!(reads(&file_system), vec![config_path]);
+}
+
+#[tokio::test]
+async fn malformed_manifest_object_config_reports_actual_manifest_path() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let plugin_root = AbsolutePathBuf::from_absolute_path_checked(temp_dir.path().join("plugin"))
+        .expect("absolute plugin root");
+    let plugin = resolved_plugin(
+        &plugin_root,
+        Some(PluginManifestMcpServers::Object("{not-json".to_string())),
+    );
+    let file_system = SyntheticExecutorFileSystem {
+        config_path: plugin_root.join(DEFAULT_MCP_CONFIG_FILE),
+        config_contents: None,
+        reads: Mutex::new(Vec::new()),
+    };
+
+    let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
+    let err = load_from_file_system(&plugin, &plugin_root_uri, &file_system)
+        .await
+        .expect_err("malformed manifest object config should fail");
+
+    let ExecutorPluginMcpProviderError::ParseConfig {
+        plugin_id,
+        path,
+        source: _,
+    } = err
+    else {
+        panic!("expected parse error");
+    };
+    assert_eq!(
+        (plugin_id, path),
+        (
+            "selected-root".to_string(),
+            PathUri::from_abs_path(&plugin_root.join(".claude-plugin/plugin.json"))
+        )
+    );
+    assert_eq!(reads(&file_system), Vec::new());
 }
 
 fn resolved_plugin(
     plugin_root: &AbsolutePathBuf,
     mcp_servers: Option<PluginManifestMcpServers<AbsolutePathBuf>>,
 ) -> ResolvedPlugin {
+    let plugin_root_uri = PathUri::from_abs_path(plugin_root);
+    let mcp_servers = mcp_servers.map(|mcp_servers| match mcp_servers {
+        PluginManifestMcpServers::Path(path) => {
+            PluginManifestMcpServers::Path(PathUri::from_abs_path(&path))
+        }
+        PluginManifestMcpServers::Object(config) => PluginManifestMcpServers::Object(config),
+    });
     ResolvedPlugin::from_environment(
         "selected-root".to_string(),
         "executor-test".to_string(),
-        plugin_root.clone(),
-        plugin_root.join(".codex-plugin/plugin.json"),
+        plugin_root_uri.clone(),
+        plugin_root_uri
+            .join(".claude-plugin/plugin.json")
+            .expect("manifest URI"),
         PluginManifest {
             name: "demo-plugin".to_string(),
             version: None,

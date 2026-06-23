@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core_skills::SkillMetadata;
@@ -197,13 +196,6 @@ fn catalog_entry_from_skill(
     entry
 }
 
-fn executor_absolute_path(path: &str) -> std::io::Result<AbsolutePathBuf> {
-    let path = PathBuf::from(path);
-    if !path.is_absolute() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "executor path must be absolute",
-        ));
-    }
-    AbsolutePathBuf::from_absolute_path_checked(path)
+fn executor_absolute_path(path: &PathUri) -> std::io::Result<AbsolutePathBuf> {
+    path.to_abs_path()
 }

@@ -246,10 +246,10 @@ impl PathUri {
     /// Returns true when this URI is lexically equal to or below `base`.
     ///
     /// Containment is computed using URI authority and path-segment boundaries,
-    /// without consulting the host filesystem. Percent-encoded path separators
-    /// fail closed because native path conversion may interpret them as segment
-    /// boundaries. Opaque fallback URIs created by [`Self::from_abs_path`] only
-    /// contain themselves.
+    /// without consulting the host filesystem. Percent-encoded native path
+    /// separators fail closed because native path conversion may interpret them
+    /// as segment boundaries. Opaque fallback URIs created by
+    /// [`Self::from_abs_path`] only contain themselves.
     pub fn starts_with(&self, base: &Self) -> bool {
         if self == base {
             return true;

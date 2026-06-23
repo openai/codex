@@ -222,7 +222,6 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
 #[tokio::test]
 async fn selected_root_id_distinguishes_identical_executor_paths() {
     let test_root = create_local_skill_root("root-identity").expect("create local skill root");
-    let root_path = test_root.to_string_lossy().into_owned();
     let canonical_root = AbsolutePathBuf::from_absolute_path_checked(&test_root)
         .expect("absolute skill root")
         .canonicalize()
@@ -242,7 +241,7 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
                     id: id.to_string(),
                     location: CapabilityRootLocation::Environment {
                         environment_id: "local".to_string(),
-                        path: root_path.clone(),
+                        path: PathUri::from_host_native_path(&test_root).expect("skill root URI"),
                     },
                 })
                 .collect(),
