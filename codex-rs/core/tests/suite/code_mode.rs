@@ -3423,7 +3423,7 @@ text(JSON.stringify(tool));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
+async fn code_mode_can_call_hidden_dynamic_tools_and_catch_failures() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -3463,11 +3463,18 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     let code = r#"
 const tool = ALL_TOOLS.find(({ name }) => name === "codex_app__hidden_dynamic_tool");
 const out = await tools.codex_app__hidden_dynamic_tool({ city: "Paris" });
+let error = null;
+try {
+  await tools.codex_app__hidden_dynamic_tool({ city: "London" });
+} catch (caught) {
+  error = caught?.message ?? String(caught);
+}
 text(
   JSON.stringify({
     name: tool?.name ?? null,
     description: tool?.description ?? null,
     out,
+    error,
   })
 );
 "#;
@@ -3549,6 +3556,25 @@ text(
             },
         })
         .await?;
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::DynamicToolCallRequest(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.namespace.as_deref(), Some("codex_app"));
+    assert_eq!(request.tool, "hidden_dynamic_tool");
+    assert_eq!(request.arguments, serde_json::json!({ "city": "London" }));
+    test.codex
+        .submit(Op::DynamicToolResponse {
+            id: request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "automation_update received invalid arguments.".to_string(),
+                }],
+                success: false,
+            },
+        })
+        .await?;
     wait_for_event(&test.codex, |event| match event {
         EventMsg::TurnComplete(event) => event.turn_id == turn_id,
         _ => false,
@@ -3574,6 +3600,12 @@ text(
     assert_eq!(
         parsed.get("out"),
         Some(&Value::String("hidden-ok".to_string()))
+    );
+    assert_eq!(
+        parsed.get("error"),
+        Some(&Value::String(
+            "automation_update received invalid arguments.".to_string()
+        ))
     );
     assert!(
         parsed

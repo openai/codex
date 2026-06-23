@@ -2,6 +2,7 @@ use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
@@ -121,6 +122,7 @@ impl DynamicToolHandler {
             turn,
             call_id,
             payload,
+            source,
             ..
         } = invocation;
 
@@ -156,10 +158,19 @@ impl DynamicToolHandler {
             .into_iter()
             .map(FunctionCallOutputContentItem::from)
             .collect::<Vec<_>>();
-        Ok(boxed_tool_output(FunctionToolOutput::from_content(
-            body,
-            Some(success),
-        )))
+        let output = FunctionToolOutput::from_content(body, Some(success));
+        if !success && matches!(source, ToolCallSource::CodeMode { .. }) {
+            let message = output.into_text();
+            return Err(FunctionCallError::RespondToModel(
+                if message.trim().is_empty() {
+                    "dynamic tool call failed".to_string()
+                } else {
+                    message
+                },
+            ));
+        }
+
+        Ok(boxed_tool_output(output))
     }
 }
 
