@@ -1952,6 +1952,8 @@ pub struct SafetyBufferingEvent {
     pub model: String,
     pub use_cases: Vec<String>,
     pub reasons: Vec<String>,
+    pub show_buffering_ui: bool,
+    pub faster_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

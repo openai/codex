@@ -284,15 +284,8 @@ async fn compaction_budget_exhaustion_aborts_without_error_or_retry(remote_v2: b
         ])
     };
     let responses = mount_sse_sequence(&server, vec![compact_response]).await;
-    let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
-    model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    model_provider.supports_websockets = false;
-    if !remote_v2 {
-        model_provider.name = "OpenAI-compatible test provider".to_string();
-    }
     let test = test_codex()
         .with_config(move |config| {
-            config.model_provider = model_provider;
             config.rollout_budget = Some(RolloutBudgetConfig {
                 limit_tokens: 10,
                 reminder_at_remaining_tokens: vec![5],
@@ -303,6 +296,8 @@ async fn compaction_budget_exhaustion_aborts_without_error_or_retry(remote_v2: b
                     .features
                     .enable(Feature::RemoteCompactionV2)
                     .expect("test config should allow remote compaction v2");
+            } else {
+                config.model_provider.name = "OpenAI-compatible test provider".to_string();
             }
         })
         .build(&server)
