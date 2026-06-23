@@ -2,6 +2,9 @@ use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
 use base64::Engine as _;
+#[cfg(not(test))]
+use codex_keyring_store::DefaultKeyringStore;
+use codex_keyring_store::KeyringStore;
 use codex_utils_home_dir::find_codex_home;
 use rama_net::tls::ApplicationProtocol;
 use rama_tls_rustls::dep::pki_types::CertificateDer;
@@ -44,9 +47,7 @@ pub(super) struct ManagedMitmCa {
 impl ManagedMitmCa {
     pub(super) fn load_or_create() -> Result<Self> {
         let (ca_cert_pem, ca_key_pem) = load_or_create_ca()?;
-        let ca_key = KeyPair::from_pem(&ca_key_pem).context("failed to parse CA key")?;
-        let issuer: Issuer<'static, KeyPair> =
-            Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key).context("failed to parse CA cert")?;
+        let issuer = parse_ca_issuer(&ca_cert_pem, &ca_key_pem)?;
         Ok(Self { issuer })
     }
 
@@ -101,8 +102,11 @@ fn issue_host_certificate_pem(
 
 const MANAGED_MITM_CA_DIR: &str = "proxy";
 const MANAGED_MITM_CA_CERT: &str = "ca.pem";
-const MANAGED_MITM_CA_KEY: &str = "ca.key";
+const MANAGED_MITM_CA_LOCK: &str = "ca.lock";
 const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
+const MANAGED_MITM_CA_KEYRING_SERVICE: &str = "Codex Network Proxy CA";
+const MANAGED_MITM_CA_KEYRING_ACCOUNT_PREFIX: &str = "mitm-ca";
+const MANAGED_MITM_CA_KEYRING_ENTRY_VERSION: &str = "v1";
 pub(crate) const SSL_CERT_DIR_ENV_KEY: &str = "SSL_CERT_DIR";
 
 // Best-effort compatibility set for common child toolchains that accept a CA bundle path.
@@ -135,26 +139,57 @@ pub(crate) struct ManagedMitmCaTrustBundle {
     pub(crate) startup_env_values: HashMap<&'static str, String>,
 }
 
-fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
-    let codex_home =
-        find_codex_home().context("failed to resolve CODEX_HOME for managed MITM CA")?;
-    let proxy_dir = codex_home.join(MANAGED_MITM_CA_DIR);
-    Ok((
-        proxy_dir.join(MANAGED_MITM_CA_CERT).to_path_buf(),
-        proxy_dir.join(MANAGED_MITM_CA_KEY).to_path_buf(),
-    ))
+#[derive(Debug)]
+struct ManagedMitmCaStorage {
+    cert_path: PathBuf,
+    lock_path: PathBuf,
+    keyring_account: String,
 }
 
-pub(crate) fn managed_ca_private_key_path() -> Result<PathBuf> {
-    let (_, private_key_path) = managed_ca_paths()?;
-    Ok(private_key_path)
+enum ManagedMitmCaKeyringEntry {
+    Missing,
+    Matching(String),
+    Mismatched,
+}
+
+impl ManagedMitmCaStorage {
+    fn for_codex_home(codex_home: &Path) -> Self {
+        let proxy_dir = codex_home.join(MANAGED_MITM_CA_DIR);
+        let canonical_codex_home = codex_home
+            .canonicalize()
+            .unwrap_or_else(|_| codex_home.to_path_buf());
+        let hash = Sha256::digest(
+            canonical_codex_home
+                .as_os_str()
+                .to_string_lossy()
+                .as_bytes(),
+        );
+        let hash = format!("{hash:x}");
+        let short_hash = hash.get(..16).unwrap_or(hash.as_str());
+        Self {
+            cert_path: proxy_dir.join(MANAGED_MITM_CA_CERT),
+            lock_path: proxy_dir.join(MANAGED_MITM_CA_LOCK),
+            keyring_account: format!("{MANAGED_MITM_CA_KEYRING_ACCOUNT_PREFIX}|{short_hash}"),
+        }
+    }
+}
+
+fn managed_ca_storage() -> Result<ManagedMitmCaStorage> {
+    let codex_home =
+        find_codex_home().context("failed to resolve CODEX_HOME for managed MITM CA")?;
+    Ok(ManagedMitmCaStorage::for_codex_home(&codex_home))
+}
+
+fn managed_ca_cert_path() -> Result<PathBuf> {
+    let storage = managed_ca_storage()?;
+    Ok(storage.cert_path)
 }
 
 pub(crate) fn managed_ca_trust_bundle(
     env: &HashMap<&'static str, String>,
 ) -> Result<ManagedMitmCaTrustBundle> {
     load_or_create_ca()?;
-    let (cert_path, _) = managed_ca_paths()?;
+    let cert_path = managed_ca_cert_path()?;
     managed_ca_trust_bundle_for_cert_path(&cert_path, env)
 }
 
@@ -180,7 +215,7 @@ fn managed_ca_trust_bundle_for_cert_path(
 pub(crate) fn upstream_tls_root_store(
     env: &HashMap<&'static str, String>,
 ) -> Result<Arc<rustls::RootCertStore>> {
-    let (managed_ca_cert_path, _) = managed_ca_paths()?;
+    let managed_ca_cert_path = managed_ca_cert_path()?;
     upstream_tls_root_store_for_cert_path(&managed_ca_cert_path, env)
 }
 
@@ -388,7 +423,7 @@ fn is_current_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Pa
 
 /// Returns whether `path` points at a current Codex-generated MITM CA bundle.
 pub fn is_managed_mitm_ca_trust_bundle_path(path: &str) -> bool {
-    let Ok((managed_ca_cert_path, _)) = managed_ca_paths() else {
+    let Ok(managed_ca_cert_path) = managed_ca_cert_path() else {
         return false;
     };
     is_current_generated_trust_bundle_path(Path::new(path), &managed_ca_cert_path)
@@ -444,53 +479,138 @@ fn push_certificate_pem(bundle: &mut String, der: &[u8]) {
     bundle.push_str("-----END CERTIFICATE-----\n");
 }
 
+#[cfg(not(test))]
 fn load_or_create_ca() -> Result<(String, String)> {
-    let (cert_path, key_path) = managed_ca_paths()?;
+    let storage = managed_ca_storage()?;
+    load_or_create_ca_with_keyring(&storage, &DefaultKeyringStore)
+}
 
-    if cert_path.exists() || key_path.exists() {
-        if !cert_path.exists() || !key_path.exists() {
-            return Err(anyhow!(
-                "both managed MITM CA files must exist (cert={}, key={})",
-                cert_path.display(),
-                key_path.display()
-            ));
+#[cfg(test)]
+fn load_or_create_ca() -> Result<(String, String)> {
+    generate_ca()
+}
+
+fn load_or_create_ca_with_keyring(
+    storage: &ManagedMitmCaStorage,
+    keyring_store: &dyn KeyringStore,
+) -> Result<(String, String)> {
+    let proxy_dir = storage
+        .cert_path
+        .parent()
+        .ok_or_else(|| anyhow!("managed MITM CA cert path is missing a parent"))?;
+    fs::create_dir_all(proxy_dir)
+        .with_context(|| format!("failed to create {}", proxy_dir.display()))?;
+    // The certificate file and keyring entry form one logical record. Serialize creation so
+    // concurrent Codex processes cannot publish mismatched halves.
+    let lock_file = open_managed_ca_lock_file(&storage.lock_path)?;
+    lock_file
+        .lock()
+        .with_context(|| format!("failed to lock {}", storage.lock_path.display()))?;
+
+    if !path_entry_exists(&storage.cert_path)? {
+        return generate_and_store_ca(storage, keyring_store);
+    }
+
+    let cert_pem = fs::read_to_string(&storage.cert_path)
+        .with_context(|| format!("failed to read CA cert {}", storage.cert_path.display()))?;
+    let keyring_entry =
+        load_ca_key_from_keyring(keyring_store, &storage.keyring_account, &cert_pem)?;
+    let keyring_mismatch_reason = match keyring_entry {
+        ManagedMitmCaKeyringEntry::Matching(key_pem) => {
+            parse_ca_issuer(&cert_pem, &key_pem).context("stored CA key is invalid")?;
+            return Ok((cert_pem, key_pem));
         }
-        validate_existing_ca_key_file(&key_path)?;
-        let cert_pem = fs::read_to_string(&cert_path)
-            .with_context(|| format!("failed to read CA cert {}", cert_path.display()))?;
-        let key_pem = fs::read_to_string(&key_path)
-            .with_context(|| format!("failed to read CA key {}", key_path.display()))?;
-        return Ok((cert_pem, key_pem));
-    }
+        ManagedMitmCaKeyringEntry::Missing => "has no key",
+        ManagedMitmCaKeyringEntry::Mismatched => "contains a key for a different certificate",
+    };
 
-    if let Some(parent) = cert_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
+    Err(anyhow!(
+        "managed MITM CA certificate exists but the OS keyring {keyring_mismatch_reason}: {}",
+        storage.cert_path.display()
+    ))
+}
 
+fn generate_and_store_ca(
+    storage: &ManagedMitmCaStorage,
+    keyring_store: &dyn KeyringStore,
+) -> Result<(String, String)> {
     let (cert_pem, key_pem) = generate_ca()?;
-    // The CA key is a high-value secret. Create it atomically with restrictive permissions.
-    // The cert can be world-readable, but we still write it atomically to avoid partial writes.
-    //
-    // We intentionally use create-new semantics: if a key already exists, we should not overwrite
-    // it silently (that would invalidate previously-trusted cert chains).
-    write_atomic_create_new(&key_path, key_pem.as_bytes(), /*mode*/ 0o600)
-        .with_context(|| format!("failed to persist CA key {}", key_path.display()))?;
-    if let Err(err) = write_atomic_create_new(&cert_path, cert_pem.as_bytes(), /*mode*/ 0o644)
-        .with_context(|| format!("failed to persist CA cert {}", cert_path.display()))
-    {
-        // Avoid leaving a partially-created CA around (cert missing) if the second write fails.
-        let _ = fs::remove_file(&key_path);
-        return Err(err);
-    }
-    let cert_path = cert_path.display();
-    let key_path = key_path.display();
-    info!("generated MITM CA (cert_path={cert_path}, key_path={key_path})");
+    save_ca_key_to_keyring(keyring_store, &storage.keyring_account, &cert_pem, &key_pem)?;
+    write_atomic_create_new(&storage.cert_path, cert_pem.as_bytes(), /*mode*/ 0o644)
+        .with_context(|| format!("failed to persist CA cert {}", storage.cert_path.display()))?;
+    info!(
+        cert_path = %storage.cert_path.display(),
+        "generated MITM CA with private key stored in OS keyring"
+    );
     Ok((cert_pem, key_pem))
+}
+
+fn load_ca_key_from_keyring(
+    keyring_store: &dyn KeyringStore,
+    account: &str,
+    cert_pem: &str,
+) -> Result<ManagedMitmCaKeyringEntry> {
+    let stored = keyring_store
+        .load(MANAGED_MITM_CA_KEYRING_SERVICE, account)
+        .map_err(|err| anyhow!(err.message()))
+        .context("failed to load managed MITM CA key from OS keyring")?;
+    let Some(stored) = stored else {
+        return Ok(ManagedMitmCaKeyringEntry::Missing);
+    };
+    let mut parts = stored.splitn(3, '\n');
+    let version = parts.next();
+    let stored_cert_hash = parts.next();
+    let key_pem = parts.next();
+    let expected_cert_hash = format!("{:x}", Sha256::digest(cert_pem.as_bytes()));
+    if version != Some(MANAGED_MITM_CA_KEYRING_ENTRY_VERSION)
+        || stored_cert_hash != Some(expected_cert_hash.as_str())
+    {
+        return Ok(ManagedMitmCaKeyringEntry::Mismatched);
+    }
+    let Some(key_pem) = key_pem else {
+        return Ok(ManagedMitmCaKeyringEntry::Mismatched);
+    };
+    Ok(ManagedMitmCaKeyringEntry::Matching(key_pem.to_string()))
+}
+
+fn save_ca_key_to_keyring(
+    keyring_store: &dyn KeyringStore,
+    account: &str,
+    cert_pem: &str,
+    key_pem: &str,
+) -> Result<()> {
+    let cert_hash = Sha256::digest(cert_pem.as_bytes());
+    let value = format!("{MANAGED_MITM_CA_KEYRING_ENTRY_VERSION}\n{cert_hash:x}\n{key_pem}");
+    keyring_store
+        .save(MANAGED_MITM_CA_KEYRING_SERVICE, account, &value)
+        .map_err(|err| anyhow!(err.message()))
+        .context("failed to store managed MITM CA key in OS keyring")
+}
+
+fn path_entry_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("failed to stat {}", path.display())),
+    }
+}
+
+fn parse_ca_issuer(cert_pem: &str, key_pem: &str) -> Result<Issuer<'static, KeyPair>> {
+    let ca_key = KeyPair::from_pem(key_pem).context("failed to parse CA key")?;
+    Issuer::from_ca_cert_pem(cert_pem, ca_key).context("failed to parse CA cert")
+}
+
+fn open_managed_ca_lock_file(path: &Path) -> Result<File> {
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options
+        .open(path)
+        .with_context(|| format!("failed to open {}", path.display()))
 }
 
 fn generate_ca() -> Result<(String, String)> {
@@ -610,41 +730,6 @@ fn write_atomic_create_new_or_reuse(path: &Path, contents: &[u8], mode: u32) -> 
 }
 
 #[cfg(unix)]
-fn validate_existing_ca_key_file(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("failed to stat CA key {}", path.display()))?;
-    if metadata.file_type().is_symlink() {
-        return Err(anyhow!(
-            "refusing to use symlink for managed MITM CA key {}",
-            path.display()
-        ));
-    }
-    if !metadata.is_file() {
-        return Err(anyhow!(
-            "managed MITM CA key is not a regular file: {}",
-            path.display()
-        ));
-    }
-
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(anyhow!(
-            "managed MITM CA key {} must not be group/world accessible (mode={mode:o}; expected <= 600)",
-            path.display()
-        ));
-    }
-
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_existing_ca_key_file(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
 fn open_create_new_with_mode(path: &Path, mode: u32) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -669,11 +754,70 @@ fn open_create_new_with_mode(path: &Path, _mode: u32) -> Result<File> {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
+    use codex_keyring_store::tests::MockKeyringStore;
     use pretty_assertions::assert_eq;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
+
+    fn test_managed_ca_storage(proxy_dir: &Path) -> ManagedMitmCaStorage {
+        ManagedMitmCaStorage {
+            cert_path: proxy_dir.join(MANAGED_MITM_CA_CERT),
+            lock_path: proxy_dir.join(MANAGED_MITM_CA_LOCK),
+            keyring_account: "test-managed-mitm-ca".to_string(),
+        }
+    }
+
+    fn stored_ca_key(
+        keyring_store: &MockKeyringStore,
+        storage: &ManagedMitmCaStorage,
+        cert_pem: &str,
+    ) -> String {
+        match load_ca_key_from_keyring(keyring_store, &storage.keyring_account, cert_pem).unwrap() {
+            ManagedMitmCaKeyringEntry::Matching(key_pem) => key_pem,
+            ManagedMitmCaKeyringEntry::Missing | ManagedMitmCaKeyringEntry::Mismatched => {
+                panic!("expected matching managed MITM CA key")
+            }
+        }
+    }
+
+    #[test]
+    fn managed_ca_private_key_is_created_only_in_keyring() {
+        let dir = tempdir().unwrap();
+        let storage = test_managed_ca_storage(dir.path());
+        let keyring_store = MockKeyringStore::default();
+
+        let first = load_or_create_ca_with_keyring(&storage, &keyring_store).unwrap();
+        let second = load_or_create_ca_with_keyring(&storage, &keyring_store).unwrap();
+
+        assert_eq!(second, first);
+        assert_eq!(stored_ca_key(&keyring_store, &storage, &first.0), first.1);
+        assert_eq!(fs::read_to_string(&storage.cert_path).unwrap(), first.0);
+        assert!(!dir.path().join("ca.key").exists());
+        parse_ca_issuer(&first.0, &first.1).unwrap();
+    }
+
+    #[test]
+    fn managed_ca_rejects_keyring_key_for_different_certificate() {
+        let dir = tempdir().unwrap();
+        let storage = test_managed_ca_storage(dir.path());
+        let keyring_store = MockKeyringStore::default();
+        let (cert_pem, _) = generate_ca().unwrap();
+        let (other_cert_pem, other_key_pem) = generate_ca().unwrap();
+        fs::write(&storage.cert_path, cert_pem).unwrap();
+        save_ca_key_to_keyring(
+            &keyring_store,
+            &storage.keyring_account,
+            &other_cert_pem,
+            &other_key_pem,
+        )
+        .unwrap();
+
+        let err = load_or_create_ca_with_keyring(&storage, &keyring_store).unwrap_err();
+
+        assert!(
+            err.to_string().contains("different certificate"),
+            "unexpected error: {err:#}"
+        );
+    }
 
     #[test]
     fn current_generated_trust_bundle_path_rejects_stale_bundle() {
@@ -763,50 +907,6 @@ mod tests {
         let baseline_bundle = fs::read_to_string(&trust_bundle.path).unwrap();
 
         assert_eq!(baseline_bundle.matches(&managed_ca_cert).count(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn validate_existing_ca_key_file_rejects_group_world_permissions() {
-        let dir = tempdir().unwrap();
-        let key_path = dir.path().join("ca.key");
-        fs::write(&key_path, "key").unwrap();
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644)).unwrap();
-
-        let err = validate_existing_ca_key_file(&key_path).unwrap_err();
-        assert!(
-            err.to_string().contains("group/world accessible"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn validate_existing_ca_key_file_rejects_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempdir().unwrap();
-        let target = dir.path().join("real.key");
-        let link = dir.path().join("ca.key");
-        fs::write(&target, "key").unwrap();
-        symlink(&target, &link).unwrap();
-
-        let err = validate_existing_ca_key_file(&link).unwrap_err();
-        assert!(
-            err.to_string().contains("symlink"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn validate_existing_ca_key_file_allows_private_permissions() {
-        let dir = tempdir().unwrap();
-        let key_path = dir.path().join("ca.key");
-        fs::write(&key_path, "key").unwrap();
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
-
-        validate_existing_ca_key_file(&key_path).unwrap();
     }
 
     #[cfg(unix)]

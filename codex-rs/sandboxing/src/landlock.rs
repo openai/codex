@@ -12,16 +12,6 @@ pub fn allow_network_for_proxy(enforce_managed_network: bool) -> bool {
     enforce_managed_network
 }
 
-pub(crate) fn permission_profile_supports_legacy_landlock(
-    permission_profile: &PermissionProfile,
-    sandbox_policy_cwd: &Path,
-) -> bool {
-    let (file_system_sandbox_policy, network_sandbox_policy) =
-        permission_profile.to_runtime_permissions();
-    !file_system_sandbox_policy
-        .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
-}
-
 /// Converts the permission profile into the CLI invocation for
 /// `codex-linux-sandbox`.
 ///
@@ -40,8 +30,6 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
 ) -> Vec<String> {
     let permission_profile_json = serde_json::to_string(permission_profile)
         .unwrap_or_else(|err| panic!("failed to serialize permission profile: {err}"));
-    let supports_legacy_landlock =
-        permission_profile_supports_legacy_landlock(permission_profile, sandbox_policy_cwd);
     let sandbox_policy_cwd = sandbox_policy_cwd
         .to_str()
         .unwrap_or_else(|| panic!("cwd must be valid UTF-8"))
@@ -60,7 +48,7 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
         permission_profile_json,
     ];
     // Proxy-only networking requires bubblewrap's isolated network namespace.
-    if use_legacy_landlock && !allow_network_for_proxy && supports_legacy_landlock {
+    if use_legacy_landlock && !allow_network_for_proxy {
         linux_cmd.push("--use-legacy-landlock".to_string());
     }
     if allow_network_for_proxy {
