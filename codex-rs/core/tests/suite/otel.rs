@@ -3,6 +3,7 @@ use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
@@ -114,9 +115,17 @@ fn extract_log_field_does_not_confuse_similar_keys() {
 async fn responses_api_emits_api_request_event() {
     let server = start_mock_server().await;
 
-    mount_sse_once(&server, sse(vec![ev_completed("done")])).await;
+    let response_mock = mount_sse_once(&server, sse(vec![ev_completed("done")])).await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+            config.model_reasoning_effort = Some(ReasoningEffort::High);
+        })
+        .build(&server)
+        .await
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -134,12 +143,31 @@ async fn responses_api_emits_api_request_event() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    let request_body = response_mock.single_request().body_json();
+    assert_eq!(request_body["service_tier"].as_str(), Some("priority"));
+    assert_eq!(request_body["reasoning"]["effort"].as_str(), Some("high"));
+
     logs_assert(|lines: &[&str]| {
         lines
             .iter()
             .find(|line| line.contains("codex.api_request"))
             .map(|_| Ok(()))
             .unwrap_or_else(|| Err("expected codex.api_request event".to_string()))
+    });
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("event.kind=response.completed")
+                    && line.contains("service_tier=\"priority\"")
+                    && line.contains("model_reasoning_effort=\"high\"")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or_else(|| {
+                Err("expected response.completed event with inference attributes".to_string())
+            })
     });
 
     logs_assert(|lines: &[&str]| {
