@@ -45,15 +45,6 @@ pub(super) enum ExecutorPluginMcpProviderError {
         #[source]
         source: serde_json::Error,
     },
-    #[error(
-        "failed to resolve MCP config path for selected plugin `{plugin_id}` at `{root}`: {source}"
-    )]
-    ResolveConfigPath {
-        plugin_id: String,
-        root: PathUri,
-        #[source]
-        source: PathUriParseError,
-    },
 }
 
 impl ExecutorPluginMcpProvider {
