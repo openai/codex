@@ -4,9 +4,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use codex_core_skills::HostSkillsSnapshot;
-use codex_core_skills::loader::EnvironmentSkillMetadata;
 use codex_core_skills::loader::SkillRoot;
-use codex_core_skills::loader::load_environment_skills_from_root;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
@@ -46,33 +44,18 @@ impl SyntheticFileSystem {
             .map_err(io::Error::other)
     }
 
-    fn alias_path(&self, relative_path: &str) -> io::Result<PathUri> {
-        self.alias_root
-            .join(relative_path)
-            .map_err(io::Error::other)
-    }
-
     async fn canonicalize(&self, path: &PathUri) -> io::Result<PathUri> {
         if path == &self.alias_root {
             return Ok(self.canonical_root.clone());
-        }
-        if path == &self.alias_path("skill")? {
-            return self.path("skill");
-        }
-        if path == &self.alias_path("skill/SKILL.md")? {
-            return self.path("skill/SKILL.md");
         }
         self.metadata(path)?;
         Ok(path.clone())
     }
 
     async fn read_file(&self, path: &PathUri) -> io::Result<Vec<u8>> {
-        if path == &self.path("skill/SKILL.md")? || path == &self.alias_path("skill/SKILL.md")? {
+        if path == &self.path("skill/SKILL.md")? {
             Ok(SKILL_CONTENTS.as_bytes().to_vec())
-        } else if self.has_plugin_manifest
-            && (path == &self.path(".claude-plugin/plugin.json")?
-                || path == &self.alias_path(".claude-plugin/plugin.json")?)
-        {
+        } else if self.has_plugin_manifest && path == &self.path(".claude-plugin/plugin.json")? {
             Ok(PLUGIN_MANIFEST.as_bytes().to_vec())
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
@@ -80,13 +63,13 @@ impl SyntheticFileSystem {
     }
 
     async fn read_directory(&self, path: &PathUri) -> io::Result<Vec<ReadDirectoryEntry>> {
-        if path == &self.canonical_root || path == &self.alias_root {
+        if path == &self.canonical_root {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "skill".to_string(),
                 is_directory: true,
                 is_file: false,
             }])
-        } else if path == &self.path("skill")? || path == &self.alias_path("skill")? {
+        } else if path == &self.path("skill")? {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
@@ -99,21 +82,11 @@ impl SyntheticFileSystem {
 
     fn metadata(&self, path: &PathUri) -> io::Result<FileMetadata> {
         let skill_dir = self.path("skill")?;
-        let alias_skill_dir = self.alias_path("skill")?;
         let skill_path = self.path("skill/SKILL.md")?;
-        let alias_skill_path = self.alias_path("skill/SKILL.md")?;
         let manifest_path = self.path(".claude-plugin/plugin.json")?;
-        let alias_manifest_path = self.alias_path(".claude-plugin/plugin.json")?;
-        let (is_directory, is_file) = if path == &self.canonical_root
-            || path == &self.alias_root
-            || path == &skill_dir
-            || path == &alias_skill_dir
-        {
+        let (is_directory, is_file) = if path == &self.canonical_root || path == &skill_dir {
             (true, false)
-        } else if path == &skill_path
-            || path == &alias_skill_path
-            || self.has_plugin_manifest && (path == &manifest_path || path == &alias_manifest_path)
-        {
+        } else if path == &skill_path || self.has_plugin_manifest && path == &manifest_path {
             (false, true)
         } else {
             return Err(io::Error::new(io::ErrorKind::NotFound, "not found"));
@@ -253,37 +226,6 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
     assert_eq!(
         loaded.read_skill_text(&skill).await.expect("skill body"),
         SKILL_CONTENTS
-    );
-}
-
-#[tokio::test]
-async fn environment_skill_loading_reads_foreign_uris_through_executor_file_system() {
-    let alias_root = PathUri::parse("file:///C:/skills/alias").expect("alias root URI");
-    let canonical_root = PathUri::parse("file:///C:/skills/canonical").expect("canonical root URI");
-    let file_system = SyntheticFileSystem {
-        alias_root: alias_root.clone(),
-        canonical_root: canonical_root.clone(),
-        has_plugin_manifest: true,
-    };
-
-    let outcome = load_environment_skills_from_root(
-        &file_system,
-        &alias_root,
-        /*restriction_product*/ None,
-    )
-    .await;
-
-    assert_eq!(outcome.warnings, Vec::<String>::new());
-    assert_eq!(
-        outcome.skills,
-        vec![EnvironmentSkillMetadata {
-            path_to_skills_md: alias_root.join("skill/SKILL.md").expect("skill URI"),
-            name: "synthetic-plugin:synthetic".to_string(),
-            description: "Synthetic executor skill.".to_string(),
-            short_description: None,
-            dependencies: None,
-            policy: None,
-        }]
     );
 }
 
