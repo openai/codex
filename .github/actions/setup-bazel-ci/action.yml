@@ -34,6 +34,17 @@ runs:
 
     - name: Set up Bazel
       uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      with:
+        bazelisk-version: 1.28.1
+
+    - name: Verify Bazel version
+      shell: pwsh
+      run: |
+        $expected = (Get-Content (Join-Path $env:GITHUB_WORKSPACE '.bazelversion') -Raw).Trim()
+        $actual = (& bazel --version).Trim()
+        if ($actual -ne "bazel $expected") {
+          throw "Expected Bazel $expected from .bazelversion, got $actual"
+        }
 
     - name: Configure Bazel repository cache
       id: configure_bazel_repository_cache
