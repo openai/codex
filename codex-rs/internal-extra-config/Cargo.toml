@@ -14,4 +14,6 @@ test = false
 workspace = true
 
 [dependencies]
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+ts-rs = { workspace = true }

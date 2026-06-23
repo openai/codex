@@ -2105,6 +2105,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-experimental-api-macros",
+ "codex-internal-extra-config",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-absolute-path",
@@ -3196,7 +3197,9 @@ dependencies = [
 name = "codex-internal-extra-config"
 version = "0.0.0"
 dependencies = [
+ "schemars 0.8.22",
  "serde",
+ "ts-rs",
 ]
 
 [[package]]

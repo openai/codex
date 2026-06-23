@@ -121,11 +121,15 @@ impl From<ThreadSource> for CoreThreadSource {
     }
 }
 
-/// Extra app-server data for a thread.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "v2/")]
-pub struct ThreadExtra {}
+// copybara:replace-for-public begin
+pub use codex_internal_extra_config::ThreadExtra;
+// copybara:replace-for-public with
+// copybara:public /// Extra app-server data for a thread.
+// copybara:public #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+// copybara:public #[serde(rename_all = "camelCase")]
+// copybara:public #[ts(rename_all = "camelCase", export_to = "v2/")]
+// copybara:public pub struct ThreadExtra {}
+// copybara:replace-for-public end
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

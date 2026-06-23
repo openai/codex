@@ -27,16 +27,17 @@ PROJECT_INTERNAL_ONLY_MARKERS_TO_PUBLIC = core.transform(
             multiline = True,
             regex_groups = {
                 "internal": "(?m)^.*copybara:replace-for-public begin.*\\n[\\w\\W]*?^.*copybara:replace-for-public with.*\\n",
-                "public": "(?m)(?:^[ \\t]*#[ \\t]*copybara:public(?:[ \\t].*)?\\n?)+",
+                "public": "(?m)(?:^[ \\t]*(?:#|//)[ \\t]*copybara:public(?:[ \\t].*)?\\n?)+",
                 "end": "(?m)^.*copybara:replace-for-public end.*\\n?",
             },
             paths = INTERNAL_ONLY_MARKER_FILES,
         ),
         core.replace(
-            before = "${indent}#${space}copybara:public${separator}${line}",
+            before = "${indent}${comment}${space}copybara:public${separator}${line}",
             after = "${indent}${line}",
             regex_groups = {
                 "indent": "[ \\t]*",
+                "comment": "(?:#|//)",
                 "space": "[ \\t]*",
                 "separator": "[ \\t]?",
                 "line": ".*",

@@ -108,11 +108,13 @@ def verify_marker_projection(base_copybara_args: list[str], temp_root: Path) -> 
     thread_store_types.write_text(
         textwrap.dedent(
             """\
+            // copybara:replace-for-public begin
             pub struct PersistentModeConfig {
-                // copybara:strip-for-public begin
                 pub message: String,
-                // copybara:strip-for-public end
             }
+            // copybara:replace-for-public with
+            // copybara:public pub struct PersistentModeConfig {}
+            // copybara:replace-for-public end
             """
         ),
         encoding="utf-8",

@@ -134,9 +134,8 @@ hunk. If that happens, resolve the merge conflict by keeping the public change
 and reapplying the marked internal lines. If another shared file type needs
 these markers, add a broad path pattern to `INTERNAL_ONLY_MARKER_FILES` in
 `copy.bara.sky` so imports three-way merge that file class and exports strip or
-replace the markers. Replacement blocks currently expect TOML-style
-`# copybara:public` payload lines; add a file-specific transform before using
-replacement blocks in a language with different comment syntax.
+replace the markers. Replacement payloads may use TOML-style
+`# copybara:public` or Rust-style `// copybara:public` markers.
 
 Do not use line markers in generated files. In particular, `codex-rs/Cargo.lock`
 is projection-sensitive once internal workspace crates add lockfile entries.
