@@ -876,7 +876,32 @@ pub struct ConfigRequirementsToml {
     #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
     pub permissions: Option<PermissionsRequirementsToml>,
+    pub models: Option<ModelsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelsRequirementsToml {
+    pub new_thread: Option<NewThreadModelDefaultsToml>,
+}
+
+impl ModelsRequirementsToml {
+    fn is_empty(&self) -> bool {
+        self.new_thread
+            .as_ref()
+            .is_none_or(NewThreadModelDefaultsToml::is_empty)
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct NewThreadModelDefaultsToml {
+    pub model: Option<String>,
+}
+
+impl NewThreadModelDefaultsToml {
+    fn is_empty(&self) -> bool {
+        self.model.is_none()
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -930,6 +955,7 @@ pub struct ConfigRequirementsWithSources {
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
     pub permissions: Option<Sourced<PermissionsRequirementsToml>>,
+    pub models: Option<Sourced<ModelsRequirementsToml>>,
     pub guardian_policy_config: Option<Sourced<String>>,
 }
 
@@ -974,6 +1000,7 @@ impl ConfigRequirementsWithSources {
             enforce_residency: _,
             network: _,
             permissions: _,
+            models: _,
             guardian_policy_config: _,
         } = &other;
 
@@ -1010,6 +1037,7 @@ impl ConfigRequirementsWithSources {
                 enforce_residency,
                 network,
                 permissions,
+                models,
                 guardian_policy_config,
             }
         );
@@ -1046,6 +1074,7 @@ impl ConfigRequirementsWithSources {
             enforce_residency,
             network,
             permissions,
+            models,
             guardian_policy_config,
         } = self;
         ConfigRequirementsToml {
@@ -1071,6 +1100,7 @@ impl ConfigRequirementsWithSources {
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
             permissions: permissions.map(|sourced| sourced.value),
+            models: models.map(|sourced| sourced.value),
             guardian_policy_config: guardian_policy_config.map(|sourced| sourced.value),
         }
     }
@@ -1184,6 +1214,10 @@ impl ConfigRequirementsToml {
             && self.network.is_none()
             && self.permissions.is_none()
             && self
+                .models
+                .as_ref()
+                .is_none_or(ModelsRequirementsToml::is_empty)
+            && self
                 .guardian_policy_config
                 .as_deref()
                 .is_none_or(|value| value.trim().is_empty())
@@ -1214,8 +1248,9 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 
     fn try_from(toml: ConfigRequirementsWithSources) -> Result<Self, Self::Error> {
         // Profile catalog selection remains on ConfigRequirementsToml for
-        // config loading and requirements API projection. The normalized
-        // constraints below only need the compiled PermissionProfile envelope.
+        // config loading and requirements API projection. Managed new-thread
+        // defaults also remain there because they are initialization values,
+        // not runtime constraints.
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_approvals_reviewers,
@@ -1238,6 +1273,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             enforce_residency,
             network,
             permissions,
+            models: _,
             guardian_policy_config,
         } = toml;
 
@@ -1635,6 +1671,7 @@ mod tests {
             enforce_residency,
             network,
             permissions,
+            models,
             guardian_policy_config,
         } = toml;
         ConfigRequirementsWithSources {
@@ -1670,6 +1707,7 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             permissions: permissions.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            models: models.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
@@ -1823,6 +1861,27 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_new_thread_model_default() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                [models.new_thread]
+                model = "managed-model"
+            "#,
+        )?;
+
+        assert_eq!(
+            requirements.models,
+            Some(ModelsRequirementsToml {
+                new_thread: Some(NewThreadModelDefaultsToml {
+                    model: Some("managed-model".to_string()),
+                }),
+            })
+        );
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn merge_unset_fields_copies_every_field_and_sets_sources() {
         let mut target = ConfigRequirementsWithSources::default();
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
@@ -1843,6 +1902,11 @@ mod tests {
         };
         let computer_use = ComputerUseRequirementsToml {
             allow_locked_computer_use: Some(false),
+        };
+        let models = ModelsRequirementsToml {
+            new_thread: Some(NewThreadModelDefaultsToml {
+                model: Some("managed-model".to_string()),
+            }),
         };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
@@ -1873,6 +1937,7 @@ mod tests {
             enforce_residency: Some(enforce_residency),
             network: None,
             permissions: None,
+            models: Some(models.clone()),
             guardian_policy_config: Some(guardian_policy_config.clone()),
         };
 
@@ -1923,6 +1988,7 @@ mod tests {
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
                 permissions: None,
+                models: Some(Sourced::new(models, source.clone())),
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
             }
         );
@@ -1970,6 +2036,7 @@ mod tests {
                 enforce_residency: None,
                 network: None,
                 permissions: None,
+                models: None,
                 guardian_policy_config: None,
             }
         );
@@ -2025,6 +2092,7 @@ mod tests {
                 enforce_residency: None,
                 network: None,
                 permissions: None,
+                models: None,
                 guardian_policy_config: None,
             }
         );

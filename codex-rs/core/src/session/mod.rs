@@ -466,6 +466,24 @@ pub(crate) fn resolve_multi_agent_version(
         })
 }
 
+fn resolve_initial_model(
+    configured_model: Option<String>,
+    managed_new_thread_model: Option<String>,
+    conversation_history: &InitialHistory,
+    session_source: &SessionSource,
+) -> Option<String> {
+    if session_source.is_non_root_agent() {
+        return configured_model;
+    }
+
+    match conversation_history {
+        InitialHistory::New | InitialHistory::Cleared => {
+            managed_new_thread_model.or(configured_model)
+        }
+        InitialHistory::Resumed(_) | InitialHistory::Forked(_) => configured_model,
+    }
+}
+
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
@@ -560,6 +578,20 @@ impl Codex {
                     .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
             )
         };
+
+        let managed_new_thread_model = config
+            .config_layer_stack
+            .requirements_toml()
+            .models
+            .as_ref()
+            .and_then(|models| models.new_thread.as_ref())
+            .and_then(|defaults| defaults.model.clone());
+        config.model = resolve_initial_model(
+            config.model.take(),
+            managed_new_thread_model,
+            &conversation_history,
+            &session_source,
+        );
 
         let config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {
