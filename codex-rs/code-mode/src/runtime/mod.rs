@@ -33,10 +33,6 @@ pub(crate) enum RuntimeCommand {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum PendingRuntimeMode {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the stacked continuing cell actor")
-    )]
     Continue,
     PauseUntilResumed,
 }
@@ -76,18 +72,10 @@ pub(crate) struct RuntimeThread {
 }
 
 impl RuntimeThread {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the stacked continuing cell actor")
-    )]
     pub(crate) async fn wait(&mut self) {
         let _ = (&mut self.completion_rx).await;
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the stacked continuing cell actor")
-    )]
     pub(crate) fn join_finished(&mut self) -> Result<(), RuntimeThreadError> {
         let Some(join_handle) = self.join_handle.take() else {
             return Ok(());
@@ -95,10 +83,6 @@ impl RuntimeThread {
         join_handle.join().map_err(|_| RuntimeThreadError::Panicked)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the stacked continuing cell actor")
-    )]
     pub(crate) fn join_pending(&self) -> bool {
         self.join_handle.is_some()
     }

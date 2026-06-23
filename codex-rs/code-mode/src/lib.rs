@@ -1,4 +1,5 @@
 mod cell_actor;
+pub mod continuing_cell;
 mod runtime;
 mod service;
 mod session_runtime;
