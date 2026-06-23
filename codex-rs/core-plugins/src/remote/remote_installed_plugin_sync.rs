@@ -212,6 +212,16 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 .map(str::trim)
                 .filter(|version| !version.is_empty());
             if store.active_plugin_version(&plugin_id).as_deref() == release_version {
+                if let Err(err) = store.write_remote_plugin_id(&plugin_id, &plugin.id) {
+                    warn!(
+                        remote_plugin_id = %plugin.id,
+                        plugin = %plugin.name,
+                        marketplace = %marketplace_name,
+                        error = %err,
+                        "failed to persist identity for cached remote installed plugin"
+                    );
+                    failed_remote_plugin_ids.insert(plugin.id);
+                }
                 continue;
             }
 
@@ -439,6 +449,13 @@ fn clear_remote_installed_plugin_bundle_sync_in_flight(key: &RemoteInstalledPlug
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
 
     #[test]
     fn remote_installed_plugin_sync_in_flight_dedupes_by_cache_root() {
@@ -459,6 +476,105 @@ mod tests {
             key.clone()
         ));
         clear_remote_installed_plugin_bundle_sync_in_flight(&key);
+    }
+
+    #[tokio::test]
+    async fn sync_backfills_remote_plugin_install_metadata_for_current_bundle() {
+        let server = MockServer::start().await;
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let cached_manifest = codex_home
+            .path()
+            .join(PLUGINS_CACHE_DIR)
+            .join(REMOTE_GLOBAL_MARKETPLACE_NAME)
+            .join("linear")
+            .join("1.2.3")
+            .join(".codex-plugin")
+            .join("plugin.json");
+        std::fs::create_dir_all(cached_manifest.parent().expect("manifest parent"))
+            .expect("create cached plugin manifest parent");
+        std::fs::write(&cached_manifest, r#"{"name":"linear","version":"1.2.3"}"#)
+            .expect("write cached plugin manifest");
+        let remote_plugin_id = "plugins~Plugin_linear";
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param("scope", "GLOBAL"))
+            .and(query_param("includeDownloadUrls", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plugins": [{
+                    "id": remote_plugin_id,
+                    "name": "linear",
+                    "scope": "GLOBAL",
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "ENABLED",
+                    "release": {
+                        "version": "1.2.3",
+                        "display_name": "Linear",
+                        "description": "Track work",
+                        "interface": {},
+                    },
+                    "enabled": true,
+                }],
+                "pagination": {"next_page_token": null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param("scope", "USER"))
+            .and(query_param("includeDownloadUrls", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plugins": [],
+                "pagination": {"next_page_token": null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param("scope", "WORKSPACE"))
+            .and(query_param("includeDownloadUrls", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plugins": [],
+                "pagination": {"next_page_token": null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let config = RemotePluginServiceConfig {
+            chatgpt_base_url: format!("{}/backend-api", server.uri()),
+        };
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+        let outcome = sync_remote_installed_plugin_bundles_once(
+            codex_home.path().to_path_buf(),
+            &config,
+            Some(&auth),
+        )
+        .await
+        .expect("sync current remote plugin bundle");
+
+        assert_eq!(outcome, RemoteInstalledPluginBundleSyncOutcome::default());
+        let plugin_id = PluginId::new(
+            "linear".to_string(),
+            REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(),
+        )
+        .expect("valid plugin id");
+        let metadata_path = PluginStore::new(codex_home.path().to_path_buf())
+            .plugin_base_root(&plugin_id)
+            .join(".codex-remote-plugin-install.json");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(metadata_path.as_path())
+                    .expect("read remote plugin install metadata")
+            )
+            .expect("parse remote plugin install metadata"),
+            json!({
+                "schema_version": 1,
+                "remote_plugin_id": remote_plugin_id,
+            })
+        );
     }
 
     #[test]

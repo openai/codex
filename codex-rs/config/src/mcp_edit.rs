@@ -146,7 +146,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
                 entry["env_vars"] = array_from_env_vars(env_vars);
             }
             if let Some(cwd) = cwd {
-                entry["cwd"] = value(cwd.to_string_lossy().to_string());
+                entry["cwd"] = value(cwd.as_str());
             }
         }
         McpServerTransportConfig::StreamableHttp {

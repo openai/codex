@@ -165,18 +165,18 @@ async fn run_remote_compact_task_inner(
     attempt
         .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
-    if matches!(&result, Err(CodexErr::TurnAborted)) {
-        return result;
+    match result {
+        Ok(()) => Ok(()),
+        Err(err @ CodexErr::TurnAborted) => Err(err),
+        Err(err) => {
+            sess.track_turn_codex_error(turn_context, &err);
+            let event = EventMsg::Error(
+                err.to_error_event(Some("Error running remote compact task".to_string())),
+            );
+            sess.send_event(turn_context, event).await;
+            Err(err)
+        }
     }
-    if let Err(err) = result {
-        sess.track_turn_codex_error(turn_context, &err);
-        let event = EventMsg::Error(
-            err.to_error_event(Some("Error running remote compact task".to_string())),
-        );
-        sess.send_event(turn_context, event).await;
-        return Err(err);
-    }
-    Ok(())
 }
 
 async fn run_remote_compact_task_inner_impl(
@@ -234,7 +234,7 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await?;
     let mut input = prompt_input.clone();
-    input.push(ResponseItem::CompactionTrigger { metadata: None });
+    input.push(ResponseItem::CompactionTrigger {});
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
@@ -292,7 +292,7 @@ async fn run_remote_compact_task_inner_impl(
     let (compacted_history, retained_images) =
         build_v2_compacted_history(&prompt_input, compaction_output);
     analytics_details.retained_image_count = Some(retained_images);
-    let (new_window_number, new_window_id) = sess.advance_auto_compact_window().await;
+    let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
     let new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -309,7 +309,9 @@ async fn run_remote_compact_task_inner_impl(
         message: String::new(),
         replacement_history: Some(new_history.clone()),
         window_number: Some(new_window_number),
-        window_id: Some(new_window_id),
+        first_window_id: Some(new_window_ids.first_window_id.to_string()),
+        previous_window_id: new_window_ids.previous_window_id.map(|id| id.to_string()),
+        window_id: Some(new_window_ids.window_id.to_string()),
     };
     compaction_trace.record_installed(&CompactionCheckpointTracePayload {
         input_history: &trace_input_history,
@@ -524,7 +526,7 @@ fn truncate_message_text_to_token_budget(
         role,
         content,
         phase,
-        metadata,
+        internal_chat_message_metadata_passthrough: metadata,
     } = item
     else {
         return Some(item);
@@ -563,7 +565,7 @@ fn truncate_message_text_to_token_budget(
         role,
         content: truncated_content,
         phase,
-        metadata,
+        internal_chat_message_metadata_passthrough: metadata,
     })
 }
 
@@ -584,7 +586,7 @@ mod tests {
                 text: text.to_string(),
             }],
             phase,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }
     }
 
@@ -616,18 +618,18 @@ mod tests {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call_1".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::Compaction {
                 id: None,
                 encrypted_content: "old".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ];
         let output = ResponseItem::Compaction {
             id: None,
             encrypted_content: "new".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
 
         let (history, _) = build_v2_compacted_history(&input, output.clone());
@@ -656,7 +658,7 @@ mod tests {
         let output = ResponseItem::Compaction {
             id: None,
             encrypted_content: "new".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
 
         let (history, _) = build_v2_compacted_history(&input, output.clone());
@@ -683,12 +685,12 @@ mod tests {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }];
         let output = ResponseItem::Compaction {
             id: None,
             encrypted_content: "new".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
 
         let (_, retained_image_count) = build_v2_compacted_history(&input, output);
@@ -736,7 +738,7 @@ mod tests {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
 
         let truncated =
@@ -760,7 +762,7 @@ mod tests {
                     },
                 ],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }]
         );
     }
@@ -775,7 +777,7 @@ mod tests {
                 detail: None,
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let newest = message("user", "new", /*phase*/ None);
         let retained = vec![
@@ -800,7 +802,7 @@ mod tests {
                 detail: None,
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let newest = message("user", "new", /*phase*/ None);
         let retained = vec![image_only_message, newest.clone()];
@@ -816,7 +818,7 @@ mod tests {
         let compaction = ResponseItem::Compaction {
             id: None,
             encrypted_content: "encrypted".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let stream = response_stream(vec![
             Ok(ResponseEvent::OutputItemDone(message(

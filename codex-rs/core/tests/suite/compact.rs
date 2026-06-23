@@ -1,5 +1,6 @@
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_core::CodexThread;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
@@ -35,6 +36,7 @@ use core_test_support::responses;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -91,6 +93,48 @@ const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
 const REMOTE_V2_SUMMARY: &str = "global-instructions-remote-v2-summary";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
+
+async fn build_auto_compaction_disabled_codex(server: &MockServer) -> TestCodex {
+    let mut model_provider = non_openai_model_provider(server);
+    model_provider.stream_max_retries = Some(0);
+    test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(100);
+            config.model_auto_compact_token_limit = Some(90);
+            let _ = config.features.disable(Feature::AutoCompaction);
+        })
+        .build(server)
+        .await
+        .expect("build codex")
+}
+
+async fn submit_context_window_exceeded_turn(codex: &Arc<CodexThread>, text: &str) {
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submit context window exceeded turn");
+    let error_message = wait_for_event_match(codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert!(
+        error_message.contains("ran out of room in the model's context window"),
+        "expected context window exceeded message, got {error_message}"
+    );
+}
 
 fn ev_shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
     ev_function_call(
@@ -1993,12 +2037,12 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
                 text: remote_summary.to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let compact_mock =
@@ -2273,6 +2317,93 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
         &requests[2].body_json(),
         previous_model,
         next_model,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compaction_feature_disabled_skips_comp_hash_model_switch_compaction() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let previous_model = "gpt-5.3-codex";
+    let next_model = "gpt-5.2";
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_optional_comp_hash(previous_model, Some("hash-a")),
+                model_info_with_optional_comp_hash(next_model, Some("hash-b")),
+            ],
+        },
+    )
+    .await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "after switch"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            let _ = config.features.disable(Feature::AutoCompaction);
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "before switch",
+            test.cwd.path().to_path_buf(),
+            previous_model.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "after switch",
+            test.cwd.path().to_path_buf(),
+            next_model.to_string(),
+        ))
+        .await
+        .expect("submit second user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests.len(),
+        2,
+        "disabled auto-compaction should skip compaction on a comp-hash model switch"
+    );
+    let first = requests[0].body_json();
+    let second = requests[1].body_json();
+    assert_eq!(first["model"].as_str(), Some(previous_model));
+    assert_eq!(second["model"].as_str(), Some(next_model));
+    assert!(second.to_string().contains("before switch"));
+    assert!(second.to_string().contains("after switch"));
+    assert!(
+        !body_contains_text(&second.to_string(), SUMMARIZATION_PROMPT),
+        "disabled auto-compaction should preserve history instead of requesting a summary"
     );
 }
 
@@ -3656,6 +3787,45 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compaction_feature_disabled_skips_mid_turn_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let over_limit_tokens = 100 * 95 / 100 + 1;
+    let first_turn = sse(vec![
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r1", over_limit_tokens),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_turn,
+            sse_failed(
+                "response-failed",
+                "context_length_exceeded",
+                CONTEXT_LIMIT_MESSAGE,
+            ),
+        ],
+    )
+    .await;
+    let test = build_auto_compaction_disabled_codex(&server).await;
+
+    submit_context_window_exceeded_turn(&test.codex, FUNCTION_CALL_LIMIT_MSG).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    let continuation_request = &requests[1];
+    continuation_request.function_call_output(DUMMY_CALL_ID);
+    assert!(
+        !body_contains_text(
+            &continuation_request.body_json().to_string(),
+            SUMMARIZATION_PROMPT
+        ),
+        "disabled auto-compaction should continue without a compaction request"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_clamps_config_limit_to_context_window() {
     skip_if_no_network!();
 
@@ -3993,12 +4163,12 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let compact_mock =
@@ -4121,12 +4291,12 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let compact_mock =
@@ -4233,7 +4403,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     )
     .await
     .expect("override thread settings");
-    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
         .to_string();
     codex
         .submit(Op::UserInput {
@@ -4485,6 +4655,44 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     assert!(
         error_message.contains("ran out of room in the model's context window"),
         "expected context window exceeded message, got {error_message}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compaction_feature_disabled_skips_pre_turn_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_turn,
+            sse_failed(
+                "response-failed",
+                "context_length_exceeded",
+                CONTEXT_LIMIT_MESSAGE,
+            ),
+        ],
+    )
+    .await;
+    let test = build_auto_compaction_disabled_codex(&server).await;
+
+    test.submit_turn("USER_ONE")
+        .await
+        .expect("submit first turn");
+    submit_context_window_exceeded_turn(&test.codex, "USER_TWO").await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    let second_request_body = requests[1].body_json().to_string();
+    assert!(second_request_body.contains("USER_TWO"));
+    assert!(
+        !body_contains_text(&second_request_body, SUMMARIZATION_PROMPT),
+        "disabled auto-compaction should sample without a pre-turn compaction request"
     );
 }
 

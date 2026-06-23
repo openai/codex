@@ -421,7 +421,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                     }
                     return self
                         .manager
-                        .open_session_with_exec_env(
+                        .open_session_with_prepared_exec_env(
                             req.process_id,
                             &prepared.exec_request,
                             req.tty,
@@ -459,33 +459,20 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             error @ ToolError::Codex(_) => error,
         })?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
-        let mut exec_env = attempt
-            .env_for(
-                command,
-                options,
-                managed_network,
-                Some(&req.turn_environment.environment_id),
-            )
-            .map_err(ToolError::Codex)?;
-        exec_env.exec_server_env_config = req.exec_server_env_config.clone();
         self.manager
             .open_session_with_exec_env(
                 req.process_id,
-                &exec_env,
+                command,
+                options,
+                attempt,
+                managed_network,
+                /*environment_id*/ Some(&req.turn_environment.environment_id),
+                req.exec_server_env_config.clone(),
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
                 req.turn_environment.environment.as_ref(),
             )
             .await
-            .map_err(|err| match err {
-                UnifiedExecError::SandboxDenied { output, .. } => {
-                    ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                        output: Box::new(output),
-                        network_policy_decision: None,
-                    }))
-                }
-                other => ToolError::Rejected(other.to_string()),
-            })
     }
 }
 

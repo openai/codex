@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::parse_turn_item;
@@ -196,7 +198,7 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
             test.config.clone(),
             InitialHistory::Resumed(ResumedHistory {
                 conversation_id: test.session_configured.thread_id,
-                history: source_items.clone(),
+                history: Arc::new(source_items.clone()),
                 rollout_path: None,
             }),
             /*thread_source*/ None,

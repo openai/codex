@@ -119,7 +119,7 @@ pub struct AgentIdentityJwtClaims {
     pub agent_private_key: String,
     pub account_id: String,
     pub chatgpt_user_id: String,
-    pub email: String,
+    pub email: Option<String>,
     pub plan_type: AuthPlanType,
     pub chatgpt_account_is_fedramp: bool,
 }
@@ -667,11 +667,31 @@ mod tests {
                 agent_private_key: "private-key".to_string(),
                 account_id: "account-id".to_string(),
                 chatgpt_user_id: "user-id".to_string(),
-                email: "user@example.com".to_string(),
+                email: Some("user@example.com".to_string()),
                 plan_type: AuthPlanType::Known(KnownPlan::Pro),
                 chatgpt_account_is_fedramp: false,
             }
         );
+    }
+
+    #[test]
+    fn decode_agent_identity_jwt_accepts_missing_email() {
+        let jwt = jwt_with_payload(serde_json::json!({
+            "iss": AGENT_IDENTITY_JWT_ISSUER,
+            "aud": AGENT_IDENTITY_JWT_AUDIENCE,
+            "iat": 1_700_000_000usize,
+            "exp": 4_000_000_000usize,
+            "agent_runtime_id": "agent-runtime-id",
+            "agent_private_key": "private-key",
+            "account_id": "account-id",
+            "chatgpt_user_id": "user-id",
+            "plan_type": "pro",
+            "chatgpt_account_is_fedramp": false,
+        }));
+
+        let claims = decode_agent_identity_jwt(&jwt, /*jwks*/ None).expect("JWT should decode");
+
+        assert_eq!(claims.email, None);
     }
 
     #[test]
@@ -707,7 +727,7 @@ mod tests {
             agent_private_key: "private-key".to_string(),
             account_id: "account-id".to_string(),
             chatgpt_user_id: "user-id".to_string(),
-            email: "user@example.com".to_string(),
+            email: Some("user@example.com".to_string()),
             plan_type: AuthPlanType::Known(KnownPlan::Pro),
             chatgpt_account_is_fedramp: false,
         };
@@ -739,7 +759,7 @@ mod tests {
             agent_private_key: "private-key".to_string(),
             account_id: "account-id".to_string(),
             chatgpt_user_id: "user-id".to_string(),
-            email: "user@example.com".to_string(),
+            email: Some("user@example.com".to_string()),
             plan_type: AuthPlanType::Known(KnownPlan::Pro),
             chatgpt_account_is_fedramp: false,
         };

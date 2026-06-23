@@ -5,7 +5,7 @@ use crate::codex_apps::load_startup_cached_codex_apps_server_info;
 use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
 use crate::codex_apps::read_cached_codex_apps_tools;
 use crate::codex_apps::write_cached_codex_apps_tools;
-use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
+use crate::codex_apps::write_codex_apps_tools_cache;
 use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::elicitation_is_rejected_by_policy;
@@ -704,22 +704,11 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
         "calendar_search",
     )];
     let server_info = create_test_server_info("Codex Apps");
-    write_cached_codex_apps_tools_if_needed(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-        &server_info,
-        &cached_tools,
-    );
+    write_codex_apps_tools_cache(Some(&cache_context), &server_info, &cached_tools);
 
-    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-    )
-    .expect("expected startup snapshot to load from cache");
-    let cached_server_info = load_startup_cached_codex_apps_server_info(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-    );
+    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(Some(&cache_context))
+        .expect("expected startup snapshot to load from cache");
+    let cached_server_info = load_startup_cached_codex_apps_server_info(Some(&cache_context));
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].server_name, CODEX_APPS_MCP_SERVER_NAME);
@@ -746,15 +735,9 @@ fn startup_cached_codex_apps_tools_loads_without_server_info_cache() {
     .expect("serialize");
     std::fs::write(cache_path, bytes).expect("write");
 
-    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-    )
-    .expect("legacy startup snapshot should remain available");
-    let cached_server_info = load_startup_cached_codex_apps_server_info(
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&cache_context),
-    );
+    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(Some(&cache_context))
+        .expect("legacy startup snapshot should remain available");
+    let cached_server_info = load_startup_cached_codex_apps_server_info(Some(&cache_context));
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].callable_name, "calendar_search");
@@ -770,8 +753,7 @@ fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
         Some("user-one"),
     );
     let server_info = create_test_server_info("Codex Apps");
-    write_cached_codex_apps_tools_if_needed(
-        CODEX_APPS_MCP_SERVER_NAME,
+    write_codex_apps_tools_cache(
         Some(&cache_context),
         &server_info,
         &[create_test_tool(
@@ -792,19 +774,10 @@ fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
     std::fs::write(cache_path, bytes).expect("write legacy tools cache");
 
     assert_eq!(
-        load_startup_cached_codex_apps_server_info(
-            CODEX_APPS_MCP_SERVER_NAME,
-            Some(&cache_context),
-        ),
+        load_startup_cached_codex_apps_server_info(Some(&cache_context)),
         Some(server_info)
     );
-    assert!(
-        load_startup_cached_codex_apps_tools_snapshot(
-            CODEX_APPS_MCP_SERVER_NAME,
-            Some(&cache_context),
-        )
-        .is_none()
-    );
+    assert!(load_startup_cached_codex_apps_tools_snapshot(Some(&cache_context)).is_none());
 }
 
 #[tokio::test]
@@ -827,6 +800,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
+            is_codex_apps_mcp_server: true,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -864,6 +838,7 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
+            is_codex_apps_mcp_server: true,
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: Some(server_info.clone()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -901,6 +876,7 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
         "rmcp".to_string(),
         AsyncManagedClient {
             client: pending_client,
+            is_codex_apps_mcp_server: false,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -944,6 +920,7 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
         "rmcp".to_string(),
         AsyncManagedClient {
             client: pending_client,
+            is_codex_apps_mcp_server: false,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -986,6 +963,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
+            is_codex_apps_mcp_server: true,
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1022,6 +1000,7 @@ async fn shutdown_cancels_pending_tool_listing() {
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
+            is_codex_apps_mcp_server: true,
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1057,6 +1036,7 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
+            is_codex_apps_mcp_server: true,
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1097,6 +1077,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: failed_client,
+            is_codex_apps_mcp_server: true,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: Some(server_info.clone()),
             startup_complete,
@@ -1155,6 +1136,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
         server_name.to_string(),
         AsyncManagedClient {
             client: pending_client,
+            is_codex_apps_mcp_server: false,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1193,6 +1175,41 @@ fn server_metadata_preserves_tool_approval_policy() {
         metadata.tool_approval_mode("search"),
         AppToolApproval::Approve
     );
+}
+
+#[test]
+fn host_owned_codex_apps_requires_server_metadata() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+
+    assert!(!manager.is_host_owned_codex_apps_server(CODEX_APPS_MCP_SERVER_NAME));
+}
+
+#[test]
+fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    let server = EffectiveMcpServer::configured(crate::codex_apps_mcp_server_config(
+        "https://chatgpt.com",
+        /*apps_mcp_product_sku*/ None,
+    ));
+    manager.server_metadata.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        McpServerMetadata::from(&server),
+    );
+
+    assert!(manager.is_host_owned_codex_apps_server(CODEX_APPS_MCP_SERVER_NAME));
+    assert!(!manager.is_host_owned_codex_apps_server("docs"));
 }
 
 #[tokio::test]
@@ -1276,7 +1293,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             chatgpt_user_id: None,
             is_workspace_account: false,
         },
-        /*host_owned_codex_apps_enabled*/ false,
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
         /*supports_openai_form_elicitation*/ false,
