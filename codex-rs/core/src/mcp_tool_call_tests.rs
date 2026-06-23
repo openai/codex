@@ -461,6 +461,57 @@ async fn mcp_tool_call_span_records_expected_fields() {
     );
 }
 
+#[tokio::test]
+async fn mcp_tool_call_span_records_error_type_and_hosted_error_code() {
+    let buffer: &'static std::sync::Mutex<Vec<u8>> =
+        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_level(true)
+        .with_ansi(false)
+        .with_max_level(Level::TRACE)
+        .with_span_events(FmtSpan::FULL)
+        .with_writer(MockWriter::new(buffer))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let (session, turn_context) = make_session_and_context().await;
+    let result = Ok(CallToolResult {
+        content: Vec::new(),
+        structured_content: Some(serde_json::json!({"error_code": "RATE_LIMITED"})),
+        is_error: Some(true),
+        meta: None,
+    });
+    let span = mcp_tool_call_span(
+        &session,
+        &turn_context,
+        McpToolCallSpanFields {
+            server_name: CODEX_APPS_MCP_SERVER_NAME,
+            tool_name: "calendar_search",
+            call_id: "call-123",
+            server_origin: Some("https://chatgpt.com/api/codex/ps/mcp"),
+            connector_id: Some("calendar"),
+            connector_name: Some("Calendar"),
+        },
+    );
+
+    async {
+        record_mcp_result_span_telemetry(
+            &Span::current(),
+            &result,
+            McpErrorCodeSource::HostedPluginService,
+        );
+    }
+    .instrument(span)
+    .await;
+
+    let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs");
+    assert!(
+        logs.contains("error.type=\"tool_result\"")
+            && logs.contains("codex.mcp.error.code=\"RATE_LIMITED\""),
+        "missing MCP tool error span fields\nlogs:\n{logs}"
+    );
+}
+
 async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> String {
     let buffer: &'static std::sync::Mutex<Vec<u8>> =
         Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
@@ -474,12 +525,12 @@ async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> Stri
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let (session, turn_context) = make_session_and_context().await;
-    let result = CallToolResult {
+    let result = Ok(CallToolResult {
         content: Vec::new(),
         structured_content: None,
         is_error: None,
         meta,
-    };
+    });
 
     {
         let span = mcp_tool_call_span(
@@ -496,7 +547,11 @@ async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> Stri
         );
 
         async {
-            record_mcp_result_span_telemetry(&Span::current(), Some(&result));
+            record_mcp_result_span_telemetry(
+                &Span::current(),
+                &result,
+                McpErrorCodeSource::Untrusted,
+            );
         }
         .instrument(span)
         .await;
