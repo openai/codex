@@ -2231,7 +2231,7 @@ async fn spawn_thread_subagent_gets_random_nickname_in_session_source() {
 }
 
 #[tokio::test]
-async fn spawn_thread_subagent_inherits_parent_originator_without_fork() {
+async fn spawn_thread_subagents_persist_parent_originator_across_new_and_truncated_fork() {
     let harness = AgentControlHarness::new().await;
     let parent = harness
         .manager
@@ -2276,30 +2276,6 @@ async fn spawn_thread_subagent_inherits_parent_originator_without_fork() {
         .expect("child thread should be registered");
     let child_originator = persisted_originator(&child_thread).await;
     assert_eq!(child_originator, parent_originator);
-}
-
-#[tokio::test]
-async fn spawn_thread_subagent_fork_last_n_turns_inherits_parent_originator_without_session_meta() {
-    let harness = AgentControlHarness::new().await;
-    let parent = harness
-        .manager
-        .start_thread_with_options(StartThreadOptions {
-            config: harness.config.clone(),
-            initial_history: InitialHistory::New,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: Some("codex_work_desktop".to_string()),
-            multi_agent_mode: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: ExtensionDataInit::default(),
-            supports_openai_form_elicitation: false,
-        })
-        .await
-        .expect("parent thread should start");
-    let parent_originator = persisted_originator(&parent.thread).await;
-    assert_eq!(parent_originator, "codex_work_desktop");
 
     let child = harness
         .control
