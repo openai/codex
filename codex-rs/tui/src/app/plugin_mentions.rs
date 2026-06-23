@@ -90,12 +90,15 @@ mod tests {
     use codex_app_server_protocol::PluginInstallPolicy;
     use codex_app_server_protocol::PluginListResponse;
     use codex_app_server_protocol::PluginMarketplaceEntry;
+    use codex_app_server_protocol::PluginShareContext;
+    use codex_app_server_protocol::PluginShareDiscoverability;
     use codex_app_server_protocol::PluginSource;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn plugin_mentions_use_plugin_list_summaries_and_gui_eligibility() {
         let active = plugin_summary("active");
+        let active_shared = shared_plugin_summary("active-shared");
         let mut disabled_by_admin = plugin_summary("disabled-by-admin");
         disabled_by_admin.availability = PluginAvailability::DisabledByAdmin;
         let mut disabled = plugin_summary("disabled");
@@ -108,7 +111,13 @@ mod tests {
                 name: "server-marketplace".to_string(),
                 path: None,
                 interface: None,
-                plugins: vec![active, disabled_by_admin, disabled, uninstalled],
+                plugins: vec![
+                    active,
+                    active_shared,
+                    disabled_by_admin,
+                    disabled,
+                    uninstalled,
+                ],
             }],
             marketplace_load_errors: Vec::new(),
             featured_plugin_ids: Vec::new(),
@@ -116,15 +125,40 @@ mod tests {
 
         assert_eq!(
             plugin_mentions_from_list_response(response),
-            vec![PluginCapabilitySummary {
-                config_name: "active@server-marketplace".to_string(),
-                display_name: "active".to_string(),
-                description: Some("server-marketplace".to_string()),
-                has_skills: false,
-                mcp_server_names: Vec::new(),
-                app_connector_ids: Vec::new(),
-            }]
+            vec![
+                PluginCapabilitySummary {
+                    config_name: "active@server-marketplace".to_string(),
+                    display_name: "active".to_string(),
+                    description: Some("server-marketplace".to_string()),
+                    has_skills: false,
+                    mcp_server_names: Vec::new(),
+                    app_connector_ids: Vec::new(),
+                },
+                PluginCapabilitySummary {
+                    config_name: "active-shared@server-marketplace".to_string(),
+                    display_name: "active-shared".to_string(),
+                    description: Some("server-marketplace".to_string()),
+                    has_skills: false,
+                    mcp_server_names: Vec::new(),
+                    app_connector_ids: Vec::new(),
+                }
+            ]
         );
+    }
+
+    fn shared_plugin_summary(name: &str) -> PluginSummary {
+        PluginSummary {
+            share_context: Some(PluginShareContext {
+                remote_plugin_id: format!("plugins~{name}"),
+                remote_version: Some("7".to_string()),
+                discoverability: Some(PluginShareDiscoverability::Private),
+                share_url: Some(format!("https://chatgpt.com/codex/plugins/share/{name}")),
+                creator_account_user_id: None,
+                creator_name: Some("Test User".to_string()),
+                share_principals: None,
+            }),
+            ..plugin_summary(name)
+        }
     }
 
     fn plugin_summary(name: &str) -> PluginSummary {

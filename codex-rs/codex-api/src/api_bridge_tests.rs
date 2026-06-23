@@ -27,6 +27,34 @@ fn map_api_error_maps_server_overloaded_from_503_body() {
 }
 
 #[test]
+fn map_api_error_maps_cloudflare_blocked_response_to_user_message() {
+    let mut headers = HeaderMap::new();
+    headers.insert(CF_RAY_HEADER, http::HeaderValue::from_static("ray-id"));
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::FORBIDDEN,
+        url: Some("http://example.com/blocked".to_string()),
+        headers: Some(headers),
+        body: Some(
+            "<html><body>Cloudflare error: Sorry, you have been blocked</body></html>".to_string(),
+        ),
+    }));
+
+    let CodexErr::UnexpectedStatus(err) = err else {
+        panic!("expected CodexErr::UnexpectedStatus, got {err:?}");
+    };
+    assert_eq!(
+        err.user_message.as_deref(),
+        Some(
+            "Access blocked by Cloudflare. This usually happens when connecting from a restricted region (status 403 Forbidden)"
+        )
+    );
+    assert_eq!(
+        err.to_string(),
+        "Access blocked by Cloudflare. This usually happens when connecting from a restricted region (status 403 Forbidden), url: http://example.com/blocked, cf-ray: ray-id"
+    );
+}
+
+#[test]
 fn map_api_error_maps_cyber_policy_from_400_body() {
     let body = serde_json::json!({
         "error": {
