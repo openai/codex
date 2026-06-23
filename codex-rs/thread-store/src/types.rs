@@ -85,6 +85,8 @@ pub struct CreateThreadParams {
     pub dynamic_tools: Vec<DynamicToolSpec>,
     /// Multi-agent runtime selected when the thread was created.
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// Initial context-window identity captured when the thread was created.
+    pub initial_window_id: String,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
 }
