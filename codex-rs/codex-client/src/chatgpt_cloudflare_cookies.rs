@@ -128,11 +128,12 @@ mod tests {
     fn stores_and_returns_cloudflare_cookies_for_chatgpt_hosts() {
         let store = ChatGptCloudflareCookieStore::default();
         let url = reqwest::Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+        let load_balancer = HeaderValue::from_static("__cflb=west; Path=/; Secure; HttpOnly");
         let cfuvid = HeaderValue::from_static("_cfuvid=visitor; Path=/; Secure; HttpOnly");
         let clearance =
             HeaderValue::from_static("cf_clearance=clearance; Path=/; Secure; HttpOnly");
 
-        store.set_cookies(&mut [&cfuvid, &clearance].into_iter(), &url);
+        store.set_cookies(&mut [&load_balancer, &cfuvid, &clearance].into_iter(), &url);
 
         let mut cookies = store
             .cookies(&url)
@@ -148,6 +149,7 @@ mod tests {
         assert_eq!(
             cookies,
             vec![
+                "__cflb=west".to_string(),
                 "_cfuvid=visitor".to_string(),
                 "cf_clearance=clearance".to_string()
             ]
