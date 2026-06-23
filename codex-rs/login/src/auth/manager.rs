@@ -1,4 +1,7 @@
 use chrono::Utc;
+use hmac::Hmac;
+use hmac::Mac;
+use rand::RngCore;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -6,6 +9,7 @@ use serde::Serialize;
 use serial_test::serial;
 use std::env;
 use std::fmt::Debug;
+use std::fmt::Formatter;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -62,7 +66,10 @@ use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::auth::RefreshTokenFailedReason;
 use codex_protocol::protocol::SessionSource;
 use serde_json::Value;
+use sha2::Sha256;
 use thiserror::Error;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Authentication mechanism used by the current user.
 #[derive(Debug, Clone)]
@@ -82,6 +89,181 @@ pub enum AgentIdentityAuthPolicy {
     JwtOnly,
     /// Allow managed ChatGPT auth to register or reuse Agent Identity auth.
     ChatGptAuth,
+}
+
+/// A more secure way to match auth credentials without storing or printing raw key material.
+///
+/// The fingerprint is keyed with random in-memory material. Debug output can safely include the
+/// auth kind and a short fingerprint prefix, while matching can still recompute the keyed
+/// fingerprint for candidate stored auth records.
+#[derive(Clone)]
+pub struct AuthFingerprint {
+    kind: ApiAuthMode,
+    fingerprint: [u8; 32],
+    key: [u8; 32],
+}
+
+impl AuthFingerprint {
+    pub fn from_auth(auth: &CodexAuth) -> Option<Self> {
+        let kind = auth.api_auth_mode();
+        let mut key = [0_u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        let fingerprint = match auth {
+            CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
+                let auth_dot_json = auth.get_current_auth_json()?;
+                fingerprint_chatgpt_auth_dot_json(kind, &auth_dot_json, &key)?
+            }
+            CodexAuth::AgentIdentity(auth) => fingerprint_agent_identity_record(
+                kind,
+                serde_json::to_vec(auth.record()).ok()?.as_slice(),
+                &key,
+            ),
+            CodexAuth::PersonalAccessToken(auth) => {
+                fingerprint_single_secret(kind, auth.access_token(), &key)
+            }
+            CodexAuth::ApiKey(_) | CodexAuth::BedrockApiKey(_) => return None,
+        };
+
+        Some(Self {
+            kind,
+            fingerprint,
+            key,
+        })
+    }
+
+    fn matches_auth_dot_json(&self, auth_dot_json: &AuthDotJson) -> bool {
+        if auth_dot_json.resolved_mode() != self.kind {
+            return false;
+        }
+
+        let Some(candidate) = fingerprint_auth_dot_json(self.kind, auth_dot_json, &self.key) else {
+            return false;
+        };
+        candidate == self.fingerprint
+    }
+
+    fn is_external_chatgpt_tokens(&self) -> bool {
+        self.kind == ApiAuthMode::ChatgptAuthTokens
+    }
+}
+
+impl Debug for AuthFingerprint {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthFingerprint")
+            .field("kind", &self.kind)
+            .field("fingerprint_prefix", &FingerprintPrefix(&self.fingerprint))
+            .finish()
+    }
+}
+
+struct FingerprintPrefix<'a>(&'a [u8; 32]);
+
+impl Debug for FingerprintPrefix<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for byte in self.0.iter().take(4) {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+fn fingerprint_auth_dot_json(
+    kind: ApiAuthMode,
+    auth_dot_json: &AuthDotJson,
+    key: &[u8; 32],
+) -> Option<[u8; 32]> {
+    match kind {
+        ApiAuthMode::Chatgpt | ApiAuthMode::ChatgptAuthTokens => {
+            fingerprint_chatgpt_auth_dot_json(kind, auth_dot_json, key)
+        }
+        ApiAuthMode::AgentIdentity => {
+            let record = auth_dot_json
+                .agent_identity
+                .as_ref()
+                .and_then(|agent_identity| match agent_identity {
+                    AgentIdentityStorage::Jwt(jwt) => {
+                        AgentIdentityAuthRecord::from_agent_identity_jwt(jwt).ok()
+                    }
+                    AgentIdentityStorage::Record(record) => Some(record.clone()),
+                })?;
+            Some(fingerprint_agent_identity_record(
+                kind,
+                serde_json::to_vec(&record).ok()?.as_slice(),
+                key,
+            ))
+        }
+        ApiAuthMode::PersonalAccessToken => auth_dot_json
+            .personal_access_token
+            .as_deref()
+            .map(|access_token| fingerprint_single_secret(kind, access_token, key)),
+        ApiAuthMode::ApiKey | ApiAuthMode::BedrockApiKey => None,
+    }
+}
+
+fn fingerprint_chatgpt_auth_dot_json(
+    kind: ApiAuthMode,
+    auth_dot_json: &AuthDotJson,
+    key: &[u8; 32],
+) -> Option<[u8; 32]> {
+    let tokens = auth_dot_json.tokens.as_ref()?;
+    let mut mac = auth_fingerprint_mac(kind, key);
+    update_mac_field(&mut mac, tokens.access_token.as_bytes());
+    update_mac_field(&mut mac, tokens.refresh_token.as_bytes());
+    update_mac_optional_field(
+        &mut mac,
+        auth_dot_json_chatgpt_account_id(auth_dot_json).map(str::as_bytes),
+    );
+    Some(mac.finalize().into_bytes().into())
+}
+
+fn fingerprint_agent_identity_record(
+    kind: ApiAuthMode,
+    serialized_record: &[u8],
+    key: &[u8; 32],
+) -> [u8; 32] {
+    let mut mac = auth_fingerprint_mac(kind, key);
+    update_mac_field(&mut mac, serialized_record);
+    mac.finalize().into_bytes().into()
+}
+
+fn fingerprint_single_secret(kind: ApiAuthMode, secret: &str, key: &[u8; 32]) -> [u8; 32] {
+    let mut mac = auth_fingerprint_mac(kind, key);
+    update_mac_field(&mut mac, secret.as_bytes());
+    mac.finalize().into_bytes().into()
+}
+
+fn auth_fingerprint_mac(kind: ApiAuthMode, key: &[u8; 32]) -> HmacSha256 {
+    let Ok(mut mac) = HmacSha256::new_from_slice(key) else {
+        unreachable!("HMAC accepts keys of any size");
+    };
+    update_mac_field(&mut mac, auth_kind_label(kind));
+    mac
+}
+
+fn auth_kind_label(kind: ApiAuthMode) -> &'static [u8] {
+    match kind {
+        ApiAuthMode::ApiKey => b"ApiKey",
+        ApiAuthMode::Chatgpt => b"Chatgpt",
+        ApiAuthMode::ChatgptAuthTokens => b"ChatgptAuthTokens",
+        ApiAuthMode::AgentIdentity => b"AgentIdentity",
+        ApiAuthMode::PersonalAccessToken => b"PersonalAccessToken",
+        ApiAuthMode::BedrockApiKey => b"BedrockApiKey",
+    }
+}
+
+fn update_mac_optional_field(mac: &mut HmacSha256, value: Option<&[u8]>) {
+    match value {
+        Some(value) => {
+            mac.update(&[1]);
+            update_mac_field(mac, value);
+        }
+        None => mac.update(&[0]),
+    }
+}
+
+fn update_mac_field(mac: &mut HmacSha256, value: &[u8]) {
+    mac.update(&(value.len() as u64).to_be_bytes());
+    mac.update(value);
 }
 
 impl PartialEq for CodexAuth {
@@ -1149,10 +1331,137 @@ fn logout_all_stores(
     Ok(removed_ephemeral || removed_managed)
 }
 
+fn logout_store_matching_rejected_auth_fingerprint(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    rejected_auth_fingerprint: &AuthFingerprint,
+) -> std::io::Result<bool> {
+    logout_store_if(
+        codex_home,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+        |auth_dot_json| rejected_auth_fingerprint.matches_auth_dot_json(auth_dot_json),
+    )
+}
+
+fn logout_store_if(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    should_logout: impl Fn(&AuthDotJson) -> bool,
+) -> std::io::Result<bool> {
+    let Some(auth_dot_json) = load_auth_dot_json(
+        codex_home,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    if !should_logout(&auth_dot_json) {
+        return Ok(false);
+    }
+
+    let fallback_file_auth = if matches!(
+        auth_credentials_store_mode,
+        AuthCredentialsStoreMode::Auto | AuthCredentialsStoreMode::Keyring
+    ) {
+        load_auth_dot_json(
+            codex_home,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )?
+        .filter(|auth_dot_json| !should_logout(auth_dot_json))
+    } else {
+        None
+    };
+
+    let removed = logout(
+        codex_home,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    )?;
+    if let Some(auth_dot_json) = fallback_file_auth.as_ref() {
+        save_auth(
+            codex_home,
+            auth_dot_json,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )?;
+    }
+    Ok(removed)
+}
+
+fn auth_dot_json_chatgpt_account_id(auth_dot_json: &AuthDotJson) -> Option<&str> {
+    auth_dot_json.tokens.as_ref().and_then(|tokens| {
+        tokens
+            .account_id
+            .as_deref()
+            .or(tokens.id_token.chatgpt_account_id.as_deref())
+    })
+}
+
+fn auth_dot_json_uses_codex_backend(auth_dot_json: &AuthDotJson) -> bool {
+    auth_dot_json.resolved_mode().uses_codex_backend()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn load_auth(
     codex_home: &Path,
     enable_codex_api_key_env: bool,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    forced_chatgpt_workspace_id: Option<&[String]>,
+    chatgpt_base_url: Option<&str>,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    agent_identity_authapi_base_url: Option<&str>,
+    auth_route_config: Option<&AuthRouteConfig>,
+) -> std::io::Result<Option<CodexAuth>> {
+    load_auth_impl(
+        codex_home,
+        enable_codex_api_key_env,
+        /*enable_codex_access_token_env*/ true,
+        auth_credentials_store_mode,
+        forced_chatgpt_workspace_id,
+        chatgpt_base_url,
+        keyring_backend_kind,
+        agent_identity_authapi_base_url,
+        auth_route_config,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn load_auth_without_codex_access_token_env(
+    codex_home: &Path,
+    enable_codex_api_key_env: bool,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    forced_chatgpt_workspace_id: Option<&[String]>,
+    chatgpt_base_url: Option<&str>,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    agent_identity_authapi_base_url: Option<&str>,
+    auth_route_config: Option<&AuthRouteConfig>,
+) -> std::io::Result<Option<CodexAuth>> {
+    load_auth_impl(
+        codex_home,
+        enable_codex_api_key_env,
+        /*enable_codex_access_token_env*/ false,
+        auth_credentials_store_mode,
+        forced_chatgpt_workspace_id,
+        chatgpt_base_url,
+        keyring_backend_kind,
+        agent_identity_authapi_base_url,
+        auth_route_config,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn load_auth_impl(
+    codex_home: &Path,
+    enable_codex_api_key_env: bool,
+    enable_codex_access_token_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: Option<&[String]>,
     chatgpt_base_url: Option<&str>,
@@ -1189,7 +1498,8 @@ async fn load_auth(
         return Ok(Some(auth));
     }
 
-    if let Some(access_token) = read_codex_access_token_from_env() {
+    if enable_codex_access_token_env && let Some(access_token) = read_codex_access_token_from_env()
+    {
         return match classify_codex_access_token(&access_token) {
             CodexAccessToken::PersonalAccessToken(access_token) => {
                 let auth = PersonalAccessTokenAuth::load(access_token, auth_route_config).await?;
@@ -1547,6 +1857,7 @@ pub struct UnauthorizedRecovery {
     manager: Arc<AuthManager>,
     step: UnauthorizedRecoveryStep,
     expected_account_id: Option<String>,
+    rejected_auth_snapshot: Option<CodexAuth>,
     mode: UnauthorizedRecoveryMode,
 }
 
@@ -1582,6 +1893,7 @@ impl UnauthorizedRecovery {
             manager,
             step,
             expected_account_id,
+            rejected_auth_snapshot: cached_auth,
             mode,
         }
     }
@@ -1659,6 +1971,26 @@ impl UnauthorizedRecovery {
             UnauthorizedRecoveryStep::ExternalRefresh => "external_refresh",
             UnauthorizedRecoveryStep::Done => "done",
         }
+    }
+
+    pub fn current_auth_uses_codex_backend(&self) -> bool {
+        self.manager.current_auth_uses_codex_backend()
+    }
+
+    pub async fn force_logout_due_to_server_auth_rejection(
+        &mut self,
+        rejected_auth_fingerprint: Option<&AuthFingerprint>,
+    ) -> std::io::Result<bool> {
+        self.step = UnauthorizedRecoveryStep::Done;
+        let fallback_rejected_auth_fingerprint = self
+            .rejected_auth_snapshot
+            .as_ref()
+            .and_then(AuthFingerprint::from_auth);
+        let rejected_auth_fingerprint =
+            rejected_auth_fingerprint.or(fallback_rejected_auth_fingerprint.as_ref());
+        self.manager
+            .force_logout_due_to_server_auth_rejection(rejected_auth_fingerprint)
+            .await
     }
 
     pub async fn next(&mut self) -> Result<UnauthorizedRecoveryStepResult, RefreshTokenError> {
@@ -2135,6 +2467,23 @@ impl AuthManager {
         .flatten()
     }
 
+    async fn load_auth_from_storage_without_codex_access_token_env(&self) -> Option<CodexAuth> {
+        let forced_chatgpt_workspace_id = self.forced_chatgpt_workspace_id();
+        load_auth_without_codex_access_token_env(
+            &self.codex_home,
+            self.enable_codex_api_key_env,
+            self.auth_credentials_store_mode,
+            forced_chatgpt_workspace_id.as_deref(),
+            self.chatgpt_base_url.as_deref(),
+            self.keyring_backend_kind,
+            /*agent_identity_authapi_base_url*/ None,
+            self.auth_route_config.as_ref(),
+        )
+        .await
+        .ok()
+        .flatten()
+    }
+
     fn set_cached_auth(&self, new_auth: Option<CodexAuth>) -> bool {
         if let Ok(mut guard) = self.inner.write() {
             let previous = guard.auth.as_ref();
@@ -2399,6 +2748,100 @@ impl AuthManager {
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
         Ok(result)
+    }
+
+    pub async fn force_logout_due_to_server_auth_rejection(
+        &self,
+        rejected_auth_fingerprint: Option<&AuthFingerprint>,
+    ) -> std::io::Result<bool> {
+        if !self.current_auth_uses_codex_backend() {
+            return Ok(false);
+        }
+
+        let removal_result =
+            self.logout_stores_matching_rejected_auth_fingerprint(rejected_auth_fingerprint);
+        let cache_changed = self.set_cached_auth(
+            self.load_auth_from_storage_without_codex_access_token_env()
+                .await,
+        );
+        let removed = removal_result?;
+        Ok(removed || cache_changed)
+    }
+
+    fn logout_stores_matching_rejected_auth_fingerprint(
+        &self,
+        rejected_auth_fingerprint: Option<&AuthFingerprint>,
+    ) -> std::io::Result<bool> {
+        let Some(rejected_auth_fingerprint) = rejected_auth_fingerprint else {
+            return logout_all_stores(
+                &self.codex_home,
+                self.auth_credentials_store_mode,
+                self.keyring_backend_kind,
+            );
+        };
+
+        if rejected_auth_fingerprint.is_external_chatgpt_tokens() {
+            let removed_ephemeral = logout_store_matching_rejected_auth_fingerprint(
+                &self.codex_home,
+                AuthCredentialsStoreMode::Ephemeral,
+                AuthKeyringBackendKind::default(),
+                rejected_auth_fingerprint,
+            )?;
+            if self.auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
+                return Ok(removed_ephemeral);
+            }
+            let removed_file = logout_store_if(
+                &self.codex_home,
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+                auth_dot_json_uses_codex_backend,
+            )?;
+            let removed_managed =
+                if self.auth_credentials_store_mode == AuthCredentialsStoreMode::File {
+                    false
+                } else {
+                    logout_store_if(
+                        &self.codex_home,
+                        self.auth_credentials_store_mode,
+                        self.keyring_backend_kind,
+                        auth_dot_json_uses_codex_backend,
+                    )?
+                };
+            return Ok(removed_ephemeral || removed_file || removed_managed);
+        }
+
+        if self.auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
+            return logout_store_matching_rejected_auth_fingerprint(
+                &self.codex_home,
+                AuthCredentialsStoreMode::Ephemeral,
+                AuthKeyringBackendKind::default(),
+                rejected_auth_fingerprint,
+            );
+        }
+
+        let removed_ephemeral = logout_store_matching_rejected_auth_fingerprint(
+            &self.codex_home,
+            AuthCredentialsStoreMode::Ephemeral,
+            AuthKeyringBackendKind::default(),
+            rejected_auth_fingerprint,
+        )?;
+        let removed_file = if self.auth_credentials_store_mode == AuthCredentialsStoreMode::File {
+            false
+        } else {
+            logout_store_matching_rejected_auth_fingerprint(
+                &self.codex_home,
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+                rejected_auth_fingerprint,
+            )?
+        };
+        let removed_managed = logout_store_matching_rejected_auth_fingerprint(
+            &self.codex_home,
+            self.auth_credentials_store_mode,
+            self.keyring_backend_kind,
+            rejected_auth_fingerprint,
+        )?;
+        Ok(removed_ephemeral || removed_file || removed_managed)
     }
 
     pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {

@@ -940,6 +940,7 @@ async fn unauthorized_recovery_reports_mode_and_step_names() {
         manager: Arc::clone(&manager),
         step: UnauthorizedRecoveryStep::Reload,
         expected_account_id: None,
+        rejected_auth_snapshot: None,
         mode: UnauthorizedRecoveryMode::Managed,
     };
     assert_eq!(managed.mode_name(), "managed");
@@ -949,6 +950,7 @@ async fn unauthorized_recovery_reports_mode_and_step_names() {
         manager,
         step: UnauthorizedRecoveryStep::ExternalRefresh,
         expected_account_id: None,
+        rejected_auth_snapshot: None,
         mode: UnauthorizedRecoveryMode::External,
     };
     assert_eq!(external.mode_name(), "external");
@@ -1590,6 +1592,206 @@ async fn personal_access_token_does_not_offer_unauthorized_recovery() {
         .await
         .expect("personal access tokens do not use OAuth refresh");
     server.verify().await;
+}
+
+#[test]
+fn auth_fingerprint_debug_redacts_auth_material() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let fingerprint = AuthFingerprint::from_auth(&auth).expect("ChatGPT auth can be fingerprinted");
+
+    let debug = format!("{fingerprint:?}");
+
+    assert!(debug.contains("AuthFingerprint"));
+    assert!(debug.contains("fingerprint_prefix"));
+    assert!(!debug.contains("Access Token"));
+    assert!(!debug.contains("test"));
+    assert!(!debug.contains("account_id"));
+}
+
+fn test_auth_dot_json_with_mode_and_tokens(
+    auth_mode: AuthMode,
+    account_id: &str,
+    access_token: &str,
+    refresh_token: &str,
+) -> AuthDotJson {
+    let id_token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: None,
+        chatgpt_account_id: Some(account_id.to_string()),
+    })
+    .expect("fake jwt should serialize");
+    AuthDotJson {
+        auth_mode: Some(auth_mode),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: IdTokenInfo {
+                chatgpt_account_id: Some(account_id.to_string()),
+                raw_jwt: id_token,
+                ..Default::default()
+            },
+            access_token: access_token.to_string(),
+            refresh_token: refresh_token.to_string(),
+            account_id: Some(account_id.to_string()),
+        }),
+        last_refresh: Some(Utc::now()),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+    }
+}
+
+fn test_chatgpt_auth_dot_json(
+    account_id: &str,
+    access_token: &str,
+    refresh_token: &str,
+) -> AuthDotJson {
+    test_auth_dot_json_with_mode_and_tokens(
+        AuthMode::Chatgpt,
+        account_id,
+        access_token,
+        refresh_token,
+    )
+}
+
+fn test_chatgpt_auth_tokens_dot_json(account_id: &str, access_token: &str) -> AuthDotJson {
+    test_auth_dot_json_with_mode_and_tokens(
+        AuthMode::ChatgptAuthTokens,
+        account_id,
+        access_token,
+        "",
+    )
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn forced_server_auth_rejection_does_not_reload_access_token_env() {
+    let codex_home = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .and(header("authorization", "Bearer at-env-test"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, "at-env-test");
+    let rejected_auth_snapshot = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let rejected_auth_fingerprint = AuthFingerprint::from_auth(&rejected_auth_snapshot)
+        .expect("ChatGPT auth can be fingerprinted");
+    let manager = AuthManager::from_auth_for_testing_with_home(
+        rejected_auth_snapshot.clone(),
+        codex_home.path().to_path_buf(),
+    );
+
+    let changed = manager
+        .force_logout_due_to_server_auth_rejection(Some(&rejected_auth_fingerprint))
+        .await
+        .expect("forced logout should succeed");
+
+    assert!(changed);
+    assert!(manager.auth_cached().is_none());
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn forced_server_auth_rejection_preserves_newer_same_account_auth() {
+    let codex_home = tempdir().unwrap();
+    save_auth(
+        codex_home.path(),
+        &test_chatgpt_auth_dot_json("account_id", "new-access-token", "new-refresh-token"),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )
+    .expect("seed newer auth");
+    let rejected_auth_snapshot = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let rejected_auth_fingerprint = AuthFingerprint::from_auth(&rejected_auth_snapshot)
+        .expect("ChatGPT auth can be fingerprinted");
+    let manager = AuthManager::from_auth_for_testing_with_home(
+        rejected_auth_snapshot,
+        codex_home.path().to_path_buf(),
+    );
+
+    manager
+        .force_logout_due_to_server_auth_rejection(Some(&rejected_auth_fingerprint))
+        .await
+        .expect("forced logout should succeed");
+
+    let persisted_auth = load_auth_dot_json(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )
+    .expect("load auth")
+    .expect("newer auth should not be removed");
+    assert_eq!(
+        persisted_auth
+            .tokens
+            .map(|tokens| tokens.access_token)
+            .as_deref(),
+        Some("new-access-token")
+    );
+}
+
+#[tokio::test]
+async fn forced_server_auth_rejection_clears_stale_persistent_external_auth() {
+    let codex_home = tempdir().unwrap();
+    save_auth(
+        codex_home.path(),
+        &test_chatgpt_auth_dot_json("old_persistent_account", "old-access-token", "old-refresh"),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )
+    .expect("seed stale persistent auth");
+    save_auth(
+        codex_home.path(),
+        &test_chatgpt_auth_tokens_dot_json("account_id", "external-access-token"),
+        AuthCredentialsStoreMode::Ephemeral,
+        AuthKeyringBackendKind::default(),
+    )
+    .expect("seed ephemeral external auth");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await;
+    let rejected_auth_fingerprint =
+        AuthFingerprint::from_auth(&manager.auth_cached().expect("external auth should load"))
+            .expect("ChatGPT auth can be fingerprinted");
+
+    let changed = manager
+        .force_logout_due_to_server_auth_rejection(Some(&rejected_auth_fingerprint))
+        .await
+        .expect("forced logout should succeed");
+
+    assert!(changed);
+    assert!(manager.auth_cached().is_none());
+    assert!(
+        load_auth_dot_json(
+            codex_home.path(),
+            AuthCredentialsStoreMode::Ephemeral,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("load ephemeral auth")
+        .is_none()
+    );
+    assert!(
+        load_auth_dot_json(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("load file auth")
+        .is_none()
+    );
 }
 
 #[tokio::test]

@@ -17,6 +17,7 @@ use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_app_server_protocol::AuthMode;
+use codex_login::AuthFingerprint;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
@@ -28,6 +29,7 @@ use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -151,6 +153,22 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+fn unauthorized_transport(body: &str) -> TransportError {
+    unauthorized_transport_with_headers(body, /*headers*/ None)
+}
+
+fn unauthorized_transport_with_headers(
+    body: &str,
+    headers: Option<http::HeaderMap>,
+) -> TransportError {
+    TransportError::Http {
+        status: http::StatusCode::UNAUTHORIZED,
+        url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+        headers,
+        body: Some(body.to_string()),
+    }
 }
 
 #[derive(Default)]
@@ -399,6 +417,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        /*stream_auth_recovery*/ None,
     );
 
     let observed = stream
@@ -449,6 +468,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
         test_model_provider(),
+        /*stream_auth_recovery*/ None,
     );
 
     while stream.next().await.is_some() {}
@@ -485,6 +505,7 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
         &mut auth_recovery,
         &test_session_telemetry(),
         &provider,
+        /*rejected_auth_fingerprint*/ None,
     )
     .await
     .expect_err("expired Bedrock signature should fail");
@@ -524,6 +545,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        /*stream_auth_recovery*/ None,
     );
 
     // Fill the mapper channel with non-terminal events, then yield one output
@@ -564,6 +586,146 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[tokio::test]
+async fn workspace_restricted_401_forces_chatgpt_logout_without_retry() {
+    let rejected_auth_snapshot = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let rejected_auth_fingerprint = AuthFingerprint::from_auth(&rejected_auth_snapshot)
+        .expect("ChatGPT auth can be fingerprinted");
+    let auth_manager = AuthManager::from_auth_for_testing(rejected_auth_snapshot);
+    let mut recovery = Some(auth_manager.unauthorized_recovery());
+
+    let err = super::handle_unauthorized(
+        unauthorized_transport(r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#),
+        &mut recovery,
+        &test_session_telemetry(),
+        &test_model_provider(),
+        Some(&rejected_auth_fingerprint),
+    )
+    .await
+    .expect_err("matching 401 should force reauth without retry");
+
+    match err {
+        CodexErr::RefreshTokenFailed(failed) => {
+            assert_eq!(
+                failed.message,
+                "Your ChatGPT session is no longer authorized for this network or workspace. Please sign in again and choose an allowed workspace."
+            );
+        }
+        other => panic!("expected RefreshTokenFailed, got {other:?}"),
+    }
+    assert!(auth_manager.auth_cached().is_none());
+    assert!(!recovery.as_ref().expect("recovery").has_next());
+}
+
+#[tokio::test]
+async fn workspace_restricted_stream_401_forces_chatgpt_logout() {
+    let rejected_auth_snapshot = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let rejected_auth_fingerprint = AuthFingerprint::from_auth(&rejected_auth_snapshot)
+        .expect("ChatGPT auth can be fingerprinted");
+    let auth_manager = AuthManager::from_auth_for_testing(rejected_auth_snapshot);
+    let api_stream = futures::stream::iter([Err(ApiError::Transport(unauthorized_transport(
+        r#"{"type":"error","status":401,"error":{"code":"chatgpt_ip_workspace_restricted"}}"#,
+    )))]);
+    let (mut stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        test_model_provider(),
+        Some(super::StreamAuthRecovery {
+            auth_recovery: Some(auth_manager.unauthorized_recovery()),
+            rejected_auth_fingerprint: Some(rejected_auth_fingerprint),
+        }),
+    );
+
+    let err = stream
+        .next()
+        .await
+        .expect("stream should yield forced logout error")
+        .expect_err("workspace-restricted stream 401 should force logout");
+
+    assert!(matches!(err, CodexErr::RefreshTokenFailed(_)));
+    assert!(auth_manager.auth_cached().is_none());
+}
+
+#[tokio::test]
+async fn workspace_restricted_401_ignores_non_matching_cases() {
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut recovery = Some(auth_manager.unauthorized_recovery());
+
+    let err = super::handle_unauthorized(
+        unauthorized_transport(r#"{"error":{"code":"token_expired"}}"#),
+        &mut recovery,
+        &test_session_telemetry(),
+        &test_model_provider(),
+        /*rejected_auth_fingerprint*/ None,
+    )
+    .await
+    .expect_err("generic 401 should fall back to normal recovery");
+
+    assert!(matches!(err, CodexErr::RefreshTokenFailed(_)));
+    assert!(auth_manager.auth_cached().is_some());
+
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
+    let mut recovery = Some(auth_manager.unauthorized_recovery());
+    let err = super::handle_unauthorized(
+        unauthorized_transport(r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#),
+        &mut recovery,
+        &test_session_telemetry(),
+        &test_model_provider(),
+        /*rejected_auth_fingerprint*/ None,
+    )
+    .await
+    .expect_err("api key auth should not use ChatGPT forced logout");
+
+    assert!(matches!(err, CodexErr::UnexpectedStatus(_)));
+    assert!(
+        auth_manager
+            .auth_cached()
+            .is_some_and(|auth| auth.is_api_key_auth())
+    );
+}
+
+#[test]
+fn workspace_restricted_error_code_parser_accepts_body_and_header_shapes() {
+    for (body, expected) in [
+        (
+            r#"{"error":{"code":"chatgpt_ip_workspace_restricted"}}"#,
+            true,
+        ),
+        (r#"{"code":"chatgpt_ip_workspace_restricted"}"#, true),
+        (r#"{"error":{"code":"token_expired"}}"#, false),
+        ("not json", false),
+        (r#"{"error":{"message":"missing code"}}"#, false),
+    ] {
+        assert_eq!(
+            super::is_chatgpt_ip_workspace_restricted_unauthorized(
+                &unauthorized_transport(body),
+                &Default::default()
+            ),
+            expected
+        );
+    }
+
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        "x-error-json",
+        http::HeaderValue::from_static(
+            "eyJlcnJvciI6eyJjb2RlIjoiY2hhdGdwdF9pcF93b3Jrc3BhY2VfcmVzdHJpY3RlZCJ9fQ==",
+        ),
+    );
+    let transport = unauthorized_transport_with_headers(
+        r#"{"error":{"code":"different_error_code"}}"#,
+        Some(headers),
+    );
+    let debug = codex_response_debug_context::extract_response_debug_context(&transport);
+
+    assert!(super::is_chatgpt_ip_workspace_restricted_unauthorized(
+        &transport, &debug
+    ));
 }
 
 fn model_client_with_counting_attestation(

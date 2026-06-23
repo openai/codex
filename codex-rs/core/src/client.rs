@@ -62,6 +62,7 @@ use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
 use codex_app_server_protocol::AuthMode;
+use codex_login::AuthFingerprint;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
@@ -140,6 +141,8 @@ pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
 pub const X_OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
+pub const CHATGPT_IP_WORKSPACE_RESTRICTED_ERROR_CODE: &str = "chatgpt_ip_workspace_restricted";
+const CHATGPT_IP_WORKSPACE_RESTRICTED_MESSAGE: &str = "Your ChatGPT session is no longer authorized for this network or workspace. Please sign in again and choose an allowed workspace.";
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
 const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
@@ -273,6 +276,7 @@ struct LastResponse {
 #[derive(Debug, Default)]
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
+    connection_auth_fingerprint: Option<AuthFingerprint>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
@@ -1037,6 +1041,7 @@ impl ModelClientSession {
 
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
+        self.websocket_session.connection_auth_fingerprint = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
         self.websocket_session.last_response_from_untraced_warmup = false;
@@ -1189,6 +1194,10 @@ impl ModelClientSession {
             client_setup.api_auth.as_ref(),
             PendingUnauthorizedRetry::default(),
         );
+        let connection_auth_fingerprint = client_setup
+            .auth
+            .as_ref()
+            .and_then(AuthFingerprint::from_auth);
         let connection = self
             .client
             .connect_websocket(
@@ -1201,6 +1210,7 @@ impl ModelClientSession {
             )
             .await?;
         self.websocket_session.connection = Some(connection);
+        self.websocket_session.connection_auth_fingerprint = connection_auth_fingerprint;
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
         Ok(())
@@ -1226,6 +1236,7 @@ impl ModelClientSession {
             session_telemetry,
             api_provider,
             api_auth,
+            auth,
             responses_metadata,
             auth_context,
             request_route_telemetry,
@@ -1239,6 +1250,7 @@ impl ModelClientSession {
             self.websocket_session.last_request = None;
             self.websocket_session.last_response_rx = None;
             self.websocket_session.last_response_from_untraced_warmup = false;
+            self.websocket_session.connection_auth_fingerprint = None;
             let new_conn = match self
                 .client
                 .connect_websocket(
@@ -1260,6 +1272,7 @@ impl ModelClientSession {
                 }
             };
             self.websocket_session.connection = Some(new_conn);
+            self.websocket_session.connection_auth_fingerprint = auth;
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ false);
         } else {
@@ -1374,6 +1387,13 @@ impl ModelClientSession {
                         request_session_telemetry,
                         inference_trace_attempt,
                         Arc::clone(&self.client.state.provider),
+                        Some(StreamAuthRecovery {
+                            auth_recovery,
+                            rejected_auth_fingerprint: client_setup
+                                .auth
+                                .as_ref()
+                                .and_then(AuthFingerprint::from_auth),
+                        }),
                     );
                     return Ok(stream);
                 }
@@ -1387,12 +1407,17 @@ impl ModelClientSession {
                         response_debug_context.request_id.as_deref(),
                         /*output_items*/ &[],
                     );
+                    let rejected_auth_fingerprint = client_setup
+                        .auth
+                        .as_ref()
+                        .and_then(AuthFingerprint::from_auth);
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
                             &mut auth_recovery,
                             session_telemetry,
                             &self.client.state.provider,
+                            rejected_auth_fingerprint.as_ref(),
                         )
                         .await?,
                     );
@@ -1491,6 +1516,10 @@ impl ModelClientSession {
                     session_telemetry,
                     api_provider: client_setup.api_provider,
                     api_auth: client_setup.api_auth,
+                    auth: client_setup
+                        .auth
+                        .as_ref()
+                        .and_then(AuthFingerprint::from_auth),
                     responses_metadata,
                     auth_context: request_auth_context,
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint(
@@ -1508,12 +1537,17 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
+                    let rejected_auth_fingerprint = client_setup
+                        .auth
+                        .as_ref()
+                        .and_then(AuthFingerprint::from_auth);
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
                             &mut auth_recovery,
                             session_telemetry,
                             &self.client.state.provider,
+                            rejected_auth_fingerprint.as_ref(),
                         )
                         .await?,
                     );
@@ -1570,11 +1604,25 @@ impl ModelClientSession {
                     );
                     err
                 })?;
+            let rejected_auth_fingerprint = self
+                .websocket_session
+                .connection_auth_fingerprint
+                .clone()
+                .or_else(|| {
+                    client_setup
+                        .auth
+                        .as_ref()
+                        .and_then(AuthFingerprint::from_auth)
+                });
             let (stream, last_request_rx) = map_response_stream(
                 stream_result,
                 request_session_telemetry,
                 inference_trace_attempt,
                 Arc::clone(&self.client.state.provider),
+                Some(StreamAuthRecovery {
+                    auth_recovery,
+                    rejected_auth_fingerprint,
+                }),
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
@@ -1808,6 +1856,7 @@ fn map_response_stream(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    stream_auth_recovery: Option<StreamAuthRecovery>,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let codex_api::ResponseStream {
         rx_event,
@@ -1823,6 +1872,7 @@ fn map_response_stream(
         session_telemetry,
         inference_trace_attempt,
         provider,
+        stream_auth_recovery,
     )
 }
 
@@ -1832,6 +1882,7 @@ fn map_response_events<S>(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    mut stream_auth_recovery: Option<StreamAuthRecovery>,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
@@ -1942,7 +1993,28 @@ where
                     if let Some(upstream_request_id) = upstream_request_id {
                         feedback_tags!(last_model_request_id = upstream_request_id);
                     }
-                    let mapped = provider.map_api_error(err);
+                    let mapped = match err {
+                        ApiError::Transport(transport @ TransportError::Http { status, .. })
+                            if status == StatusCode::UNAUTHORIZED =>
+                        {
+                            let forced_logout_error =
+                                if let Some(stream_auth_recovery) = stream_auth_recovery.as_mut() {
+                                    force_logout_if_workspace_restricted_unauthorized(
+                                        &transport,
+                                        &mut stream_auth_recovery.auth_recovery,
+                                        &session_telemetry,
+                                        stream_auth_recovery.rejected_auth_fingerprint.as_ref(),
+                                    )
+                                    .await
+                                } else {
+                                    None
+                                };
+                            forced_logout_error.unwrap_or_else(|| {
+                                provider.map_api_error(ApiError::Transport(transport))
+                            })
+                        }
+                        err => provider.map_api_error(err),
+                    };
                     inference_trace_attempt.record_failed(
                         &mapped,
                         upstream_request_id,
@@ -2039,9 +2111,78 @@ struct WebsocketConnectParams<'a> {
     session_telemetry: &'a SessionTelemetry,
     api_provider: codex_api::Provider,
     api_auth: SharedAuthProvider,
+    auth: Option<AuthFingerprint>,
     responses_metadata: &'a CodexResponsesMetadata,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
+}
+
+struct StreamAuthRecovery {
+    auth_recovery: Option<UnauthorizedRecovery>,
+    rejected_auth_fingerprint: Option<AuthFingerprint>,
+}
+
+async fn force_logout_if_workspace_restricted_unauthorized(
+    transport: &TransportError,
+    auth_recovery: &mut Option<UnauthorizedRecovery>,
+    session_telemetry: &SessionTelemetry,
+    rejected_auth_fingerprint: Option<&AuthFingerprint>,
+) -> Option<CodexErr> {
+    let debug = extract_response_debug_context(transport);
+    if !is_chatgpt_ip_workspace_restricted_unauthorized(transport, &debug) {
+        return None;
+    }
+    let Some(recovery) = auth_recovery else {
+        return None;
+    };
+    if !recovery.current_auth_uses_codex_backend() {
+        return None;
+    }
+
+    let mode = recovery.mode_name();
+    let phase = recovery.step_name();
+    let auth_error_code = Some(
+        debug
+            .auth_error_code
+            .as_deref()
+            .unwrap_or(CHATGPT_IP_WORKSPACE_RESTRICTED_ERROR_CODE),
+    );
+    let auth_state_changed = match recovery
+        .force_logout_due_to_server_auth_rejection(rejected_auth_fingerprint)
+        .await
+    {
+        Ok(changed) => Some(changed),
+        Err(err) => {
+            warn!("failed to clear auth after server auth rejection: {err}");
+            None
+        }
+    };
+    session_telemetry.record_auth_recovery(
+        mode,
+        phase,
+        "forced_logout",
+        debug.request_id.as_deref(),
+        debug.cf_ray.as_deref(),
+        debug.auth_error.as_deref(),
+        auth_error_code,
+        Some(CHATGPT_IP_WORKSPACE_RESTRICTED_ERROR_CODE),
+        auth_state_changed,
+    );
+    emit_feedback_auth_recovery_tags(
+        mode,
+        phase,
+        "forced_logout",
+        debug.request_id.as_deref(),
+        debug.cf_ray.as_deref(),
+        debug.auth_error.as_deref(),
+        auth_error_code,
+    );
+    Some(CodexErr::RefreshTokenFailed(
+        codex_protocol::auth::RefreshTokenFailedError::new(
+            codex_protocol::auth::RefreshTokenFailedReason::Other,
+            CHATGPT_IP_WORKSPACE_RESTRICTED_MESSAGE,
+        ),
+    ))
 }
 
 async fn handle_unauthorized(
@@ -2049,7 +2190,19 @@ async fn handle_unauthorized(
     auth_recovery: &mut Option<UnauthorizedRecovery>,
     session_telemetry: &SessionTelemetry,
     provider: &SharedModelProvider,
+    rejected_auth_fingerprint: Option<&AuthFingerprint>,
 ) -> Result<UnauthorizedRecoveryExecution> {
+    if let Some(err) = force_logout_if_workspace_restricted_unauthorized(
+        &transport,
+        auth_recovery,
+        session_telemetry,
+        rejected_auth_fingerprint,
+    )
+    .await
+    {
+        return Err(err);
+    }
+
     let debug = extract_response_debug_context(&transport);
     if let Some(recovery) = auth_recovery
         && recovery.has_next()
@@ -2159,6 +2312,35 @@ async fn handle_unauthorized(
     );
 
     Err(provider.map_api_error(ApiError::Transport(transport)))
+}
+
+fn is_chatgpt_ip_workspace_restricted_unauthorized(
+    transport: &TransportError,
+    debug: &codex_response_debug_context::ResponseDebugContext,
+) -> bool {
+    let TransportError::Http { status, body, .. } = transport else {
+        return false;
+    };
+    if *status != StatusCode::UNAUTHORIZED {
+        return false;
+    }
+    if debug.auth_error_code.as_deref() == Some(CHATGPT_IP_WORKSPACE_RESTRICTED_ERROR_CODE) {
+        return true;
+    }
+    body.as_deref()
+        .is_some_and(|body| body_has_error_code(body, CHATGPT_IP_WORKSPACE_RESTRICTED_ERROR_CODE))
+}
+
+fn body_has_error_code(body: &str, expected_code: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    value
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| value.get("code").and_then(serde_json::Value::as_str))
+        == Some(expected_code)
 }
 
 fn api_error_http_status(error: &ApiError) -> Option<u16> {
