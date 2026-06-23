@@ -1255,6 +1255,9 @@ async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Resul
 async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let remote_test_env = get_remote_test_env();
+    println!("view_image missing-file test exec-server environment: {remote_test_env:?}");
+
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
