@@ -270,67 +270,6 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
-        let annotate_tools = |tools: Vec<ToolInfo>| {
-            let mut tools = tools;
-            let annotate_plugin_source = |tool: &mut ToolInfo, plugin_names: &[String]| {
-                tool.plugin_display_names = plugin_names.to_vec();
-
-                if plugin_names.is_empty() {
-                    return;
-                }
-
-                let plugin_source_note = if plugin_names.len() == 1 {
-                    format!("This tool is part of plugin `{}`.", plugin_names[0])
-                } else {
-                    format!(
-                        "This tool is part of plugins {}.",
-                        plugin_names
-                            .iter()
-                            .map(|plugin_name| format!("`{plugin_name}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                let description = tool
-                    .tool
-                    .description
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or("");
-                let annotated_description = if description.is_empty() {
-                    plugin_source_note
-                } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
-                    format!("{description} {plugin_source_note}")
-                } else {
-                    format!("{description}. {plugin_source_note}")
-                };
-                tool.tool.description = Some(Cow::Owned(annotated_description));
-            };
-
-            if self.is_codex_apps_mcp_server {
-                for tool in &mut tools {
-                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                    let plugin_names = match tool.connector_id.as_deref() {
-                        Some(connector_id) => self
-                            .tool_plugin_provenance
-                            .plugin_display_names_for_connector_id(connector_id),
-                        None => self
-                            .tool_plugin_provenance
-                            .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
-                    };
-                    annotate_plugin_source(tool, plugin_names);
-                }
-            } else {
-                for tool in &mut tools {
-                    let plugin_names = self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_mcp_server_name(tool.server_name.as_str());
-                    annotate_plugin_source(tool, plugin_names);
-                }
-            }
-            tools
-        };
-
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
         let tools = if let Some(startup_tools) = self.cached_tool_info_snapshot_while_initializing()
         {
@@ -340,9 +279,79 @@ impl AsyncManagedClient {
                 Ok(client) => Some(client.listed_tools()),
                 Err(_) => self.cached_tool_info_snapshot.clone(),
             }
-        };
-        tools.map(annotate_tools)
+        }?;
+        Some(if self.is_codex_apps_mcp_server {
+            annotate_codex_apps_tools(tools, &self.tool_plugin_provenance)
+        } else {
+            annotate_regular_mcp_tools(tools, &self.tool_plugin_provenance)
+        })
     }
+}
+
+/// Applies the model-visible schema and connector-scoped plugin provenance trusted for Codex Apps.
+fn annotate_codex_apps_tools(
+    mut tools: Vec<ToolInfo>,
+    tool_plugin_provenance: &ToolPluginProvenance,
+) -> Vec<ToolInfo> {
+    for tool in &mut tools {
+        tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+        let plugin_names = match tool.connector_id.as_deref() {
+            Some(connector_id) => {
+                tool_plugin_provenance.plugin_display_names_for_connector_id(connector_id)
+            }
+            None => tool_plugin_provenance
+                .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
+        };
+        annotate_plugin_source(tool, plugin_names);
+    }
+    tools
+}
+
+/// Keeps regular MCP tool schemas unchanged and resolves plugin provenance at the server boundary.
+fn annotate_regular_mcp_tools(
+    mut tools: Vec<ToolInfo>,
+    tool_plugin_provenance: &ToolPluginProvenance,
+) -> Vec<ToolInfo> {
+    for tool in &mut tools {
+        let plugin_names = tool_plugin_provenance
+            .plugin_display_names_for_mcp_server_name(tool.server_name.as_str());
+        annotate_plugin_source(tool, plugin_names);
+    }
+    tools
+}
+
+fn annotate_plugin_source(tool: &mut ToolInfo, plugin_names: &[String]) {
+    tool.plugin_display_names = plugin_names.to_vec();
+    if plugin_names.is_empty() {
+        return;
+    }
+
+    let plugin_source_note = if plugin_names.len() == 1 {
+        format!("This tool is part of plugin `{}`.", plugin_names[0])
+    } else {
+        format!(
+            "This tool is part of plugins {}.",
+            plugin_names
+                .iter()
+                .map(|plugin_name| format!("`{plugin_name}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let description = tool
+        .tool
+        .description
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
+    let annotated_description = if description.is_empty() {
+        plugin_source_note
+    } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
+        format!("{description} {plugin_source_note}")
+    } else {
+        format!("{description}. {plugin_source_note}")
+    };
+    tool.tool.description = Some(Cow::Owned(annotated_description));
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -394,51 +403,43 @@ fn tool_info_from_listed_tool(
     server_instructions: Option<&str>,
     tool: ToolWithConnectorId,
 ) -> ToolInfo {
+    if is_codex_apps_mcp_server {
+        codex_apps_tool_info_from_listed_tool(server_name, server_instructions, tool)
+    } else {
+        regular_mcp_tool_info_from_listed_tool(server_name, server_instructions, tool)
+    }
+}
+
+/// Preserves trusted connector metadata and derives the model-visible Codex Apps tool identity.
+fn codex_apps_tool_info_from_listed_tool(
+    server_name: &str,
+    server_instructions: Option<&str>,
+    tool: ToolWithConnectorId,
+) -> ToolInfo {
     let mut tool_def = tool.tool;
-    let (callable_name, callable_namespace, connector_id, connector_name, namespace_description) =
-        if is_codex_apps_mcp_server {
-            let connector_id = tool.connector_id;
-            let connector_name = tool.connector_name;
-            let connector_description = tool.connector_description;
-            let callable_name = normalize_codex_apps_callable_name(
-                &tool_def.name,
-                connector_id.as_deref(),
-                connector_name.as_deref(),
-            );
-            let callable_namespace =
-                normalize_codex_apps_callable_namespace(server_name, connector_name.as_deref());
-            if let Some(title) = tool_def.title.as_deref() {
-                let normalized_title =
-                    normalize_codex_apps_tool_title(connector_name.as_deref(), title);
-                if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
-                    tool_def.title = Some(normalized_title);
-                }
-            }
-            let has_connector_metadata = connector_id.is_some()
-                || connector_name.is_some()
-                || connector_description.is_some();
-            let namespace_description = if has_connector_metadata {
-                connector_description
-            } else {
-                server_instructions.map(str::to_string)
-            };
-            (
-                callable_name,
-                callable_namespace,
-                connector_id,
-                connector_name,
-                namespace_description,
-            )
-        } else {
-            strip_untrusted_connector_meta(&mut tool_def);
-            (
-                tool_def.name.to_string(),
-                server_name.to_string(),
-                None,
-                None,
-                server_instructions.map(str::to_string),
-            )
-        };
+    let connector_id = tool.connector_id;
+    let connector_name = tool.connector_name;
+    let connector_description = tool.connector_description;
+    let callable_name = normalize_codex_apps_callable_name(
+        &tool_def.name,
+        connector_id.as_deref(),
+        connector_name.as_deref(),
+    );
+    let callable_namespace =
+        normalize_codex_apps_callable_namespace(server_name, connector_name.as_deref());
+    if let Some(title) = tool_def.title.as_deref() {
+        let normalized_title = normalize_codex_apps_tool_title(connector_name.as_deref(), title);
+        if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
+            tool_def.title = Some(normalized_title);
+        }
+    }
+    let has_connector_metadata =
+        connector_id.is_some() || connector_name.is_some() || connector_description.is_some();
+    let namespace_description = if has_connector_metadata {
+        connector_description
+    } else {
+        server_instructions.map(str::to_string)
+    };
     ToolInfo {
         server_name: server_name.to_owned(),
         supports_parallel_tool_calls: false,
@@ -449,6 +450,28 @@ fn tool_info_from_listed_tool(
         tool: tool_def,
         connector_id,
         connector_name,
+        plugin_display_names: Vec::new(),
+    }
+}
+
+/// Removes untrusted connector metadata and keeps a regular MCP tool scoped to its server.
+fn regular_mcp_tool_info_from_listed_tool(
+    server_name: &str,
+    server_instructions: Option<&str>,
+    tool: ToolWithConnectorId,
+) -> ToolInfo {
+    let mut tool_def = tool.tool;
+    strip_untrusted_connector_meta(&mut tool_def);
+    ToolInfo {
+        server_name: server_name.to_owned(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
+        callable_name: tool_def.name.to_string(),
+        callable_namespace: server_name.to_string(),
+        namespace_description: server_instructions.map(str::to_string),
+        tool: tool_def,
+        connector_id: None,
+        connector_name: None,
         plugin_display_names: Vec::new(),
     }
 }
