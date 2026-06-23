@@ -3929,6 +3929,7 @@ dependencies = [
  "strum 0.27.2",
  "tokio",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
  "uuid",
 ]
