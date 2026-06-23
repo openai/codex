@@ -2291,6 +2291,47 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
         .get_thread(child_thread_id)
         .await
         .expect("child thread should exist");
+    let mut status_rx = harness
+        .control
+        .subscribe_status(child_thread_id)
+        .await
+        .expect("status subscription should succeed");
+    timeout(Duration::from_secs(5), async {
+        while matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
+            status_rx
+                .changed()
+                .await
+                .expect("child status should advance past pending init");
+        }
+        if matches!(status_rx.borrow().clone(), AgentStatus::Running) {
+            harness
+                .control
+                .interrupt_agent(child_thread_id)
+                .await
+                .expect("child turn should accept interruption");
+        }
+        while matches!(
+            status_rx.borrow().clone(),
+            AgentStatus::PendingInit | AgentStatus::Running
+        ) {
+            status_rx
+                .changed()
+                .await
+                .expect("child status should reach a terminal state");
+        }
+        while child_thread
+            .codex
+            .session
+            .active_turn
+            .lock()
+            .await
+            .is_some()
+        {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("child turn should settle before writing resume history");
     let mut child_turn_context = child_thread
         .codex
         .session
@@ -2323,26 +2364,6 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
         })
         .await
         .expect("change parent multi-agent mode before child resume");
-    let mut status_rx = harness
-        .control
-        .subscribe_status(child_thread_id)
-        .await
-        .expect("status subscription should succeed");
-    if matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
-        timeout(Duration::from_secs(5), async {
-            loop {
-                status_rx
-                    .changed()
-                    .await
-                    .expect("child status should advance past pending init");
-                if !matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
-                    break;
-                }
-            }
-        })
-        .await
-        .expect("child should initialize before shutdown");
-    }
     let original_snapshot = child_thread.config_snapshot().await;
     let original_nickname = original_snapshot
         .session_source
