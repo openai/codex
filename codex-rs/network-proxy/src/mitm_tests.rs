@@ -47,6 +47,7 @@ fn policy_ctx(
         target_port,
         mode,
         app_state,
+        request_context: crate::network_policy::NetworkRequestContext::default(),
     }
 }
 

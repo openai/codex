@@ -2,6 +2,7 @@ use crate::certs::ManagedMitmCa;
 use crate::config::NetworkMode;
 use crate::mitm_hook::HookEvaluation;
 use crate::mitm_hook::MitmHookActions;
+use crate::network_policy::NetworkRequestContext;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_MITM_HOOK_DENIED;
@@ -70,6 +71,7 @@ struct MitmPolicyContext {
     target_port: u16,
     mode: NetworkMode,
     app_state: Arc<NetworkProxyState>,
+    request_context: NetworkRequestContext,
 }
 
 #[derive(Clone)]
@@ -177,12 +179,18 @@ where
         .get::<NetworkMode>()
         .copied()
         .unwrap_or(NetworkMode::Full);
+    let network_request_context = stream
+        .extensions()
+        .get::<NetworkRequestContext>()
+        .cloned()
+        .unwrap_or_default();
     let request_ctx = Arc::new(MitmRequestContext {
         policy: MitmPolicyContext {
             target_host,
             target_port,
             mode,
             app_state,
+            request_context: network_request_context,
         },
         mitm,
     });
@@ -344,6 +352,7 @@ async fn evaluate_mitm_policy(
                 method: Some(method.clone()),
                 mode: Some(policy.mode),
                 protocol: "https".to_string(),
+                execution_id: policy.request_context.execution_id.clone(),
                 decision: None,
                 source: None,
                 port: Some(policy.target_port),
@@ -372,6 +381,7 @@ async fn evaluate_mitm_policy(
                     method: Some(method.clone()),
                     mode: Some(policy.mode),
                     protocol: "https".to_string(),
+                    execution_id: policy.request_context.execution_id.clone(),
                     decision: None,
                     source: None,
                     port: Some(policy.target_port),
@@ -398,6 +408,7 @@ async fn evaluate_mitm_policy(
                 method: Some(method.clone()),
                 mode: Some(policy.mode),
                 protocol: "https".to_string(),
+                execution_id: policy.request_context.execution_id.clone(),
                 decision: None,
                 source: None,
                 port: Some(policy.target_port),

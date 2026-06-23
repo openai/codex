@@ -19,6 +19,21 @@ const POLICY_REASON_ALLOW: &str = "allow";
 const DEFAULT_METHOD: &str = "none";
 const DEFAULT_CLIENT_ADDRESS: &str = "unknown";
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NetworkRequestContext {
+    pub environment_id: Option<String>,
+    pub execution_id: Option<String>,
+}
+
+impl NetworkRequestContext {
+    pub(crate) fn for_environment(environment_id: impl Into<String>) -> Self {
+        Self {
+            environment_id: Some(environment_id.into()),
+            execution_id: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetworkProtocol {
     Http,
@@ -80,6 +95,7 @@ pub struct NetworkPolicyRequest {
     pub host: String,
     pub port: u16,
     pub environment_id: Option<String>,
+    pub execution_id: Option<String>,
     pub client_addr: Option<String>,
     pub method: Option<String>,
     pub command: Option<String>,
@@ -91,6 +107,7 @@ pub struct NetworkPolicyRequestArgs {
     pub host: String,
     pub port: u16,
     pub environment_id: Option<String>,
+    pub execution_id: Option<String>,
     pub client_addr: Option<String>,
     pub method: Option<String>,
     pub command: Option<String>,
@@ -104,6 +121,7 @@ impl NetworkPolicyRequest {
             host,
             port,
             environment_id,
+            execution_id,
             client_addr,
             method,
             command,
@@ -114,6 +132,7 @@ impl NetworkPolicyRequest {
             host,
             port,
             environment_id,
+            execution_id,
             client_addr,
             method,
             command,
@@ -211,6 +230,7 @@ fn emit_non_domain_policy_decision_audit_event(
             server_port: args.server_port,
             method: args.method,
             client_addr: args.client_addr,
+            execution_id: None,
             policy_override: false,
         },
     );
@@ -226,6 +246,7 @@ struct PolicyAuditEventArgs<'a> {
     server_port: u16,
     method: Option<&'a str>,
     client_addr: Option<&'a str>,
+    execution_id: Option<&'a str>,
     policy_override: bool,
 }
 
@@ -254,6 +275,7 @@ fn emit_policy_audit_event(state: &NetworkProxyState, args: PolicyAuditEventArgs
         server.port = args.server_port,
         http.request.method = args.method.unwrap_or(DEFAULT_METHOD),
         client.address = args.client_addr.unwrap_or(DEFAULT_CLIENT_ADDRESS),
+        execution.id = args.execution_id,
         network.policy.override = args.policy_override,
     );
 }
@@ -355,6 +377,7 @@ pub(crate) async fn evaluate_host_policy(
             server_port: request.port,
             method: request.method.as_deref(),
             client_addr: request.client_addr.as_deref(),
+            execution_id: request.execution_id.as_deref(),
             policy_override,
         },
     );
@@ -630,6 +653,7 @@ mod tests {
             host: "example.com".to_string(),
             port: 80,
             environment_id: None,
+            execution_id: Some("execution-1".to_string()),
             client_addr: None,
             method: None,
             command: None,
@@ -664,6 +688,7 @@ mod tests {
         assert_eq!(event.field("server.port"), Some("80"));
         assert_eq!(event.field("http.request.method"), Some(DEFAULT_METHOD));
         assert_eq!(event.field("client.address"), Some(DEFAULT_CLIENT_ADDRESS));
+        assert_eq!(event.field("execution.id"), Some("execution-1"));
         assert_eq!(event.field("network.policy.override"), Some("true"));
         let timestamp = event
             .field("event.timestamp")
@@ -692,6 +717,7 @@ mod tests {
             host: "blocked.com".to_string(),
             port: 80,
             environment_id: None,
+            execution_id: None,
             client_addr: Some("127.0.0.1:1234".to_string()),
             method: Some("GET".to_string()),
             command: None,
@@ -736,6 +762,7 @@ mod tests {
             host: "example.com".to_string(),
             port: 80,
             environment_id: None,
+            execution_id: None,
             client_addr: None,
             method: Some("GET".to_string()),
             command: None,
@@ -787,6 +814,7 @@ mod tests {
             host: "example.com".to_string(),
             port: 80,
             environment_id: None,
+            execution_id: None,
             client_addr: None,
             method: Some("GET".to_string()),
             command: None,
@@ -874,6 +902,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 80,
             environment_id: None,
+            execution_id: None,
             client_addr: None,
             method: Some("GET".to_string()),
             command: None,

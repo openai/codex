@@ -280,6 +280,7 @@ fn denied_blocked_request(host: &str) -> BlockedRequest {
         method: None,
         mode: None,
         protocol: "http".to_string(),
+        execution_id: None,
         decision: Some("deny".to_string()),
         source: Some("decider".to_string()),
         port: Some(80),

@@ -1,6 +1,9 @@
+use crate::attribution::AttributionRegistry;
+use crate::attribution::ConnectionAttribution;
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::network_policy::NetworkRequestContext;
 use crate::runtime::BlockedRequestObserver;
 use crate::runtime::ConfigState;
 use crate::runtime::unix_socket_permissions_supported;
@@ -229,6 +232,7 @@ impl NetworkProxyBuilder {
             reserved_listeners,
             policy_decider: self.policy_decider,
             environment_proxies: Arc::new(Mutex::new(HashMap::new())),
+            execution_proxies: AttributionRegistry::default(),
         })
     }
 }
@@ -345,6 +349,7 @@ pub struct NetworkProxy {
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
+    execution_proxies: AttributionRegistry,
 }
 
 impl std::fmt::Debug for NetworkProxy {
@@ -739,13 +744,13 @@ impl NetworkProxy {
         let environment_id = environment_id.to_string();
         let http_state = self.state.clone();
         let http_decider = self.policy_decider.clone();
-        let http_environment_id = Some(environment_id.clone());
+        let http_request_context = NetworkRequestContext::for_environment(&environment_id);
         let http_task = runtime.spawn(async move {
             http_proxy::run_http_proxy_with_std_listener(
                 http_state,
                 http_listener,
                 http_decider,
-                http_environment_id,
+                http_request_context,
             )
             .await
         });
@@ -753,7 +758,7 @@ impl NetworkProxy {
         let socks_task = if self.socks_enabled {
             let socks_state = self.state.clone();
             let socks_decider = self.policy_decider.clone();
-            let socks_environment_id = Some(environment_id.clone());
+            let socks_request_context = NetworkRequestContext::for_environment(&environment_id);
             let socks5_udp_enabled = self.socks5_udp_enabled;
             socks_listener.map(|listener| {
                 runtime.spawn(async move {
@@ -761,7 +766,7 @@ impl NetworkProxy {
                         socks_state,
                         listener,
                         socks_decider,
-                        socks_environment_id,
+                        socks_request_context,
                         socks5_udp_enabled,
                     )
                     .await
@@ -841,24 +846,25 @@ impl NetworkProxy {
 
         let http_state = self.state.clone();
         let http_decider = self.policy_decider.clone();
+        let http_attribution = ConnectionAttribution::Registry(self.execution_proxies.clone());
         let http_addr = self.http_addr;
         let http_task = tokio::spawn(async move {
             match http_listener {
                 Some(listener) => {
-                    http_proxy::run_http_proxy_with_std_listener(
+                    http_proxy::run_http_proxy_with_std_listener_and_attribution(
                         http_state,
                         listener,
                         http_decider,
-                        /*environment_id*/ None,
+                        http_attribution,
                     )
                     .await
                 }
                 None => {
-                    http_proxy::run_http_proxy(
+                    http_proxy::run_http_proxy_with_attribution(
                         http_state,
                         http_addr,
                         http_decider,
-                        /*environment_id*/ None,
+                        http_attribution,
                     )
                     .await
                 }
@@ -870,24 +876,25 @@ impl NetworkProxy {
             let socks_decider = self.policy_decider.clone();
             let socks_addr = self.socks_addr;
             let enable_socks5_udp = current_cfg.network.enable_socks5_udp;
+            let socks_attribution = ConnectionAttribution::Registry(self.execution_proxies.clone());
             Some(tokio::spawn(async move {
                 match socks_listener {
                     Some(listener) => {
-                        socks5::run_socks5_with_std_listener(
+                        socks5::run_socks5_with_std_listener_and_attribution(
                             socks_state,
                             listener,
                             socks_decider,
-                            /*environment_id*/ None,
+                            socks_attribution,
                             enable_socks5_udp,
                         )
                         .await
                     }
                     None => {
-                        socks5::run_socks5(
+                        socks5::run_socks5_with_attribution(
                             socks_state,
                             socks_addr,
                             socks_decider,
-                            /*environment_id*/ None,
+                            socks_attribution,
                             enable_socks5_udp,
                         )
                         .await
@@ -902,6 +909,7 @@ impl NetworkProxy {
             http_task: Some(http_task),
             socks_task,
             environment_proxies: self.environment_proxies.clone(),
+            execution_proxies: self.execution_proxies.clone(),
             completed: false,
         })
     }
@@ -911,6 +919,7 @@ pub struct NetworkProxyHandle {
     http_task: Option<JoinHandle<Result<()>>>,
     socks_task: Option<JoinHandle<Result<()>>>,
     environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
+    execution_proxies: AttributionRegistry,
     completed: bool,
 }
 
@@ -920,6 +929,7 @@ impl NetworkProxyHandle {
             http_task: Some(tokio::spawn(async { Ok(()) })),
             socks_task: None,
             environment_proxies: Arc::new(Mutex::new(HashMap::new())),
+            execution_proxies: AttributionRegistry::default(),
             completed: true,
         }
     }
@@ -934,6 +944,7 @@ impl NetworkProxyHandle {
         };
         self.completed = true;
         abort_environment_proxies(self.environment_proxies.clone()).await;
+        self.execution_proxies.clear();
         http_result??;
         if let Some(socks_result) = socks_result {
             socks_result??;
@@ -944,6 +955,7 @@ impl NetworkProxyHandle {
     pub async fn shutdown(mut self) -> Result<()> {
         abort_tasks(self.http_task.take(), self.socks_task.take()).await;
         abort_environment_proxies(self.environment_proxies.clone()).await;
+        self.execution_proxies.clear();
         self.completed = true;
         Ok(())
     }
@@ -987,6 +999,7 @@ impl Drop for NetworkProxyHandle {
         let http_task = self.http_task.take();
         let socks_task = self.socks_task.take();
         let environment_proxies = self.environment_proxies.clone();
+        self.execution_proxies.clear();
         tokio::spawn(async move {
             abort_tasks(http_task, socks_task).await;
             abort_environment_proxies(environment_proxies).await;
@@ -1077,7 +1090,6 @@ mod tests {
         ));
         let proxy = NetworkProxy::builder().state(state).build().await?;
         let handle = proxy.run().await?;
-
         let mut local_env = HashMap::new();
         proxy.apply_to_env_for_environment(&mut local_env, "local")?;
         let mut remote_env = HashMap::new();
