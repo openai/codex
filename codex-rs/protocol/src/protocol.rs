@@ -1690,7 +1690,7 @@ pub enum NonSteerableTurnKind {
 #[ts(rename_all = "snake_case")]
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
-    RolloutBudgetExceeded,
+    SessionBudgetExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
     CyberPolicy,
@@ -1728,7 +1728,7 @@ impl CodexErrorInfo {
         match self {
             Self::ThreadRollbackFailed | Self::ActiveTurnNotSteerable { .. } => false,
             Self::ContextWindowExceeded
-            | Self::RolloutBudgetExceeded
+            | Self::SessionBudgetExceeded
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
             | Self::CyberPolicy

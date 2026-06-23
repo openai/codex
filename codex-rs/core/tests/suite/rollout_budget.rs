@@ -252,7 +252,7 @@ async fn exhausted_budget_fails_current_and_later_turns() -> Result<()> {
             matches!(
                 event,
                 EventMsg::Error(error)
-                    if error.codex_error_info == Some(CodexErrorInfo::RolloutBudgetExceeded)
+                    if error.codex_error_info == Some(CodexErrorInfo::SessionBudgetExceeded)
             )
         })
         .await;
@@ -315,7 +315,7 @@ async fn compaction_budget_exhaustion_fails_without_retry(remote_v2: bool) -> Re
         matches!(
             event,
             EventMsg::Error(error)
-                if error.codex_error_info == Some(CodexErrorInfo::RolloutBudgetExceeded)
+                if error.codex_error_info == Some(CodexErrorInfo::SessionBudgetExceeded)
         )
     })
     .await;

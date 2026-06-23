@@ -7070,7 +7070,7 @@
           {
             "enum": [
               "contextWindowExceeded",
-              "rolloutBudgetExceeded",
+              "sessionBudgetExceeded",
               "usageLimitExceeded",
               "serverOverloaded",
               "cyberPolicy",
