@@ -198,12 +198,21 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         push_text(">>> PARENT TURN PERMISSION CONTEXT END\n".to_string());
     }
     match &request {
-        GuardianApprovalRequest::NetworkAccess { trigger, .. } => {
+        GuardianApprovalRequest::NetworkAccess {
+            trigger,
+            possible_triggers,
+            ..
+        } => {
             push_text(">>> APPROVAL REQUEST START\n".to_string());
             push_text("Below is a proposed network access request under review.\n".to_string());
             if trigger.is_some() {
                 push_text(
                     "The network access was triggered by the action in the `trigger` entry. When assessing this request, focus primarily on whether the triggering command is authorised by the user and whether it is within the rules. The user does not need to have explicitly authorised this exact network connection, as long as the network access is a reasonable consequence of the triggering command.\n\n"
+                        .to_string(),
+                );
+            } else if !possible_triggers.is_empty() {
+                push_text(
+                    "The proxy could not identify which active command triggered the network access. The `possibleTriggers` entry contains every candidate command that was active in the same execution environment when the request was observed. Approve if at least one candidate is authorised by the user and the network access is a reasonable consequence of that candidate. Do not require every candidate to explain the request. Deny if none provide a plausible authorised explanation.\n\n"
                         .to_string(),
                 );
             } else {

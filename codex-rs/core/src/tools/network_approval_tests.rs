@@ -349,15 +349,33 @@ async fn active_call_preserves_triggering_command_context() {
 }
 
 #[tokio::test]
-async fn multiple_active_calls_are_ambiguous_even_in_the_same_environment() {
+async fn active_call_attribution_returns_all_matching_environment_candidates() {
     let service = NetworkApprovalService::default();
     register_call_with_default_shell_trigger(&service, "registration-1").await;
     register_call_with_default_shell_trigger(&service, "registration-2").await;
 
-    match service.resolve_active_call_attribution().await {
-        ActiveNetworkApprovalAttribution::Ambiguous => {}
+    assert!(matches!(
+        service
+            .resolve_active_call_attribution(ActiveNetworkApprovalCallScope::Environment("remote"))
+            .await,
+        ActiveNetworkApprovalAttribution::None
+    ));
+
+    match service
+        .resolve_active_call_attribution(ActiveNetworkApprovalCallScope::Environment("local"))
+        .await
+    {
+        ActiveNetworkApprovalAttribution::Ambiguous(calls) => {
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|call| call.registration_id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["registration-1", "registration-2"]
+            );
+        }
         ActiveNetworkApprovalAttribution::None | ActiveNetworkApprovalAttribution::Single(_) => {
-            panic!("multiple active calls should be ambiguous")
+            panic!("multiple matching calls should return every candidate")
         }
     }
 }
