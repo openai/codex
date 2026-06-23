@@ -4313,10 +4313,11 @@ fn read_compacted_resume_prefix_items(
                 return Ok(None);
             }
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => return Ok(None),
-            RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_)) => {
-                prefix_items.retain(|item| {
-                    !matches!(item, RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_)))
-                });
+            RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_))
+                if !prefix_items.iter().any(|item| {
+                    matches!(item, RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_)))
+                }) =>
+            {
                 prefix_items.push(rollout_line.item.clone());
             }
             RolloutItem::EventMsg(EventMsg::TokenCount(_)) => {

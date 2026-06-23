@@ -427,14 +427,14 @@ mod thread_processor_behavior_tests {
         ))
     }
 
-    fn compacted_resume_test_goal_update(thread_id: ThreadId) -> RolloutItem {
+    fn compacted_resume_test_goal_update(thread_id: ThreadId, objective: &str) -> RolloutItem {
         RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(
             codex_protocol::protocol::ThreadGoalUpdatedEvent {
                 thread_id,
                 turn_id: None,
                 goal: codex_protocol::protocol::ThreadGoal {
                     thread_id,
-                    objective: "finish the task".to_string(),
+                    objective: objective.to_string(),
                     status: codex_protocol::protocol::ThreadGoalStatus::Active,
                     token_budget: None,
                     tokens_used: 0,
@@ -530,8 +530,9 @@ mod thread_processor_behavior_tests {
         let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
         let contents = compacted_resume_test_rollout_contents(vec![
             compacted_resume_test_session(thread_id),
-            compacted_resume_test_goal_update(thread_id),
+            compacted_resume_test_goal_update(thread_id, "first goal"),
             compacted_resume_test_user_event("first user event"),
+            compacted_resume_test_goal_update(thread_id, "later goal"),
             RolloutItem::ResponseItem(compacted_resume_test_message("user", "first user response")),
             compacted_resume_test_token_count(),
             compacted_resume_test_user_event("middle user event"),
@@ -555,6 +556,16 @@ mod thread_processor_behavior_tests {
                 .iter()
                 .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_))))
         );
+        let goals = items
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(event)) => {
+                    Some(event.goal.objective.as_str())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(goals, vec!["first goal"]);
         let goal_position = items
             .iter()
             .position(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(_))))
