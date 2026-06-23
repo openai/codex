@@ -28,6 +28,7 @@ use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 use codex_shell_command::shell_detect::DetectedShell;
+use codex_utils_path_uri::PathUri;
 use tokio_util::task::AbortOnDropHandle;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
@@ -608,6 +609,9 @@ impl EnvironmentInfo {
     pub(crate) fn local() -> Self {
         Self {
             shell: codex_shell_command::shell_detect::default_user_shell().into(),
+            cwd: std::env::current_dir()
+                .ok()
+                .and_then(|cwd| PathUri::from_host_native_path(cwd).ok()),
         }
     }
 }
@@ -653,6 +657,19 @@ mod tests {
 
     fn assert_local_environment_unavailable(manager: &EnvironmentManager) {
         assert!(manager.try_local_environment().is_none());
+    }
+
+    #[test]
+    fn local_environment_info_includes_current_directory() {
+        let info = super::EnvironmentInfo::local();
+
+        assert_eq!(
+            info.cwd,
+            Some(
+                PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                    .expect("cwd URI")
+            )
+        );
     }
 
     #[tokio::test]

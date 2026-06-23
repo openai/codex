@@ -72,6 +72,9 @@ pub struct InitializeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentInfo {
     pub shell: ShellInfo,
+    /// Working directory inherited by the exec-server process.
+    #[serde(default)]
+    pub cwd: Option<PathUri>,
 }
 
 /// Shell detected for an execution/filesystem environment.
@@ -511,10 +514,12 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
+    use super::EnvironmentInfo;
     use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
     use super::ProcessId;
+    use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
     use codex_network_proxy::ManagedNetworkSandboxContext;
     use codex_protocol::models::PermissionProfile;
@@ -564,6 +569,25 @@ mod tests {
             serde_json::from_value(serialized).expect("deserialize legacy exec params");
         assert!(legacy.enforce_managed_network);
         assert_eq!(legacy.managed_network, None);
+    }
+
+    #[test]
+    fn environment_info_accepts_legacy_response_without_cwd() {
+        let info: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "shell": { "name": "zsh", "path": "/bin/zsh" }
+        }))
+        .expect("legacy environment info should deserialize");
+
+        assert_eq!(
+            info,
+            EnvironmentInfo {
+                shell: ShellInfo {
+                    name: "zsh".to_string(),
+                    path: "/bin/zsh".to_string(),
+                },
+                cwd: None,
+            }
+        );
     }
 
     #[test]
