@@ -14,7 +14,11 @@ async fn process_compacted_history_with_test_session(
     session
         .set_previous_turn_settings(previous_turn_settings.cloned())
         .await;
-    let world_state = Arc::new(session.build_world_state(&turn_context).await);
+    let world_state = Arc::new(
+        session
+            .build_world_state_for_environments(&turn_context, &turn_context.environments)
+            .await,
+    );
     let initial_context = session
         .build_initial_context_with_world_state(&turn_context, world_state.as_ref())
         .await;

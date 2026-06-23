@@ -3030,7 +3030,7 @@ impl Session {
         items
     }
 
-    async fn build_world_state_for_environments(
+    pub(crate) async fn build_world_state_for_environments(
         &self,
         turn_context: &TurnContext,
         environments: &TurnEnvironmentSnapshot,
@@ -3048,11 +3048,6 @@ impl Session {
             environments,
             &environment_subagents,
         )
-    }
-
-    pub(crate) async fn build_world_state(&self, turn_context: &TurnContext) -> WorldState {
-        self.build_world_state_for_environments(turn_context, &turn_context.environments)
-            .await
     }
 
     pub(crate) async fn build_initial_context_with_world_state(
@@ -3471,7 +3466,10 @@ impl Session {
         let turn_context_item = turn_context.to_turn_context_item();
         let turn_context_changed = reference_context_item.as_ref() != Some(&turn_context_item);
         let should_inject_full_context = reference_context_item.is_none();
-        let world_state = Arc::new(self.build_world_state(turn_context).await);
+        let world_state = Arc::new(
+            self.build_world_state_for_environments(turn_context, &turn_context.environments)
+                .await,
+        );
         let mut context_items = if should_inject_full_context {
             let context_items = self
                 .build_initial_context_with_world_state(turn_context, world_state.as_ref())
