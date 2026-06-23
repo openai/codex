@@ -6,6 +6,7 @@ use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
+use codex_models_manager::model_presets::hide_ultra_reasoning_effort;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -246,9 +247,12 @@ impl TurnContext {
             Some(reasoning_effort.clone()),
             /*developer_instructions*/ None,
         );
-        let available_models = models_manager
+        let mut available_models = models_manager
             .list_models(RefreshStrategy::OnlineIfUncached)
             .await;
+        if !config.features.enabled(Feature::MultiAgentMode) {
+            hide_ultra_reasoning_effort(&mut available_models);
+        }
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -506,7 +510,10 @@ impl Session {
         let auth_manager_for_context = auth_manager.clone();
         let provider_for_context = create_model_provider(provider, auth_manager);
         let session_telemetry_for_context = session_telemetry;
-        let available_models = models_manager.try_list_models().unwrap_or_default();
+        let mut available_models = models_manager.try_list_models().unwrap_or_default();
+        if !per_turn_config.features.enabled(Feature::MultiAgentMode) {
+            hide_ultra_reasoning_effort(&mut available_models);
+        }
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
             codex_tools::unified_exec_feature_mode_for_features(per_turn_config.features.get()),
             crate::tools::tool_user_shell_type(user_shell),

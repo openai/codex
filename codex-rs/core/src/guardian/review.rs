@@ -5,6 +5,7 @@ use codex_analytics::GuardianReviewFailureReason;
 use codex_analytics::GuardianReviewTerminalStatus;
 use codex_analytics::GuardianReviewTrackContext;
 use codex_analytics::GuardianReviewedAction;
+use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -684,11 +685,14 @@ pub(super) async fn guardian_review_session_config(
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
         None => None,
     };
-    let available_models = session
+    let mut available_models = session
         .services
         .models_manager
         .list_models(codex_models_manager::manager::RefreshStrategy::Offline)
         .await;
+    if !turn.config.features.enabled(Feature::MultiAgentMode) {
+        codex_models_manager::model_presets::hide_ultra_reasoning_effort(&mut available_models);
+    }
     let default_review_model_id = turn.provider.approval_review_preferred_model();
     let preferred_reasoning_effort = |supports_low: bool, fallback| {
         if supports_low {

@@ -130,6 +130,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
                             effort: ReasoningEffort::High,
                             description: "Deep dive".to_string(),
                         },
+                        ReasoningEffortPreset {
+                            effort: ReasoningEffort::Ultra,
+                            description: "Maximum reasoning with proactive delegation".to_string(),
+                        },
                     ],
                     vec![ModelServiceTier {
                         id: "priority".to_string(),
@@ -167,6 +171,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
                 .features
                 .enable(Feature::Collab)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentMode)
+                .expect("test config should allow feature update");
             config.multi_agent_v2.hide_spawn_agent_metadata = false;
         });
     let test = builder.build(&server).await?;
@@ -200,7 +208,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         "expected model override usage guidance in spawn_agent description: {description:?}"
     );
     assert!(
-        description.contains("Reasoning efforts: low, medium (default), high."),
+        description.contains("Reasoning efforts: low, medium (default), high, ultra."),
         "expected default reasoning effort in spawn_agent description: {description:?}"
     );
     assert!(

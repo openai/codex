@@ -24,11 +24,14 @@ pub(super) async fn spawn_review_thread(
     let _ = review_features.disable(Feature::WebSearchCached);
     let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
-    let available_models = sess
+    let mut available_models = sess
         .services
         .models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
+    if !review_features.enabled(Feature::MultiAgentMode) {
+        codex_models_manager::model_presets::hide_ultra_reasoning_effort(&mut available_models);
+    }
     let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
         codex_tools::unified_exec_feature_mode_for_features(review_features.get()),
         crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),

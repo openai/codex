@@ -4,6 +4,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
@@ -21,6 +22,17 @@ const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective so
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
+    if !config.ultra_reasoning_enabled {
+        model
+            .supported_reasoning_levels
+            .retain(|preset| preset.effort != ReasoningEffort::Ultra);
+        if model.default_reasoning_level == Some(ReasoningEffort::Ultra) {
+            model.default_reasoning_level = model
+                .supported_reasoning_levels
+                .last()
+                .map(|preset| preset.effort.clone());
+        }
+    }
     if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries
         && supports_reasoning_summaries
     {

@@ -3018,8 +3018,8 @@ async fn model_reasoning_selection_popup_snapshot() {
     preset.supported_reasoning_efforts.insert(
         2,
         ReasoningEffortPreset {
-            effort: ReasoningEffortConfig::Custom("max".to_string()),
-            description: "Maximum available reasoning".to_string(),
+            effort: ReasoningEffortConfig::Ultra,
+            description: "Maximum reasoning with proactive delegation".to_string(),
         },
     );
     chat.open_reasoning_popup(preset);
