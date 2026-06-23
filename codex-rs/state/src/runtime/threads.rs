@@ -1138,7 +1138,7 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         builder.push_bind(ancestor_thread_id.to_string());
         builder.push(
             r#"
-    UNION ALL
+    UNION
     SELECT edge.child_thread_id, edge.parent_thread_id
     FROM thread_spawn_edges AS edge
     JOIN subtree ON edge.parent_thread_id = subtree.child_thread_id
@@ -1159,9 +1159,16 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         None => builder.push(" FROM threads"),
     };
     push_thread_filters(builder, filters);
-    if let Some(crate::ThreadRelationFilter::DirectChildrenOf(parent_thread_id)) = relation_filter {
-        builder.push(" AND listed_edge.parent_thread_id = ");
-        builder.push_bind(parent_thread_id.to_string());
+    match relation_filter {
+        Some(crate::ThreadRelationFilter::DirectChildrenOf(parent_thread_id)) => {
+            builder.push(" AND listed_edge.parent_thread_id = ");
+            builder.push_bind(parent_thread_id.to_string());
+        }
+        Some(crate::ThreadRelationFilter::DescendantsOf(ancestor_thread_id)) => {
+            builder.push(" AND subtree.child_thread_id != ");
+            builder.push_bind(ancestor_thread_id.to_string());
+        }
+        None => {}
     }
     let order_by_index = match (relation_filter, filters.cwd_filters) {
         // Relationship listings are expected to be much smaller than the global thread table.
@@ -1914,6 +1921,7 @@ mod tests {
         let grandchild_id = ThreadId::new();
 
         for (thread_id, created_at) in [
+            (parent_id, 1_700_000_000),
             (first_child_id, 1_700_000_100),
             (second_child_id, 1_700_000_200),
             (grandchild_id, 1_700_000_300),
@@ -2065,6 +2073,31 @@ mod tests {
                 [(first_child_id, parent_id)].into(),
                 None,
             )
+        );
+
+        runtime
+            .upsert_thread_spawn_edge(
+                grandchild_id,
+                parent_id,
+                DirectionalThreadSpawnEdgeStatus::Open,
+            )
+            .await
+            .expect("cycle-closing spawn edge insert should succeed");
+        let cyclic_descendants = runtime
+            .list_threads_by_relation(
+                /*page_size*/ 10,
+                crate::ThreadRelationFilter::DescendantsOf(parent_id),
+                filters(None),
+            )
+            .await
+            .expect("cyclic descendant graph should terminate");
+        assert_eq!(
+            cyclic_descendants
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![grandchild_id, second_child_id, first_child_id]
         );
     }
 
