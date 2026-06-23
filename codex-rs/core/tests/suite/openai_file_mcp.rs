@@ -199,7 +199,7 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
             .await?;
             Ok(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let mock = run_extract_turn(&test, &server).await?;
 
     let requests = mock.requests();

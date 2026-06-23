@@ -57,7 +57,7 @@ async fn agents_instructions(mut builder: TestCodexBuilder) -> Result<String> {
     )
     .await;
 
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn("hello").await?;
 
     let request = resp_mock.single_request();
@@ -372,7 +372,7 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
             .await?;
             Ok::<(), anyhow::Error>(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let project_agents = test.config.cwd.join("AGENTS.md");
     let global_agents = global_agents.abs();
 
@@ -430,7 +430,7 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
             .await?;
             Ok(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     assert_eq!(provider.load_count(), 1);
 
     let no_environment_thread = test
@@ -515,7 +515,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
             .await?;
             Ok(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let project_source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
     let creation_sources = vec![
         PathUri::from_abs_path(&global_source),
