@@ -429,10 +429,14 @@ impl ThreadStateManager {
     pub(crate) async fn remove_thread_state(&self, thread_id: ThreadId) {
         let thread_state = {
             let mut state = self.state.lock().await;
-            let thread_state = state
-                .threads
-                .remove(&thread_id)
-                .map(|thread_entry| thread_entry.state);
+            let thread_state = state.threads.remove(&thread_id).map(|mut thread_entry| {
+                // Watch receivers retain their last value after the sender is dropped. Publish
+                // a terminal empty snapshot so an in-flight listener cannot dispatch to stale
+                // subscribers while teardown cancellation is being observed.
+                thread_entry.connection_ids.clear();
+                thread_entry.publish_connections();
+                thread_entry.state
+            });
             state.thread_ids_by_connection.retain(|_, thread_ids| {
                 thread_ids.remove(&thread_id);
                 !thread_ids.is_empty()

@@ -1255,6 +1255,16 @@ mod thread_processor_behavior_tests {
             )
             .await
             .expect("connection should be live");
+        let connection_ids = manager
+            .subscribe_to_connection_ids(thread_id)
+            .await
+            .expect("thread should have a connection-ids watcher");
+        let has_connections = manager
+            .subscribe_to_has_connections(thread_id)
+            .await
+            .expect("thread should have a has-connections watcher");
+        assert_eq!(connection_ids.borrow().as_ref(), &[connection]);
+        assert!(*has_connections.borrow());
         {
             let state = manager.thread_state(thread_id).await;
             let mut state = state.lock().await;
@@ -1273,6 +1283,8 @@ mod thread_processor_behavior_tests {
 
         manager.remove_thread_state(thread_id).await;
         assert_eq!(cancel_rx.await, Ok(()));
+        assert!(connection_ids.borrow().is_empty());
+        assert!(!*has_connections.borrow());
 
         let state = manager.thread_state(thread_id).await;
         let subscribed_connection_ids = manager.subscribed_connection_ids(thread_id).await;
