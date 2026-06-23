@@ -26,7 +26,7 @@ fn retained_message(text: &str) -> RolloutItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })
 }
 
