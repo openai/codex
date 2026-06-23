@@ -171,29 +171,32 @@ impl McpConnectionManager {
                 },
             )
             .await;
-            let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                Some(CodexAppsToolsCacheContext {
-                    codex_home: codex_home.clone(),
-                    user_key: codex_apps_tools_cache_key.clone(),
-                })
-            } else {
-                None
-            };
-            let uses_env_bearer_token =
-                server
-                    .configured_config()
-                    .is_some_and(|config| match &config.transport {
-                        McpServerTransportConfig::StreamableHttp {
-                            bearer_token_env_var,
-                            ..
-                        } => bearer_token_env_var.is_some(),
-                        McpServerTransportConfig::Stdio { .. } => false,
-                    });
-            let runtime_auth_provider =
-                if server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token {
-                    codex_apps_auth_provider.clone()
+            let (codex_apps_tools_cache_context, runtime_auth_provider) =
+                if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                    let uses_env_bearer_token =
+                        server
+                            .configured_config()
+                            .is_some_and(|config| match &config.transport {
+                                McpServerTransportConfig::StreamableHttp {
+                                    bearer_token_env_var,
+                                    ..
+                                } => bearer_token_env_var.is_some(),
+                                McpServerTransportConfig::Stdio { .. } => false,
+                            });
+                    let runtime_auth_provider = if uses_env_bearer_token {
+                        None
+                    } else {
+                        codex_apps_auth_provider.clone()
+                    };
+                    (
+                        Some(CodexAppsToolsCacheContext {
+                            codex_home: codex_home.clone(),
+                            user_key: codex_apps_tools_cache_key.clone(),
+                        }),
+                        runtime_auth_provider,
+                    )
                 } else {
-                    None
+                    (None, None)
                 };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
