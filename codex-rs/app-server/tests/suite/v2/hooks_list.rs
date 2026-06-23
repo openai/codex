@@ -25,7 +25,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use core_test_support::skip_if_windows;
+use core_test_support::skip_if_host_windows;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use tempfile::TempDir;
@@ -651,7 +651,7 @@ async fn config_batch_write_toggles_user_hook() -> Result<()> {
 
 #[tokio::test]
 async fn config_batch_write_updates_hook_trust_for_loaded_session() -> Result<()> {
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let responses = vec![
         create_final_assistant_message_sse_response("Warmup")?,
@@ -902,7 +902,7 @@ command = "python3 {hook_script_path}"
 
 #[tokio::test]
 async fn config_batch_write_disables_hook_for_loaded_session() -> Result<()> {
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let responses = vec![
         create_final_assistant_message_sse_response("Warmup")?,

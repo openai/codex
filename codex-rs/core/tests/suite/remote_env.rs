@@ -34,8 +34,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
-use core_test_support::TestEnvironment;
-use core_test_support::get_remote_test_env;
+use core_test_support::TestTargetOs;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -47,11 +46,14 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_wine_exec;
+use core_test_support::skip_if_no_remote_env;
+use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
+use core_test_support::test_docker_container_name;
+use core_test_support::test_target_os;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use futures::SinkExt;
@@ -167,9 +169,7 @@ async fn wait_for_completion_without_patch_approval(test: &TestCodex) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
@@ -202,9 +202,7 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
     let response_mock = mount_sse_once(
@@ -228,10 +226,10 @@ async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
         .context("environment context should be model visible")?;
     // TODO(anp): Assert Wine-exec exposes a `C:\\...` cwd after model-visible paths preserve
     // target-native spelling instead of the Linux orchestrator's `/C:/...` representation.
-    let expected_shell = match core_test_support::test_environment() {
-        TestEnvironment::Docker { .. } => "<shell>bash</shell>",
-        TestEnvironment::WineExec => "<shell>powershell</shell>",
-        TestEnvironment::Local => unreachable!("test requires a remote environment"),
+    let expected_shell = match test_target_os() {
+        TestTargetOs::Linux => "<shell>bash</shell>",
+        TestTargetOs::Windows => "<shell>powershell</shell>",
+        TestTargetOs::MacOs => unreachable!("remote test targets do not run macOS"),
     };
     assert_eq!(
         environment_context
@@ -248,16 +246,18 @@ async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
 async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
     const CALL_ID: &str = "remote-explicit-shell";
 
-    let (shell, command) = match core_test_support::test_environment() {
-        TestEnvironment::Docker { .. } => (
+    skip_if_no_remote_env!(Ok(()));
+
+    let (shell, command) = match test_target_os() {
+        TestTargetOs::Linux => (
             "bash",
             r#"case "$PWD" in /tmp/codex-core-test-cwd-*) ;; *) echo "unexpected cwd: $PWD" >&2; exit 1 ;; esac"#,
         ),
-        TestEnvironment::WineExec => (
+        TestTargetOs::Windows => (
             "powershell",
             r#"$cwd = (Get-Location).Path; if ($cwd -notlike 'C:\codex-core-test-cwd-*') { Write-Error "unexpected cwd: $cwd"; exit 1 }"#,
         ),
-        TestEnvironment::Local => return Ok(()),
+        TestTargetOs::MacOs => unreachable!("remote test targets do not run macOS"),
     };
 
     let server = start_mock_server().await;
@@ -771,12 +771,10 @@ fn assert_normalized_path_rejected(error: &std::io::Error) {
 }
 
 fn remote_exec(script: &str) -> Result<()> {
-    let remote_env = get_remote_test_env().context("remote env should be configured")?;
-    let container_name = remote_env
-        .docker_container_name()
+    let container_name = test_docker_container_name()
         .context("test requires direct access to the Docker container")?;
     let output = Command::new("docker")
-        .args(["exec", container_name, "sh", "-lc", script])
+        .args(["exec", container_name.as_str(), "sh", "-lc", script])
         .output()?;
     assert!(
         output.status.success(),
@@ -823,10 +821,8 @@ async fn exec_command_routing_output(
 async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     skip_if_no_network!(Ok(()));
     // TODO(anp): Remove after remote path fixtures use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
+    skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
     let test = unified_exec_test(&server).await?;
@@ -900,10 +896,8 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
 async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result<()> {
     skip_if_no_network!(Ok(()));
     // TODO(anp): Remove after remote path fixtures use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
+    skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
@@ -1107,10 +1101,8 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
 async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<()> {
     skip_if_no_network!(Ok(()));
     // TODO(anp): Remove after remote path fixtures use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
+    skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
     let mut builder = test_codex();
@@ -1195,10 +1187,8 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
 async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     skip_if_no_network!(Ok(()));
     // TODO(anp): Remove after remote path fixtures use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
+    skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
@@ -1386,10 +1376,8 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
 {
     skip_if_no_network!(Ok(()));
     // TODO(anp): Remove after remote path fixtures use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
+    skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
     let test = unified_exec_test(&server).await?;
@@ -1482,11 +1470,9 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
     // TODO(anp): Remove after remote sandbox fixtures use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
+    skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
     skip_if_no_network!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
@@ -1532,11 +1518,9 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -> Result<()> {
-    skip_if_wine_exec!(Ok(()), "tests POSIX symlink and parent traversal semantics");
+    skip_if_target_windows!(Ok(()), "tests POSIX symlink and parent traversal semantics");
     skip_if_no_network!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
@@ -1568,11 +1552,9 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
-    skip_if_wine_exec!(Ok(()), "tests POSIX symlink removal semantics");
+    skip_if_target_windows!(Ok(()), "tests POSIX symlink removal semantics");
     skip_if_no_network!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
@@ -1642,11 +1624,9 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
-    skip_if_wine_exec!(Ok(()), "tests POSIX symlink copy semantics");
+    skip_if_target_windows!(Ok(()), "tests POSIX symlink copy semantics");
     skip_if_no_network!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
@@ -1678,14 +1658,12 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
         )
         .await?;
 
-    let remote_env = get_remote_test_env().context("remote env should be configured")?;
-    let container_name = remote_env
-        .docker_container_name()
+    let container_name = test_docker_container_name()
         .context("test requires direct access to the Docker container")?;
     let link_target = Command::new("docker")
         .args([
             "exec",
-            container_name,
+            container_name.as_str(),
             "readlink",
             copied_symlink
                 .to_str()
