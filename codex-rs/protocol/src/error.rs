@@ -313,8 +313,6 @@ pub struct UnexpectedResponseError {
     pub identity_error_code: Option<String>,
 }
 
-const CLOUDFLARE_BLOCKED_MESSAGE: &str =
-    "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
 const UNEXPECTED_RESPONSE_BODY_MAX_BYTES: usize = 1000;
 
 impl UnexpectedResponseError {
@@ -344,21 +342,16 @@ impl UnexpectedResponseError {
             Some(message.to_string())
         }
     }
+}
 
-    fn friendly_message(&self) -> Option<String> {
+impl std::fmt::Display for UnexpectedResponseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut message = if let Some(user_message) = &self.user_message {
             user_message.clone()
         } else {
-            if self.status != StatusCode::FORBIDDEN {
-                return None;
-            }
-
-            if !self.body.contains("Cloudflare") || !self.body.contains("blocked") {
-                return None;
-            }
-
             let status = self.status;
-            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status})")
+            let body = self.display_body();
+            format!("unexpected status {status}: {body}")
         };
         if let Some(url) = &self.url {
             message.push_str(&format!(", url: {url}"));
@@ -375,36 +368,7 @@ impl UnexpectedResponseError {
         if let Some(error_code) = &self.identity_error_code {
             message.push_str(&format!(", auth error code: {error_code}"));
         }
-
-        Some(message)
-    }
-}
-
-impl std::fmt::Display for UnexpectedResponseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(friendly) = self.friendly_message() {
-            write!(f, "{friendly}")
-        } else {
-            let status = self.status;
-            let body = self.display_body();
-            let mut message = format!("unexpected status {status}: {body}");
-            if let Some(url) = &self.url {
-                message.push_str(&format!(", url: {url}"));
-            }
-            if let Some(cf_ray) = &self.cf_ray {
-                message.push_str(&format!(", cf-ray: {cf_ray}"));
-            }
-            if let Some(id) = &self.request_id {
-                message.push_str(&format!(", request id: {id}"));
-            }
-            if let Some(auth_error) = &self.identity_authorization_error {
-                message.push_str(&format!(", auth error: {auth_error}"));
-            }
-            if let Some(error_code) = &self.identity_error_code {
-                message.push_str(&format!(", auth error code: {error_code}"));
-            }
-            write!(f, "{message}")
-        }
+        write!(f, "{message}")
     }
 }
 

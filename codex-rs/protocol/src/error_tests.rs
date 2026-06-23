@@ -401,27 +401,6 @@ fn usage_limit_reached_includes_minutes_when_available() {
 }
 
 #[test]
-fn unexpected_status_cloudflare_html_is_simplified() {
-    let err = UnexpectedResponseError {
-        status: StatusCode::FORBIDDEN,
-        body: "<html><body>Cloudflare error: Sorry, you have been blocked</body></html>"
-            .to_string(),
-        user_message: None,
-        url: Some("http://example.com/blocked".to_string()),
-        cf_ray: Some("ray-id".to_string()),
-        request_id: None,
-        identity_authorization_error: None,
-        identity_error_code: None,
-    };
-    let status = StatusCode::FORBIDDEN.to_string();
-    let url = "http://example.com/blocked";
-    assert_eq!(
-        err.to_string(),
-        format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), url: {url}, cf-ray: ray-id")
-    );
-}
-
-#[test]
 fn unexpected_status_non_html_is_unchanged() {
     let err = UnexpectedResponseError {
         status: StatusCode::FORBIDDEN,
