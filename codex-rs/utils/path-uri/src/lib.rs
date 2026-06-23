@@ -265,10 +265,18 @@ impl PathUri {
             return false;
         }
 
-        let Some(path_segments) = containment_path_segments(&self.0) else {
+        let Some(path_segments) = containment_path_segments(
+            &self.0,
+            self.infer_path_convention()
+                .unwrap_or(PathConvention::Posix),
+        ) else {
             return false;
         };
-        let Some(base_segments) = containment_path_segments(&base.0) else {
+        let Some(base_segments) = containment_path_segments(
+            &base.0,
+            base.infer_path_convention()
+                .unwrap_or(PathConvention::Posix),
+        ) else {
             return false;
         };
         path_segments.starts_with(&base_segments)
@@ -569,7 +577,7 @@ fn is_windows_drive_uri_segment(segment: &str) -> bool {
     matches!(segment.as_bytes(), [drive, b':'] if drive.is_ascii_alphabetic())
 }
 
-fn containment_path_segments(url: &Url) -> Option<Vec<&str>> {
+fn containment_path_segments(url: &Url, convention: PathConvention) -> Option<Vec<&str>> {
     let segments = url
         .path_segments()?
         .filter(|segment| !segment.is_empty())
@@ -577,7 +585,7 @@ fn containment_path_segments(url: &Url) -> Option<Vec<&str>> {
     (!segments.iter().any(|segment| {
         urlencoding::decode_binary(segment.as_bytes())
             .iter()
-            .any(|byte| matches!(*byte, b'/' | b'\\'))
+            .any(|byte| *byte == b'/' || (convention == PathConvention::Windows && *byte == b'\\'))
     }))
     .then_some(segments)
 }

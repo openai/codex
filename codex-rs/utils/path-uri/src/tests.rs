@@ -748,6 +748,11 @@ fn starts_with_uses_uri_segment_boundaries() {
         (
             "file:///workspace/plugin/%5C..%5Coutside",
             "file:///workspace/plugin",
+            true,
+        ),
+        (
+            "file:///C:/plugins/foo/%5C..%5Coutside",
+            "file:///C:/plugins/foo",
             false,
         ),
     ] {

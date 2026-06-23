@@ -1,10 +1,11 @@
 use codex_config::HooksFile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::find_plugin_manifest_path;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
-use std::path::Component;
 use std::path::Path;
 const MAX_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_DEFAULT_PROMPT_LEN: usize = 128;
@@ -15,6 +16,8 @@ pub type PluginManifestInterface = codex_plugin::manifest::PluginManifestInterfa
 pub type PluginManifestMcpServers =
     codex_plugin::manifest::PluginManifestMcpServers<AbsolutePathBuf>;
 pub type PluginManifestPaths = codex_plugin::manifest::PluginManifestPaths<AbsolutePathBuf>;
+
+pub(crate) type UriPluginManifest = codex_plugin::manifest::PluginManifest<PathUri>;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,58 +144,19 @@ pub(crate) fn parse_plugin_manifest(
     manifest_path: &Path,
     contents: &str,
 ) -> Result<PluginManifest, serde_json::Error> {
-    let resolver = HostManifestResourceResolver {
-        plugin_root,
-        manifest_path,
-    };
-    parse_plugin_manifest_with_resolver(&resolver, contents)
+    let plugin_root_uri =
+        PathUri::from_host_native_path(plugin_root).map_err(serde_json::Error::io)?;
+    let manifest_path_uri =
+        PathUri::from_host_native_path(manifest_path).map_err(serde_json::Error::io)?;
+    parse_plugin_manifest_uri(&plugin_root_uri, &manifest_path_uri, contents)?
+        .try_map_resources(|path| path.to_abs_path().map_err(serde_json::Error::io))
 }
 
-/// Separates manifest decoding from filesystem-specific resource resolution.
-///
-/// Implementations interpret manifest-relative paths using the convention of
-/// the filesystem that owns the plugin root. They must reject paths that are
-/// invalid for that convention or lexically escape the plugin root, and supply
-/// source-appropriate values for fallback naming and diagnostics.
-trait ManifestResourceResolver {
-    type Resource;
-
-    fn plugin_name_fallback(&self) -> Option<String>;
-    fn manifest_path_for_warning(&self) -> String;
-    fn resolve_path(&self, field: &'static str, path: Option<&str>) -> Option<Self::Resource>;
-}
-
-struct HostManifestResourceResolver<'a> {
-    plugin_root: &'a Path,
-    manifest_path: &'a Path,
-}
-
-impl ManifestResourceResolver for HostManifestResourceResolver<'_> {
-    type Resource = AbsolutePathBuf;
-
-    fn plugin_name_fallback(&self) -> Option<String> {
-        self.plugin_root
-            .file_name()
-            .and_then(|entry| entry.to_str())
-            .map(str::to_string)
-    }
-
-    fn manifest_path_for_warning(&self) -> String {
-        self.manifest_path.display().to_string()
-    }
-
-    fn resolve_path(&self, field: &'static str, path: Option<&str>) -> Option<Self::Resource> {
-        resolve_manifest_path(self.plugin_root, field, path)
-    }
-}
-
-fn parse_plugin_manifest_with_resolver<R>(
-    resolver: &R,
+pub(crate) fn parse_plugin_manifest_uri(
+    plugin_root: &PathUri,
+    manifest_path: &PathUri,
     contents: &str,
-) -> Result<codex_plugin::manifest::PluginManifest<R::Resource>, serde_json::Error>
-where
-    R: ManifestResourceResolver,
-{
+) -> Result<UriPluginManifest, serde_json::Error> {
     let RawPluginManifest {
         name: raw_name,
         version,
@@ -204,11 +168,11 @@ where
         hooks,
         interface,
     } = serde_json::from_str::<RawPluginManifest>(contents)?;
-    let name = resolver
-        .plugin_name_fallback()
+    let name = plugin_root
+        .basename()
         .filter(|_| raw_name.trim().is_empty())
         .unwrap_or(raw_name);
-    let manifest_path_for_warning = resolver.manifest_path_for_warning();
+    let manifest_path_for_warning = manifest_path.to_string();
     let version = version.and_then(|version| {
         let version = version.trim();
         (!version.is_empty()).then(|| version.to_string())
@@ -248,13 +212,13 @@ where
             ),
             brand_color,
             composer_icon: resolve_interface_asset_path(
-                resolver,
+                plugin_root,
                 "interface.composerIcon",
                 composer_icon.as_deref(),
             ),
-            logo: resolve_interface_asset_path(resolver, "interface.logo", logo.as_deref()),
+            logo: resolve_interface_asset_path(plugin_root, "interface.logo", logo.as_deref()),
             logo_dark: resolve_interface_asset_path(
-                resolver,
+                plugin_root,
                 "interface.logoDark",
                 logo_dark.as_deref(),
             ),
@@ -262,7 +226,7 @@ where
                 .iter()
                 .filter_map(|screenshot| {
                     resolve_interface_asset_path(
-                        resolver,
+                        plugin_root,
                         "interface.screenshots",
                         Some(screenshot),
                     )
@@ -294,30 +258,28 @@ where
         description,
         keywords,
         paths: codex_plugin::manifest::PluginManifestPaths {
-            skills: resolve_manifest_paths(resolver, "skills", skills.as_ref()),
-            mcp_servers: resolve_manifest_mcp_servers(resolver, mcp_servers),
-            apps: resolver.resolve_path("apps", apps.as_deref()),
-            hooks: resolve_manifest_hooks(resolver, hooks),
+            skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
+            mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
+            apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
+            hooks: resolve_manifest_hooks(plugin_root, hooks),
         },
         interface,
     })
 }
 
-fn resolve_manifest_hooks<R>(
-    resolver: &R,
+fn resolve_manifest_hooks(
+    plugin_root: &PathUri,
     hooks: Option<RawPluginManifestHooks>,
-) -> Option<codex_plugin::manifest::PluginManifestHooks<R::Resource>>
-where
-    R: ManifestResourceResolver,
-{
+) -> Option<codex_plugin::manifest::PluginManifestHooks<PathUri>> {
     match hooks? {
-        RawPluginManifestHooks::Path(path) => resolver
-            .resolve_path("hooks", Some(&path))
-            .map(|path| codex_plugin::manifest::PluginManifestHooks::Paths(vec![path])),
+        RawPluginManifestHooks::Path(path) => {
+            resolve_manifest_path(plugin_root, "hooks", Some(&path))
+                .map(|path| codex_plugin::manifest::PluginManifestHooks::Paths(vec![path]))
+        }
         RawPluginManifestHooks::Paths(paths) => {
             let hooks = paths
                 .iter()
-                .filter_map(|path| resolver.resolve_path("hooks", Some(path)))
+                .filter_map(|path| resolve_manifest_path(plugin_root, "hooks", Some(path)))
                 .collect::<Vec<_>>();
             (!hooks.is_empty()).then_some(codex_plugin::manifest::PluginManifestHooks::Paths(hooks))
         }
@@ -338,17 +300,15 @@ where
     }
 }
 
-fn resolve_manifest_mcp_servers<R>(
-    resolver: &R,
+fn resolve_manifest_mcp_servers(
+    plugin_root: &PathUri,
     mcp_servers: Option<RawPluginManifestMcpServers>,
-) -> Option<codex_plugin::manifest::PluginManifestMcpServers<R::Resource>>
-where
-    R: ManifestResourceResolver,
-{
+) -> Option<codex_plugin::manifest::PluginManifestMcpServers<PathUri>> {
     match mcp_servers? {
-        RawPluginManifestMcpServers::Path(path) => resolver
-            .resolve_path("mcpServers", Some(&path))
-            .map(codex_plugin::manifest::PluginManifestMcpServers::Path),
+        RawPluginManifestMcpServers::Path(path) => {
+            resolve_manifest_path(plugin_root, "mcpServers", Some(&path))
+                .map(codex_plugin::manifest::PluginManifestMcpServers::Path)
+        }
         RawPluginManifestMcpServers::Object(servers) => match serde_json::to_string(&servers) {
             Ok(servers) => Some(codex_plugin::manifest::PluginManifestMcpServers::Object(
                 servers,
@@ -368,15 +328,12 @@ where
     }
 }
 
-fn resolve_interface_asset_path<R>(
-    resolver: &R,
+fn resolve_interface_asset_path(
+    plugin_root: &PathUri,
     field: &'static str,
     path: Option<&str>,
-) -> Option<R::Resource>
-where
-    R: ManifestResourceResolver,
-{
-    resolver.resolve_path(field, path)
+) -> Option<PathUri> {
+    resolve_manifest_path(plugin_root, field, path)
 }
 
 fn resolve_default_prompts(
@@ -468,22 +425,20 @@ fn json_value_type(value: &JsonValue) -> &'static str {
     }
 }
 
-fn resolve_manifest_paths<R>(
-    resolver: &R,
+fn resolve_manifest_paths(
+    plugin_root: &PathUri,
     field: &'static str,
     paths: Option<&RawPluginManifestPaths>,
-) -> Vec<R::Resource>
-where
-    R: ManifestResourceResolver,
-{
+) -> Vec<PathUri> {
     match paths {
-        Some(RawPluginManifestPaths::Path(path)) => resolver
-            .resolve_path(field, Some(path))
-            .map(|path| vec![path])
-            .unwrap_or_default(),
+        Some(RawPluginManifestPaths::Path(path)) => {
+            resolve_manifest_path(plugin_root, field, Some(path))
+                .map(|path| vec![path])
+                .unwrap_or_default()
+        }
         Some(RawPluginManifestPaths::Paths(paths)) => paths
             .iter()
-            .filter_map(|path| resolver.resolve_path(field, Some(path)))
+            .filter_map(|path| resolve_manifest_path(plugin_root, field, Some(path)))
             .collect(),
         Some(RawPluginManifestPaths::Invalid(value)) => {
             tracing::warn!(
@@ -497,12 +452,10 @@ where
 }
 
 fn resolve_manifest_path(
-    plugin_root: &Path,
+    plugin_root: &PathUri,
     field: &'static str,
     path: Option<&str>,
-) -> Option<AbsolutePathBuf> {
-    // `plugin.json` paths are required to be relative to the plugin root and we return the
-    // normalized absolute path to the rest of the system.
+) -> Option<PathUri> {
     let path = path?;
     if path.is_empty() {
         return None;
@@ -516,27 +469,40 @@ fn resolve_manifest_path(
         return None;
     }
 
-    let mut normalized = std::path::PathBuf::new();
-    for component in Path::new(relative_path).components() {
-        match component {
-            Component::Normal(component) => normalized.push(component),
-            Component::ParentDir => {
-                tracing::warn!("ignoring {field}: path must not contain '..'");
-                return None;
-            }
-            _ => {
-                tracing::warn!("ignoring {field}: path must stay within the plugin root");
-                return None;
-            }
+    let convention = plugin_root.infer_path_convention();
+    let has_parent_component = match convention {
+        Some(PathConvention::Windows) => relative_path
+            .split(['/', '\\'])
+            .any(|component| component == ".."),
+        Some(PathConvention::Posix) | None => {
+            relative_path.split('/').any(|component| component == "..")
         }
+    };
+    if has_parent_component {
+        tracing::warn!("ignoring {field}: path must not contain '..'");
+        return None;
     }
 
-    AbsolutePathBuf::try_from(plugin_root.join(normalized))
-        .map_err(|err| {
-            tracing::warn!("ignoring {field}: path must resolve to an absolute path: {err}");
-            err
-        })
-        .ok()
+    let has_windows_root = convention == Some(PathConvention::Windows)
+        && (relative_path.starts_with('\\')
+            || matches!(relative_path.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic()));
+    if relative_path.starts_with('/') || has_windows_root {
+        tracing::warn!("ignoring {field}: path must stay within the plugin root");
+        return None;
+    }
+
+    let resolved = match plugin_root.join(relative_path) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            tracing::warn!("ignoring {field}: path must resolve under plugin root: {err}");
+            return None;
+        }
+    };
+    if !resolved.starts_with(plugin_root) {
+        tracing::warn!("ignoring {field}: path must stay within the plugin root");
+        return None;
+    }
+    Some(resolved)
 }
 
 #[cfg(test)]
@@ -551,6 +517,7 @@ mod tests {
     use codex_protocol::capabilities::CapabilityRootLocation;
     use codex_protocol::capabilities::SelectedCapabilityRoot;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -758,6 +725,46 @@ mod tests {
                 .and_then(|interface| interface.display_name.as_deref()),
             Some("Fallback Plugin")
         );
+    }
+
+    #[test]
+    fn uri_manifest_uses_the_root_path_convention() {
+        let windows_root =
+            PathUri::parse("file:///C:/plugins/demo-plugin").expect("Windows plugin root URI");
+        let posix_root =
+            PathUri::parse("file:///plugins/demo-plugin").expect("POSIX plugin root URI");
+        let composer_icon = r"./assets\..\icon.svg";
+
+        assert_eq!(parse_uri_composer_icon(&windows_root, composer_icon), None);
+        assert_eq!(
+            parse_uri_composer_icon(&posix_root, composer_icon),
+            Some(
+                posix_root
+                    .join(r"assets\..\icon.svg")
+                    .expect("composer icon URI")
+            )
+        );
+    }
+
+    fn parse_uri_composer_icon(plugin_root: &PathUri, composer_icon: &str) -> Option<PathUri> {
+        let manifest_path = plugin_root
+            .join(".codex-plugin/plugin.json")
+            .expect("manifest URI");
+        let composer_icon_json =
+            serde_json::to_string(composer_icon).expect("serialize composer icon");
+        let contents = format!(
+            r#"{{
+  "name": "demo-plugin",
+  "interface": {{
+    "displayName": "Demo Plugin",
+    "composerIcon": {composer_icon_json}
+  }}
+}}"#
+        );
+        super::parse_plugin_manifest_uri(plugin_root, &manifest_path, &contents)
+            .expect("URI manifest")
+            .interface
+            .and_then(|interface| interface.composer_icon)
     }
 
     #[tokio::test]
