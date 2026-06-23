@@ -51,6 +51,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionSource as ProtocolSessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::UserMessageEvent;
@@ -1367,6 +1368,7 @@ async fn seed_pathless_store_thread(
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_context_window: SessionContextWindow::new_initial(),
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),

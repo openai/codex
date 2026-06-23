@@ -37,7 +37,8 @@ pub(super) async fn create_thread(
             params.dynamic_tools,
         )
         .with_session_id(params.session_id)
-        .with_multi_agent_version(params.multi_agent_version),
+        .with_multi_agent_version(params.multi_agent_version)
+        .with_context_window(params.initial_context_window),
     )
     .await
     .map_err(|err| ThreadStoreError::Internal {

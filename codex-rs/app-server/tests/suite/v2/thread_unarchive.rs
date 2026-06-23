@@ -31,6 +31,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_thread_store::CreateThreadParams;
@@ -218,6 +219,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_context_window: SessionContextWindow::new_initial(),
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),

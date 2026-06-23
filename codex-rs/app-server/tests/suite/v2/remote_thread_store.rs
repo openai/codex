@@ -47,6 +47,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_thread_store::CreateThreadParams as StoreCreateThreadParams;
@@ -157,6 +158,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_context_window: SessionContextWindow::new_initial(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(codex_home.path().to_path_buf()),
                 model_provider: "mock_provider".to_string(),

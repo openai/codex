@@ -59,6 +59,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -3760,6 +3761,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_context_window: SessionContextWindow::new_initial(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
@@ -6609,6 +6611,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_context_window: SessionContextWindow::new_initial(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
