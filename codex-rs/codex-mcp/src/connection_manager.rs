@@ -506,6 +506,7 @@ impl McpConnectionManager {
         let fetch_start = Instant::now();
         let tools = list_tools_for_client_uncached(
             CODEX_APPS_MCP_SERVER_NAME,
+            /*is_codex_apps_mcp_server*/ true,
             &managed_client.client,
             managed_client.tool_timeout,
             managed_client.server_instructions.as_deref(),
