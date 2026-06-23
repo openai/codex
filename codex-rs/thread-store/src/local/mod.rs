@@ -182,17 +182,11 @@ impl LocalThreadStore {
                     message: format!("thread {} is archived", params.thread_id),
                 });
             }
-            return read_thread::read_thread_by_rollout_path(
-                self,
-                rollout_path,
-                /*include_archived*/ true,
-                /*include_history*/ true,
+            return read_thread::load_history_from_rollout_path(
+                rollout_path.as_path(),
+                params.thread_id,
             )
-            .await?
-            .history
-            .ok_or_else(|| ThreadStoreError::Internal {
-                message: format!("failed to load history for thread {}", params.thread_id),
-            });
+            .await;
         }
 
         read_thread::read_thread(
@@ -959,8 +953,8 @@ mod tests {
                 thread_id,
                 include_archived: false,
             })
-            .await
-            .expect("load external live history");
+            .await;
+        let history = history.expect("load external live history");
 
         assert!(history.items.iter().any(|item| {
             matches!(

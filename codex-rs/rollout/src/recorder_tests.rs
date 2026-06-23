@@ -71,6 +71,33 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
 }
 
 #[tokio::test]
+async fn load_rollout_items_for_thread_stops_on_mismatch() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let actual_uuid = Uuid::from_u128(1);
+    let actual_thread_id =
+        ThreadId::from_string(&actual_uuid.to_string()).expect("valid actual thread id");
+    let expected_thread_id =
+        ThreadId::from_string(&Uuid::from_u128(2).to_string()).expect("valid expected thread id");
+    let rollout_path = write_session_file(home.path(), "2025-01-03T12-00-00", actual_uuid)?;
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    // Invalid UTF-8 after SessionMeta proves the mismatch returns before reading the tail.
+    file.write_all(&[0xff, b'\n'])?;
+
+    let err = RolloutRecorder::load_rollout_items_for_thread(&rollout_path, expected_thread_id)
+        .await
+        .expect_err("mismatched thread id should fail");
+
+    let LoadRolloutItemsForThreadError::ThreadIdMismatch {
+        actual_thread_id: error_actual_thread_id,
+    } = err
+    else {
+        panic!("expected thread id mismatch, got {err}");
+    };
+    assert_eq!(error_actual_thread_id, actual_thread_id);
+    Ok(())
+}
+
+#[tokio::test]
 async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let uuid = Uuid::new_v4();
