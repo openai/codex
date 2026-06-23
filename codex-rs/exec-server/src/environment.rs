@@ -611,7 +611,7 @@ impl EnvironmentInfo {
             shell: codex_shell_command::shell_detect::default_user_shell().into(),
             cwd: std::env::current_dir()
                 .ok()
-                .and_then(|cwd| PathUri::from_path(cwd).ok()),
+                .and_then(|cwd| PathUri::from_host_native_path(cwd).ok()),
         }
     }
 }
@@ -666,7 +666,7 @@ mod tests {
         assert_eq!(
             info.cwd,
             Some(
-                PathUri::from_path(std::env::current_dir().expect("current directory"))
+                PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
                     .expect("cwd URI")
             )
         );
