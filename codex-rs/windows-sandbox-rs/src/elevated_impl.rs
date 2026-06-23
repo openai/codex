@@ -197,6 +197,7 @@ mod windows_impl {
             };
             let transport = retry_runner_spawn_once(
                 sandbox_creds,
+                &spawn_request.command,
                 |sandbox_creds| {
                     spawn_runner_transport(
                         codex_home,
