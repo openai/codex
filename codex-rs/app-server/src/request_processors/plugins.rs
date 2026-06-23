@@ -502,6 +502,17 @@ impl PluginRequestProcessor {
         self.thread_manager.skills_service().clear_cache();
     }
 
+    fn clear_plugin_share_related_caches(&self, config: &Config, auth: Option<CodexAuth>) {
+        self.clear_plugin_related_caches();
+        let plugins_manager = self.thread_manager.plugins_manager();
+        plugins_manager.invalidate_remote_installed_plugin_snapshot();
+        plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+            &config.plugins_config_input(),
+            auth,
+            Some(self.effective_plugins_changed_callback()),
+        );
+    }
+
     async fn load_latest_config(
         &self,
         fallback_cwd: Option<PathBuf>,
@@ -658,11 +669,12 @@ impl PluginRequestProcessor {
         // TODO(remote plugins): Remove this once remote plugins are ready and vertical plugins are
         // served directly from the normal remote catalog.
         if include_vertical && !config.features.enabled(Feature::RemotePlugin) {
-            match codex_core_plugins::remote::fetch_openai_curated_remote_collection_marketplace(
-                &remote_plugin_service_config,
-                auth.as_ref(),
-            )
-            .await
+            match plugins_manager
+                .fetch_openai_curated_remote_collection_marketplace_for_config(
+                    &plugins_input,
+                    auth.as_ref(),
+                )
+                .await
             {
                 Ok(Some(remote_marketplace)) => {
                     data.push(remote_marketplace_to_info(remote_marketplace));
@@ -699,13 +711,14 @@ impl PluginRequestProcessor {
             remote_sources.push(RemoteMarketplaceSource::SharedWithMe);
         }
         if !remote_sources.is_empty() {
-            match codex_core_plugins::remote::fetch_remote_marketplaces(
-                &remote_plugin_service_config,
-                auth.as_ref(),
-                &remote_sources,
-                /*global_catalog_cache_path*/ Some(config.codex_home.as_path()),
-            )
-            .await
+            match plugins_manager
+                .fetch_remote_marketplaces_for_config(
+                    &plugins_input,
+                    auth.as_ref(),
+                    &remote_sources,
+                    /*global_catalog_cache_path*/ Some(config.codex_home.as_path()),
+                )
+                .await
             {
                 Ok(remote_marketplaces) => {
                     for remote_marketplace in remote_marketplaces
@@ -1262,7 +1275,7 @@ impl PluginRequestProcessor {
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "save remote plugin share"))?;
         let remote_plugin_id = result.remote_plugin_id;
-        self.clear_plugin_related_caches();
+        self.clear_plugin_share_related_caches(&config, auth);
         Ok(PluginShareSaveResponse {
             remote_plugin_id,
             share_url: result.share_url.unwrap_or_default(),
@@ -1301,7 +1314,7 @@ impl PluginRequestProcessor {
         .map_err(|err| {
             remote_plugin_catalog_error_to_jsonrpc(err, "update remote plugin share targets")
         })?;
-        self.clear_plugin_related_caches();
+        self.clear_plugin_share_related_caches(&config, auth);
         Ok(PluginShareUpdateTargetsResponse {
             principals: result
                 .principals
@@ -1400,7 +1413,7 @@ impl PluginRequestProcessor {
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "delete remote plugin share"))?;
-        self.clear_plugin_related_caches();
+        self.clear_plugin_share_related_caches(&config, auth);
         Ok(PluginShareDeleteResponse {})
     }
 
@@ -1636,13 +1649,13 @@ impl PluginRequestProcessor {
             remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin")
         })?;
 
-        self.thread_manager
-            .plugins_manager()
-            .maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
-                &config.plugins_config_input(),
-                auth.clone(),
-                Some(self.effective_plugins_changed_callback()),
-            );
+        let plugins_manager = self.thread_manager.plugins_manager();
+        plugins_manager.clear_remote_installed_plugins_cache();
+        plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+            &config.plugins_config_input(),
+            auth.clone(),
+            Some(self.effective_plugins_changed_callback()),
+        );
 
         let plugin_metadata = self
             .thread_manager

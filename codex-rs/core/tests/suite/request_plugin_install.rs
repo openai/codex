@@ -46,6 +46,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
+use wiremock::matchers::query_param_is_missing;
 
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME: &str = "list_available_plugins_to_install";
@@ -233,7 +234,11 @@ fn remote_installed_plugins_response(plugins: Vec<Value>) -> ResponseTemplate {
 async fn mount_empty_remote_installed_plugins(server: &wiremock::MockServer) -> MockGuard {
     Mock::given(method("GET"))
         .and(path("/ps/plugins/installed"))
+        .and(query_param_is_missing("scope"))
+        .and(query_param("includeDownloadUrls", "true"))
+        .and(query_param("limit", "1000"))
         .respond_with(remote_installed_plugins_response(Vec::new()))
+        .expect(1)
         .mount_as_scoped(server)
         .await
 }
@@ -241,7 +246,9 @@ async fn mount_empty_remote_installed_plugins(server: &wiremock::MockServer) -> 
 async fn mount_remote_calendar_installed_plugins(server: &wiremock::MockServer) {
     Mock::given(method("GET"))
         .and(path("/ps/plugins/installed"))
-        .and(query_param("scope", "GLOBAL"))
+        .and(query_param_is_missing("scope"))
+        .and(query_param("includeDownloadUrls", "true"))
+        .and(query_param("limit", "1000"))
         .respond_with(remote_installed_plugins_response(vec![json!({
             "id": REMOTE_CALENDAR_PLUGIN_ID,
             "name": "calendar",
@@ -259,15 +266,6 @@ async fn mount_remote_calendar_installed_plugins(server: &wiremock::MockServer) 
         .with_priority(1)
         .mount(server)
         .await;
-    for scope in ["WORKSPACE", "USER"] {
-        Mock::given(method("GET"))
-            .and(path("/ps/plugins/installed"))
-            .and(query_param("scope", scope))
-            .respond_with(remote_installed_plugins_response(Vec::new()))
-            .with_priority(1)
-            .mount(server)
-            .await;
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
