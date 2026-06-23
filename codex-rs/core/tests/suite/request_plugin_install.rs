@@ -507,10 +507,12 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
             "event_type": "codex_plugin_install_requested",
             "event_params": {
                 "suggestion_id": "request_plugin_install_install-github",
-                "plugin_id": "github@openai-curated-remote",
-                "remote_plugin_id": REMOTE_PLUGIN_ID,
-                "plugin_name": "GitHub",
-                "connector_ids": [APP_CONNECTOR_ID],
+                "plugins": [{
+                    "plugin_id": "github@openai-curated-remote",
+                    "remote_plugin_id": REMOTE_PLUGIN_ID,
+                    "plugin_name": "GitHub",
+                    "connector_ids": [APP_CONNECTOR_ID],
+                }],
                 "source": "endpoint_recommendation",
                 "thread_id": thread_id,
                 "turn_id": turn_id,

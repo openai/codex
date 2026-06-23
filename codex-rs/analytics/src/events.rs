@@ -14,6 +14,7 @@ use crate::facts::CompactionTrigger;
 use crate::facts::GoalEventKind;
 use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
+use crate::facts::PluginInstallRequested;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
@@ -956,12 +957,17 @@ pub(crate) struct CodexPluginUsedMetadata {
 }
 
 #[derive(Serialize)]
-pub(crate) struct CodexPluginInstallRequestedMetadata {
-    pub(crate) suggestion_id: String,
+pub(crate) struct CodexPluginInstallRequestedPluginMetadata {
     pub(crate) plugin_id: String,
     pub(crate) remote_plugin_id: Option<String>,
     pub(crate) plugin_name: String,
     pub(crate) connector_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexPluginInstallRequestedMetadata {
+    pub(crate) suggestion_id: String,
+    pub(crate) plugins: Vec<CodexPluginInstallRequestedPluginMetadata>,
     pub(crate) source: crate::facts::PluginInstallRequestSource,
     pub(crate) thread_id: String,
     pub(crate) turn_id: String,
@@ -1097,14 +1103,20 @@ fn codex_plugin_metadata_with_product_client_id(
 
 pub(crate) fn codex_plugin_install_requested_metadata(
     tracking: &TrackEventsContext,
-    request: crate::facts::PluginInstallRequested,
+    request: PluginInstallRequested,
 ) -> CodexPluginInstallRequestedMetadata {
     CodexPluginInstallRequestedMetadata {
         suggestion_id: request.suggestion_id,
-        plugin_id: request.plugin_id,
-        remote_plugin_id: request.remote_plugin_id,
-        plugin_name: request.plugin_name,
-        connector_ids: request.connector_ids,
+        plugins: request
+            .plugins
+            .into_iter()
+            .map(|plugin| CodexPluginInstallRequestedPluginMetadata {
+                plugin_id: plugin.plugin_id,
+                remote_plugin_id: plugin.remote_plugin_id,
+                plugin_name: plugin.plugin_name,
+                connector_ids: plugin.connector_ids,
+            })
+            .collect(),
         source: request.source,
         thread_id: tracking.thread_id.clone(),
         turn_id: tracking.turn_id.clone(),

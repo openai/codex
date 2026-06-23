@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use codex_analytics::PluginInstallRequestSource;
 use codex_analytics::PluginInstallRequested;
+use codex_analytics::PluginInstallRequestedPlugin;
 use codex_analytics::build_track_events_context;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
@@ -195,10 +196,12 @@ impl RequestPluginInstallHandler {
                     ),
                     PluginInstallRequested {
                         suggestion_id: suggestion_id.clone(),
-                        plugin_id: plugin.id.clone(),
-                        remote_plugin_id: plugin.remote_plugin_id.clone(),
-                        plugin_name: plugin.name.clone(),
-                        connector_ids: plugin.app_connector_ids.clone(),
+                        plugins: vec![PluginInstallRequestedPlugin {
+                            plugin_id: plugin.id.clone(),
+                            remote_plugin_id: plugin.remote_plugin_id.clone(),
+                            plugin_name: plugin.name.clone(),
+                            connector_ids: plugin.app_connector_ids.clone(),
+                        }],
                         source,
                     },
                 );

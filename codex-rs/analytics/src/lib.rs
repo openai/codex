@@ -44,6 +44,7 @@ pub use facts::InputError;
 pub use facts::InvocationType;
 pub use facts::PluginInstallRequestSource;
 pub use facts::PluginInstallRequested;
+pub use facts::PluginInstallRequestedPlugin;
 pub use facts::SkillInvocation;
 pub use facts::SubAgentThreadStartedInput;
 pub use facts::ThreadInitializationMode;

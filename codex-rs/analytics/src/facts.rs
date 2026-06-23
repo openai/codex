@@ -556,11 +556,16 @@ pub enum PluginInstallRequestSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginInstallRequested {
     pub suggestion_id: String,
+    pub plugins: Vec<PluginInstallRequestedPlugin>,
+    pub source: PluginInstallRequestSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginInstallRequestedPlugin {
     pub plugin_id: String,
     pub remote_plugin_id: Option<String>,
     pub plugin_name: String,
     pub connector_ids: Vec<String>,
-    pub source: PluginInstallRequestSource,
 }
 
 pub(crate) struct PluginInstallRequestedInput {
