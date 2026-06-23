@@ -325,11 +325,10 @@ pub(crate) async fn run_turn(
                     "post sampling token usage"
                 );
 
-                let tokens_until_compaction = token_status.tokens_until_compaction();
                 super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    tokens_until_compaction,
+                    token_status.tokens_until_compaction,
                 )
                 .await;
 
