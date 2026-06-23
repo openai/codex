@@ -487,8 +487,6 @@ export type { TurnStatus } from "./TurnStatus";
 export type { TurnSteerParams } from "./TurnSteerParams";
 export type { TurnSteerResponse } from "./TurnSteerResponse";
 export type { TurnsPage } from "./TurnsPage";
-export type { UpdateCheckResponse } from "./UpdateCheckResponse";
-export type { UpdateInstallResponse } from "./UpdateInstallResponse";
 export type { UserInput } from "./UserInput";
 export type { WarningNotification } from "./WarningNotification";
 export type { WebSearchAction } from "./WebSearchAction";

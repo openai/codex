@@ -1532,52 +1532,6 @@
             },
             "method": {
               "enum": [
-                "update/check"
-              ],
-              "title": "Update/checkRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "Update/checkRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "update/install"
-              ],
-              "title": "Update/installRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "Update/installRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
                 "experimentalFeature/list"
               ],
               "title": "ExperimentalFeature/listRequestMethod",
@@ -20222,48 +20176,6 @@
         "required": [
           "data"
         ],
-        "type": "object"
-      },
-      "UpdateCheckResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "canAutoUpdate": {
-            "type": "boolean"
-          },
-          "currentVersion": {
-            "type": "string"
-          },
-          "installationMethod": {
-            "$ref": "#/definitions/v2/InstallationMethod"
-          },
-          "latestVersion": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "canAutoUpdate",
-          "currentVersion",
-          "installationMethod",
-          "latestVersion"
-        ],
-        "title": "UpdateCheckResponse",
-        "type": "object"
-      },
-      "UpdateInstallResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "installedVersion": {
-            "type": "string"
-          },
-          "success": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "installedVersion",
-          "success"
-        ],
-        "title": "UpdateInstallResponse",
         "type": "object"
       },
       "UserInput": {
