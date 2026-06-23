@@ -73,6 +73,7 @@ use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -790,7 +791,6 @@ impl ModelClient {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
-        let instructions = &prompt.base_instructions.text;
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
         if !self.state.provider.info().is_openai() {
             input
@@ -798,6 +798,28 @@ impl ModelClient {
                 .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
         }
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+        let (instructions, tools) = if model_info.use_responses_lite {
+            let mut prefix = vec![ResponseItem::AdditionalTools {
+                id: None,
+                role: "developer".to_string(),
+                tools,
+            }];
+            if !prompt.base_instructions.text.is_empty() {
+                prefix.push(ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: prompt.base_instructions.text.clone(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                });
+            }
+            input.splice(0..0, prefix);
+            (String::new(), None)
+        } else {
+            (prompt.base_instructions.text.clone(), Some(tools))
+        };
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
@@ -824,7 +846,7 @@ impl ModelClient {
         let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
-            instructions: instructions.clone(),
+            instructions,
             input,
             tools,
             tool_choice: "auto".to_string(),

@@ -256,7 +256,8 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             ResponseItem::CustomToolCall { call_id, .. } => {
                 custom_tool_call_ids.insert(call_id.as_str());
             }
-            ResponseItem::Message { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Message { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
@@ -296,7 +297,8 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
                 image_urls.push(format!("data:image/png;base64,{result}"));
             }
-            ResponseItem::Reasoning { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Reasoning { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }

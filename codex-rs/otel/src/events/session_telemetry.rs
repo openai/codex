@@ -1198,6 +1198,7 @@ impl SessionTelemetry {
 
     fn responses_item_type(item: &ResponseItem) -> String {
         match item {
+            ResponseItem::AdditionalTools { .. } => "additional_tools".into(),
             ResponseItem::Message { role, .. } => format!("message_from_{role}"),
             ResponseItem::AgentMessage { .. } => "agent_message".into(),
             ResponseItem::Reasoning { .. } => "reasoning".into(),
