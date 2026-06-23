@@ -247,6 +247,33 @@ impl PathUri {
         std::iter::successors(Some(self.clone()), Self::parent)
     }
 
+    /// Returns true when this URI is lexically equal to or below `base`.
+    ///
+    /// Containment is computed using URI authority and path-segment boundaries,
+    /// without consulting the host filesystem. Percent-encoded path separators
+    /// fail closed because native path conversion may interpret them as segment
+    /// boundaries. Opaque fallback URIs created by [`Self::from_abs_path`] only
+    /// contain themselves.
+    pub fn starts_with(&self, base: &Self) -> bool {
+        if self == base {
+            return true;
+        }
+        if decode_bad_path_uri(&self.0).is_some() || decode_bad_path_uri(&base.0).is_some() {
+            return false;
+        }
+        if self.0.host_str() != base.0.host_str() {
+            return false;
+        }
+
+        let Some(path_segments) = containment_path_segments(&self.0) else {
+            return false;
+        };
+        let Some(base_segments) = containment_path_segments(&base.0) else {
+            return false;
+        };
+        path_segments.starts_with(&base_segments)
+    }
+
     /// Lexically resolves native absolute or relative path text against this URI.
     ///
     /// Path text is interpreted using the POSIX or Windows convention inferred
@@ -540,6 +567,19 @@ fn decode_bad_path_uri(url: &Url) -> Option<Vec<u8>> {
 
 fn is_windows_drive_uri_segment(segment: &str) -> bool {
     matches!(segment.as_bytes(), [drive, b':'] if drive.is_ascii_alphabetic())
+}
+
+fn containment_path_segments(url: &Url) -> Option<Vec<&str>> {
+    let segments = url
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    (!segments.iter().any(|segment| {
+        urlencoding::decode_binary(segment.as_bytes())
+            .iter()
+            .any(|byte| matches!(*byte, b'/' | b'\\'))
+    }))
+    .then_some(segments)
 }
 
 fn infer_opaque_path_convention(path_bytes: &[u8]) -> Option<PathConvention> {
