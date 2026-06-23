@@ -1,5 +1,6 @@
 use super::*;
 
+use super::rollout_reconstruction::SessionMetaWindowRestore;
 use super::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -9,8 +10,12 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::SessionContextWindow;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -295,7 +300,11 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
     ];
 
     let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
         .await;
 
     assert_eq!(
@@ -389,7 +398,11 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
     ];
 
     let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
         .await;
 
     assert_eq!(
@@ -515,7 +528,11 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
     ];
 
     let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
         .await;
 
     assert_eq!(
@@ -613,7 +630,11 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
     ];
 
     let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
         .await;
 
     assert_eq!(
@@ -685,7 +706,11 @@ async fn reconstruct_history_rollback_clears_history_and_metadata_when_exceeding
     ];
 
     let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
         .await;
 
     assert_eq!(reconstructed.history, Vec::new());
@@ -910,6 +935,128 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
 }
 
 #[tokio::test]
+async fn reconstruct_history_restores_initial_window_from_session_meta() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = ThreadId::default();
+    let initial_window_id = Uuid::now_v7();
+    let rollout_items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+        meta: SessionMeta {
+            session_id: thread_id.into(),
+            id: thread_id,
+            context_window: Some(SessionContextWindow {
+                window_id: initial_window_id.to_string(),
+            }),
+            ..SessionMeta::default()
+        },
+        git: None,
+    })];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
+        .await;
+
+    assert_eq!(reconstructed.window_number, 0);
+    assert_eq!(reconstructed.first_window_id, Some(initial_window_id));
+    assert_eq!(reconstructed.previous_window_id, None);
+    assert_eq!(reconstructed.window_id, Some(initial_window_id));
+}
+
+#[tokio::test]
+async fn reconstruct_history_prefers_compacted_window_over_session_meta() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = ThreadId::default();
+    let initial_window_id = Uuid::now_v7();
+    let compacted_first_window_id = Uuid::now_v7();
+    let compacted_previous_window_id = Uuid::now_v7();
+    let compacted_window_id = Uuid::now_v7();
+    let rollout_items = vec![
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: thread_id.into(),
+                id: thread_id,
+                context_window: Some(SessionContextWindow {
+                    window_id: initial_window_id.to_string(),
+                }),
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
+        RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(Vec::new()),
+            window_number: Some(2),
+            first_window_id: Some(compacted_first_window_id.to_string()),
+            previous_window_id: Some(compacted_previous_window_id.to_string()),
+            window_id: Some(compacted_window_id.to_string()),
+        }),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
+        .await;
+
+    assert_eq!(reconstructed.window_number, 2);
+    assert_eq!(
+        reconstructed.first_window_id,
+        Some(compacted_first_window_id)
+    );
+    assert_eq!(
+        reconstructed.previous_window_id,
+        Some(compacted_previous_window_id)
+    );
+    assert_eq!(reconstructed.window_id, Some(compacted_window_id));
+}
+
+#[tokio::test]
+async fn reconstruct_history_preserves_legacy_compaction_count_with_session_meta_window() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = ThreadId::default();
+    let initial_window_id = Uuid::now_v7();
+    let rollout_items = vec![
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: thread_id.into(),
+                id: thread_id,
+                context_window: Some(SessionContextWindow {
+                    window_id: initial_window_id.to_string(),
+                }),
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
+        RolloutItem::Compacted(CompactedItem {
+            message: "legacy summary".to_string(),
+            replacement_history: None,
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+        }),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
+        .await;
+
+    assert_eq!(reconstructed.window_number, 1);
+    assert_eq!(reconstructed.first_window_id, None);
+    assert_eq!(reconstructed.previous_window_id, None);
+    assert_eq!(reconstructed.window_id, None);
+}
+
+#[tokio::test]
 async fn reconstruct_history_legacy_compaction_without_replacement_history_does_not_inject_current_initial_context()
  {
     let (session, turn_context) = make_session_and_context().await;
@@ -927,7 +1074,11 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
     ];
 
     let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
         .await;
 
     assert_eq!(
@@ -991,7 +1142,11 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
     ];
 
     let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .reconstruct_history_from_rollout(
+            &turn_context,
+            &rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
         .await;
 
     assert!(reconstructed.reference_context_item.is_none());
