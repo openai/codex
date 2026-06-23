@@ -10,6 +10,7 @@ use tracing::Instrument;
 use tracing::debug_span;
 use tracing::info_span;
 
+use super::rollout_reconstruction::SessionMetaWindowRestore;
 use crate::session::SteerInputError;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -526,8 +527,12 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
-        .await;
+    sess.apply_rollout_reconstruction(
+        turn_context.as_ref(),
+        replay_items.as_slice(),
+        SessionMetaWindowRestore::Restore,
+    )
+    .await;
     sess.services
         .agent_control
         .rollout_budget()

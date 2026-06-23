@@ -1,5 +1,6 @@
 use super::*;
 use crate::context_manager::is_user_turn_boundary;
+use codex_protocol::protocol::SessionContextWindow;
 use uuid::Uuid;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
@@ -21,6 +22,12 @@ struct ReconstructedWindow {
     first_id: Option<Uuid>,
     previous_id: Option<Uuid>,
     id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SessionMetaWindowRestore {
+    Restore,
+    Ignore,
 }
 
 #[derive(Debug, Default)]
@@ -103,16 +110,52 @@ fn finalize_active_segment<'a>(
 }
 
 impl Session {
+    #[cfg(test)]
     pub(super) async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
+    ) -> RolloutReconstruction {
+        self.reconstruct_history_from_rollout_with_session_meta_window_restore(
+            turn_context,
+            rollout_items,
+            SessionMetaWindowRestore::Restore,
+        )
+        .await
+    }
+
+    pub(super) async fn reconstruct_history_from_rollout_with_session_meta_window_restore(
+        &self,
+        turn_context: &TurnContext,
+        rollout_items: &[RolloutItem],
+        session_meta_window_restore: SessionMetaWindowRestore,
     ) -> RolloutReconstruction {
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
         // are both known; then replay only the buffered surviving tail forward to preserve exact
         // history semantics.
+        let has_legacy_compaction_without_window_number =
+            rollout_items.iter().any(|item| {
+                matches!(item, RolloutItem::Compacted(compacted) if compacted.window_number.is_none())
+            });
+        let initial_window = match session_meta_window_restore {
+            SessionMetaWindowRestore::Restore => {
+                if has_legacy_compaction_without_window_number {
+                    None
+                } else {
+                    rollout_items.iter().find_map(|item| match item {
+                        RolloutItem::SessionMeta(session_meta) => session_meta
+                            .meta
+                            .context_window
+                            .as_ref()
+                            .and_then(reconstructed_window_from_session_context_window),
+                        _ => None,
+                    })
+                }
+            }
+            SessionMetaWindowRestore::Ignore => None,
+        };
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
@@ -348,7 +391,7 @@ impl Session {
             reference_context_item
         };
 
-        let window = window.unwrap_or(ReconstructedWindow {
+        let window = window.or(initial_window).unwrap_or(ReconstructedWindow {
             number: fallback_window_number,
             first_id: None,
             previous_id: None,
@@ -370,4 +413,16 @@ fn parse_uuid_v7(value: &str) -> Option<Uuid> {
     Uuid::parse_str(value)
         .ok()
         .filter(|uuid| uuid.get_version_num() == 7)
+}
+
+fn reconstructed_window_from_session_context_window(
+    context_window: &SessionContextWindow,
+) -> Option<ReconstructedWindow> {
+    let id = parse_uuid_v7(&context_window.window_id)?;
+    Some(ReconstructedWindow {
+        number: 0,
+        first_id: Some(id),
+        previous_id: None,
+        id: Some(id),
+    })
 }

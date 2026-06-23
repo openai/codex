@@ -236,6 +236,7 @@ pub(crate) use self::input_queue::InputQueueActivity;
 pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 use self::review::spawn_review_thread;
+use self::rollout_reconstruction::SessionMetaWindowRestore;
 use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
@@ -1290,7 +1291,11 @@ impl Session {
                 let turn_context = self.new_default_turn().await;
                 let rollout_items = resumed_history.history;
                 let previous_turn_settings = self
-                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
+                    .apply_rollout_reconstruction(
+                        &turn_context,
+                        &rollout_items,
+                        SessionMetaWindowRestore::Restore,
+                    )
                     .await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
@@ -1328,8 +1333,12 @@ impl Session {
             }
             InitialHistory::Forked(rollout_items) => {
                 let turn_context = self.new_default_turn().await;
-                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
-                    .await;
+                self.apply_rollout_reconstruction(
+                    &turn_context,
+                    &rollout_items,
+                    SessionMetaWindowRestore::Ignore,
+                )
+                .await;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
@@ -1366,6 +1375,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
+        session_meta_window_restore: SessionMetaWindowRestore,
     ) -> Option<PreviousTurnSettings> {
         let rollout_reconstruction::RolloutReconstruction {
             mut history,
@@ -1376,7 +1386,11 @@ impl Session {
             previous_window_id,
             window_id,
         } = self
-            .reconstruct_history_from_rollout(turn_context, rollout_items)
+            .reconstruct_history_from_rollout_with_session_meta_window_restore(
+                turn_context,
+                rollout_items,
+                session_meta_window_restore,
+            )
             .await;
         // Keep the recorded rollout unchanged. Prepare its reconstructed history before
         // installing it, so legacy images are processed once for this resume or fork and
