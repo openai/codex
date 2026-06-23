@@ -281,6 +281,7 @@ impl MemoryStartupContext {
                 &context.session_telemetry,
                 context.reasoning_effort.clone(),
                 context.reasoning_summary,
+                /*reasoning_summary_delivery*/ None,
                 context.service_tier.clone(),
                 &responses_metadata,
                 &InferenceTraceContext::disabled(),
@@ -292,7 +293,7 @@ impl MemoryStartupContext {
         while let Some(message) = stream.next().await.transpose()? {
             match message {
                 ResponseEvent::OutputTextDelta { delta, .. } => result.push_str(&delta),
-                ResponseEvent::OutputItemDone(item) => {
+                ResponseEvent::OutputItemDone { item, .. } => {
                     if result.is_empty()
                         && let codex_protocol::models::ResponseItem::Message { content, .. } = item
                         && let Some(text) = content_items_to_text(&content)

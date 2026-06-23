@@ -168,6 +168,7 @@ pub struct ResponsesStreamEvent {
     call_id: Option<String>,
     delta: Option<String>,
     text: Option<String>,
+    output_index: Option<usize>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
     safety_buffering: Option<Value>,
@@ -320,7 +321,10 @@ pub fn process_responses_event(
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
                 if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
-                    return Ok(Some(ResponseEvent::OutputItemDone(item)));
+                    return Ok(Some(ResponseEvent::OutputItemDone {
+                        item,
+                        output_index: event.output_index,
+                    }));
                 }
                 debug!("failed to parse ResponseItem from output_item.done");
             }
@@ -739,6 +743,7 @@ mod tests {
     async fn parses_items_and_completed() {
         let item1 = json!({
             "type": "response.output_item.done",
+            "output_index": 0,
             "item": {
                 "type": "message",
                 "role": "assistant",
@@ -750,6 +755,7 @@ mod tests {
 
         let item2 = json!({
             "type": "response.output_item.done",
+            "output_index": 1,
             "item": {
                 "type": "message",
                 "role": "assistant",
@@ -774,16 +780,22 @@ mod tests {
 
         assert_matches!(
             &events[0],
-            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message {
-                role,
-                phase: Some(MessagePhase::Commentary),
-                ..
-            })) if role == "assistant"
+            Ok(ResponseEvent::OutputItemDone {
+                item: ResponseItem::Message {
+                    role,
+                    phase: Some(MessagePhase::Commentary),
+                    ..
+                },
+                output_index: Some(0),
+            }) if role == "assistant"
         );
 
         assert_matches!(
             &events[1],
-            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
+            Ok(ResponseEvent::OutputItemDone {
+                item: ResponseItem::Message { role, .. },
+                output_index: Some(1),
+            })
                 if role == "assistant"
         );
 
@@ -819,7 +831,7 @@ mod tests {
 
         assert_eq!(events.len(), 2);
 
-        assert_matches!(events[0], Ok(ResponseEvent::OutputItemDone(_)));
+        assert_matches!(events[0], Ok(ResponseEvent::OutputItemDone { .. }));
 
         match &events[1] {
             Err(ApiError::Stream(msg)) => {
@@ -854,12 +866,15 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_matches!(
             &events[0],
-            ResponseEvent::OutputItemDone(ResponseItem::ToolSearchCall {
-                call_id,
-                execution,
-                arguments,
+            ResponseEvent::OutputItemDone {
+                item: ResponseItem::ToolSearchCall {
+                    call_id,
+                    execution,
+                    arguments,
+                    ..
+                },
                 ..
-            }) if call_id.as_deref() == Some("search-1")
+            } if call_id.as_deref() == Some("search-1")
                 && execution == "client"
                 && arguments == &json!({"query": "calendar create", "limit": 1})
         );
@@ -1102,7 +1117,7 @@ mod tests {
             matches!(ev, ResponseEvent::Created)
         }
         fn is_output(ev: &ResponseEvent) -> bool {
-            matches!(ev, ResponseEvent::OutputItemDone(_))
+            matches!(ev, ResponseEvent::OutputItemDone { .. })
         }
         fn is_completed(ev: &ResponseEvent) -> bool {
             matches!(ev, ResponseEvent::Completed { .. })

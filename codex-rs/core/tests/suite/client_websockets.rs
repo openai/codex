@@ -377,7 +377,7 @@ async fn responses_websocket_preconnect_reuses_connection() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_request_prewarm_reuses_connection() {
+async fn responses_websocket_request_prewarm_reuses_connection_across_delivery_modes() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
@@ -386,7 +386,11 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
+    let mut provider = websocket_provider(&server);
+    provider.name = "OpenAI".to_string();
+    let mut harness =
+        websocket_harness_with_provider_options(provider, /*runtime_metrics_enabled*/ true).await;
+    harness.model_info.supports_reasoning_summaries = true;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
@@ -402,7 +406,26 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
         )
         .await
         .expect("websocket prewarm failed");
-    stream_until_complete(&mut client_session, &harness, &prompt).await;
+    let turn_responses_metadata = turn_metadata(&harness, /*turn_id*/ None);
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &harness.model_info,
+            &harness.session_telemetry,
+            harness.effort.clone(),
+            harness.summary,
+            Some(ReasoningSummaryDelivery::ConcurrentCutoff),
+            /*service_tier*/ None,
+            &turn_responses_metadata,
+            &InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("websocket stream failed");
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
 
     assert_eq!(server.handshakes().len(), 1);
     assert_eq!(
@@ -423,6 +446,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup["tools"], serde_json::json!([]));
+    assert_eq!(warmup.get("stream_options"), None);
     let warmup_turn_metadata: serde_json::Value = serde_json::from_str(
         warmup["client_metadata"]["x-codex-turn-metadata"]
             .as_str()
@@ -436,6 +460,10 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     assert_eq!(follow_up["type"].as_str(), Some("response.create"));
     assert_eq!(follow_up["previous_response_id"].as_str(), Some("warm-1"));
     assert_eq!(follow_up["input"], serde_json::json!([]));
+    assert_eq!(
+        follow_up["stream_options"]["reasoning_summary_delivery"].as_str(),
+        Some("concurrent_cutoff")
+    );
 
     server.shutdown().await;
 }
@@ -676,8 +704,6 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
                     "responses_lite": body["client_metadata"]
                         .get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY),
                     "reasoning_context": body["reasoning"].get("context"),
-                    "reasoning_summary_delivery": body["stream_options"]
-                        .get("reasoning_summary_delivery"),
                     "parallel_tool_calls": body["parallel_tool_calls"],
                 })
             })
@@ -686,19 +712,16 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
             json!({
                 "responses_lite": null,
                 "reasoning_context": null,
-                "reasoning_summary_delivery": "concurrent_cutoff",
                 "parallel_tool_calls": false,
             }),
             json!({
                 "responses_lite": "true",
                 "reasoning_context": "all_turns",
-                "reasoning_summary_delivery": "concurrent_cutoff",
                 "parallel_tool_calls": false,
             }),
             json!({
                 "responses_lite": null,
                 "reasoning_context": null,
-                "reasoning_summary_delivery": "concurrent_cutoff",
                 "parallel_tool_calls": false,
             }),
         ]

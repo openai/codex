@@ -416,7 +416,7 @@ impl SessionTelemetry {
         handle_responses_span.record("otel.name", SessionTelemetry::responses_type(event));
 
         match event {
-            ResponseEvent::OutputItemDone(item) => {
+            ResponseEvent::OutputItemDone { item, .. } => {
                 handle_responses_span.record("from", "output_item_done");
                 if let ResponseItem::FunctionCall { name, .. } = item {
                     handle_responses_span.record("tool_name", name.as_str());
@@ -1175,7 +1175,7 @@ impl SessionTelemetry {
     fn responses_type(event: &ResponseEvent) -> String {
         match event {
             ResponseEvent::Created => "created".into(),
-            ResponseEvent::OutputItemDone(item) | ResponseEvent::OutputItemAdded(item) => {
+            ResponseEvent::OutputItemDone { item, .. } | ResponseEvent::OutputItemAdded(item) => {
                 SessionTelemetry::responses_item_type(item)
             }
             ResponseEvent::Completed { .. } => "completed".into(),

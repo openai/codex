@@ -874,6 +874,15 @@ pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
     })
 }
 
+pub fn ev_output_item_done_with_index(mut event: Value, output_index: usize) -> Value {
+    assert_eq!(
+        event.get("type").and_then(Value::as_str),
+        Some("response.output_item.done")
+    );
+    event["output_index"] = serde_json::json!(output_index);
+    event
+}
+
 pub fn ev_function_call_with_namespace(
     call_id: &str,
     namespace: &str,

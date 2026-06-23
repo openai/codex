@@ -396,8 +396,11 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     // item in history, so the trace should preserve it when the stream is
     // abandoned.
     let item = output_message("msg-1", "partial answer");
-    let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone(item))])
-        .chain(futures::stream::pending());
+    let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone {
+        item,
+        output_index: None,
+    })])
+    .chain(futures::stream::pending());
     let (mut stream, _) = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
@@ -410,7 +413,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         .next()
         .await
         .expect("mapped stream should yield output item")?;
-    assert!(matches!(observed, ResponseEvent::OutputItemDone(_)));
+    assert!(matches!(observed, ResponseEvent::OutputItemDone { .. }));
 
     // Dropping the consumer is how turn interruption/preemption stops polling
     // the provider stream. The mapper task observes that drop asynchronously
@@ -429,6 +432,65 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     assert_eq!(inference.execution.status, ExecutionStatus::Cancelled);
     assert_eq!(inference.response_item_ids.len(), 1);
     assert_eq!(rollout.raw_payloads.len(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn response_stream_orders_item_done_events() -> anyhow::Result<()> {
+    let item_zero = output_message("msg-0", "first");
+    let item_one = output_message("msg-1", "second");
+    let api_stream = futures::stream::iter([
+        Ok(ResponseEvent::OutputItemDone {
+            item: item_one,
+            output_index: Some(1),
+        }),
+        Ok(ResponseEvent::ReasoningSummaryDone {
+            text: "summary".to_string(),
+            summary_index: 0,
+            item_id: Some("reasoning-0".to_string()),
+        }),
+        Ok(ResponseEvent::OutputItemDone {
+            item: item_zero,
+            output_index: Some(0),
+        }),
+        Ok(ResponseEvent::Completed {
+            response_id: "resp-1".to_string(),
+            token_usage: None,
+            end_turn: Some(true),
+        }),
+    ]);
+    let (mut stream, last_response) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        test_model_provider(),
+    );
+
+    let mut observed = Vec::new();
+    while let Some(event) = stream.next().await {
+        match event? {
+            ResponseEvent::ReasoningSummaryDone { .. } => observed.push("summary".to_string()),
+            ResponseEvent::OutputItemDone { item, .. } => {
+                observed.push(item.id().expect("output item id").to_string());
+            }
+            ResponseEvent::Completed { .. } => observed.push("completed".to_string()),
+            _ => {}
+        }
+    }
+
+    assert_eq!(observed, ["summary", "msg-0", "msg-1", "completed"]);
+    assert_eq!(
+        last_response
+            .await
+            .expect("last response")
+            .items_added
+            .iter()
+            .map(|item| item.id().expect("output item id"))
+            .collect::<Vec<_>>(),
+        ["msg-0", "msg-1"]
+    );
 
     Ok(())
 }
@@ -512,10 +574,10 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
     for _ in 0..super::RESPONSE_STREAM_CHANNEL_CAPACITY {
         events.push_back(ResponseEvent::Created);
     }
-    events.push_back(ResponseEvent::OutputItemDone(output_message(
-        "msg-1",
-        "partial answer",
-    )));
+    events.push_back(ResponseEvent::OutputItemDone {
+        item: output_message("msg-1", "partial answer"),
+        output_index: None,
+    });
     let api_stream = NotifyAfterEventStream {
         events,
         yielded: 0,

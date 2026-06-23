@@ -24,6 +24,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_message_item_added;
+use core_test_support::responses::ev_output_item_done_with_index;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_output_text_delta_for_item;
 use core_test_support::responses::ev_reasoning_item;
@@ -35,6 +36,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_web_search_call_added_partial;
 use core_test_support::responses::ev_web_search_call_done;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -1164,28 +1166,60 @@ async fn concurrent_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reasoning-1", &[""]),
         ev_reasoning_summary_text_delta("**Inspecting"),
-        ev_reasoning_summary_text_done_for_item("reasoning-1", 0, "**Inspecting files**"),
-        ev_reasoning_summary_text_done_for_item("reasoning-1", 1, "**Planning checks**"),
+        ev_reasoning_summary_text_done_for_item(
+            "reasoning-1",
+            /*summary_index*/ 0,
+            "**Inspecting files**",
+        ),
+        ev_reasoning_summary_text_done_for_item(
+            "reasoning-1",
+            /*summary_index*/ 1,
+            "**Planning checks**",
+        ),
         ev_message_item_added("message-1", ""),
         ev_output_text_delta_for_item("message-1", "Final"),
         ev_reasoning_item_added("reasoning-2", &[""]),
         ev_output_text_delta_for_item("message-1", " answer"),
-        ev_reasoning_summary_text_done_for_item("reasoning-1", 2, "**Finishing checks**"),
-        ev_reasoning_summary_text_done_for_item("reasoning-2", 0, "**Checking result**"),
-        ev_assistant_message("message-1", "Final answer"),
-        ev_reasoning_item(
+        ev_reasoning_summary_text_done_for_item(
             "reasoning-1",
-            &[
-                "**Inspecting files**",
-                "**Planning checks**",
-                "**Finishing checks**",
-            ],
-            &[],
+            /*summary_index*/ 2,
+            "**Finishing checks**",
         ),
-        ev_reasoning_item("reasoning-2", &["**Checking result**"], &[]),
+        ev_reasoning_summary_text_done_for_item(
+            "reasoning-2",
+            /*summary_index*/ 0,
+            "**Checking result**",
+        ),
+        ev_output_item_done_with_index(
+            ev_assistant_message("message-1", "Final answer"),
+            /*output_index*/ 1,
+        ),
+        ev_output_item_done_with_index(
+            ev_reasoning_item(
+                "reasoning-1",
+                &[
+                    "**Inspecting files**",
+                    "**Planning checks**",
+                    "**Finishing checks**",
+                ],
+                &[],
+            ),
+            /*output_index*/ 0,
+        ),
+        ev_output_item_done_with_index(
+            ev_reasoning_item("reasoning-2", &["**Checking result**"], &[]),
+            /*output_index*/ 2,
+        ),
         ev_completed("resp-1"),
     ]);
-    mount_sse_once(&server, stream).await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            stream,
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
 
     codex
         .submit(Op::UserInput {
@@ -1231,7 +1265,7 @@ async fn concurrent_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
 
     assert_eq!(
         completed_item_ids,
-        vec!["message-1", "reasoning-1", "reasoning-2"]
+        vec!["reasoning-1", "message-1", "reasoning-2"]
     );
     assert_eq!(
         message_deltas,
@@ -1272,6 +1306,40 @@ async fn concurrent_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
             ("reasoning-1".to_string(), 2),
         ]
     );
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "continue".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = response_mock.requests();
+    let second_request = requests.get(1).expect("second request");
+    let output_types = second_request
+        .input()
+        .iter()
+        .filter_map(
+            |item| match item.get("type").and_then(serde_json::Value::as_str) {
+                Some("reasoning") => Some("reasoning"),
+                Some("message")
+                    if item.get("role").and_then(serde_json::Value::as_str)
+                        == Some("assistant") =>
+                {
+                    Some("message")
+                }
+                _ => None,
+            },
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(output_types, ["reasoning", "message", "reasoning"]);
 
     Ok(())
 }

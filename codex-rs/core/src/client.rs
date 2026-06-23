@@ -112,6 +112,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::feedback_tags;
+use crate::response_event_buffer::OutputItemDoneBuffer;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::subagent_header_value;
 use crate::util::emit_feedback_auth_recovery_tags;
@@ -299,7 +300,7 @@ fn responses_request_properties_match(
         reasoning: previous_reasoning,
         store: previous_store,
         stream: previous_stream,
-        stream_options: previous_stream_options,
+        stream_options: _,
         include: previous_include,
         service_tier: previous_service_tier,
         prompt_cache_key: previous_prompt_cache_key,
@@ -316,7 +317,7 @@ fn responses_request_properties_match(
         reasoning: current_reasoning,
         store: current_store,
         stream: current_stream,
-        stream_options: current_stream_options,
+        stream_options: _,
         include: current_include,
         service_tier: current_service_tier,
         prompt_cache_key: current_prompt_cache_key,
@@ -332,7 +333,8 @@ fn responses_request_properties_match(
         && previous_reasoning == current_reasoning
         && previous_store == current_store
         && previous_stream == current_stream
-        && previous_stream_options == current_stream_options
+        // Stream options control delivery for the current response, not the context
+        // referenced by `previous_response_id`.
         && previous_include == current_include
         && previous_service_tier == current_service_tier
         && previous_prompt_cache_key == current_prompt_cache_key
@@ -1915,6 +1917,8 @@ where
         let mut logged_error = false;
         let mut tx_last_response = Some(tx_last_response);
         let mut items_added: Vec<ResponseItem> = Vec::new();
+        let mut observed_items: Vec<ResponseItem> = Vec::new();
+        let mut output_item_done_buffer = OutputItemDoneBuffer::default();
         let mut api_stream = api_stream;
         let upstream_request_id = upstream_request_id.as_deref();
         if let Some(upstream_request_id) = upstream_request_id {
@@ -1926,7 +1930,7 @@ where
                     inference_trace_attempt.record_cancelled(
                         STREAM_DROPPED_REASON,
                         upstream_request_id,
-                        &items_added,
+                        &observed_items,
                     );
                     return;
                 }
@@ -1936,19 +1940,22 @@ where
                 break;
             };
             match event {
-                Ok(ResponseEvent::OutputItemDone(item)) => {
-                    items_added.push(item.clone());
-                    if tx_event
-                        .send(Ok(ResponseEvent::OutputItemDone(item)))
-                        .await
-                        .is_err()
-                    {
-                        inference_trace_attempt.record_cancelled(
-                            STREAM_DROPPED_REASON,
-                            upstream_request_id,
-                            &items_added,
-                        );
-                        return;
+                Ok(ResponseEvent::OutputItemDone { item, output_index }) => {
+                    observed_items.push(item.clone());
+                    for (item, output_index) in output_item_done_buffer.push(item, output_index) {
+                        items_added.push(item.clone());
+                        if tx_event
+                            .send(Ok(ResponseEvent::OutputItemDone { item, output_index }))
+                            .await
+                            .is_err()
+                        {
+                            inference_trace_attempt.record_cancelled(
+                                STREAM_DROPPED_REASON,
+                                upstream_request_id,
+                                &observed_items,
+                            );
+                            return;
+                        }
                     }
                 }
                 Ok(ResponseEvent::Completed {
@@ -1956,6 +1963,21 @@ where
                     token_usage,
                     end_turn,
                 }) => {
+                    for (item, output_index) in output_item_done_buffer.finish() {
+                        items_added.push(item.clone());
+                        if tx_event
+                            .send(Ok(ResponseEvent::OutputItemDone { item, output_index }))
+                            .await
+                            .is_err()
+                        {
+                            inference_trace_attempt.record_cancelled(
+                                STREAM_DROPPED_REASON,
+                                upstream_request_id,
+                                &observed_items,
+                            );
+                            return;
+                        }
+                    }
                     feedback_tags!(last_model_response_id = &response_id);
                     if let Some(usage) = &token_usage {
                         session_telemetry.sse_event_completed(
@@ -1995,7 +2017,7 @@ where
                         inference_trace_attempt.record_cancelled(
                             STREAM_DROPPED_REASON,
                             upstream_request_id,
-                            &items_added,
+                            &observed_items,
                         );
                         return;
                     }
@@ -2012,7 +2034,7 @@ where
                     inference_trace_attempt.record_failed(
                         &mapped,
                         upstream_request_id,
-                        &items_added,
+                        &observed_items,
                     );
                     if !logged_error {
                         session_telemetry.see_event_completed_failed(&mapped);
@@ -2027,7 +2049,7 @@ where
         inference_trace_attempt.record_failed(
             "stream closed before response.completed",
             upstream_request_id,
-            &items_added,
+            &observed_items,
         );
     });
 
