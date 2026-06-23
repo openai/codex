@@ -65,6 +65,8 @@ mod image_rollout;
 mod items;
 mod json_result;
 mod live_cli;
+#[cfg(unix)]
+mod mcp_refresh_cleanup;
 mod mcp_tool_exposure;
 mod mcp_turn_metadata;
 mod model_overrides;

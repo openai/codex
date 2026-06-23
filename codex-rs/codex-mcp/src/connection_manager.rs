@@ -345,8 +345,15 @@ impl McpConnectionManager {
     /// Stop all MCP clients owned by this manager and terminate stdio server processes.
     pub async fn shutdown(&self) {
         self.startup_cancellation_token.cancel();
-        for client in self.clients.values() {
-            client.shutdown().await;
+        let clients = self.clients.values().cloned().collect::<Vec<_>>();
+        // Keep cleanup alive if an interrupt cancels the refresh that requested it.
+        let shutdown_task = tokio::spawn(async move {
+            for client in clients {
+                client.shutdown().await;
+            }
+        });
+        if let Err(error) = shutdown_task.await {
+            warn!("MCP client shutdown task failed: {error}");
         }
     }
 

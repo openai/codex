@@ -371,9 +371,11 @@ impl Session {
             let current_manager = self.services.mcp_connection_manager.load_full();
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         }
-        self.services
+        let superseded_manager = self
+            .services
             .mcp_connection_manager
-            .store(Arc::new(refreshed_manager));
+            .swap(Arc::new(refreshed_manager));
+        superseded_manager.shutdown().await;
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(
