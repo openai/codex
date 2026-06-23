@@ -252,6 +252,14 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    pub fn with_initial_rollout_index(initial_rollout_index: usize) -> Self {
+        Self {
+            current_rollout_index: initial_rollout_index,
+            next_rollout_index: initial_rollout_index,
+            ..Self::new()
+        }
+    }
+
     pub fn reset(&mut self) {
         *self = Self::new();
     }

@@ -13,6 +13,7 @@ use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
+use crate::session::InitialRolloutCopy;
 use crate::session::resolve_multi_agent_version;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
@@ -55,6 +56,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_rollout::ForkParentRolloutRef;
 use codex_rollout::state_db::StateDbHandle;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::InMemoryThreadStore;
@@ -657,6 +659,7 @@ impl ThreadManager {
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -754,6 +757,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -826,6 +830,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -954,10 +959,38 @@ impl ThreadManager {
             thread_source,
             parent_trace,
             supports_openai_form_elicitation,
+            /*initial_rollout_copy*/ None,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn fork_thread_from_history_with_initial_rollout_copy<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
+        initial_rollout_copy: ForkParentRolloutRef,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_with_initial_history(
+            snapshot.into(),
+            config,
+            history,
+            thread_source,
+            parent_trace,
+            supports_openai_form_elicitation,
+            Some(initial_rollout_copy),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn fork_thread_with_initial_history(
         &self,
         snapshot: ForkSnapshot,
@@ -966,6 +999,7 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         supports_openai_form_elicitation: bool,
+        initial_rollout_copy: Option<ForkParentRolloutRef>,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -991,6 +1025,14 @@ impl ThreadManager {
                 &config,
             )
             .await;
+        let initial_rollout_copy = initial_rollout_copy.map(|parent_ref| InitialRolloutCopy {
+            parent_ref,
+            source_history_item_count: match &history {
+                InitialHistory::New | InitialHistory::Cleared => 0,
+                InitialHistory::Resumed(resumed) => resumed.history.len(),
+                InitialHistory::Forked(items) => items.len(),
+            },
+        });
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
@@ -999,22 +1041,26 @@ impl ThreadManager {
             &config.cwd,
         );
         let agent_control = self.agent_control_for_config(&config);
-        Box::pin(self.state.spawn_thread(
+        Box::pin(self.state.spawn_thread_with_source(
             config,
             history,
             Arc::clone(&self.state.auth_manager),
             agent_control,
+            self.state.session_source.clone(),
             /*parent_thread_id*/ None,
             source_thread_id,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
             initial_multi_agent_mode,
+            /*inherited_environments*/ None,
+            /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            initial_rollout_copy,
         ))
         .await
     }
@@ -1279,6 +1325,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -1319,6 +1366,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -1360,6 +1408,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -1403,6 +1452,7 @@ impl ThreadManagerState {
             thread_extension_init,
             supports_openai_form_elicitation,
             user_shell_override,
+            /*initial_rollout_copy*/ None,
         ))
         .await
     }
@@ -1428,6 +1478,7 @@ impl ThreadManagerState {
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
+        initial_rollout_copy: Option<InitialRolloutCopy>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if let InitialHistory::Resumed(resumed) = &initial_history {
@@ -1482,6 +1533,7 @@ impl ThreadManagerState {
             conversation_history: initial_history,
             session_source,
             forked_from_thread_id,
+            initial_rollout_copy,
             parent_thread_id,
             thread_source,
             agent_control,

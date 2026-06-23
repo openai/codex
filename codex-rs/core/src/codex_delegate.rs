@@ -101,6 +101,7 @@ pub(crate) async fn run_codex_thread_interactive(
         conversation_history,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
         forked_from_thread_id,
+        initial_rollout_copy: None,
         parent_thread_id: Some(parent_session.thread_id),
         thread_source: Some(ThreadSource::Subagent),
         agent_control: parent_session.services.agent_control.clone(),

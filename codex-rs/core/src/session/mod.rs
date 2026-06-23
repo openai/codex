@@ -416,6 +416,12 @@ pub struct CodexSpawnOk {
     pub thread_id: ThreadId,
 }
 
+#[derive(Clone)]
+pub(crate) struct InitialRolloutCopy {
+    pub(crate) parent_ref: codex_rollout::ForkParentRolloutRef,
+    pub(crate) source_history_item_count: usize,
+}
+
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
     pub(crate) user_instructions: LoadedUserInstructions,
@@ -430,6 +436,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
+    pub(crate) initial_rollout_copy: Option<InitialRolloutCopy>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
@@ -519,6 +526,7 @@ impl Codex {
             conversation_history,
             session_source,
             forked_from_thread_id,
+            initial_rollout_copy,
             parent_thread_id,
             thread_source,
             agent_control,
@@ -651,6 +659,7 @@ impl Codex {
             app_server_client_version: None,
             session_source,
             forked_from_thread_id,
+            initial_rollout_copy,
             parent_thread_id,
             thread_source,
             dynamic_tools,
@@ -1275,12 +1284,19 @@ impl Session {
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
-        let is_subagent = {
+        let (is_subagent, fork_source_history_item_count) = {
             let state = self.state.lock().await;
-            state
-                .session_configuration
-                .session_source
-                .is_non_root_agent()
+            (
+                state
+                    .session_configuration
+                    .session_source
+                    .is_non_root_agent(),
+                state
+                    .session_configuration
+                    .initial_rollout_copy
+                    .as_ref()
+                    .map(|copy| copy.source_history_item_count),
+            )
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
         {
@@ -1347,7 +1363,14 @@ impl Session {
                 }
 
                 // If persisting, persist all rollout items as-is (the store filters).
-                if !rollout_items.is_empty() {
+                if let Some(source_history_item_count) = fork_source_history_item_count {
+                    let suffix = rollout_items
+                        .get(source_history_item_count..)
+                        .unwrap_or_default();
+                    if !suffix.is_empty() {
+                        self.persist_rollout_items(suffix).await;
+                    }
+                } else if !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
 

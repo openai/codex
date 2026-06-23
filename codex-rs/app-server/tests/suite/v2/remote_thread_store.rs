@@ -157,6 +157,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_rollout_copy: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(codex_home.path().to_path_buf()),
                 model_provider: "mock_provider".to_string(),

@@ -18,8 +18,10 @@ use codex_protocol::protocol::UserMessageEvent;
 
 use crate::CreateThreadParams;
 use crate::GitInfoPatch;
+#[cfg(test)]
 use crate::ResumeThreadParams;
 use crate::ThreadMetadataPatch;
+use crate::ThreadPersistenceMetadata;
 
 const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
 #[cfg(not(test))]
@@ -51,7 +53,10 @@ pub(crate) struct PendingThreadMetadataPatch {
 }
 
 impl ThreadMetadataSync {
-    pub(crate) async fn for_create(params: &CreateThreadParams) -> Self {
+    pub(crate) async fn for_create(
+        params: &CreateThreadParams,
+        observed_history: Option<&[RolloutItem]>,
+    ) -> Self {
         let created_at = Utc::now();
         let cwd = params.metadata.cwd.clone().unwrap_or_default();
         let git_info = if get_git_repo_root(cwd.as_path()).is_some() {
@@ -78,7 +83,7 @@ impl ThreadMetadataSync {
             memory_mode: Some(params.metadata.memory_mode),
             ..Default::default()
         };
-        Self {
+        let mut sync = Self {
             thread_id: params.thread_id,
             cwd_seen: !cwd.as_os_str().is_empty(),
             preview_seen: false,
@@ -89,14 +94,32 @@ impl ThreadMetadataSync {
             last_touch_persisted_at: None,
             defer_create_update_until_history_exists: true,
             defer_resume_update_until_append: false,
+        };
+        if let Some(observed_history) = observed_history {
+            sync.defer_create_update_until_history_exists = false;
+            let update = sync.observe_resume_history(observed_history);
+            sync.merge_pending_update(update);
         }
+        sync
     }
 
+    #[cfg(test)]
     pub(crate) fn for_resume(params: &ResumeThreadParams) -> Self {
+        Self::for_resume_parts(
+            params.thread_id,
+            &params.metadata,
+            params.history.as_deref().map(Vec::as_slice),
+        )
+    }
+
+    pub(crate) fn for_resume_parts(
+        thread_id: ThreadId,
+        metadata: &ThreadPersistenceMetadata,
+        history: Option<&[RolloutItem]>,
+    ) -> Self {
         let mut sync = Self {
-            thread_id: params.thread_id,
-            cwd_seen: params
-                .metadata
+            thread_id,
+            cwd_seen: metadata
                 .cwd
                 .as_ref()
                 .is_some_and(|cwd| !cwd.as_os_str().is_empty()),
@@ -109,16 +132,12 @@ impl ThreadMetadataSync {
             defer_create_update_until_history_exists: false,
             defer_resume_update_until_append: false,
         };
-        if let Some(history) = params.history.as_deref() {
-            sync.record_resume_history(history);
+        if let Some(history) = history {
+            let update = sync.observe_resume_history(history);
+            sync.merge_pending_update(update);
+            sync.defer_resume_update_until_append = sync.pending_update.is_some();
         }
         sync
-    }
-
-    pub(crate) fn record_resume_history(&mut self, history: &[RolloutItem]) {
-        let update = self.observe_resume_history(history);
-        self.merge_pending_update(update);
-        self.defer_resume_update_until_append = self.pending_update.is_some();
     }
 
     pub(crate) fn take_pending_update(&self) -> Option<PendingThreadMetadataPatch> {

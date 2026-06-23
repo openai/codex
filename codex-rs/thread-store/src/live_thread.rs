@@ -91,8 +91,24 @@ impl LiveThread {
         thread_store: Arc<dyn ThreadStore>,
         params: CreateThreadParams,
     ) -> ThreadStoreResult<Self> {
+        Self::create_inner(thread_store, params, /*observed_history*/ None).await
+    }
+
+    pub async fn create_with_observed_history(
+        thread_store: Arc<dyn ThreadStore>,
+        params: CreateThreadParams,
+        observed_history: &[RolloutItem],
+    ) -> ThreadStoreResult<Self> {
+        Self::create_inner(thread_store, params, Some(observed_history)).await
+    }
+
+    async fn create_inner(
+        thread_store: Arc<dyn ThreadStore>,
+        params: CreateThreadParams,
+        observed_history: Option<&[RolloutItem]>,
+    ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let metadata_sync = ThreadMetadataSync::for_create(&params).await;
+        let metadata_sync = ThreadMetadataSync::for_create(&params, observed_history).await;
         thread_store.create_thread(params).await?;
         Ok(Self {
             thread_id,
@@ -106,12 +122,26 @@ impl LiveThread {
         thread_store: Arc<dyn ThreadStore>,
         params: ResumeThreadParams,
     ) -> ThreadStoreResult<Self> {
+        Self::resume_with_observed_history(thread_store, params, /*observed_history*/ None).await
+    }
+
+    pub async fn resume_with_observed_history(
+        thread_store: Arc<dyn ThreadStore>,
+        params: ResumeThreadParams,
+        observed_history: Option<&[RolloutItem]>,
+    ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let should_load_history = params.history.is_none();
         let include_archived = params.include_archived;
-        let mut metadata_sync = ThreadMetadataSync::for_resume(&params);
+        let metadata = params.metadata.clone();
+        let metadata_sync = observed_history
+            .or_else(|| params.history.as_deref().map(Vec::as_slice))
+            .map(|history| {
+                ThreadMetadataSync::for_resume_parts(thread_id, &metadata, Some(history))
+            });
         thread_store.resume_thread(params).await?;
-        if should_load_history {
+        let metadata_sync = if let Some(metadata_sync) = metadata_sync {
+            metadata_sync
+        } else {
             match thread_store
                 .load_history(LoadThreadHistoryParams {
                     thread_id,
@@ -119,7 +149,11 @@ impl LiveThread {
                 })
                 .await
             {
-                Ok(history) => metadata_sync.record_resume_history(&history.items),
+                Ok(history) => ThreadMetadataSync::for_resume_parts(
+                    thread_id,
+                    &metadata,
+                    Some(history.items.as_slice()),
+                ),
                 Err(err) => {
                     if let Err(discard_err) = thread_store.discard_thread(thread_id).await {
                         warn!(
@@ -129,7 +163,7 @@ impl LiveThread {
                     return Err(err);
                 }
             }
-        }
+        };
         Ok(Self {
             thread_id,
             thread_store,

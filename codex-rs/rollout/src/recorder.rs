@@ -14,6 +14,8 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -39,6 +41,7 @@ use super::list::ThreadListConfig;
 use super::list::ThreadListLayout;
 use super::list::ThreadSortKey;
 use super::list::ThreadsPage;
+use super::list::find_thread_path_by_id_str_in_subdir_from_filesystem;
 use super::list::get_threads;
 use super::list::get_threads_in_root;
 use super::list::parse_cursor;
@@ -51,6 +54,7 @@ use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -63,6 +67,15 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
+
+const FORK_PARENT_ROLLOUT_PATH_FIELD: &str = "fork_parent_rollout_path";
+const FORK_PARENT_ROLLOUT_BYTE_LEN_FIELD: &str = "fork_parent_rollout_byte_len";
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct ForkParentRolloutRef {
+    pub path: PathBuf,
+    pub byte_len: u64,
+}
 
 /// Writes canonical session rollout items to JSONL.
 ///
@@ -80,6 +93,7 @@ pub struct RolloutRecorder {
 }
 
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum RolloutRecorderParams {
     Create {
         session_id: SessionId,
@@ -91,6 +105,7 @@ pub enum RolloutRecorderParams {
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         multi_agent_version: Option<MultiAgentVersion>,
+        initial_rollout_copy: Option<ForkParentRolloutRef>,
     },
     Resume {
         path: PathBuf,
@@ -178,6 +193,7 @@ impl RolloutRecorderParams {
             base_instructions,
             dynamic_tools,
             multi_agent_version: None,
+            initial_rollout_copy: None,
         }
     }
 
@@ -198,6 +214,20 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *version = multi_agent_version;
+        }
+        self
+    }
+
+    pub fn with_initial_rollout_copy(
+        mut self,
+        initial_rollout_copy: Option<ForkParentRolloutRef>,
+    ) -> Self {
+        if let Self::Create {
+            initial_rollout_copy: copy,
+            ..
+        } = &mut self
+        {
+            *copy = initial_rollout_copy;
         }
         self
     }
@@ -704,7 +734,8 @@ impl RolloutRecorder {
         config: &impl RolloutConfigView,
         params: RolloutRecorderParams,
     ) -> std::io::Result<Self> {
-        let (file, deferred_log_file_info, rollout_path, meta) = match params {
+        let (file, deferred_log_file_info, rollout_path, meta, initial_rollout_copy) = match params
+        {
             RolloutRecorderParams::Create {
                 session_id,
                 conversation_id,
@@ -715,6 +746,7 @@ impl RolloutRecorder {
                 base_instructions,
                 dynamic_tools,
                 multi_agent_version,
+                initial_rollout_copy,
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
@@ -754,7 +786,13 @@ impl RolloutRecorder {
                     multi_agent_version,
                 };
 
-                (None, Some(log_file_info), path, Some(session_meta))
+                (
+                    None,
+                    Some(log_file_info),
+                    path,
+                    Some(session_meta),
+                    initial_rollout_copy,
+                )
             }
             RolloutRecorderParams::Resume { path } => {
                 let path = compression::materialize_rollout_for_append(path.as_path()).await?;
@@ -767,6 +805,7 @@ impl RolloutRecorder {
                     ),
                     None,
                     path,
+                    None,
                     None,
                 )
             }
@@ -791,6 +830,7 @@ impl RolloutRecorder {
                 deferred_log_file_info,
                 rx,
                 meta,
+                initial_rollout_copy,
                 cwd,
                 rollout_path_for_spawn.clone(),
             )
@@ -880,50 +920,47 @@ impl RolloutRecorder {
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
-        let mut items: Vec<RolloutItem> = Vec::new();
-        let mut thread_id: Option<ThreadId> = None;
-        let mut parse_errors = 0usize;
-        let mut reader = compression::open_rollout_line_reader(path).await?;
-        let mut saw_non_empty_line = false;
-        while let Some(line) = reader.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
-            }
-            saw_non_empty_line = true;
-            let mut v: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                    continue;
-                }
-            };
-            if strip_legacy_ghost_snapshot_rollout_line(&mut v) {
-                trace!("skipping legacy ghost_snapshot rollout line");
-                continue;
-            }
+        let (mut items, thread_id, mut parse_errors, mut parent_ref) =
+            Self::load_rollout_items_unexpanded(path, /*byte_len*/ None).await?;
+        let mut current_path = path.to_path_buf();
+        let mut child_segments = Vec::new();
+        let mut visited_paths = HashSet::from([current_path.clone()]);
 
-            // Parse the rollout line structure
-            match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => {
-                    let item = rollout_line.item;
-                    // Use the FIRST SessionMeta encountered in the file as the canonical
-                    // thread id and main session information. Keep all items intact.
-                    if thread_id.is_none()
-                        && let RolloutItem::SessionMeta(session_meta_line) = &item
-                    {
-                        thread_id = Some(session_meta_line.meta.id);
-                    }
-                    items.push(item);
-                }
-                Err(e) => {
-                    trace!("failed to parse rollout line: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                }
+        while let Some(reference) = parent_ref {
+            let parent_thread_id = fork_parent_thread_id(items.as_slice(), current_path.as_path())?;
+            let parent_path = resolve_fork_parent_rollout_path(
+                current_path.as_path(),
+                &reference,
+                parent_thread_id,
+            )
+            .await?;
+            if !visited_paths.insert(parent_path.clone()) {
+                return Err(IoError::other(format!(
+                    "fork parent cycle detected at {}",
+                    parent_path.display()
+                )));
             }
+            let (parent_items, loaded_parent_thread_id, parent_parse_errors, next_parent_ref) =
+                Self::load_rollout_items_unexpanded(
+                    parent_path.as_path(),
+                    Some(reference.byte_len),
+                )
+                .await?;
+            if loaded_parent_thread_id != Some(parent_thread_id) {
+                return Err(IoError::other(format!(
+                    "fork parent identity mismatch for {}",
+                    current_path.display()
+                )));
+            }
+            parse_errors = parse_errors.saturating_add(parent_parse_errors);
+            child_segments.push(items);
+            items = parent_items;
+            current_path = parent_path;
+            parent_ref = next_parent_ref;
         }
-        if !saw_non_empty_line {
-            return Err(IoError::other("empty session file"));
+
+        for child_items in child_segments.into_iter().rev() {
+            items = prepend_parent_items(child_items, items)?;
         }
 
         tracing::debug!(
@@ -933,6 +970,86 @@ impl RolloutRecorder {
             parse_errors,
         );
         Ok((items, thread_id, parse_errors))
+    }
+
+    async fn load_rollout_items_unexpanded(
+        path: &Path,
+        byte_len: Option<u64>,
+    ) -> std::io::Result<(
+        Vec<RolloutItem>,
+        Option<ThreadId>,
+        usize,
+        Option<ForkParentRolloutRef>,
+    )> {
+        let mut items: Vec<RolloutItem> = Vec::new();
+        let mut thread_id: Option<ThreadId> = None;
+        let mut parse_errors = 0usize;
+        let mut parent_ref = None;
+        let mut bytes_read = 0u64;
+        let mut reader = compression::open_rollout_line_reader(path).await?;
+        let mut saw_non_empty_line = false;
+        loop {
+            if byte_len.is_some_and(|byte_len| bytes_read >= byte_len) {
+                break;
+            }
+            let Some(line) = reader.next_line().await? else {
+                if let Some(byte_len) = byte_len {
+                    return Err(IoError::other(format!(
+                        "rollout prefix ended before {byte_len} bytes"
+                    )));
+                }
+                break;
+            };
+            if let Some(byte_len) = byte_len {
+                let line_len = u64::try_from(line.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1);
+                if bytes_read.saturating_add(line_len) > byte_len {
+                    return Err(IoError::other(format!(
+                        "rollout prefix boundary {byte_len} splits a JSONL line"
+                    )));
+                }
+                bytes_read = bytes_read.saturating_add(line_len);
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            if !saw_non_empty_line {
+                parent_ref = parse_fork_parent_rollout_ref_from_line(line.as_str());
+            }
+            saw_non_empty_line = true;
+            match serde_json::from_str::<RolloutLine>(&line) {
+                Ok(rollout_line) if rollout_item_may_need_legacy_cleanup(&rollout_line.item) => {
+                    if let Some(rollout_line) = parse_rollout_line_after_legacy_cleanup(
+                        &line,
+                        &mut parse_errors,
+                        /*rollout_error*/ None,
+                    ) {
+                        push_loaded_rollout_item(&mut items, &mut thread_id, rollout_line.item);
+                    }
+                }
+                Ok(rollout_line) => {
+                    push_loaded_rollout_item(&mut items, &mut thread_id, rollout_line.item);
+                }
+                Err(rollout_error) => {
+                    if let Some(rollout_line) = parse_rollout_line_after_legacy_cleanup(
+                        &line,
+                        &mut parse_errors,
+                        Some(&rollout_error),
+                    ) {
+                        push_loaded_rollout_item(&mut items, &mut thread_id, rollout_line.item);
+                    }
+                }
+            }
+        }
+        if !saw_non_empty_line {
+            return Err(IoError::other(if byte_len.is_some() {
+                "empty session file prefix"
+            } else {
+                "empty session file"
+            }));
+        }
+        Ok((items, thread_id, parse_errors, parent_ref))
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
@@ -977,6 +1094,168 @@ impl RolloutRecorder {
             }
         };
         Ok(())
+    }
+}
+
+fn fork_parent_thread_id(items: &[RolloutItem], path: &Path) -> std::io::Result<ThreadId> {
+    items
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => meta_line.meta.forked_from_id,
+            _ => None,
+        })
+        .ok_or_else(|| {
+            IoError::other(format!(
+                "fork parent reference in {} is missing a parent thread id",
+                path.display()
+            ))
+        })
+}
+
+async fn resolve_fork_parent_rollout_path(
+    child_path: &Path,
+    parent_ref: &ForkParentRolloutRef,
+    parent_thread_id: ThreadId,
+) -> std::io::Result<PathBuf> {
+    if let Some(path) = compression::existing_rollout_path(parent_ref.path.as_path()).await {
+        return Ok(path);
+    }
+
+    let codex_home = child_path
+        .ancestors()
+        .find(|ancestor| {
+            ancestor
+                .file_name()
+                .is_some_and(|name| name == SESSIONS_SUBDIR || name == ARCHIVED_SESSIONS_SUBDIR)
+        })
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            IoError::other(format!(
+                "fork parent rollout {} does not exist",
+                parent_ref.path.display()
+            ))
+        })?;
+    let parent_thread_id = parent_thread_id.to_string();
+    if let Some(path) = find_thread_path_by_id_str_in_subdir_from_filesystem(
+        codex_home,
+        SESSIONS_SUBDIR,
+        parent_thread_id.as_str(),
+    )
+    .await?
+    {
+        return Ok(path);
+    }
+    if let Some(path) = find_thread_path_by_id_str_in_subdir_from_filesystem(
+        codex_home,
+        ARCHIVED_SESSIONS_SUBDIR,
+        parent_thread_id.as_str(),
+    )
+    .await?
+    {
+        return Ok(path);
+    }
+    Err(IoError::other(format!(
+        "fork parent rollout {} does not exist and thread {parent_thread_id} was not found under {}",
+        parent_ref.path.display(),
+        codex_home.display()
+    )))
+}
+
+fn prepend_parent_items(
+    child_items: Vec<RolloutItem>,
+    parent_items: Vec<RolloutItem>,
+) -> std::io::Result<Vec<RolloutItem>> {
+    let mut child_items = child_items.into_iter();
+    let Some(RolloutItem::SessionMeta(child_meta)) = child_items.next() else {
+        return Err(IoError::other(
+            "fork child rollout does not start with session metadata",
+        ));
+    };
+    let mut items = Vec::with_capacity(1 + parent_items.len() + child_items.size_hint().0);
+    items.push(RolloutItem::SessionMeta(child_meta));
+    items.extend(parent_items);
+    items.extend(child_items);
+    Ok(items)
+}
+
+pub fn parse_fork_parent_rollout_ref_from_line(line: &str) -> Option<ForkParentRolloutRef> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    let payload = value.get("payload").unwrap_or(&value);
+    let path = payload
+        .get(FORK_PARENT_ROLLOUT_PATH_FIELD)
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())?;
+    let byte_len = payload
+        .get(FORK_PARENT_ROLLOUT_BYTE_LEN_FIELD)
+        .and_then(Value::as_u64)
+        .filter(|byte_len| *byte_len > 0)?;
+    Some(ForkParentRolloutRef {
+        path: PathBuf::from(path),
+        byte_len,
+    })
+}
+
+fn push_loaded_rollout_item(
+    items: &mut Vec<RolloutItem>,
+    thread_id: &mut Option<ThreadId>,
+    item: RolloutItem,
+) {
+    // Use the FIRST SessionMeta encountered in the file as the canonical
+    // thread id and main session information. Keep all items intact.
+    if thread_id.is_none()
+        && let RolloutItem::SessionMeta(session_meta_line) = &item
+    {
+        *thread_id = Some(session_meta_line.meta.id);
+    }
+    items.push(item);
+}
+
+fn rollout_item_may_need_legacy_cleanup(item: &RolloutItem) -> bool {
+    match item {
+        RolloutItem::ResponseItem(ResponseItem::Other) => true,
+        RolloutItem::Compacted(compacted) => {
+            compacted
+                .replacement_history
+                .as_ref()
+                .is_some_and(|history| {
+                    history
+                        .iter()
+                        .any(|item| matches!(item, ResponseItem::Other))
+                })
+        }
+        _ => false,
+    }
+}
+
+fn parse_rollout_line_after_legacy_cleanup(
+    line: &str,
+    parse_errors: &mut usize,
+    rollout_error: Option<&serde_json::Error>,
+) -> Option<RolloutLine> {
+    let mut value: Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("failed to parse line as JSON: {line:?}, error: {err}");
+            *parse_errors = parse_errors.saturating_add(1);
+            return None;
+        }
+    };
+    if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
+        trace!("skipping legacy ghost_snapshot rollout line");
+        return None;
+    }
+
+    match serde_json::from_value::<RolloutLine>(value) {
+        Ok(rollout_line) => Some(rollout_line),
+        Err(err) => {
+            if let Some(rollout_error) = rollout_error {
+                trace!("failed to parse rollout line: {rollout_error}; fallback error: {err}");
+            } else {
+                trace!("failed to parse rollout line after legacy cleanup: {err}");
+            }
+            *parse_errors = parse_errors.saturating_add(1);
+            None
+        }
     }
 }
 
@@ -1473,6 +1752,7 @@ struct RolloutWriterState {
     deferred_log_file_info: Option<LogFileInfo>,
     pending_items: Vec<RolloutItem>,
     meta: Option<SessionMeta>,
+    initial_rollout_copy: Option<ForkParentRolloutRef>,
     cwd: PathBuf,
     rollout_path: PathBuf,
     last_logged_error: Option<String>,
@@ -1483,6 +1763,7 @@ impl RolloutWriterState {
         file: Option<tokio::fs::File>,
         deferred_log_file_info: Option<LogFileInfo>,
         meta: Option<SessionMeta>,
+        initial_rollout_copy: Option<ForkParentRolloutRef>,
         cwd: PathBuf,
         rollout_path: PathBuf,
     ) -> Self {
@@ -1491,6 +1772,7 @@ impl RolloutWriterState {
             deferred_log_file_info,
             pending_items: Vec::new(),
             meta,
+            initial_rollout_copy,
             cwd,
             rollout_path,
             last_logged_error: None,
@@ -1596,7 +1878,15 @@ impl RolloutWriterState {
         let Some(session_meta) = self.meta.as_ref().cloned() else {
             return Ok(());
         };
-        write_session_meta(self.writer.as_mut(), session_meta, &self.cwd).await?;
+        let fork_parent_rollout_ref = self.initial_rollout_copy.clone();
+        write_session_meta(
+            self.writer.as_mut(),
+            session_meta,
+            &self.cwd,
+            fork_parent_rollout_ref.as_ref(),
+        )
+        .await?;
+        self.initial_rollout_copy = None;
         self.meta = None;
         Ok(())
     }
@@ -1641,10 +1931,18 @@ async fn rollout_writer(
     deferred_log_file_info: Option<LogFileInfo>,
     mut rx: mpsc::Receiver<RolloutCmd>,
     meta: Option<SessionMeta>,
+    initial_rollout_copy: Option<ForkParentRolloutRef>,
     cwd: PathBuf,
     rollout_path: PathBuf,
 ) -> std::io::Result<()> {
-    let mut state = RolloutWriterState::new(file, deferred_log_file_info, meta, cwd, rollout_path);
+    let mut state = RolloutWriterState::new(
+        file,
+        deferred_log_file_info,
+        meta,
+        initial_rollout_copy,
+        cwd,
+        rollout_path,
+    );
 
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
@@ -1678,6 +1976,7 @@ async fn write_session_meta(
     mut writer: Option<&mut JsonlWriter>,
     session_meta: SessionMeta,
     cwd: &Path,
+    fork_parent_rollout_ref: Option<&ForkParentRolloutRef>,
 ) -> std::io::Result<()> {
     let git_info = if get_git_repo_root(cwd).is_some() {
         collect_git_info(cwd).await.map(|info| ProtocolGitInfo {
@@ -1693,9 +1992,10 @@ async fn write_session_meta(
         git: git_info,
     };
 
-    let rollout_item = RolloutItem::SessionMeta(session_meta_line);
     if let Some(writer) = writer.as_mut() {
-        writer.write_rollout_item(&rollout_item).await?;
+        writer
+            .write_session_meta_line(&session_meta_line, fork_parent_rollout_ref)
+            .await?;
     }
     Ok(())
 }
@@ -1729,7 +2029,52 @@ struct RolloutLineRef<'a> {
     item: &'a RolloutItem,
 }
 
+#[derive(serde::Serialize)]
+struct SessionMetaLineRef<'a> {
+    timestamp: String,
+    #[serde(rename = "type")]
+    item_type: &'static str,
+    payload: SessionMetaPayloadRef<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct SessionMetaPayloadRef<'a> {
+    #[serde(flatten)]
+    meta: &'a SessionMeta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git: Option<&'a ProtocolGitInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fork_parent_rollout_path: Option<&'a PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fork_parent_rollout_byte_len: Option<u64>,
+}
+
 impl JsonlWriter {
+    async fn write_session_meta_line(
+        &mut self,
+        session_meta_line: &SessionMetaLine,
+        fork_parent_rollout_ref: Option<&ForkParentRolloutRef>,
+    ) -> std::io::Result<()> {
+        let timestamp_format: &[FormatItem] = format_description!(
+            "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
+        );
+        let timestamp = OffsetDateTime::now_utc()
+            .format(timestamp_format)
+            .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
+        let line = SessionMetaLineRef {
+            timestamp,
+            item_type: "session_meta",
+            payload: SessionMetaPayloadRef {
+                meta: &session_meta_line.meta,
+                git: session_meta_line.git.as_ref(),
+                fork_parent_rollout_path: fork_parent_rollout_ref.map(|reference| &reference.path),
+                fork_parent_rollout_byte_len: fork_parent_rollout_ref
+                    .map(|reference| reference.byte_len),
+            },
+        };
+        self.write_line(&line).await
+    }
+
     async fn write_rollout_item(&mut self, rollout_item: &RolloutItem) -> std::io::Result<()> {
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"

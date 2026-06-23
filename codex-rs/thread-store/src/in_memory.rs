@@ -120,6 +120,7 @@ mod tests {
                     base_instructions: BaseInstructions::default(),
                     dynamic_tools: Vec::new(),
                     multi_agent_version: None,
+                    initial_rollout_copy: None,
                     metadata: ThreadPersistenceMetadata {
                         cwd: None,
                         model_provider: "test-provider".to_string(),

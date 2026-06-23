@@ -102,6 +102,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) session_source: SessionSource,
     /// Immediate history source copied into this thread, when this thread was forked.
     pub(super) forked_from_thread_id: Option<ThreadId>,
+    /// Optional immutable parent rollout snapshot referenced by this thread.
+    pub(super) initial_rollout_copy: Option<InitialRolloutCopy>,
     /// Immediate control/spawn parent for this thread, when it has one.
     pub(super) parent_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
@@ -566,6 +568,16 @@ impl Session {
         // - initialize thread persistence with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
+        let initial_rollout_copy_history =
+            session_configuration
+                .initial_rollout_copy
+                .as_ref()
+                .and(match &initial_history {
+                    InitialHistory::Forked(items) => Some(items.as_slice()),
+                    InitialHistory::New | InitialHistory::Cleared | InitialHistory::Resumed(_) => {
+                        None
+                    }
+                });
         let thread_persistence_fut = async {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>(None)
@@ -585,6 +597,10 @@ impl Session {
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
                             multi_agent_version: initial_multi_agent_version,
+                            initial_rollout_copy: session_configuration
+                                .initial_rollout_copy
+                                .as_ref()
+                                .map(|copy| copy.parent_ref.clone()),
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),
                                 model_provider: config.model_provider_id.clone(),
@@ -595,13 +611,25 @@ impl Session {
                                 },
                             },
                         };
-                        LiveThread::create(Arc::clone(&thread_store), params).await?
+                        if let Some(observed_history) = initial_rollout_copy_history {
+                            LiveThread::create_with_observed_history(
+                                Arc::clone(&thread_store),
+                                params,
+                                observed_history,
+                            )
+                            .await?
+                        } else {
+                            LiveThread::create(Arc::clone(&thread_store), params).await?
+                        }
                     }
                     InitialHistory::Resumed(resumed_history) => {
+                        let local_resume_with_path = resumed_history.rollout_path.is_some()
+                            && thread_store.as_any().is::<LocalThreadStore>();
                         let params = ResumeThreadParams {
                             thread_id: resumed_history.conversation_id,
                             rollout_path: resumed_history.rollout_path.clone(),
-                            history: Some(resumed_history.history.clone()),
+                            history: (!local_resume_with_path)
+                                .then(|| resumed_history.history.clone()),
                             include_archived: true,
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),
@@ -613,7 +641,12 @@ impl Session {
                                 },
                             },
                         };
-                        LiveThread::resume(Arc::clone(&thread_store), params).await?
+                        LiveThread::resume_with_observed_history(
+                            Arc::clone(&thread_store),
+                            params,
+                            Some(resumed_history.history.as_slice()),
+                        )
+                        .await?
                     }
                 };
                 Ok(Some(live_thread))
