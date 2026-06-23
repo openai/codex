@@ -9,6 +9,7 @@ use codex_plugin::ResolvedPlugin;
 use codex_plugin::ResolvedPluginLocation;
 use codex_plugin::manifest::PluginManifestMcpServers;
 use codex_utils_path_uri::PathUri;
+use codex_utils_path_uri::PathUriParseError;
 use std::io;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -28,6 +29,16 @@ pub(super) enum ExecutorPluginMcpProviderError {
         path: PathUri,
         #[source]
         source: io::Error,
+    },
+    #[error(
+        "failed to resolve MCP config path `{relative_path}` below selected plugin `{plugin_id}` at `{root}`: {source}"
+    )]
+    InvalidConfigPath {
+        plugin_id: String,
+        root: PathUri,
+        relative_path: &'static str,
+        #[source]
+        source: PathUriParseError,
     },
     #[error("failed to parse MCP config for selected plugin `{plugin_id}` at `{path}`: {source}")]
     ParseConfig {
@@ -73,16 +84,19 @@ async fn load_from_file_system(
                 path.clone(),
             )
         }
-        Some(PluginManifestMcpServers::Object(object_config)) => (
-            object_config.clone(),
-            plugin_root
-                .join(".codex-plugin/plugin.json")
-                .expect("static plugin manifest path must be valid"),
-        ),
+        Some(PluginManifestMcpServers::Object(object_config)) => {
+            let PluginResourceLocator::Environment { path, .. } = plugin.manifest_path();
+            (object_config.clone(), path.clone())
+        }
         None => {
             let config_path = plugin_root
                 .join(DEFAULT_MCP_CONFIG_FILE)
-                .expect("static MCP config path must be valid");
+                .map_err(|source| ExecutorPluginMcpProviderError::InvalidConfigPath {
+                    plugin_id: plugin_id.to_string(),
+                    root: plugin_root.clone(),
+                    relative_path: DEFAULT_MCP_CONFIG_FILE,
+                    source,
+                })?;
             let contents = match file_system
                 .read_file_text(&config_path, /*sandbox*/ None)
                 .await
