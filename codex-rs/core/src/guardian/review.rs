@@ -24,6 +24,8 @@ use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
 
+use crate::context::ContextualUserFragment;
+use crate::context::GuardianNetworkAccessDenied;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -281,6 +283,16 @@ async fn run_guardian_review(
     approval_request_source: GuardianApprovalRequestSource,
     external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
+    let unattributed_network_target = if let GuardianApprovalRequest::NetworkAccess {
+        target,
+        trigger: None,
+        ..
+    } = &request
+    {
+        Some(target.clone())
+    } else {
+        None
+    };
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
@@ -562,7 +574,7 @@ async fn run_guardian_review(
         .send_event(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: review_id,
+                id: review_id.clone(),
                 target_item_id,
                 turn_id: assessment_turn_id.clone(),
                 started_at_ms,
@@ -576,6 +588,15 @@ async fn run_guardian_review(
             }),
         )
         .await;
+
+    if !approved && let Some(target) = unattributed_network_target {
+        let rejection = guardian_rejection_message(session.as_ref(), &review_id).await;
+        let denial =
+            ContextualUserFragment::into(GuardianNetworkAccessDenied::new(&target, &rejection));
+        session
+            .record_conversation_items(turn.as_ref(), std::slice::from_ref(&denial))
+            .await;
+    }
 
     if count_denial_for_circuit_breaker {
         record_guardian_denial(&session, &turn, &assessment_turn_id).await;

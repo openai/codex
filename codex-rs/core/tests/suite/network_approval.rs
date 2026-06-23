@@ -87,6 +87,7 @@ async fn guardian_receives_all_possible_triggers_for_concurrent_network_requests
     let second_command = network_command(&second_marker, &first_marker);
     let first_args = network_exec_args(LOCAL_ENVIRONMENT_ID, &first_command);
     let second_args = network_exec_args(LOCAL_ENVIRONMENT_ID, &second_command);
+    let denial_rationale = "The destination is not authorized by the user.";
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -106,7 +107,10 @@ async fn guardian_receives_all_possible_triggers_for_concurrent_network_requests
             ]),
             sse(vec![
                 ev_response_created("resp-network-guardian"),
-                ev_assistant_message("msg-network-guardian", r#"{"outcome":"allow"}"#),
+                ev_assistant_message(
+                    "msg-network-guardian",
+                    &json!({"outcome": "deny", "rationale": denial_rationale}).to_string(),
+                ),
                 ev_completed("resp-network-guardian"),
             ]),
             sse(vec![
@@ -173,6 +177,14 @@ async fn guardian_receives_all_possible_triggers_for_concurrent_network_requests
             .concat()
             .contains("Approve if at least one candidate")
     );
+    assert!(responses.requests().into_iter().any(|request| {
+        request.body_json()["client_metadata"]["x-openai-subagent"].as_str() != Some("guardian")
+            && request.message_input_texts("developer").iter().any(|text| {
+                text.contains("<guardian_network_access_denied>")
+                    && text.contains(NETWORK_TEST_TARGET)
+                    && text.contains(denial_rationale)
+            })
+    }));
 
     Ok(())
 }
