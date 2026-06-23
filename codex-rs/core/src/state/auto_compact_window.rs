@@ -1,3 +1,4 @@
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::TokenUsage;
 use uuid::Uuid;
 
@@ -6,6 +7,26 @@ pub(crate) struct AutoCompactWindowIds {
     pub(crate) first_window_id: Uuid,
     pub(crate) previous_window_id: Option<Uuid>,
     pub(crate) window_id: Uuid,
+}
+
+impl AutoCompactWindowIds {
+    pub(crate) fn new_initial() -> Self {
+        let window_id = Uuid::now_v7();
+        Self {
+            first_window_id: window_id,
+            previous_window_id: None,
+            window_id,
+        }
+    }
+
+    pub(crate) fn to_session_context_window(self, window_number: u64) -> SessionContextWindow {
+        SessionContextWindow {
+            window_number,
+            first_window_id: self.first_window_id.to_string(),
+            previous_window_id: self.previous_window_id.map(|id| id.to_string()),
+            window_id: self.window_id.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,15 +55,15 @@ pub(super) struct AutoCompactWindow {
 }
 
 impl AutoCompactWindow {
+    #[cfg(test)]
     pub(super) fn new() -> Self {
-        let window_id = Uuid::now_v7();
+        Self::new_with_ids(AutoCompactWindowIds::new_initial())
+    }
+
+    pub(super) fn new_with_ids(ids: AutoCompactWindowIds) -> Self {
         Self {
             window_number: 0,
-            ids: AutoCompactWindowIds {
-                first_window_id: window_id,
-                previous_window_id: None,
-                window_id,
-            },
+            ids,
             new_context_window_requested: false,
             prefill_input_tokens: None,
             token_budget_reminder_delivered: false,

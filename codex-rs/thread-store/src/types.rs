@@ -12,6 +12,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
@@ -84,6 +85,9 @@ pub struct CreateThreadParams {
     pub dynamic_tools: Vec<DynamicToolSpec>,
     /// Multi-agent runtime selected when the thread was created.
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// Initial context-window identity captured when the thread was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_context_window: Option<SessionContextWindow>,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
 }
