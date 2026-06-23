@@ -82,17 +82,10 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
             rationale: "Auto-reviewer denied the action without a specific rationale.".to_string(),
             source: GuardianAssessmentDecisionSource::Agent,
         });
-    format_guardian_rejection_message(&rejection.rationale, rejection.source)
-}
-
-fn format_guardian_rejection_message(
-    rationale: &str,
-    source: GuardianAssessmentDecisionSource,
-) -> String {
-    match source {
+    match rejection.source {
         GuardianAssessmentDecisionSource::Agent => format!(
             "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
-            rationale.trim(),
+            rejection.rationale.trim(),
             GUARDIAN_REJECTION_INSTRUCTIONS
         ),
     }
@@ -584,6 +577,15 @@ async fn run_guardian_review(
             rationales.insert(review_id.clone(), rejection);
         }
     }
+    let unattributed_network_denial: Option<codex_protocol::models::ResponseItem> =
+        if !approved && let Some(target) = unattributed_network_target {
+            let rejection = guardian_rejection_message(session.as_ref(), &review_id).await;
+            Some(ContextualUserFragment::into(
+                GuardianNetworkAccessDenied::new(&target, &rejection),
+            ))
+        } else {
+            None
+        };
     session
         .send_event(
             turn.as_ref(),
@@ -603,13 +605,7 @@ async fn run_guardian_review(
         )
         .await;
 
-    if !approved && let Some(target) = unattributed_network_target {
-        let rejection = format_guardian_rejection_message(
-            &assessment.rationale,
-            GuardianAssessmentDecisionSource::Agent,
-        );
-        let denial: codex_protocol::models::ResponseItem =
-            ContextualUserFragment::into(GuardianNetworkAccessDenied::new(&target, &rejection));
+    if let Some(denial) = unattributed_network_denial {
         session
             .record_conversation_items(turn.as_ref(), std::slice::from_ref(&denial))
             .await;
