@@ -53,7 +53,7 @@ use tracing::warn;
 
 /// State needed to terminate a CONNECT tunnel and enforce policy on inner HTTPS requests.
 pub struct MitmState {
-    ca: ManagedMitmCa,
+    ca: Arc<ManagedMitmCa>,
     upstream: UpstreamClient,
     inspect: bool,
     max_body_bytes: usize,
@@ -104,7 +104,7 @@ impl MitmState {
 
         // MITM exists when HTTPS policy depends on the inner request: limited-mode method clamps
         // and host-specific hooks both need visibility after CONNECT is established. We
-        // generate/load a local CA and issue per-host leaf certs so we can terminate TLS and
+        // generate a process-local CA and issue per-host leaf certs so we can terminate TLS and
         // apply policy.
         let ca = ManagedMitmCa::load_or_create()?;
         let upstream_tls_root_store =

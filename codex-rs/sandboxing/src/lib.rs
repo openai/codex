@@ -21,9 +21,10 @@ pub use manager::SandboxTransformError;
 pub use manager::SandboxTransformRequest;
 pub use manager::SandboxType;
 pub use manager::SandboxablePreference;
+pub use manager::cleanup_legacy_managed_mitm_ca_private_key;
 pub use manager::compatibility_sandbox_policy_for_permission_profile;
 pub use manager::get_platform_sandbox;
-pub use manager::with_managed_mitm_ca_access;
+pub use manager::with_managed_mitm_ca_readable_root;
 pub use windows::WindowsSandboxFilesystemOverrides;
 pub use windows::permission_profile_supports_windows_restricted_token_sandbox;
 pub use windows::resolve_windows_elevated_filesystem_overrides;
@@ -51,6 +52,9 @@ impl From<SandboxTransformError> for CodexErr {
                 CodexErr::LandlockSandboxExecutableNotProvided
             }
             SandboxTransformError::EnvironmentNetworkProxy(message) => {
+                CodexErr::UnsupportedOperation(message)
+            }
+            SandboxTransformError::ManagedMitmCaKeyCleanup(message) => {
                 CodexErr::UnsupportedOperation(message)
             }
             #[cfg(target_os = "linux")]

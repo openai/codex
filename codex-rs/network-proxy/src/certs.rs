@@ -32,6 +32,8 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::info;
@@ -39,15 +41,48 @@ use tracing::warn;
 
 pub(super) struct ManagedMitmCa {
     issuer: Issuer<'static, KeyPair>,
+    certificate_path: PathBuf,
 }
 
+static MANAGED_MITM_CAS: LazyLock<Mutex<HashMap<PathBuf, Arc<ManagedMitmCa>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 impl ManagedMitmCa {
-    pub(super) fn load_or_create() -> Result<Self> {
-        let (ca_cert_pem, ca_key_pem) = load_or_create_ca()?;
-        let ca_key = KeyPair::from_pem(&ca_key_pem).context("failed to parse CA key")?;
+    pub(super) fn load_or_create() -> Result<Arc<Self>> {
+        let proxy_dir = managed_ca_dir()?;
+        let mut managed_cas = MANAGED_MITM_CAS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(ca) = managed_cas.get(&proxy_dir) {
+            return Ok(ca.clone());
+        }
+
+        let ca = Arc::new(Self::create(&proxy_dir)?);
+        managed_cas.insert(proxy_dir, ca.clone());
+        Ok(ca)
+    }
+
+    fn create(proxy_dir: &Path) -> Result<Self> {
+        remove_legacy_managed_ca_private_key_from_dir(proxy_dir)?;
+        fs::create_dir_all(proxy_dir)
+            .with_context(|| format!("failed to create {}", proxy_dir.display()))?;
+
+        let (ca_cert_pem, ca_key) = generate_ca()?;
+        let certificate_path = persist_managed_ca_certificate(proxy_dir, &ca_cert_pem)?;
         let issuer: Issuer<'static, KeyPair> =
             Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key).context("failed to parse CA cert")?;
-        Ok(Self { issuer })
+        info!(
+            cert_path = %certificate_path.display(),
+            "generated process-local MITM CA"
+        );
+        Ok(Self {
+            issuer,
+            certificate_path,
+        })
+    }
+
+    fn certificate_path(&self) -> &Path {
+        &self.certificate_path
     }
 
     pub(super) fn tls_acceptor_data_for_host(&self, host: &str) -> Result<TlsAcceptorData> {
@@ -100,8 +135,8 @@ fn issue_host_certificate_pem(
 }
 
 const MANAGED_MITM_CA_DIR: &str = "proxy";
-const MANAGED_MITM_CA_CERT: &str = "ca.pem";
-const MANAGED_MITM_CA_KEY: &str = "ca.key";
+const MANAGED_MITM_CA_CERT_PREFIX: &str = "ca";
+const LEGACY_MANAGED_MITM_CA_KEY: &str = "ca.key";
 const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
 pub(crate) const SSL_CERT_DIR_ENV_KEY: &str = "SSL_CERT_DIR";
 
@@ -135,27 +170,37 @@ pub(crate) struct ManagedMitmCaTrustBundle {
     pub(crate) startup_env_values: HashMap<&'static str, String>,
 }
 
-fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
+fn managed_ca_dir() -> Result<PathBuf> {
     let codex_home =
         find_codex_home().context("failed to resolve CODEX_HOME for managed MITM CA")?;
-    let proxy_dir = codex_home.join(MANAGED_MITM_CA_DIR);
-    Ok((
-        proxy_dir.join(MANAGED_MITM_CA_CERT).to_path_buf(),
-        proxy_dir.join(MANAGED_MITM_CA_KEY).to_path_buf(),
-    ))
+    Ok(codex_home.join(MANAGED_MITM_CA_DIR).to_path_buf())
 }
 
-pub(crate) fn managed_ca_private_key_path() -> Result<PathBuf> {
-    let (_, private_key_path) = managed_ca_paths()?;
-    Ok(private_key_path)
+pub(crate) fn remove_legacy_managed_ca_private_key() -> Result<()> {
+    remove_legacy_managed_ca_private_key_from_dir(&managed_ca_dir()?)
+}
+
+fn remove_legacy_managed_ca_private_key_from_dir(proxy_dir: &Path) -> Result<()> {
+    let private_key_path = proxy_dir.join(LEGACY_MANAGED_MITM_CA_KEY);
+    match fs::remove_file(&private_key_path) {
+        Ok(()) => {
+            info!(
+                key_path = %private_key_path.display(),
+                "removed legacy managed MITM CA private key"
+            );
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err)
+            .with_context(|| format!("failed to remove CA key {}", private_key_path.display())),
+    }
 }
 
 pub(crate) fn managed_ca_trust_bundle(
     env: &HashMap<&'static str, String>,
 ) -> Result<ManagedMitmCaTrustBundle> {
-    load_or_create_ca()?;
-    let (cert_path, _) = managed_ca_paths()?;
-    managed_ca_trust_bundle_for_cert_path(&cert_path, env)
+    let ca = ManagedMitmCa::load_or_create()?;
+    managed_ca_trust_bundle_for_cert_path(ca.certificate_path(), env)
 }
 
 fn managed_ca_trust_bundle_for_cert_path(
@@ -180,8 +225,8 @@ fn managed_ca_trust_bundle_for_cert_path(
 pub(crate) fn upstream_tls_root_store(
     env: &HashMap<&'static str, String>,
 ) -> Result<Arc<rustls::RootCertStore>> {
-    let (managed_ca_cert_path, _) = managed_ca_paths()?;
-    upstream_tls_root_store_for_cert_path(&managed_ca_cert_path, env)
+    let ca = ManagedMitmCa::load_or_create()?;
+    upstream_tls_root_store_for_cert_path(ca.certificate_path(), env)
 }
 
 pub(crate) fn upstream_tls_root_store_for_cert_path(
@@ -365,6 +410,9 @@ fn is_current_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Pa
     let Some(proxy_dir) = managed_ca_cert_path.parent() else {
         return false;
     };
+    if is_generated_trust_bundle_path(path, proxy_dir) {
+        return true;
+    }
     let Some(file_name) = path.file_name().and_then(|file_name| file_name.to_str()) else {
         return false;
     };
@@ -386,12 +434,35 @@ fn is_current_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Pa
             .any(|window| window == managed_ca_cert)
 }
 
-/// Returns whether `path` points at a current Codex-generated MITM CA bundle.
-pub fn is_managed_mitm_ca_trust_bundle_path(path: &str) -> bool {
-    let Ok((managed_ca_cert_path, _)) = managed_ca_paths() else {
+fn is_generated_trust_bundle_path(path: &Path, proxy_dir: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|file_name| file_name.to_str()) else {
         return false;
     };
-    is_current_generated_trust_bundle_path(Path::new(path), &managed_ca_cert_path)
+    let Some(expected_hash) = file_name
+        .strip_prefix(MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX)
+        .and_then(|suffix| suffix.strip_prefix('-'))
+        .and_then(|suffix| suffix.strip_suffix(".pem"))
+    else {
+        return false;
+    };
+    if path.parent() != Some(proxy_dir)
+        || expected_hash.len() != 64
+        || !expected_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return false;
+    }
+    let Ok(trust_bundle) = fs::read(path) else {
+        return false;
+    };
+    format!("{:x}", Sha256::digest(trust_bundle)) == expected_hash
+}
+
+/// Returns whether `path` points at a current Codex-generated MITM CA bundle.
+pub fn is_managed_mitm_ca_trust_bundle_path(path: &str) -> bool {
+    let Ok(proxy_dir) = managed_ca_dir() else {
+        return false;
+    };
+    is_generated_trust_bundle_path(Path::new(path), &proxy_dir)
 }
 
 fn persist_managed_ca_trust_bundle(
@@ -444,56 +515,20 @@ fn push_certificate_pem(bundle: &mut String, der: &[u8]) {
     bundle.push_str("-----END CERTIFICATE-----\n");
 }
 
-fn load_or_create_ca() -> Result<(String, String)> {
-    let (cert_path, key_path) = managed_ca_paths()?;
-
-    if cert_path.exists() || key_path.exists() {
-        if !cert_path.exists() || !key_path.exists() {
-            return Err(anyhow!(
-                "both managed MITM CA files must exist (cert={}, key={})",
-                cert_path.display(),
-                key_path.display()
-            ));
-        }
-        validate_existing_ca_key_file(&key_path)?;
-        let cert_pem = fs::read_to_string(&cert_path)
-            .with_context(|| format!("failed to read CA cert {}", cert_path.display()))?;
-        let key_pem = fs::read_to_string(&key_path)
-            .with_context(|| format!("failed to read CA key {}", key_path.display()))?;
-        return Ok((cert_pem, key_pem));
-    }
-
-    if let Some(parent) = cert_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-
-    let (cert_pem, key_pem) = generate_ca()?;
-    // The CA key is a high-value secret. Create it atomically with restrictive permissions.
-    // The cert can be world-readable, but we still write it atomically to avoid partial writes.
-    //
-    // We intentionally use create-new semantics: if a key already exists, we should not overwrite
-    // it silently (that would invalidate previously-trusted cert chains).
-    write_atomic_create_new(&key_path, key_pem.as_bytes(), /*mode*/ 0o600)
-        .with_context(|| format!("failed to persist CA key {}", key_path.display()))?;
-    if let Err(err) = write_atomic_create_new(&cert_path, cert_pem.as_bytes(), /*mode*/ 0o644)
-        .with_context(|| format!("failed to persist CA cert {}", cert_path.display()))
-    {
-        // Avoid leaving a partially-created CA around (cert missing) if the second write fails.
-        let _ = fs::remove_file(&key_path);
-        return Err(err);
-    }
-    let cert_path = cert_path.display();
-    let key_path = key_path.display();
-    info!("generated MITM CA (cert_path={cert_path}, key_path={key_path})");
-    Ok((cert_pem, key_pem))
+fn persist_managed_ca_certificate(proxy_dir: &Path, cert_pem: &str) -> Result<PathBuf> {
+    let hash = Sha256::digest(cert_pem.as_bytes());
+    let cert_path = proxy_dir.join(format!("{MANAGED_MITM_CA_CERT_PREFIX}-{hash:x}.pem"));
+    write_atomic_create_new_or_reuse(&cert_path, cert_pem.as_bytes(), /*mode*/ 0o644)
+        .with_context(|| {
+            format!(
+                "failed to persist managed MITM CA certificate {}",
+                cert_path.display()
+            )
+        })?;
+    Ok(cert_path)
 }
 
-fn generate_ca() -> Result<(String, String)> {
+fn generate_ca() -> Result<(String, KeyPair)> {
     let mut params = CertificateParams::default();
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params.key_usages = vec![
@@ -510,7 +545,7 @@ fn generate_ca() -> Result<(String, String)> {
     let cert = params
         .self_signed(&key_pair)
         .map_err(|err| anyhow!("failed to generate CA cert: {err}"))?;
-    Ok((cert.pem(), key_pair.serialize_pem()))
+    Ok((cert.pem(), key_pair))
 }
 
 fn write_atomic_create_new(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
@@ -610,41 +645,6 @@ fn write_atomic_create_new_or_reuse(path: &Path, contents: &[u8], mode: u32) -> 
 }
 
 #[cfg(unix)]
-fn validate_existing_ca_key_file(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("failed to stat CA key {}", path.display()))?;
-    if metadata.file_type().is_symlink() {
-        return Err(anyhow!(
-            "refusing to use symlink for managed MITM CA key {}",
-            path.display()
-        ));
-    }
-    if !metadata.is_file() {
-        return Err(anyhow!(
-            "managed MITM CA key is not a regular file: {}",
-            path.display()
-        ));
-    }
-
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(anyhow!(
-            "managed MITM CA key {} must not be group/world accessible (mode={mode:o}; expected <= 600)",
-            path.display()
-        ));
-    }
-
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_existing_ca_key_file(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
 fn open_create_new_with_mode(path: &Path, mode: u32) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -671,8 +671,6 @@ mod tests {
 
     #[cfg(unix)]
     use pretty_assertions::assert_eq;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
     #[test]
@@ -689,6 +687,24 @@ mod tests {
     }
 
     #[test]
+    fn generated_trust_bundle_path_requires_matching_content_hash() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        let trust_bundle_path =
+            persist_managed_ca_trust_bundle(&managed_ca_cert_path, "trusted roots").unwrap();
+
+        assert!(is_generated_trust_bundle_path(
+            &trust_bundle_path,
+            dir.path()
+        ));
+        fs::write(&trust_bundle_path, "tampered roots").unwrap();
+        assert!(!is_generated_trust_bundle_path(
+            &trust_bundle_path,
+            dir.path()
+        ));
+    }
+
+    #[test]
     fn managed_ca_trust_bundle_appends_startup_file_and_directory_certificates() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
@@ -696,6 +712,7 @@ mod tests {
         let startup_ca_dir = dir.path().join("startup-certs");
         let (managed_ca_cert, _) = generate_ca().unwrap();
         let (startup_ca_cert, startup_ca_key) = generate_ca().unwrap();
+        let startup_ca_key = startup_ca_key.serialize_pem();
         let (directory_ca_cert, _) = generate_ca().unwrap();
         let mut trusted_ca_der = CertificateDer::from_pem_slice(startup_ca_cert.as_bytes())
             .unwrap()
@@ -765,48 +782,21 @@ mod tests {
         assert_eq!(baseline_bundle.matches(&managed_ca_cert).count(), 1);
     }
 
-    #[cfg(unix)]
     #[test]
-    fn validate_existing_ca_key_file_rejects_group_world_permissions() {
+    fn managed_ca_creation_removes_legacy_key_and_persists_only_the_certificate() {
         let dir = tempdir().unwrap();
-        let key_path = dir.path().join("ca.key");
-        fs::write(&key_path, "key").unwrap();
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644)).unwrap();
+        let legacy_key_path = dir.path().join(LEGACY_MANAGED_MITM_CA_KEY);
+        fs::write(&legacy_key_path, "legacy private key").unwrap();
 
-        let err = validate_existing_ca_key_file(&key_path).unwrap_err();
-        assert!(
-            err.to_string().contains("group/world accessible"),
-            "unexpected error: {err:#}"
-        );
-    }
+        let ca = ManagedMitmCa::create(dir.path()).unwrap();
+        ca.tls_acceptor_data_for_host("example.com").unwrap();
+        let persisted_files = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
 
-    #[cfg(unix)]
-    #[test]
-    fn validate_existing_ca_key_file_rejects_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempdir().unwrap();
-        let target = dir.path().join("real.key");
-        let link = dir.path().join("ca.key");
-        fs::write(&target, "key").unwrap();
-        symlink(&target, &link).unwrap();
-
-        let err = validate_existing_ca_key_file(&link).unwrap_err();
-        assert!(
-            err.to_string().contains("symlink"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn validate_existing_ca_key_file_allows_private_permissions() {
-        let dir = tempdir().unwrap();
-        let key_path = dir.path().join("ca.key");
-        fs::write(&key_path, "key").unwrap();
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
-
-        validate_existing_ca_key_file(&key_path).unwrap();
+        assert_eq!(persisted_files, vec![ca.certificate_path().to_path_buf()]);
+        assert!(!legacy_key_path.exists());
     }
 
     #[cfg(unix)]

@@ -20,13 +20,14 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::cleanup_legacy_managed_mitm_ca_private_key;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::create_seatbelt_command_args;
-use codex_sandboxing::with_managed_mitm_ca_access;
+use codex_sandboxing::with_managed_mitm_ca_readable_root;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use tokio::process::Child;
@@ -362,9 +363,14 @@ async fn run_command_under_sandbox(
     // Proxy containment depends on whether a proxy is active, not whether its
     // policy came from managed requirements.
     let enforce_managed_network = network.is_some();
-    let runtime_permission_profile = with_managed_mitm_ca_access(
+    cleanup_legacy_managed_mitm_ca_private_key()?;
+    let managed_mitm_ca_trust_bundle_path = match network.as_ref() {
+        Some(network) => network.managed_mitm_ca_trust_bundle_path(),
+        None => None,
+    };
+    let runtime_permission_profile = with_managed_mitm_ca_readable_root(
         permission_profile,
-        network.as_ref(),
+        managed_mitm_ca_trust_bundle_path.as_ref(),
         sandbox_policy_cwd.as_path(),
     );
 
