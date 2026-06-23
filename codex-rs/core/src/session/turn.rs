@@ -332,14 +332,14 @@ pub(crate) async fn run_turn(
                 .await;
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                let new_context_window_requested = sess.take_new_context_window_request().await;
                 let auto_compact_needed = turn_context
                     .config
                     .features
                     .enabled(Feature::AutoCompaction)
-                    && token_limit_reached
-                    && needs_follow_up;
-                if needs_follow_up && (new_context_window_requested || auto_compact_needed) {
+                    && token_limit_reached;
+                if needs_follow_up
+                    && (sess.take_new_context_window_request().await || auto_compact_needed)
+                {
                     if let Err(err) = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),
