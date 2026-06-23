@@ -25,7 +25,7 @@ use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
 use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
-use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
+use crate::codex_apps::write_codex_apps_tools_cache;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
@@ -581,8 +581,7 @@ async fn start_server_task(
     );
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
     let codex_apps_tools_cache_context = if is_codex_apps_mcp_server {
-        write_cached_codex_apps_tools_if_needed(
-            &server_name,
+        write_codex_apps_tools_cache(
             codex_apps_tools_cache_context.as_ref(),
             &server_info,
             &tools,
