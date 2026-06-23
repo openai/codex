@@ -391,7 +391,7 @@ impl McpConnectionManager {
     }
 
     pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
-        server_name == CODEX_APPS_MCP_SERVER_NAME
+        server_name == CODEX_APPS_MCP_SERVER_NAME && self.server_metadata.contains_key(server_name)
     }
 
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
