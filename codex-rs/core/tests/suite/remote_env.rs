@@ -214,7 +214,7 @@ async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
         ]),
     )
     .await;
-    let test = test_codex().build_with_remote_env(&server).await?;
+    let test = test_codex().build_with_auto_env(&server).await?;
 
     test.submit_turn("report remote environment").await?;
 
@@ -274,7 +274,7 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let response_mock = mount_sse_sequence(
         &server,
         vec![

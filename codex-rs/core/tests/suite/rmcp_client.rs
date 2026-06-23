@@ -603,7 +603,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -782,7 +782,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -908,7 +908,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
 
     wait_for_mcp_server(&fixture.codex, server_name).await?;
@@ -1002,7 +1002,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -1143,7 +1143,7 @@ async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -1232,7 +1232,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -1323,7 +1323,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -1477,7 +1477,7 @@ async fn stdio_image_responses_resize_large_image() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -1565,7 +1565,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -1711,7 +1711,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -1819,7 +1819,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -1944,7 +1944,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -2040,7 +2040,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -2224,7 +2224,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
@@ -2411,7 +2411,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     // Phase 5: wait for MCP startup before the turn is submitted, which keeps
     // failures tied to server startup/discovery.

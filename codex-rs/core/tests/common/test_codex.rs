@@ -405,7 +405,16 @@ impl TestCodexBuilder {
         .await
     }
 
-    pub async fn build_with_remote_env(
+    /// Builds a test runtime using the execution environment selected by the test process.
+    ///
+    /// With no remote test configuration, or with `CODEX_TEST_ENVIRONMENT=local`, this uses a
+    /// temporary local environment just like [`Self::build`]. `CODEX_TEST_ENVIRONMENT=docker` or
+    /// `CODEX_TEST_ENVIRONMENT=wine-exec` selects the remote exec server configured by
+    /// `CODEX_TEST_REMOTE_EXEC_SERVER_URL`; the legacy `CODEX_TEST_REMOTE_ENV` Docker-container
+    /// configuration does the same. Only the automatically selected environment is registered.
+    /// Use [`Self::build_with_remote_and_local_env`] when a remote test also needs the local
+    /// environment to be selectable explicitly.
+    pub async fn build_with_auto_env(
         &mut self,
         server: &wiremock::MockServer,
     ) -> anyhow::Result<TestCodex> {
@@ -961,9 +970,9 @@ impl TestCodexHarness {
         Ok(Self { server, test })
     }
 
-    pub async fn with_remote_env_builder(mut builder: TestCodexBuilder) -> Result<Self> {
+    pub async fn with_auto_env_builder(mut builder: TestCodexBuilder) -> Result<Self> {
         let server = start_mock_server().await;
-        let test = builder.build_with_remote_env(&server).await?;
+        let test = builder.build_with_auto_env(&server).await?;
         Ok(Self { server, test })
     }
 
