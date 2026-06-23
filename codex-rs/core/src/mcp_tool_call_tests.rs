@@ -410,92 +410,6 @@ fn prompt_mode_does_not_allow_persistent_remember() {
     );
 }
 
-fn metric_call_tool_result(
-    is_error: bool,
-    structured_content: Option<serde_json::Value>,
-) -> CallToolResult {
-    CallToolResult {
-        content: Vec::new(),
-        structured_content,
-        is_error: Some(is_error),
-        meta: None,
-    }
-}
-
-#[test]
-fn mcp_call_metric_outcome_distinguishes_request_and_tool_errors() {
-    assert_eq!(
-        mcp_call_metric_outcome(
-            &Ok(metric_call_tool_result(
-                /*is_error*/ false, /*structured_content*/ None,
-            )),
-            McpErrorCodeSource::HostedPluginService,
-        ),
-        McpCallMetricOutcome {
-            status: "ok",
-            error_type: None,
-            error_code: None,
-        }
-    );
-    assert_eq!(
-        mcp_call_metric_outcome(
-            &Ok(metric_call_tool_result(
-                /*is_error*/ true,
-                Some(serde_json::json!({"error_code": "RATE_LIMITED"})),
-            )),
-            McpErrorCodeSource::HostedPluginService,
-        ),
-        McpCallMetricOutcome {
-            status: "error",
-            error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-            error_code: Some("RATE_LIMITED".to_string()),
-        }
-    );
-    assert_eq!(
-        mcp_call_metric_outcome(
-            &Err("connection closed".to_string()),
-            McpErrorCodeSource::HostedPluginService,
-        ),
-        McpCallMetricOutcome {
-            status: "error",
-            error_type: Some(MCP_CALL_ERROR_TYPE_MCP_REQUEST),
-            error_code: Some(MCP_CALL_ERROR_CODE_UNKNOWN.to_string()),
-        }
-    );
-}
-
-#[test]
-fn mcp_call_metric_outcome_ignores_untrusted_tool_error_codes() {
-    let result = Ok(metric_call_tool_result(
-        /*is_error*/ true,
-        Some(serde_json::json!({"error_code": "arbitrary-user-value"})),
-    ));
-
-    assert_eq!(
-        mcp_call_metric_outcome(&result, McpErrorCodeSource::Untrusted),
-        McpCallMetricOutcome {
-            status: "error",
-            error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-            error_code: Some(MCP_CALL_ERROR_CODE_UNKNOWN.to_string()),
-        }
-    );
-}
-
-#[test]
-fn mcp_call_metric_outcome_reads_hosted_auth_error_code_from_meta() {
-    assert_eq!(
-        mcp_call_metric_outcome(
-            &Ok(codex_apps_auth_failure_result()),
-            McpErrorCodeSource::HostedPluginService,
-        ),
-        McpCallMetricOutcome {
-            status: "error",
-            error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-            error_code: Some("UNAUTHORIZED".to_string()),
-        }
-    );
-}
-
 #[tokio::test]
 async fn mcp_tool_call_span_records_expected_fields() {
     let buffer: &'static std::sync::Mutex<Vec<u8>> =
@@ -561,10 +475,12 @@ async fn mcp_tool_call_span_records_error_type_and_hosted_error_code() {
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let (session, turn_context) = make_session_and_context().await;
-    let result = Ok(metric_call_tool_result(
-        /*is_error*/ true,
-        Some(serde_json::json!({"error_code": "RATE_LIMITED"})),
-    ));
+    let result = Ok(CallToolResult {
+        content: Vec::new(),
+        structured_content: Some(serde_json::json!({"error_code": "RATE_LIMITED"})),
+        is_error: Some(true),
+        meta: None,
+    });
     let span = mcp_tool_call_span(
         &session,
         &turn_context,
@@ -579,7 +495,7 @@ async fn mcp_tool_call_span_records_error_type_and_hosted_error_code() {
     );
 
     async {
-        record_mcp_call_outcome_span_telemetry(
+        record_mcp_result_span_telemetry(
             &Span::current(),
             &result,
             McpErrorCodeSource::HostedPluginService,
@@ -609,12 +525,12 @@ async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> Stri
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let (session, turn_context) = make_session_and_context().await;
-    let result = CallToolResult {
+    let result = Ok(CallToolResult {
         content: Vec::new(),
         structured_content: None,
         is_error: None,
         meta,
-    };
+    });
 
     {
         let span = mcp_tool_call_span(
@@ -631,7 +547,11 @@ async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> Stri
         );
 
         async {
-            record_mcp_result_span_telemetry(&Span::current(), Some(&result));
+            record_mcp_result_span_telemetry(
+                &Span::current(),
+                &result,
+                McpErrorCodeSource::Untrusted,
+            );
         }
         .instrument(span)
         .await;

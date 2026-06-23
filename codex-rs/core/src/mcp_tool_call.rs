@@ -46,7 +46,6 @@ use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
-use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
@@ -95,17 +94,15 @@ use tracing::error;
 use tracing::field::Empty;
 use url::Url;
 
-const MCP_CALL_COUNT_METRIC: &str = "codex.mcp.call";
-const MCP_CALL_DURATION_METRIC: &str = "codex.mcp.call.duration_ms";
-const MCP_CALL_ERROR_COUNT_METRIC: &str = "codex.mcp.call.error";
-// No CallToolResult was received. This includes request setup, transport, timeout, protocol, and
-// JSON-RPC failures; it does not imply that the request never reached the MCP server.
-const MCP_CALL_ERROR_TYPE_MCP_REQUEST: &str = "mcp_request";
-// The MCP server returned a CallToolResult with isError=true.
-const MCP_CALL_ERROR_TYPE_TOOL_RESULT: &str = "tool_result";
-const MCP_CALL_ERROR_CODE_UNKNOWN: &str = "unknown";
-const MCP_CALL_ERROR_TYPE_SPAN_ATTR: &str = "error.type";
-const MCP_CALL_ERROR_CODE_SPAN_ATTR: &str = "codex.mcp.error.code";
+mod telemetry;
+
+use telemetry::MCP_CALL_COUNT_METRIC;
+use telemetry::McpCallMetricOutcome;
+use telemetry::McpErrorCodeSource;
+use telemetry::emit_mcp_call_metrics;
+use telemetry::mcp_call_metric_outcome;
+use telemetry::record_mcp_call_outcome_span_telemetry;
+
 const MCP_RESULT_TELEMETRY_META_KEY: &str = "codex/telemetry";
 const MCP_RESULT_TELEMETRY_SPAN_KEY: &str = "span";
 const MCP_RESULT_TELEMETRY_TARGET_ID_KEY: &str = "target_id";
@@ -282,11 +279,7 @@ pub(crate) async fn handle_mcp_tool_call(
         };
 
         let status = if result.is_ok() { "ok" } else { "error" };
-        let outcome = McpCallMetricOutcome {
-            status,
-            error_type: None,
-            error_code: None,
-        };
+        let outcome = McpCallMetricOutcome::from_status(status);
         emit_mcp_call_metrics(
             turn_context.as_ref(),
             &outcome,
@@ -403,8 +396,7 @@ async fn handle_approved_mcp_tool_call(
             .await
         }
         .await;
-        record_mcp_result_span_telemetry(&Span::current(), result.as_ref().ok());
-        record_mcp_call_outcome_span_telemetry(&Span::current(), &result, error_code_source);
+        record_mcp_result_span_telemetry(&Span::current(), &result, error_code_source);
         result
     }
     .instrument(mcp_tool_call_span(
@@ -452,140 +444,6 @@ async fn handle_approved_mcp_tool_call(
     }
 }
 
-fn emit_mcp_call_metrics(
-    turn_context: &TurnContext,
-    outcome: &McpCallMetricOutcome,
-    tool_name: &str,
-    connector_id: Option<&str>,
-    connector_name: Option<&str>,
-    duration: Option<Duration>,
-) {
-    let tags = mcp_call_metric_tags(outcome.status, tool_name, connector_id, connector_name);
-    let tag_refs: Vec<(&str, &str)> = tags
-        .iter()
-        .map(|(key, value)| (*key, value.as_str()))
-        .collect();
-    turn_context
-        .session_telemetry
-        .counter(MCP_CALL_COUNT_METRIC, /*inc*/ 1, &tag_refs);
-    if let Some(duration) = duration {
-        turn_context.session_telemetry.record_duration(
-            MCP_CALL_DURATION_METRIC,
-            duration,
-            &tag_refs,
-        );
-    }
-
-    let (Some(error_type), Some(error_code)) = (outcome.error_type, outcome.error_code.as_deref())
-    else {
-        return;
-    };
-    let mut error_tags = tags;
-    error_tags.push(("error_type", sanitize_metric_tag_value(error_type)));
-    error_tags.push(("error_code", sanitize_metric_tag_value(error_code)));
-    let error_tag_refs: Vec<(&str, &str)> = error_tags
-        .iter()
-        .map(|(key, value)| (*key, value.as_str()))
-        .collect();
-    turn_context.session_telemetry.counter(
-        MCP_CALL_ERROR_COUNT_METRIC,
-        /*inc*/ 1,
-        &error_tag_refs,
-    );
-}
-
-fn mcp_call_metric_tags(
-    status: &str,
-    tool_name: &str,
-    connector_id: Option<&str>,
-    connector_name: Option<&str>,
-) -> Vec<(&'static str, String)> {
-    let mut tags = vec![
-        ("status", sanitize_metric_tag_value(status)),
-        ("tool", sanitize_metric_tag_value(tool_name)),
-    ];
-    if let Some(connector_id) = connector_id.filter(|connector_id| !connector_id.is_empty()) {
-        tags.push(("connector_id", sanitize_metric_tag_value(connector_id)));
-    }
-    if let Some(connector_name) = connector_name.filter(|connector_name| !connector_name.is_empty())
-    {
-        tags.push(("connector_name", sanitize_metric_tag_value(connector_name)));
-    }
-    tags
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct McpCallMetricOutcome {
-    status: &'static str,
-    error_type: Option<&'static str>,
-    error_code: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum McpErrorCodeSource {
-    HostedPluginService,
-    Untrusted,
-}
-
-fn mcp_call_metric_outcome(
-    result: &Result<CallToolResult, String>,
-    error_code_source: McpErrorCodeSource,
-) -> McpCallMetricOutcome {
-    match result {
-        Ok(result) if result.is_error.unwrap_or(false) => {
-            let error_code = if error_code_source == McpErrorCodeSource::HostedPluginService {
-                result
-                    .structured_content
-                    .as_ref()
-                    .and_then(JsonValue::as_object)
-                    .and_then(|structured_content| structured_content.get("error_code"))
-                    .and_then(JsonValue::as_str)
-                    .filter(|error_code| !error_code.is_empty())
-                    .or_else(|| {
-                        result
-                            .meta
-                            .as_ref()
-                            .and_then(JsonValue::as_object)
-                            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
-                            .and_then(JsonValue::as_object)
-                            .and_then(|codex_apps| codex_apps.get("connector_auth_failure"))
-                            .and_then(JsonValue::as_object)
-                            .filter(|auth_failure| {
-                                auth_failure
-                                    .get("is_auth_failure")
-                                    .and_then(JsonValue::as_bool)
-                                    == Some(true)
-                            })
-                            .and_then(|auth_failure| auth_failure.get("error_code"))
-                            .and_then(JsonValue::as_str)
-                            .filter(|error_code| !error_code.is_empty())
-                    })
-            } else {
-                None
-            };
-            McpCallMetricOutcome {
-                status: "error",
-                error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-                error_code: Some(
-                    error_code
-                        .unwrap_or(MCP_CALL_ERROR_CODE_UNKNOWN)
-                        .to_string(),
-                ),
-            }
-        }
-        Ok(_) => McpCallMetricOutcome {
-            status: "ok",
-            error_type: None,
-            error_code: None,
-        },
-        Err(_) => McpCallMetricOutcome {
-            status: "error",
-            error_type: Some(MCP_CALL_ERROR_TYPE_MCP_REQUEST),
-            error_code: Some(MCP_CALL_ERROR_CODE_UNKNOWN.to_string()),
-        },
-    }
-}
-
 fn mcp_tool_call_span(
     session: &Session,
     turn_context: &TurnContext,
@@ -623,19 +481,6 @@ fn mcp_tool_call_span(
     span
 }
 
-fn record_mcp_call_outcome_span_telemetry(
-    span: &Span,
-    result: &Result<CallToolResult, String>,
-    error_code_source: McpErrorCodeSource,
-) {
-    let outcome = mcp_call_metric_outcome(result, error_code_source);
-    let (Some(error_type), Some(error_code)) = (outcome.error_type, outcome.error_code) else {
-        return;
-    };
-    span.record(MCP_CALL_ERROR_TYPE_SPAN_ATTR, error_type);
-    span.record(MCP_CALL_ERROR_CODE_SPAN_ATTR, error_code);
-}
-
 struct McpToolCallSpanFields<'a> {
     server_name: &'a str,
     tool_name: &'a str,
@@ -660,8 +505,16 @@ fn record_server_fields(span: &Span, url: Option<&str>) {
     }
 }
 
-fn record_mcp_result_span_telemetry(span: &Span, result: Option<&CallToolResult>) {
+fn record_mcp_result_span_telemetry(
+    span: &Span,
+    result: &Result<CallToolResult, String>,
+    error_code_source: McpErrorCodeSource,
+) {
+    record_mcp_call_outcome_span_telemetry(span, result, error_code_source);
+
     let Some(span_telemetry) = result
+        .as_ref()
+        .ok()
         .and_then(|result| result.meta.as_ref())
         .and_then(JsonValue::as_object)
         .and_then(|meta| meta.get(MCP_RESULT_TELEMETRY_META_KEY))
