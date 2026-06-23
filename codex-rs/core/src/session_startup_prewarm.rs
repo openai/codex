@@ -14,6 +14,7 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn::build_prompt;
 use crate::session::turn::built_tools;
 use codex_otel::STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC;
@@ -261,6 +262,9 @@ async fn schedule_startup_prewarm_inner(
     let startup_router = built_tools(
         session.as_ref(),
         startup_turn_context.as_ref(),
+        Arc::new(StepContext::from_turn_context(
+            startup_turn_context.as_ref(),
+        )),
         &startup_cancellation_token,
     )
     .await?;

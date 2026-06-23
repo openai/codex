@@ -387,7 +387,6 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnModerationMetadataEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
-use codex_tools::ToolEnvironmentMode;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
@@ -2786,6 +2785,24 @@ impl Session {
             .history
             .set_world_state_baseline(Arc::clone(&world_state));
         world_state
+    }
+
+    pub(crate) async fn capture_step_context(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Arc<StepContext> {
+        let step_context = if turn_context
+            .config
+            .features
+            .enabled(Feature::DeferredExecutor)
+        {
+            StepContext {
+                environments: self.services.turn_environments.snapshot().await,
+            }
+        } else {
+            StepContext::from_turn_context(turn_context)
+        };
+        Arc::new(step_context)
     }
 
     pub(crate) async fn record_inter_agent_communication(

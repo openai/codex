@@ -21,6 +21,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionImplementation;
@@ -230,6 +231,7 @@ async fn run_remote_compact_task_inner_impl(
     let tool_router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
+        Arc::new(StepContext::from_turn_context(turn_context.as_ref())),
         &CancellationToken::new(),
     )
     .await?;

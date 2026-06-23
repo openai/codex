@@ -30,6 +30,7 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -178,8 +179,9 @@ async fn probe_with(
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
     configure_turn(&mut turn);
-    let router = ToolRouter::from_turn_context(
+    let router = ToolRouter::from_contexts(
         &turn,
+        Arc::new(StepContext::from_turn_context(&turn)),
         ToolRouterParams {
             tool_suggest_candidates: inputs.tool_suggest_candidates,
             mcp_tools: inputs.mcp_tools,
@@ -640,6 +642,31 @@ async fn environment_count_controls_environment_backed_tools() {
 }
 
 #[tokio::test]
+async fn environment_tools_follow_the_step_context() {
+    let (_session, mut turn) = make_session_and_context().await;
+    set_feature(&mut turn, Feature::UnifiedExec, /*enabled*/ true);
+    turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+
+    let step_context = Arc::new(StepContext::from_turn_context(&turn));
+    turn.environments.turn_environments.clear();
+
+    let plan = ToolPlanProbe::from_router(ToolRouter::from_contexts(
+        &turn,
+        step_context,
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            tool_suggest_candidates: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: &[],
+        },
+        &Default::default(),
+    ));
+
+    plan.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
+}
+
+#[tokio::test]
 async fn host_context_gates_agent_job_tools() {
     let normal_agent_job = probe(|turn| {
         set_feature(turn, Feature::SpawnCsv, /*enabled*/ true);
@@ -773,8 +800,9 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
 
     let (_session, mut first_turn) = make_session_and_context().await;
     first_turn.model_info.supports_search_tool = true;
-    let first_router = ToolRouter::from_turn_context(
+    let first_router = ToolRouter::from_contexts(
         &first_turn,
+        Arc::new(StepContext::from_turn_context(&first_turn)),
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: Some(vec![mcp_tool("first", "mcp__first", "lookup")]),
@@ -788,8 +816,9 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
 
     let (_session, mut second_turn) = make_session_and_context().await;
     second_turn.model_info.supports_search_tool = true;
-    let second_router = ToolRouter::from_turn_context(
+    let second_router = ToolRouter::from_contexts(
         &second_turn,
+        Arc::new(StepContext::from_turn_context(&second_turn)),
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: Some(vec![mcp_tool("second", "mcp__second", "lookup")]),

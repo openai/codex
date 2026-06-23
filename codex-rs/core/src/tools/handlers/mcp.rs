@@ -317,6 +317,7 @@ mod search_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::step_context::StepContext;
     use crate::session::tests::make_session_and_context;
     use crate::tools::context::ToolCallSource;
     use crate::tools::hook_names::HookToolName;
@@ -345,6 +346,7 @@ mod tests {
         assert_eq!(
             handler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
+                step_context: Arc::new(StepContext::from_turn_context(&turn)),
                 turn: turn.into(),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
@@ -377,6 +379,7 @@ mod tests {
         assert_eq!(
             handler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
+                step_context: Arc::new(StepContext::from_turn_context(&turn)),
                 turn: turn.into(),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
@@ -405,6 +408,7 @@ mod tests {
             .with_updated_hook_input(
                 ToolInvocation {
                     session: session.into(),
+                    step_context: Arc::new(StepContext::from_turn_context(&turn)),
                     turn: turn.into(),
                     cancellation_token: tokio_util::sync::CancellationToken::new(),
                     tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
@@ -452,6 +456,7 @@ mod tests {
             .expect("MCP tool spec should build");
         let invocation = ToolInvocation {
             session: session.into(),
+            step_context: Arc::new(StepContext::from_turn_context(&turn)),
             turn: turn.into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),

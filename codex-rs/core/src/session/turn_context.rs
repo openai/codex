@@ -207,10 +207,6 @@ impl TurnContext {
             && self.config.orchestrator_mcp_enabled
     }
 
-    pub(crate) fn tool_environment_mode(&self) -> ToolEnvironmentMode {
-        ToolEnvironmentMode::from_count(self.environments.turn_environments.len())
-    }
-
     pub(crate) async fn with_model(
         &self,
         model: String,

@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::CodeModeWaitHandler;
@@ -271,6 +272,7 @@ fn test_invocation_with_payload(
 ) -> ToolInvocation {
     ToolInvocation {
         session,
+        step_context: Arc::new(StepContext::from_turn_context(turn.as_ref())),
         turn,
         cancellation_token: CancellationToken::new(),
         tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),

@@ -9,6 +9,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolCallSource;
@@ -29,6 +30,7 @@ async fn invocation_for_payload(
     let (session, turn) = make_session_and_context().await;
     ToolInvocation {
         session: session.into(),
+        step_context: Arc::new(StepContext::from_turn_context(&turn)),
         turn: turn.into(),
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
@@ -241,6 +243,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
+            step_context: Arc::new(StepContext::from_turn_context(&turn)),
             turn: turn.into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
@@ -267,6 +270,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
+            step_context: Arc::new(StepContext::from_turn_context(&turn)),
             turn: turn.into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),

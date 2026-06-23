@@ -160,6 +160,7 @@ impl ShellCommandHandler {
         let ToolInvocation {
             session,
             turn,
+            step_context,
             cancellation_token,
             tracker,
             call_id,
@@ -172,6 +173,12 @@ impl ShellCommandHandler {
             return Err(FunctionCallError::RespondToModel(format!(
                 "unsupported payload for shell_command handler: {tool_name}"
             )));
+        };
+
+        let Some(turn_environment) = step_context.environments.primary().cloned() else {
+            return Err(FunctionCallError::RespondToModel(
+                "shell is unavailable in this session".to_string(),
+            ));
         };
 
         #[allow(deprecated)]
@@ -205,6 +212,7 @@ impl ShellCommandHandler {
             prefix_rule,
             session,
             turn,
+            turn_environment,
             tracker,
             call_id,
             shell_runtime_backend: self.shell_runtime_backend(),

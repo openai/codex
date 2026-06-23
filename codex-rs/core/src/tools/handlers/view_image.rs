@@ -101,6 +101,7 @@ impl ViewImageHandler {
         let ToolInvocation {
             session,
             turn,
+            step_context,
             payload,
             call_id,
             ..
@@ -134,7 +135,7 @@ impl ViewImageHandler {
         };
 
         let Some(turn_environment) =
-            resolve_tool_environment(turn.as_ref(), environment_id.as_deref())?
+            resolve_tool_environment(&step_context.environments, environment_id.as_deref())?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "view_image is unavailable in this session".to_string(),
@@ -253,6 +254,7 @@ impl ToolOutput for ViewImageOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::step_context::StepContext;
     use crate::session::tests::make_session_and_context;
     use crate::session::turn_context::TurnEnvironment;
     use crate::tools::context::ToolCallSource;
@@ -326,6 +328,7 @@ mod tests {
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {
                 session: Arc::new(session),
+                step_context: Arc::new(StepContext::from_turn_context(&turn)),
                 turn: Arc::new(turn),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
@@ -354,6 +357,7 @@ mod tests {
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {
                 session: Arc::new(session),
+                step_context: Arc::new(StepContext::from_turn_context(&turn)),
                 turn: Arc::new(turn),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
@@ -389,6 +393,7 @@ mod tests {
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {
                 session: Arc::new(session),
+                step_context: Arc::new(StepContext::from_turn_context(&turn)),
                 turn: Arc::new(turn),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
