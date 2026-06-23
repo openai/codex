@@ -274,7 +274,7 @@ mod tests {
         )
         .expect("runtime paths");
         let handler = FileSystemHandler::new(runtime_paths);
-        let sandbox_cwd = PathUri::from_path(temp_dir.path()).expect("tempdir URI");
+        let sandbox_cwd = PathUri::from_host_native_path(temp_dir.path()).expect("tempdir URI");
         let sandbox_context = |sandbox_policy| {
             FileSystemSandboxContext::from_legacy_sandbox_policy(
                 sandbox_policy,
@@ -292,7 +292,8 @@ mod tests {
                 },
             ),
         ] {
-            let path = PathUri::from_path(temp_dir.path().join(file_name)).expect("path URI");
+            let path =
+                PathUri::from_host_native_path(temp_dir.path().join(file_name)).expect("path URI");
 
             handler
                 .write_file(FsWriteFileParams {
@@ -312,7 +313,7 @@ mod tests {
                 .expect("canonicalize file");
             assert_eq!(
                 canonicalized.path,
-                PathUri::from_path(
+                PathUri::from_host_native_path(
                     std::fs::canonicalize(temp_dir.path().join(file_name)).expect("canonical path"),
                 )
                 .expect("canonical path URI"),

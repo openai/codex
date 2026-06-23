@@ -18,7 +18,7 @@ fn git_blob_sha1_hex(data: &str) -> String {
 }
 
 async fn apply_verified_patch(root: &Path, patch: &str) -> AppliedPatchDelta {
-    let cwd = PathUri::from_path(root).expect("absolute tempdir path");
+    let cwd = PathUri::from_host_native_path(root).expect("absolute tempdir path");
     let argv = vec!["apply_patch".to_string(), patch.to_string()];
     match codex_apply_patch::maybe_parse_apply_patch_verified(
         &argv,

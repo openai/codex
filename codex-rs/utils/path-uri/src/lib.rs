@@ -121,7 +121,7 @@ impl PathUri {
     /// Relative paths are reported as invalid input. Absolute paths without a
     /// valid URI representation use the fallback documented on
     /// [`Self::from_abs_path`].
-    pub fn from_path(path: impl AsRef<Path>) -> io::Result<Self> {
+    pub fn from_host_native_path(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = AbsolutePathBuf::from_absolute_path_checked(path)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         Ok(Self::from_abs_path(&path))

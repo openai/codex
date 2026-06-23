@@ -645,7 +645,7 @@ mod tests {
             make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
         let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
         let dir = tempdir().expect("tempdir");
-        let cwd = PathUri::from_path(dir.path()).expect("absolute cwd");
+        let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let delta = codex_apply_patch::apply_patch(
@@ -729,7 +729,7 @@ mod tests {
             make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
         let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
         let dir = tempdir().expect("tempdir");
-        let cwd = PathUri::from_path(dir.path()).expect("absolute cwd");
+        let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
 
         for patch in [
             "*** Begin Patch\n*** Add File: a.txt\n+one\n*** End Patch",
@@ -782,7 +782,7 @@ mod tests {
             make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
         let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
         let dir = tempdir().expect("tempdir");
-        let cwd = PathUri::from_path(dir.path()).expect("absolute cwd");
+        let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let delta = codex_apply_patch::apply_patch(

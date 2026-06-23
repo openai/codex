@@ -173,7 +173,7 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     let file_system = test_env.environment().get_filesystem();
 
     let file_path_abs = test_env.cwd().join("remote-test-env-ok");
-    let file_path_uri = PathUri::from_path(&file_path_abs)?;
+    let file_path_uri = PathUri::from_host_native_path(&file_path_abs)?;
     let payload = b"remote-test-env-ok".to_vec();
 
     file_system
@@ -329,8 +329,8 @@ async fn remote_sandbox_denial_requests_approval_and_retries() -> Result<()> {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     let remote_cwd = PathBuf::from(format!("/tmp/codex-remote-denial-cwd-{nonce}")).abs();
     let target_path = PathBuf::from(format!("/tmp/codex-remote-denial-target-{nonce}")).abs();
-    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
-    let target_uri = PathUri::from_path(&target_path)?;
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
+    let target_uri = PathUri::from_host_native_path(&target_path)?;
     test.fs()
         .create_directory(
             &remote_cwd_uri,
@@ -801,8 +801,8 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     ))
     .abs();
     let remote_marker_name = "marker.txt";
-    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
-    let remote_marker_uri = PathUri::from_path(remote_cwd.join(remote_marker_name))?;
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
+    let remote_marker_uri = PathUri::from_host_native_path(remote_cwd.join(remote_marker_name))?;
     test.fs()
         .create_directory(
             &remote_cwd_uri,
@@ -900,7 +900,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
     let local_write_root = local_cwd.path().join(relative_write_root);
     let local_target_path = local_cwd.path().join(relative_target_path);
     fs::create_dir(&local_write_root)?;
-    let remote_write_root_uri = PathUri::from_path(&remote_write_root)?;
+    let remote_write_root_uri = PathUri::from_host_native_path(&remote_write_root)?;
     test.fs()
         .create_directory(
             &remote_write_root_uri,
@@ -1040,7 +1040,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
     assert_eq!(
         test.fs()
             .read_file_text(
-                &PathUri::from_path(&remote_target_path)?,
+                &PathUri::from_host_native_path(&remote_target_path)?,
                 /*sandbox*/ None,
             )
             .await?,
@@ -1084,7 +1084,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
-    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
     test.fs()
         .create_directory(
             &remote_cwd_uri,
@@ -1129,7 +1129,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
     let remote_contents = test
         .fs()
         .read_file_text(
-            &PathUri::from_path(remote_cwd.join(file_name))?,
+            &PathUri::from_host_native_path(remote_cwd.join(file_name))?,
             /*sandbox*/ None,
         )
         .await?;
@@ -1174,7 +1174,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
-    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
     test.fs()
         .create_directory(
             &remote_cwd_uri,
@@ -1188,7 +1188,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
-    let target_path_uri = PathUri::from_path(&target_path)?;
+    let target_path_uri = PathUri::from_host_native_path(&target_path)?;
     let _ = fs::remove_file(&target_path);
     test.fs()
         .remove(
@@ -1362,7 +1362,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
-    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
     test.fs()
         .create_directory(
             &remote_cwd_uri,
@@ -1417,7 +1417,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
     let remote_contents = test
         .fs()
         .read_file_text(
-            &PathUri::from_path(remote_cwd.join(file_name))?,
+            &PathUri::from_host_native_path(remote_cwd.join(file_name))?,
             /*sandbox*/ None,
         )
         .await?;
@@ -1455,8 +1455,8 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
     let allowed_dir = PathBuf::from(format!("/tmp/codex-remote-readable-{}", std::process::id()));
     let file_path = allowed_dir.join("note.txt");
-    let allowed_dir_uri = PathUri::from_path(&allowed_dir)?;
-    let file_path_uri = PathUri::from_path(&file_path)?;
+    let allowed_dir_uri = PathUri::from_host_native_path(&allowed_dir)?;
+    let file_path_uri = PathUri::from_host_native_path(&file_path)?;
     file_system
         .create_directory(
             &allowed_dir_uri,
@@ -1516,7 +1516,7 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
     ))?;
 
     let requested_path =
-        PathUri::from_path(allowed_dir.join("link").join("..").join("secret.txt"))?;
+        PathUri::from_host_native_path(allowed_dir.join("link").join("..").join("secret.txt"))?;
     let sandbox = read_only_sandbox(allowed_dir.clone());
     let error = match file_system.read_file(&requested_path, Some(&sandbox)).await {
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
@@ -1564,7 +1564,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
     let sandbox = workspace_write_sandbox(allowed_dir.clone());
     file_system
         .remove(
-            &PathUri::from_path(&symlink_path)?,
+            &PathUri::from_host_native_path(&symlink_path)?,
             RemoveOptions {
                 recursive: false,
                 force: false,
@@ -1582,13 +1582,16 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
         .is_ok();
     assert!(!symlink_exists);
     let outside = file_system
-        .read_file_text(&PathUri::from_path(&outside_file)?, /*sandbox*/ None)
+        .read_file_text(
+            &PathUri::from_host_native_path(&outside_file)?,
+            /*sandbox*/ None,
+        )
         .await?;
     assert_eq!(outside, "outside");
 
     file_system
         .remove(
-            &PathUri::from_path(&root)?,
+            &PathUri::from_host_native_path(&root)?,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -1630,8 +1633,8 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
     let sandbox = workspace_write_sandbox(allowed_dir.clone());
     file_system
         .copy(
-            &PathUri::from_path(&source_symlink)?,
-            &PathUri::from_path(&copied_symlink)?,
+            &PathUri::from_host_native_path(&source_symlink)?,
+            &PathUri::from_host_native_path(&copied_symlink)?,
             CopyOptions { recursive: false },
             Some(&sandbox),
         )
@@ -1664,7 +1667,7 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
 
     file_system
         .remove(
-            &PathUri::from_path(&root)?,
+            &PathUri::from_host_native_path(&root)?,
             RemoveOptions {
                 recursive: true,
                 force: true,

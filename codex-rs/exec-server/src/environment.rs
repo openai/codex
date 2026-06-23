@@ -1151,8 +1151,10 @@ mod tests {
             .start(crate::ExecParams {
                 process_id: ProcessId::from("default-env-proc"),
                 argv: vec!["true".to_string()],
-                cwd: PathUri::from_path(std::env::current_dir().expect("read current dir"))
-                    .expect("cwd URI"),
+                cwd: PathUri::from_host_native_path(
+                    std::env::current_dir().expect("read current dir"),
+                )
+                .expect("cwd URI"),
                 env_policy: None,
                 env: Default::default(),
                 tty: false,
@@ -1188,8 +1190,10 @@ mod tests {
             .start(crate::ExecParams {
                 process_id: ProcessId::from("local-sandbox-proc"),
                 argv: vec!["true".to_string()],
-                cwd: PathUri::from_path(std::env::current_dir().expect("read current dir"))
-                    .expect("cwd URI"),
+                cwd: PathUri::from_host_native_path(
+                    std::env::current_dir().expect("read current dir"),
+                )
+                .expect("cwd URI"),
                 env_policy: None,
                 env: Default::default(),
                 tty: false,

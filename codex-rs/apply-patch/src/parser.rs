@@ -480,7 +480,7 @@ fn test_parse_patch_accepts_relative_and_absolute_hunk_paths() {
 #[test]
 fn test_hunk_resolve_path_accepts_relative_and_absolute_paths() {
     let cwd_dir = tempfile::tempdir().unwrap();
-    let cwd = PathUri::from_path(cwd_dir.path()).unwrap();
+    let cwd = PathUri::from_host_native_path(cwd_dir.path()).unwrap();
     let absolute_dir = tempfile::tempdir().unwrap();
     let absolute_add = absolute_dir.path().join("absolute-add.py").abs();
     let absolute_delete = absolute_dir.path().join("absolute-delete.py").abs();

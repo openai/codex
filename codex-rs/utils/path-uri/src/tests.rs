@@ -423,7 +423,8 @@ fn path_uri_deserializes_legacy_absolute_paths() {
 
 #[test]
 fn path_uri_rejects_relative_native_paths() {
-    let error = PathUri::from_path("src/lib.rs").expect_err("relative path should be rejected");
+    let error =
+        PathUri::from_host_native_path("src/lib.rs").expect_err("relative path should be rejected");
 
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 }
