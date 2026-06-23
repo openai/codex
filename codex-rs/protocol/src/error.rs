@@ -69,6 +69,9 @@ pub enum CodexErr {
     #[error("turn aborted. Something went wrong? Hit `/feedback` to report the issue.")]
     TurnAborted,
 
+    #[error("shared rollout token budget exhausted")]
+    RolloutBudgetExceeded,
+
     /// Returned by ResponsesClient when the SSE stream disconnects or errors out **after** the HTTP
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
     ///
@@ -173,6 +176,7 @@ impl CodexErr {
     pub fn is_retryable(&self) -> bool {
         match self {
             CodexErr::TurnAborted
+            | CodexErr::RolloutBudgetExceeded
             | CodexErr::Interrupted
             | CodexErr::EnvVar(_)
             | CodexErr::Fatal(_)
@@ -220,6 +224,7 @@ impl CodexErr {
     pub fn to_codex_protocol_error(&self) -> CodexErrorInfo {
         match self {
             CodexErr::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
+            CodexErr::RolloutBudgetExceeded => CodexErrorInfo::RolloutBudgetExceeded,
             CodexErr::UsageLimitReached(_)
             | CodexErr::QuotaExceeded
             | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
