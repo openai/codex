@@ -2543,6 +2543,52 @@
             },
             "method": {
               "enum": [
+                "update/check"
+              ],
+              "title": "Update/checkRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Update/checkRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "update/apply"
+              ],
+              "title": "Update/applyRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Update/applyRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "experimentalFeature/list"
               ],
               "title": "ExperimentalFeature/listRequestMethod",
@@ -7550,6 +7596,17 @@
           "type": "string"
         }
       ]
+    },
+    "InstallationMethod": {
+      "enum": [
+        "npm",
+        "bun",
+        "brew",
+        "standaloneUnix",
+        "standaloneWindows",
+        "other"
+      ],
+      "type": "string"
     },
     "InternalChatMessageMetadataPassthrough": {
       "description": "Internal Responses API passthrough metadata copied into underlying chat messages.\n\nResponses API strongly types this payload. Do not modify it without first getting API approval and making the corresponding Responses API change.",
@@ -17944,6 +18001,36 @@
       "required": [
         "data"
       ],
+      "type": "object"
+    },
+    "UpdateApplyResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "UpdateApplyResponse",
+      "type": "object"
+    },
+    "UpdateCheckResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "canAutoUpdate": {
+          "type": "boolean"
+        },
+        "currentVersion": {
+          "type": "string"
+        },
+        "installationMethod": {
+          "$ref": "#/definitions/InstallationMethod"
+        },
+        "latestVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "canAutoUpdate",
+        "currentVersion",
+        "installationMethod",
+        "latestVersion"
+      ],
+      "title": "UpdateCheckResponse",
       "type": "object"
     },
     "UserInput": {

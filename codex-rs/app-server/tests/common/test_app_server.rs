@@ -630,6 +630,16 @@ impl TestAppServer {
             .await
     }
 
+    /// Send an `update/check` JSON-RPC request.
+    pub async fn send_update_check_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("update/check", /*params*/ None).await
+    }
+
+    /// Send an `update/apply` JSON-RPC request.
+    pub async fn send_update_apply_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("update/apply", /*params*/ None).await
+    }
+
     /// Send an `experimentalFeature/list` JSON-RPC request.
     pub async fn send_experimental_feature_list_request(
         &mut self,

@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "InstallationMethod": {
+      "enum": [
+        "npm",
+        "bun",
+        "brew",
+        "standaloneUnix",
+        "standaloneWindows",
+        "other"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "canAutoUpdate": {
+      "type": "boolean"
+    },
+    "currentVersion": {
+      "type": "string"
+    },
+    "installationMethod": {
+      "$ref": "#/definitions/InstallationMethod"
+    },
+    "latestVersion": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "canAutoUpdate",
+    "currentVersion",
+    "installationMethod",
+    "latestVersion"
+  ],
+  "title": "UpdateCheckResponse",
+  "type": "object"
+}
