@@ -4156,6 +4156,7 @@ pub(crate) fn thread_from_stored_thread(
     let thread_id = thread.thread_id.to_string();
     let thread = Thread {
         id: thread_id.clone(),
+        extra: None,
         session_id: thread_id,
         forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
         parent_thread_id: thread.parent_thread_id.map(|id| id.to_string()),
@@ -4366,6 +4367,7 @@ fn build_thread_from_snapshot(
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     Thread {
         id: thread_id.to_string(),
+        extra: None,
         session_id,
         forked_from_id: None,
         parent_thread_id: config_snapshot.parent_thread_id.map(|id| id.to_string()),

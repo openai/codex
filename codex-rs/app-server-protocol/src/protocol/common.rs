@@ -2573,6 +2573,7 @@ mod tests {
             response: v2::ThreadStartResponse {
                 thread: v2::Thread {
                     id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                    extra: None,
                     session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
                     forked_from_id: None,
                     parent_thread_id: None,
@@ -2604,7 +2605,7 @@ mod tests {
                         "/tmp/AGENTS.md",
                     )),
                 ],
-                approval_policy: v2::AskForApproval::OnFailure,
+                approval_policy: v2::AskForApproval::OnRequest,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
                 active_permission_profile: None,
@@ -2622,6 +2623,7 @@ mod tests {
                 "response": {
                     "thread": {
                         "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "extra": null,
                         "sessionId": "67e55044-10b1-426f-9247-bb680e5fe0c7",
                         "forkedFromId": null,
                         "parentThreadId": null,
@@ -2651,7 +2653,7 @@ mod tests {
                     "cwd": absolute_path_string("tmp"),
                     "runtimeWorkspaceRoots": [],
                     "instructionSources": [absolute_path_string("tmp/AGENTS.md")],
-                    "approvalPolicy": "on-failure",
+                    "approvalPolicy": "on-request",
                     "approvalsReviewer": "user",
                     "sandbox": {
                         "type": "dangerFullAccess"

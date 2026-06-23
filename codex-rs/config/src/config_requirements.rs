@@ -2513,17 +2513,6 @@ allowed_approvals_reviewers = ["user"]
                 .can_set(&AskForApproval::UnlessTrusted)
                 .is_ok()
         );
-        assert_eq!(
-            requirements
-                .approval_policy
-                .can_set(&AskForApproval::OnFailure),
-            Err(ConstraintError::InvalidValue {
-                field_name: "approval_policy",
-                candidate: "OnFailure".into(),
-                allowed: "[UnlessTrusted, OnRequest]".into(),
-                requirement_source: RequirementSource::Unknown,
-            })
-        );
         assert!(
             requirements
                 .approval_policy

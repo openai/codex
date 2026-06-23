@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 877
+expression: combined
+---
+• Viewed Image
+  └ C:\workspace\assets\example.png

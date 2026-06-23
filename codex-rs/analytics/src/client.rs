@@ -38,6 +38,7 @@ use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
+use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use std::collections::HashSet;
@@ -173,7 +174,15 @@ impl AnalyticsEventsQueue {
         if emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
             emitted.clear();
         }
-        emitted.insert((tracking.turn_id.clone(), plugin.plugin_id.as_key()))
+        let Some(plugin_id) = plugin
+            .plugin_id
+            .as_ref()
+            .map(PluginId::as_key)
+            .or_else(|| plugin.remote_plugin_id.clone())
+        else {
+            return true;
+        };
+        emitted.insert((tracking.turn_id.clone(), plugin_id))
     }
 }
 

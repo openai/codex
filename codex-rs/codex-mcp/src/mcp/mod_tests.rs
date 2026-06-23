@@ -27,7 +27,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         skill_mcp_dependency_install_enabled: true,
-        approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+        approval_policy: Constrained::allow_any(AskForApproval::OnRequest),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         apps_enabled: false,
@@ -83,7 +83,6 @@ fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
 fn mcp_prompt_auto_approval_honors_approved_tools_in_all_permission_modes() {
     for approval_policy in [
         AskForApproval::UnlessTrusted,
-        AskForApproval::OnFailure,
         AskForApproval::OnRequest,
         AskForApproval::Granular(GranularApprovalConfig {
             sandbox_approval: true,

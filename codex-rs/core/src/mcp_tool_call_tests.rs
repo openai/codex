@@ -2915,7 +2915,6 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
 
     for approval_policy in [
         AskForApproval::UnlessTrusted,
-        AskForApproval::OnFailure,
         AskForApproval::OnRequest,
         AskForApproval::Granular(GranularApprovalConfig {
             sandbox_approval: true,
