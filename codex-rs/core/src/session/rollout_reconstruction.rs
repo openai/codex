@@ -44,6 +44,7 @@ enum TurnReferenceContextItem {
 struct ActiveReplaySegment<'a> {
     turn_id: Option<String>,
     counts_as_user_turn: bool,
+    has_compaction: bool,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
     base_replacement_history: Option<&'a [ResponseItem]>,
@@ -85,19 +86,32 @@ fn finalize_active_segment<'a>(
         *window = active_segment.window;
     }
 
-    // `previous_turn_settings` come from the newest surviving user turn that established them.
-    if previous_turn_settings.is_none() && active_segment.counts_as_user_turn {
+    // `previous_turn_settings` come from the newest surviving user turn, or a compaction segment
+    // that established a fresh baseline with a `TurnContextItem`.
+    if previous_turn_settings.is_none()
+        && (active_segment.counts_as_user_turn
+            || (active_segment.has_compaction
+                && matches!(
+                    active_segment.reference_context_item,
+                    TurnReferenceContextItem::Latest(_)
+                )))
+    {
         *previous_turn_settings = active_segment.previous_turn_settings;
     }
 
-    // `reference_context_item` comes from the newest surviving user turn baseline, or
-    // from a surviving compaction that explicitly cleared that baseline.
+    // `reference_context_item` comes from the newest surviving user turn baseline, from a
+    // surviving compaction that explicitly cleared that baseline, or from a compaction segment
+    // that re-established the baseline with a fresh `TurnContextItem`.
     if matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
         && (active_segment.counts_as_user_turn
-            || matches!(
-                active_segment.reference_context_item,
-                TurnReferenceContextItem::Cleared
-            ))
+            || (active_segment.has_compaction
+                && (matches!(
+                    active_segment.reference_context_item,
+                    TurnReferenceContextItem::Latest(_)
+                ) || matches!(
+                    active_segment.reference_context_item,
+                    TurnReferenceContextItem::Cleared
+                ))))
     {
         *reference_context_item = active_segment.reference_context_item;
     }
@@ -149,6 +163,7 @@ impl Session {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    active_segment.has_compaction = true;
                     if active_segment.window.is_none()
                         && let Some(window_number) = compacted.window_number
                     {

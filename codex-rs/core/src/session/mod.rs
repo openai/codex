@@ -253,6 +253,14 @@ use self::world_state::build_world_state_from_turn_context_item;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum NewContextWindowMode {
+    /// Start a fresh context window regardless of whether a new-context request is pending.
+    ForceStart,
+    /// Start a fresh context window only if one was explicitly requested.
+    StartIfRequested,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
@@ -3424,25 +3432,44 @@ impl Session {
         state.request_new_context_window();
     }
 
-    pub(crate) async fn maybe_start_new_context_window(
+    pub(crate) async fn start_new_context_window(
         &self,
         turn_context: &TurnContext,
         world_state: Arc<WorldState>,
+        mode: NewContextWindowMode,
     ) -> Option<u64> {
         let window = {
             let mut state = self.state.lock().await;
-            state.start_new_context_window_if_requested()
+            state.start_new_context_window(mode)
         };
         let (window_number, window_ids) = window?;
+        self.install_new_context_window(turn_context, world_state, window_number, window_ids)
+            .await;
+        Some(window_number)
+    }
+
+    async fn install_new_context_window(
+        &self,
+        turn_context: &TurnContext,
+        world_state: Arc<WorldState>,
+        window_number: u64,
+        window_ids: AutoCompactWindowIds,
+    ) {
         let context_items = self
             .build_initial_context_with_world_state(turn_context, world_state.as_ref())
             .await;
         let turn_context_item = turn_context.to_turn_context_item();
+        let previous_turn_settings = PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            comp_hash: turn_context.model_info.comp_hash.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        };
         let replacement_history = context_items;
         {
             let mut state = self.state.lock().await;
             state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
             state.history.set_world_state_baseline(world_state);
+            state.set_previous_turn_settings(Some(previous_turn_settings));
         };
         self.persist_rollout_items(&[
             RolloutItem::Compacted(CompactedItem {
@@ -3461,7 +3488,6 @@ impl Session {
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
         self.recompute_token_usage(turn_context).await;
-        Some(window_number)
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {

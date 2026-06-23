@@ -128,6 +128,46 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
 }
 
 #[tokio::test]
+async fn reconstruct_history_hydrates_reference_context_from_compaction_turn_context() {
+    let (session, turn_context) = make_session_and_context().await;
+    let mut compact_context_item = turn_context.to_turn_context_item();
+    compact_context_item.turn_id = Some("compact-turn".to_string());
+    compact_context_item.model = "compact-model".to_string();
+    let replacement_history = vec![assistant_message("fresh context baseline")];
+    let rollout_items = vec![
+        RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(replacement_history.clone()),
+            window_number: Some(1),
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+        }),
+        RolloutItem::TurnContext(compact_context_item.clone()),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.history, replacement_history);
+    assert_eq!(
+        reconstructed.previous_turn_settings,
+        Some(PreviousTurnSettings {
+            model: "compact-model".to_string(),
+            comp_hash: None,
+            realtime_active: Some(turn_context.realtime_active),
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(reconstructed.reference_context_item)
+            .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(Some(compact_context_item))
+            .expect("serialize expected reference context item")
+    );
+}
+
+#[tokio::test]
 async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lifecycle_turn_with_missing_turn_context_id()
  {
     let (session, turn_context) = make_session_and_context().await;
