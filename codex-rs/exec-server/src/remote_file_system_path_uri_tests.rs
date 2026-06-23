@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used)]
 
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCResponse;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;

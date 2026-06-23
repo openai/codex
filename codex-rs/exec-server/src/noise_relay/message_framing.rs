@@ -1,4 +1,4 @@
-use codex_app_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCMessage;
 
 use crate::ExecServerError;
 

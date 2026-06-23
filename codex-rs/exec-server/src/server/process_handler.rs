@@ -1,4 +1,4 @@
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::JSONRPCErrorError;
 
 use crate::ExecServerRuntimePaths;
 use crate::local_process::LocalProcess;

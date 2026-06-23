@@ -6,13 +6,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
+use codex_exec_server_protocol::JSONRPCError;
+use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCNotification;
+use codex_exec_server_protocol::JSONRPCRequest;
+use codex_exec_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::RequestId;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -362,7 +362,6 @@ impl RpcClient {
                 id: request_id.clone(),
                 method: method.to_string(),
                 params: Some(params),
-                trace: None,
             }))
             .await
             .is_err()
@@ -552,8 +551,8 @@ async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
 mod tests {
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCResponse;
+    use codex_exec_server_protocol::JSONRPCMessage;
+    use codex_exec_server_protocol::JSONRPCResponse;
     use pretty_assertions::assert_eq;
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWriteExt;

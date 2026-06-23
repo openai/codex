@@ -2,11 +2,11 @@
 
 mod common;
 
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
+use codex_exec_server_protocol::JSONRPCError;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCResponse;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
 use tokio_tungstenite::connect_async;
@@ -28,7 +28,7 @@ async fn exec_server_reports_malformed_websocket_json_and_keeps_running() -> any
     let JSONRPCMessage::Error(JSONRPCError { id, error }) = response else {
         panic!("expected malformed-message error response");
     };
-    assert_eq!(id, codex_app_server_protocol::RequestId::Integer(-1));
+    assert_eq!(id, codex_exec_server_protocol::RequestId::Integer(-1));
     assert_eq!(error.code, -32600);
     assert!(
         error
@@ -70,15 +70,14 @@ async fn exec_server_reports_malformed_websocket_json_and_keeps_running() -> any
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_accepts_binary_websocket_json() -> anyhow::Result<()> {
     let mut server = exec_server().await?;
-    let initialize_id = codex_app_server_protocol::RequestId::Integer(1);
-    let initialize = JSONRPCMessage::Request(codex_app_server_protocol::JSONRPCRequest {
+    let initialize_id = codex_exec_server_protocol::RequestId::Integer(1);
+    let initialize = JSONRPCMessage::Request(codex_exec_server_protocol::JSONRPCRequest {
         id: initialize_id.clone(),
         method: "initialize".to_string(),
         params: Some(serde_json::to_value(InitializeParams {
             client_name: "exec-server-binary-test".to_string(),
             resume_session_id: None,
         })?),
-        trace: None,
     });
     server
         .send_raw_binary(serde_json::to_vec(&initialize)?)
