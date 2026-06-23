@@ -28,7 +28,6 @@ use core_test_support::responses::ev_output_text_delta_for_item;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::ev_reasoning_summary_text_delta;
-use core_test_support::responses::ev_reasoning_summary_text_delta_for_item;
 use core_test_support::responses::ev_reasoning_summary_text_done_for_item;
 use core_test_support::responses::ev_reasoning_text_delta;
 use core_test_support::responses::ev_response_created;
@@ -1153,7 +1152,7 @@ async fn parallel_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reasoning-1", &[""]),
-        ev_reasoning_summary_text_delta_for_item("reasoning-1", 0, "**Inspecting"),
+        ev_reasoning_summary_text_delta("**Inspecting"),
         ev_reasoning_summary_text_done_for_item("reasoning-1", 0, "**Inspecting files**"),
         ev_reasoning_summary_text_done_for_item("reasoning-1", 1, "**Planning checks**"),
         ev_message_item_added("message-1", ""),
@@ -1186,7 +1185,6 @@ async fn parallel_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
         })
         .await?;
 
-    let mut started_item_ids = Vec::new();
     let mut completed_item_ids = Vec::new();
     let mut message_deltas = Vec::new();
     let mut summary_deltas = Vec::new();
@@ -1194,14 +1192,6 @@ async fn parallel_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
     loop {
         let event = codex.next_event().await?;
         match event.msg {
-            EventMsg::ItemStarted(ItemStartedEvent { item, .. })
-                if matches!(
-                    item.id().as_str(),
-                    "reasoning-1" | "message-1" | "reasoning-2"
-                ) =>
-            {
-                started_item_ids.push(item.id());
-            }
             EventMsg::ItemCompleted(ItemCompletedEvent { item, .. })
                 if matches!(
                     item.id().as_str(),
@@ -1224,10 +1214,6 @@ async fn parallel_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
         }
     }
 
-    assert_eq!(
-        started_item_ids,
-        vec!["reasoning-1", "message-1", "reasoning-2"]
-    );
     assert_eq!(
         completed_item_ids,
         vec!["message-1", "reasoning-1", "reasoning-2"]

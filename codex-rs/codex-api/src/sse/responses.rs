@@ -349,7 +349,6 @@ pub fn process_responses_event(
                 return Ok(Some(ResponseEvent::ReasoningSummaryDelta {
                     delta,
                     summary_index,
-                    item_id: event.item_id,
                 }));
             }
         }
@@ -367,7 +366,6 @@ pub fn process_responses_event(
                 return Ok(Some(ResponseEvent::ReasoningContentDelta {
                     delta,
                     content_index,
-                    item_id: event.item_id,
                 }));
             }
         }
@@ -452,7 +450,6 @@ pub fn process_responses_event(
             if let Some(summary_index) = event.summary_index {
                 return Ok(Some(ResponseEvent::ReasoningSummaryPartAdded {
                     summary_index,
-                    item_id: event.item_id,
                 }));
             }
         }

@@ -1920,7 +1920,6 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_items = ActiveTurnItems::default();
-    let mut parallel_summary_items_with_content = HashSet::new();
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -2279,18 +2278,11 @@ async fn try_run_sampling_request(
             ResponseEvent::ReasoningSummaryDelta {
                 delta,
                 summary_index,
-                item_id,
             } => {
                 if uses_parallel_reasoning_summaries {
                     continue;
                 }
-                if item_id
-                    .as_deref()
-                    .is_some_and(|item_id| !active_items.is_current(item_id))
-                {
-                    continue;
-                }
-                if let Some(active) = active_items.get(item_id.as_deref()) {
+                if let Some(active) = active_items.get(None) {
                     if !active.streams_to_client {
                         continue;
                     }
@@ -2332,7 +2324,7 @@ async fn try_run_sampling_request(
                     continue;
                 }
                 let item_id = active.item.id();
-                if !parallel_summary_items_with_content.insert(response_item_id.to_string()) {
+                if summary_index > 0 {
                     sess.send_event(
                         &turn_context,
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
@@ -2352,20 +2344,11 @@ async fn try_run_sampling_request(
                 sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                     .await;
             }
-            ResponseEvent::ReasoningSummaryPartAdded {
-                summary_index,
-                item_id,
-            } => {
+            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
                 if uses_parallel_reasoning_summaries {
                     continue;
                 }
-                if item_id
-                    .as_deref()
-                    .is_some_and(|item_id| !active_items.is_current(item_id))
-                {
-                    continue;
-                }
-                if let Some(active) = active_items.get(item_id.as_deref()) {
+                if let Some(active) = active_items.get(None) {
                     if !active.streams_to_client {
                         continue;
                     }
@@ -2382,9 +2365,8 @@ async fn try_run_sampling_request(
             ResponseEvent::ReasoningContentDelta {
                 delta,
                 content_index,
-                item_id,
             } => {
-                if let Some(active) = active_items.get(item_id.as_deref()) {
+                if let Some(active) = active_items.get(None) {
                     if !active.streams_to_client {
                         continue;
                     }

@@ -800,19 +800,6 @@ pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
     })
 }
 
-pub fn ev_reasoning_summary_text_delta_for_item(
-    item_id: &str,
-    summary_index: i64,
-    delta: &str,
-) -> Value {
-    serde_json::json!({
-        "type": "response.reasoning_summary_text.delta",
-        "item_id": item_id,
-        "delta": delta,
-        "summary_index": summary_index,
-    })
-}
-
 pub fn ev_reasoning_summary_text_done_for_item(
     item_id: &str,
     summary_index: i64,
