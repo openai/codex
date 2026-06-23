@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -83,7 +84,7 @@ pub struct StdioServerCommand {
     args: Vec<OsString>,
     env: Option<HashMap<OsString, OsString>>,
     env_vars: Vec<McpServerEnvVar>,
-    cwd: Option<LegacyAppPathString>,
+    cwd: Option<String>,
 }
 
 /// Client-side rmcp transport for a launched MCP stdio server.
@@ -150,7 +151,7 @@ impl StdioServerCommand {
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
         env_vars: Vec<McpServerEnvVar>,
-        cwd: Option<LegacyAppPathString>,
+        cwd: Option<String>,
     ) -> Self {
         Self {
             program,
@@ -248,10 +249,7 @@ impl LocalStdioServerLauncher {
         } = command;
         let program_name = program.to_string_lossy().into_owned();
         let envs = create_env_for_mcp_server(env, &env_vars).map_err(io::Error::other)?;
-        let cwd = cwd
-            .map(LegacyAppPathString::into_string)
-            .map(PathBuf::from)
-            .unwrap_or(fallback_cwd);
+        let cwd = cwd.map(PathBuf::from).unwrap_or(fallback_cwd);
         let resolved_program =
             program_resolver::resolve(program, &envs, &cwd).map_err(io::Error::other)?;
 
@@ -483,7 +481,7 @@ impl ExecutorStdioServerLauncher {
                 "executor stdio server requires an explicit cwd",
             ));
         };
-        let cwd: PathUri = cwd
+        let cwd: PathUri = LegacyAppPathString::from_path(Path::new(&cwd))
             .try_into()
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         let program_name = program.to_string_lossy().into_owned();

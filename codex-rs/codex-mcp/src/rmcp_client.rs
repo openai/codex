@@ -645,6 +645,7 @@ async fn make_rmcp_client(
                 )) as Arc<dyn StdioServerLauncher>
             };
 
+            let cwd = cwd.map(codex_utils_path_uri::LegacyAppPathString::into_string);
             RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, launcher)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))

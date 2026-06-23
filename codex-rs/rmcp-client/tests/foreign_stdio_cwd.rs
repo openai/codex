@@ -1,5 +1,4 @@
 use std::ffi::OsString;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -9,7 +8,6 @@ use codex_exec_server::ExecParams;
 use codex_exec_server::ExecServerError;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
-use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
@@ -47,7 +45,6 @@ async fn executor_stdio_forwards_foreign_absolute_cwd_as_path_uri() {
     let expected_cwd: PathUri = "file:///home/openai/share"
         .parse()
         .expect("expected cwd should be a path URI");
-    let cwd = LegacyAppPathString::from_path(Path::new(cwd));
     let backend = Arc::new(RecordingExecBackend::default());
     let launcher = Arc::new(ExecutorStdioServerLauncher::new(backend.clone()));
 
@@ -56,7 +53,7 @@ async fn executor_stdio_forwards_foreign_absolute_cwd_as_path_uri() {
         Vec::new(),
         /*env*/ None,
         &[],
-        Some(cwd),
+        Some(cwd.to_string()),
         launcher,
     )
     .await;
