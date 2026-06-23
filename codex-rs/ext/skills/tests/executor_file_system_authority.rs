@@ -4,7 +4,9 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use codex_core_skills::HostSkillsSnapshot;
+use codex_core_skills::loader::EnvironmentSkillMetadata;
 use codex_core_skills::loader::SkillRoot;
+use codex_core_skills::loader::load_environment_skills_from_root;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
@@ -28,40 +30,48 @@ use pretty_assertions::assert_eq;
 
 const SKILL_CONTENTS: &str =
     "---\nname: synthetic\ndescription: Synthetic executor skill.\n---\n\nEXECUTOR_ONLY_BODY\n";
+const PLUGIN_MANIFEST: &str = r#"{"name":"synthetic-plugin"}"#;
 static NEXT_TEST_ROOT_ID: AtomicUsize = AtomicUsize::new(0);
 
 struct SyntheticFileSystem {
-    alias_root: AbsolutePathBuf,
-    canonical_root: AbsolutePathBuf,
+    alias_root: PathUri,
+    canonical_root: PathUri,
+    has_plugin_manifest: bool,
 }
 
 impl SyntheticFileSystem {
+    fn path(&self, relative_path: &str) -> io::Result<PathUri> {
+        self.canonical_root
+            .join(relative_path)
+            .map_err(io::Error::other)
+    }
+
     async fn canonicalize(&self, path: &PathUri) -> io::Result<PathUri> {
-        let path = path.to_abs_path()?;
-        if path == self.alias_root {
-            return Ok(PathUri::from_abs_path(&self.canonical_root));
+        if path == &self.alias_root {
+            return Ok(self.canonical_root.clone());
         }
-        self.metadata(&path)?;
-        Ok(PathUri::from_abs_path(&path))
+        self.metadata(path)?;
+        Ok(path.clone())
     }
 
     async fn read_file(&self, path: &PathUri) -> io::Result<Vec<u8>> {
-        if path.to_abs_path()? == self.canonical_root.join("skill/SKILL.md") {
+        if path == &self.path("skill/SKILL.md")? {
             Ok(SKILL_CONTENTS.as_bytes().to_vec())
+        } else if self.has_plugin_manifest && path == &self.path(".claude-plugin/plugin.json")? {
+            Ok(PLUGIN_MANIFEST.as_bytes().to_vec())
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
         }
     }
 
     async fn read_directory(&self, path: &PathUri) -> io::Result<Vec<ReadDirectoryEntry>> {
-        let path = path.to_abs_path()?;
-        if path == self.canonical_root {
+        if path == &self.canonical_root {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "skill".to_string(),
                 is_directory: true,
                 is_file: false,
             }])
-        } else if path == self.canonical_root.join("skill") {
+        } else if path == &self.path("skill")? {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
@@ -72,12 +82,13 @@ impl SyntheticFileSystem {
         }
     }
 
-    fn metadata(&self, path: &AbsolutePathBuf) -> io::Result<FileMetadata> {
-        let skill_dir = self.canonical_root.join("skill");
-        let skill_path = skill_dir.join("SKILL.md");
+    fn metadata(&self, path: &PathUri) -> io::Result<FileMetadata> {
+        let skill_dir = self.path("skill")?;
+        let skill_path = self.path("skill/SKILL.md")?;
+        let manifest_path = self.path(".claude-plugin/plugin.json")?;
         let (is_directory, is_file) = if path == &self.canonical_root || path == &skill_dir {
             (true, false)
-        } else if path == &skill_path {
+        } else if path == &skill_path || self.has_plugin_manifest && path == &manifest_path {
             (false, true)
         } else {
             return Err(io::Error::new(io::ErrorKind::NotFound, "not found"));
@@ -146,7 +157,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
         path: &'a PathUri,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
-        Box::pin(async move { self.metadata(&path.to_abs_path()?) })
+        Box::pin(async move { self.metadata(path) })
     }
 
     fn read_directory<'a>(
@@ -193,8 +204,9 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
             path: alias_root.clone(),
             scope: SkillScope::User,
             file_system: Arc::new(SyntheticFileSystem {
-                alias_root,
-                canonical_root: canonical_root.clone(),
+                alias_root: PathUri::from_abs_path(&alias_root),
+                canonical_root: PathUri::from_abs_path(&canonical_root),
+                has_plugin_manifest: false,
             }),
             plugin_id: None,
             plugin_namespace: None,
@@ -215,6 +227,44 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
     let loaded = HostSkillsSnapshot::new(Arc::new(outcome));
     assert_eq!(
         loaded.read_skill_text(&skill).await.expect("skill body"),
+        SKILL_CONTENTS
+    );
+}
+
+#[tokio::test]
+async fn environment_skill_loading_reads_foreign_uris_through_executor_file_system() {
+    let alias_root = PathUri::parse("file:///C:/skills/alias").expect("alias root URI");
+    let canonical_root = PathUri::parse("file:///C:/skills/canonical").expect("canonical root URI");
+    let file_system = SyntheticFileSystem {
+        alias_root: alias_root.clone(),
+        canonical_root: canonical_root.clone(),
+        has_plugin_manifest: true,
+    };
+
+    let outcome = load_environment_skills_from_root(
+        &file_system,
+        &alias_root,
+        /*restriction_product*/ None,
+    )
+    .await;
+
+    assert_eq!(outcome.warnings, Vec::<String>::new());
+    assert_eq!(
+        outcome.skills,
+        vec![EnvironmentSkillMetadata {
+            path_to_skills_md: canonical_root.join("skill/SKILL.md").expect("skill URI"),
+            name: "synthetic-plugin:synthetic".to_string(),
+            description: "Synthetic executor skill.".to_string(),
+            short_description: None,
+            dependencies: None,
+            policy: None,
+        }]
+    );
+    assert_eq!(
+        file_system
+            .read_file_text(&outcome.skills[0].path_to_skills_md, /*sandbox*/ None)
+            .await
+            .expect("skill body"),
         SKILL_CONTENTS
     );
 }
@@ -280,6 +330,69 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
             ),
         ]
     );
+
+    std::fs::remove_dir_all(test_root).expect("remove skill directory");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn posix_backslashes_remain_distinct_in_executor_skill_ids() {
+    let id = NEXT_TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+    let test_root = std::env::temp_dir().join(format!(
+        "codex-executor-skill-posix-backslash-{}-{id}",
+        std::process::id()
+    ));
+    let skill_paths = [
+        test_root.join(r"a\b").join("SKILL.md"),
+        test_root.join("a/b/SKILL.md"),
+    ];
+    for path in &skill_paths {
+        std::fs::create_dir_all(path.parent().expect("skill parent")).expect("create skill dir");
+        std::fs::write(path, SKILL_CONTENTS).expect("write skill");
+    }
+
+    let provider = ExecutorSkillProvider::new_with_restriction_product(
+        Arc::new(EnvironmentManager::default_for_tests()),
+        /*restriction_product*/ None,
+    );
+    let catalog = provider
+        .list(SkillListQuery {
+            turn_id: "turn-1".to_string(),
+            executor_roots: vec![SelectedCapabilityRoot {
+                id: "root".to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: "local".to_string(),
+                    path: PathUri::from_host_native_path(&test_root).expect("skill root URI"),
+                },
+            }],
+            host_snapshot: None,
+            include_host_skills: false,
+            include_bundled_skills: true,
+            include_orchestrator_skills: false,
+            mcp_resources: None,
+        })
+        .await
+        .expect("list executor skills");
+
+    let mut actual = catalog
+        .entries
+        .into_iter()
+        .map(|entry| entry.id.0)
+        .collect::<Vec<_>>();
+    actual.sort();
+    let mut expected = skill_paths
+        .iter()
+        .map(|path| {
+            let path = path.canonicalize().expect("canonical skill path");
+            let path = PathUri::from_host_native_path(path).expect("skill URI");
+            format!(
+                "skill://root/{}",
+                path.inferred_native_path_string().trim_start_matches('/')
+            )
+        })
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(actual, expected);
 
     std::fs::remove_dir_all(test_root).expect("remove skill directory");
 }

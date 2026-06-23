@@ -1,3 +1,9 @@
+mod environment;
+
+pub use environment::EnvironmentSkillLoadOutcome;
+pub use environment::EnvironmentSkillMetadata;
+pub use environment::load_environment_skills_from_root;
+
 use crate::model::SkillDependencies;
 use crate::model::SkillError;
 use crate::model::SkillInterface;
@@ -102,6 +108,13 @@ struct DependencyTool {
     transport: Option<String>,
     command: Option<String>,
     url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedSkillFrontmatter {
+    name: String,
+    description: String,
+    short_description: Option<String>,
 }
 
 const SKILLS_FILENAME: &str = "SKILL.md";
@@ -656,8 +669,40 @@ async fn parse_skill_file(
         .read_file_text(&path_uri, /*sandbox*/ None)
         .await
         .map_err(SkillParseError::Read)?;
+    let ParsedSkillFrontmatter {
+        name: base_name,
+        description,
+        short_description,
+    } = parse_skill_frontmatter_metadata_inner(&contents, || default_skill_name(path))?;
+    let name = namespaced_skill_name(fs, path, &base_name, plugin_namespace).await;
+    let LoadedSkillMetadata {
+        interface,
+        dependencies,
+        policy,
+    } = load_skill_metadata(fs, path, plugin_root).await;
 
-    let frontmatter = extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
+    validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")?;
+
+    let resolved_path = canonicalize_for_skill_identity(fs, path).await;
+
+    Ok(SkillMetadata {
+        name,
+        description,
+        short_description,
+        interface,
+        dependencies,
+        policy,
+        path_to_skills_md: resolved_path,
+        scope,
+        plugin_id: plugin_id.map(str::to_string),
+    })
+}
+
+fn parse_skill_frontmatter_metadata_inner(
+    contents: &str,
+    default_name: impl FnOnce() -> String,
+) -> Result<ParsedSkillFrontmatter, SkillParseError> {
+    let frontmatter = extract_frontmatter(contents).ok_or(SkillParseError::MissingFrontmatter)?;
 
     let parsed: SkillFrontmatter = match serde_yaml::from_str(&frontmatter) {
         Ok(parsed) => Ok(parsed),
@@ -673,13 +718,12 @@ async fn parse_skill_file(
     }
     .map_err(SkillParseError::InvalidYaml)?;
 
-    let base_name = parsed
+    let name = parsed
         .name
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default_skill_name(path));
-    let name = namespaced_skill_name(fs, path, &base_name, plugin_namespace).await;
+        .unwrap_or_else(default_name);
     let description = parsed
         .description
         .as_deref()
@@ -691,30 +735,16 @@ async fn parse_skill_file(
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty());
-    let LoadedSkillMetadata {
-        interface,
-        dependencies,
-        policy,
-    } = load_skill_metadata(fs, path, plugin_root).await;
 
-    validate_len(&base_name, MAX_NAME_LEN, "name")?;
-    validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")?;
+    validate_len(&name, MAX_NAME_LEN, "name")?;
     if description.is_empty() {
         return Err(SkillParseError::MissingField("description"));
     }
 
-    let resolved_path = canonicalize_for_skill_identity(fs, path).await;
-
-    Ok(SkillMetadata {
+    Ok(ParsedSkillFrontmatter {
         name,
         description,
         short_description,
-        interface,
-        dependencies,
-        policy,
-        path_to_skills_md: resolved_path,
-        scope,
-        plugin_id: plugin_id.map(str::to_string),
     })
 }
 
