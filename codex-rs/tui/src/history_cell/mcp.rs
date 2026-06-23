@@ -414,7 +414,7 @@ pub(crate) fn new_mcp_tools_output(
                 lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
 
                 if let Some(cwd) = cwd.as_ref() {
-                    lines.push(vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into());
+                    lines.push(vec!["    • Cwd: ".into(), cwd.to_string().into()].into());
                 }
 
                 let env_display = format_env_display(env.as_ref(), env_vars);

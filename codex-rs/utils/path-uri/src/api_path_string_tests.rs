@@ -497,6 +497,23 @@ fn foreign_absolute_syntax_deserializes_without_host_interpretation() {
 }
 
 #[test]
+fn from_path_preserves_foreign_absolute_path_for_uri_conversion() {
+    #[cfg(not(windows))]
+    let (foreign_path, expected_uri) = (r"C:\Users\openai\share", "file:///C:/Users/openai/share");
+    #[cfg(windows)]
+    let (foreign_path, expected_uri) = ("/home/openai/share", "file:///home/openai/share");
+
+    let path: PathUri = LegacyAppPathString::from_path(std::path::Path::new(foreign_path))
+        .try_into()
+        .expect("foreign absolute path should convert");
+
+    assert_eq!(
+        path,
+        PathUri::parse(expected_uri).expect("valid expected URI")
+    );
+}
+
+#[test]
 fn renders_an_absolute_path_using_the_host_convention() {
     #[cfg(unix)]
     let native_path = "/workspace/a file.rs";

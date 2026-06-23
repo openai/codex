@@ -7,6 +7,7 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerEnvVar;
 use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerTransportConfig;
+use codex_utils_path_uri::LegacyAppPathString;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -31,7 +32,7 @@ fn stdio_server(
             args: Vec::new(),
             env: None,
             env_vars,
-            cwd: Some(cwd.to_path_buf()),
+            cwd: Some(LegacyAppPathString::from_path(cwd)),
         },
         environment_id: environment_id.to_string(),
         enabled: true,

@@ -18,6 +18,7 @@ use codex_plugin::manifest::PluginManifest;
 use codex_plugin::manifest::PluginManifestMcpServers;
 use codex_plugin::manifest::PluginManifestPaths;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -169,7 +170,7 @@ async fn reads_declared_config_only_through_executor_file_system() {
                     args: Vec::new(),
                     env: None,
                     env_vars: Vec::new(),
-                    cwd: Some(plugin_root.to_path_buf()),
+                    cwd: Some(LegacyAppPathString::from_path(plugin_root.as_path())),
                 },
                 environment_id: "executor-test".to_string(),
                 enabled: true,
@@ -223,7 +224,7 @@ async fn reads_manifest_object_config_without_executor_file_system_access() {
                     args: Vec::new(),
                     env: None,
                     env_vars: Vec::new(),
-                    cwd: Some(plugin_root.to_path_buf()),
+                    cwd: Some(LegacyAppPathString::from_path(plugin_root.as_path())),
                 },
                 environment_id: "executor-test".to_string(),
                 enabled: true,

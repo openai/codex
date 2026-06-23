@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_utils_path_uri::LegacyAppPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -224,7 +224,7 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub env_vars: Option<Vec<McpServerEnvVar>>,
     #[serde(default)]
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<LegacyAppPathString>,
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub env_http_headers: Option<HashMap<String, String>>,
@@ -358,7 +358,6 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
 
         let environment_id =
             environment_id.unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string());
-        validate_remote_stdio_cwd(&transport, &environment_id)?;
 
         Ok(Self {
             transport,
@@ -395,30 +394,6 @@ const fn default_enabled() -> bool {
     true
 }
 
-fn validate_remote_stdio_cwd(
-    transport: &McpServerTransportConfig,
-    environment_id: &str,
-) -> Result<(), String> {
-    if environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
-        return Ok(());
-    }
-    let McpServerTransportConfig::Stdio { cwd, .. } = transport else {
-        return Ok(());
-    };
-    let Some(cwd) = cwd else {
-        return Err(format!(
-            "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`"
-        ));
-    };
-    if cwd.is_absolute() {
-        return Ok(());
-    }
-    Err(format!(
-        "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`, got `{}`",
-        cwd.display()
-    ))
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
 pub enum McpServerTransportConfig {
@@ -432,7 +407,7 @@ pub enum McpServerTransportConfig {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         env_vars: Vec<McpServerEnvVar>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<PathBuf>,
+        cwd: Option<LegacyAppPathString>,
     },
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
