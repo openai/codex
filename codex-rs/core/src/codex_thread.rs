@@ -23,6 +23,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -30,6 +31,8 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadSettingsAppliedEvent;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -52,6 +55,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
+use uuid::Uuid;
 
 use codex_rollout::state_db::StateDbHandle;
 
@@ -353,6 +357,45 @@ impl CodexThread {
     ) -> ConstraintResult<ThreadConfigSnapshot> {
         let updates = self.thread_settings_update(overrides).await;
         self.codex.session.preview_settings(&updates).await
+    }
+
+    /// Apply persistent thread settings overrides immediately and emit the same
+    /// settings-applied event that queued `thread/settings/update` uses.
+    pub async fn apply_thread_settings_overrides(
+        &self,
+        overrides: CodexThreadSettingsOverrides,
+    ) -> ConstraintResult<()> {
+        let updates = self.thread_settings_update(overrides).await;
+        self.codex.session.update_settings(updates).await?;
+        let snapshot = {
+            let state = self.codex.session.state.lock().await;
+            state.session_configuration.thread_config_snapshot()
+        };
+        let cwd = snapshot.cwd().clone();
+        self.codex
+            .session
+            .send_event_raw(Event {
+                id: Uuid::now_v7().to_string(),
+                msg: EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+                    thread_settings: ThreadSettingsSnapshot {
+                        model: snapshot.model,
+                        model_provider_id: snapshot.model_provider_id,
+                        service_tier: snapshot.service_tier,
+                        approval_policy: snapshot.approval_policy,
+                        approvals_reviewer: snapshot.approvals_reviewer,
+                        permission_profile: snapshot.permission_profile,
+                        active_permission_profile: snapshot.active_permission_profile,
+                        cwd,
+                        reasoning_effort: snapshot.reasoning_effort,
+                        reasoning_summary: snapshot.reasoning_summary,
+                        personality: snapshot.personality,
+                        collaboration_mode: snapshot.collaboration_mode,
+                        multi_agent_mode: snapshot.multi_agent_mode,
+                    },
+                }),
+            })
+            .await;
+        Ok(())
     }
 
     async fn thread_settings_update(

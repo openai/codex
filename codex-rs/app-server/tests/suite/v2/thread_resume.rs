@@ -22,6 +22,7 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::PatchApplyStatus;
@@ -46,7 +47,9 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
+use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -59,6 +62,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EventMsg;
@@ -1427,6 +1431,130 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
     assert_eq!(edit.goal.tokens_used, 50);
     assert_eq!(edit.goal.time_used_seconds, 12);
     assert_eq!(edit.goal.created_at, goal.goal.created_at);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_goal_set_applies_permission_context_before_resume() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "materialize this thread".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id,
+                "objective": "resume with current permissions",
+                "approvalPolicy": "on-request",
+                "permissions": BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
+            })),
+        )
+        .await?;
+    let goal_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
+    )
+    .await??;
+    let _goal: ThreadGoalSetResponse = to_response(goal_resp)?;
+
+    let settings_notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/settings/updated"),
+    )
+    .await??;
+    let settings_params = settings_notification
+        .params
+        .context("thread/settings/updated should include params")?;
+    let updated: ThreadSettingsUpdatedNotification = serde_json::from_value(settings_params)?;
+    assert_eq!(updated.thread_id, thread.id);
+    assert_eq!(updated.thread_settings.approval_policy, AskForApproval::OnRequest);
+    assert_eq!(
+        updated
+            .thread_settings
+            .active_permission_profile
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS)
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/goal/updated"),
+    )
+    .await??;
+
+    let unsubscribe_id = mcp
+        .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
+            thread_id: thread.id.clone(),
+        })
+        .await?;
+    let unsubscribe_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(unsubscribe_id)),
+    )
+    .await??;
+    let _unsubscribe: ThreadUnsubscribeResponse = to_response(unsubscribe_resp)?;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let resumed: ThreadResumeResponse = to_response(resume_resp)?;
+    assert_eq!(resumed.approval_policy, AskForApproval::OnRequest);
+    assert_eq!(
+        resumed
+            .active_permission_profile
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS)
+    );
 
     Ok(())
 }

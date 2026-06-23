@@ -9,7 +9,9 @@ use codex_goal_extension::GoalTokenBudgetUpdate;
 pub(crate) struct ThreadGoalRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
+    arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
+    config_manager: ConfigManager,
     thread_state_manager: ThreadStateManager,
     state_db: Option<StateDbHandle>,
     goal_service: Arc<GoalService>,
@@ -19,7 +21,9 @@ impl ThreadGoalRequestProcessor {
     pub(crate) fn new(
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
+        arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
+        config_manager: ConfigManager,
         thread_state_manager: ThreadStateManager,
         state_db: Option<StateDbHandle>,
         goal_service: Arc<GoalService>,
@@ -27,7 +31,9 @@ impl ThreadGoalRequestProcessor {
         Self {
             thread_manager,
             outgoing,
+            arg0_paths,
             config,
+            config_manager,
             thread_state_manager,
             state_db,
             goal_service,
@@ -115,6 +121,12 @@ impl ThreadGoalRequestProcessor {
         };
         let status = params.status.map(ThreadGoalStatus::to_core);
         let objective = params.objective.as_deref();
+        let live_thread = self.thread_manager.get_thread(thread_id).await.ok();
+
+        if let Some(thread) = live_thread.as_ref() {
+            self.apply_goal_thread_settings(thread.as_ref(), &params)
+                .await?;
+        }
 
         let outcome = self
             .goal_service
@@ -136,15 +148,15 @@ impl ThreadGoalRequestProcessor {
             .map_err(goal_service_error)?;
         let goal = ThreadGoal::from(outcome.goal.clone());
 
-        let persist_result = match self.thread_manager.get_thread(thread_id).await {
-            Ok(thread) => {
+        let persist_result = match live_thread {
+            Some(thread) => {
                 // Live goal-first threads can be listed before any user turn is written.
                 // Use the live path so JSONL and SQLite preview metadata stay in sync.
                 thread
                     .append_rollout_items(&[outcome.thread_goal_updated_item()])
                     .await
             }
-            Err(_) => Ok(()),
+            None => Ok(()),
         };
         if let Err(err) = persist_result {
             warn!("failed to persist goal update for live thread {thread_id}: {err}");
@@ -214,6 +226,92 @@ impl ThreadGoalRequestProcessor {
                 .await;
         }
         Ok(())
+    }
+
+    async fn apply_goal_thread_settings(
+        &self,
+        thread: &CodexThread,
+        params: &ThreadGoalSetParams,
+    ) -> Result<(), JSONRPCErrorError> {
+        if params.sandbox_policy.is_some() && params.permissions.is_some() {
+            return Err(invalid_request(
+                "`permissions` cannot be combined with `sandboxPolicy`",
+            ));
+        }
+
+        let approval_policy = params
+            .approval_policy
+            .clone()
+            .map(codex_app_server_protocol::AskForApproval::to_core);
+        let approvals_reviewer = params
+            .approvals_reviewer
+            .clone()
+            .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
+        let sandbox_policy = params.sandbox_policy.clone().map(|policy| policy.to_core());
+        let has_any_overrides = approval_policy.is_some()
+            || approvals_reviewer.is_some()
+            || sandbox_policy.is_some()
+            || params.permissions.is_some();
+        if !has_any_overrides {
+            return Ok(());
+        }
+
+        let (permission_profile, active_permission_profile, profile_workspace_roots) =
+            if let Some(permissions) = params.permissions.clone() {
+                let snapshot = thread.config_snapshot().await;
+                let overrides = ConfigOverrides {
+                    workspace_roots: Some(snapshot.workspace_roots.clone()),
+                    default_permissions: Some(permissions),
+                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+                    ..Default::default()
+                };
+                let config = self
+                    .config_manager
+                    .load_for_cwd(
+                        /*request_overrides*/ None,
+                        overrides,
+                        Some(snapshot.cwd().to_path_buf()),
+                    )
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                if let Some(warning) = config.startup_warnings.iter().find(|warning| {
+                    warning.contains("Configured value for `permission_profile` is disallowed")
+                }) {
+                    return Err(invalid_request(format!(
+                        "invalid goal permission context: {warning}"
+                    )));
+                }
+                (
+                    Some(config.permissions.permission_profile().clone()),
+                    config.permissions.active_permission_profile(),
+                    Some(config.permissions.profile_workspace_roots().to_vec()),
+                )
+            } else {
+                (None, None, None)
+            };
+
+        thread
+            .apply_thread_settings_overrides(CodexThreadSettingsOverrides {
+                environments: None,
+                workspace_roots: None,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                active_permission_profile,
+                profile_workspace_roots,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                multi_agent_mode: None,
+                personality: None,
+            })
+            .await
+            .map_err(|err| invalid_request(format!("invalid goal permission context: {err}")))
     }
 
     async fn state_db_for_materialized_thread(

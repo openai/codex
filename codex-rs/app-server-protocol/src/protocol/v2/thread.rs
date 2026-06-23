@@ -769,6 +769,22 @@ pub struct ThreadGoalSetParams {
     pub objective: Option<String>,
     #[ts(optional = nullable)]
     pub status: Option<ThreadGoalStatus>,
+    /// Override the approval policy before any goal runtime effects resume work.
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed before any goal runtime
+    /// effects resume work.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Override the sandbox policy before any goal runtime effects resume work.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Select a named permissions profile id before any goal runtime effects
+    /// resume work. Cannot be combined with `sandboxPolicy`.
+    #[experimental("thread/goal/set.permissions")]
+    #[ts(optional = nullable)]
+    pub permissions: Option<String>,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",

@@ -915,11 +915,26 @@ impl AppServerSession {
 
     pub(crate) async fn thread_goal_set(
         &mut self,
+        config: &Config,
         thread_id: ThreadId,
         objective: Option<String>,
         status: Option<ThreadGoalStatus>,
         token_budget: Option<Option<i64>>,
     ) -> Result<ThreadGoalSetResponse> {
+        let permissions = permissions_selection_from_config(config, self.thread_params_mode);
+        let sandbox_policy = permissions.is_none().then(|| {
+            legacy_compatible_permission_profile(
+                &config.permissions.effective_permission_profile(),
+                config.cwd.as_path(),
+            )
+            .to_legacy_sandbox_policy(config.cwd.as_path())
+            .unwrap_or_else(|err| {
+                unreachable!(
+                    "legacy-compatible permissions must project to legacy policy: {err}"
+                )
+            })
+            .into()
+        });
         let request_id = self.next_request_id();
         self.client
             .request_typed(ClientRequest::ThreadGoalSet {
@@ -928,6 +943,10 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     objective,
                     status,
+                    approval_policy: Some(config.permissions.approval_policy.value().into()),
+                    approvals_reviewer: approvals_reviewer_override_from_config(config),
+                    sandbox_policy,
+                    permissions,
                     token_budget,
                 },
             })

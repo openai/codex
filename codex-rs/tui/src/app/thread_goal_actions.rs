@@ -200,7 +200,7 @@ impl App {
         };
 
         let result = app_server
-            .thread_goal_set(thread_id, Some(objective), Some(status), token_budget)
+            .thread_goal_set(&self.config, thread_id, Some(objective), Some(status), token_budget)
             .await;
 
         match result {
@@ -234,6 +234,7 @@ impl App {
     ) {
         let result = app_server
             .thread_goal_set(
+                &self.config,
                 thread_id,
                 /*objective*/ None,
                 Some(status),
