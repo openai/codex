@@ -13,6 +13,7 @@ use crate::resolve_windows_elevated_filesystem_overrides;
 use crate::resolve_windows_restricted_token_filesystem_overrides;
 #[cfg(target_os = "windows")]
 use crate::windows_sandbox_uses_elevated_backend;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -99,6 +100,7 @@ pub struct SandboxCommand {
     pub args: Vec<String>,
     pub cwd: PathUri,
     pub env: HashMap<String, String>,
+    pub managed_network: Option<ManagedNetworkSandboxContext>,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
@@ -332,6 +334,8 @@ impl SandboxManager {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         } = request;
+        #[cfg(target_os = "macos")]
+        let managed_network = command.managed_network.as_ref();
         let additional_permissions = command.additional_permissions.take();
         let managed_mitm_ca_trust_bundle_path =
             network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
@@ -364,6 +368,7 @@ impl SandboxManager {
                     network_sandbox_policy: pending.effective_network_policy,
                     sandbox_policy_cwd: pending.native_sandbox_policy_cwd.as_path(),
                     enforce_managed_network,
+                    managed_network,
                     environment_id,
                     network,
                     extra_allow_unix_sockets: &[],

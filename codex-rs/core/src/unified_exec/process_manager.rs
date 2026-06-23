@@ -26,6 +26,7 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::is_managed_proxy_env_var;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -143,10 +144,16 @@ fn exec_server_env_for_request(
     HashMap<String, String>,
 ) {
     if let Some(exec_server_env_config) = &request.exec_server_env_config {
-        (
-            Some(exec_server_env_config.policy.clone()),
-            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env),
-        )
+        let mut env =
+            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env);
+        if request.exec_server_managed_network.is_some() {
+            for (key, value) in &request.env {
+                if is_managed_proxy_env_var(key, value) {
+                    env.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        (Some(exec_server_env_config.policy.clone()), env)
     } else {
         (None, request.env.clone())
     }
@@ -175,6 +182,7 @@ fn exec_server_params_for_request(
         arg0: request.arg0.clone(),
         sandbox: request.exec_server_sandbox.clone(),
         enforce_managed_network: request.exec_server_enforce_managed_network,
+        managed_network: request.exec_server_managed_network.clone(),
     }
 }
 

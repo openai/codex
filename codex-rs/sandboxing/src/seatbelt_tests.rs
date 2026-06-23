@@ -14,6 +14,7 @@ use super::unix_socket_policy;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyConfig;
@@ -205,6 +206,7 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         sandbox_policy_cwd: Path::new("/"),
         enforce_managed_network: false,
+        managed_network: None,
         environment_id: None,
         network: None,
         extra_allow_unix_sockets: &[],
@@ -259,6 +261,37 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
 }
 
 #[test]
+fn prepared_managed_network_context_allows_only_its_proxy_ports() {
+    let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        &SandboxPolicy::new_read_only_policy(),
+        Path::new("/"),
+    );
+    let managed_network = ManagedNetworkSandboxContext {
+        loopback_ports: vec![43123, 48081],
+        allow_local_binding: false,
+    };
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: Path::new("/"),
+        enforce_managed_network: true,
+        managed_network: Some(&managed_network),
+        environment_id: None,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    })
+    .unwrap();
+
+    let policy = seatbelt_policy_arg(&args);
+    assert!(policy.contains("(allow network-outbound (remote ip \"localhost:43123\"))"));
+    assert!(policy.contains("(allow network-outbound (remote ip \"localhost:48081\"))"));
+    assert!(!policy.contains("(allow network-outbound (remote ip \"localhost:9999\"))"));
+    assert!(!policy.contains("(allow network-bind (local ip \"*:*\"))"));
+    assert!(!policy.contains("(allow network-outbound)\n"));
+}
+
+#[test]
 fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
     let root = absolute_path("/tmp/codex-readable");
     let unreadable = absolute_path("/tmp/codex-readable/private");
@@ -279,6 +312,7 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         sandbox_policy_cwd: Path::new("/"),
         enforce_managed_network: false,
+        managed_network: None,
         environment_id: None,
         network: None,
         extra_allow_unix_sockets: &[],
@@ -585,6 +619,7 @@ fn create_seatbelt_args_allowlists_explicit_unix_socket_paths_without_proxy() {
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
+        managed_network: None,
         environment_id: None,
         network: None,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
@@ -645,6 +680,7 @@ async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> a
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
+        managed_network: None,
         environment_id: None,
         network: Some(&network_proxy),
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
@@ -688,6 +724,7 @@ fn create_seatbelt_args_preserves_full_network_with_explicit_unix_socket_paths()
         network_sandbox_policy: NetworkSandboxPolicy::Enabled,
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
+        managed_network: None,
         environment_id: None,
         network: None,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,

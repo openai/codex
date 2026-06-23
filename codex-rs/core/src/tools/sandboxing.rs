@@ -466,6 +466,7 @@ impl<'a> SandboxAttempt<'a> {
         network: Option<&NetworkProxy>,
         environment_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
+        let managed_network = command.managed_network.clone();
         let exec_server_permissions = effective_permission_profile(
             self.exec_server_permissions,
             command.additional_permissions.as_ref(),
@@ -492,6 +493,7 @@ impl<'a> SandboxAttempt<'a> {
             options,
             self.workspace_roots.to_vec(),
         );
+        exec_request.exec_server_managed_network = managed_network;
         if self.sandbox_requested {
             exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {
                 permissions: exec_server_permissions.into(),

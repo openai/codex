@@ -92,6 +92,7 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
                 args: Vec::new(),
                 cwd: cwd_uri.clone(),
                 env: HashMap::new(),
+                managed_network: None,
                 additional_permissions: None,
             },
             permissions: &permissions,
@@ -139,6 +140,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                 args: Vec::new(),
                 cwd: cwd_uri.clone(),
                 env: HashMap::new(),
+                managed_network: None,
                 additional_permissions: Some(AdditionalPermissionProfile {
                     network: Some(NetworkPermissions {
                         enabled: Some(true),
@@ -211,6 +213,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
                 args: Vec::new(),
                 cwd: cwd_uri.clone(),
                 env: HashMap::new(),
+                managed_network: None,
                 additional_permissions: Some(AdditionalPermissionProfile {
                     file_system: Some(FileSystemPermissions::from_read_write_roots(
                         /*read*/ None,
@@ -314,6 +317,7 @@ fn transform_linux_seccomp_request(
                 args: Vec::new(),
                 cwd: cwd_uri.clone(),
                 env: HashMap::new(),
+                managed_network: None,
                 additional_permissions: None,
             },
             permissions: &permissions,
@@ -504,6 +508,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                             "Path".to_string(),
                             r"C:\Windows\System32".to_string(),
                         )]),
+                        managed_network: None,
                         additional_permissions: None,
                     },
                     permissions: &permissions,

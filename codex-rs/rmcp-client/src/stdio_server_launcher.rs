@@ -509,6 +509,7 @@ impl ExecutorStdioServerLauncher {
                 arg0: None,
                 sandbox: None,
                 enforce_managed_network: false,
+                managed_network: None,
             })
             .await
             .map_err(io::Error::other)?;

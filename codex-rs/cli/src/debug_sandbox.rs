@@ -383,6 +383,7 @@ async fn run_command_under_sandbox(
                 network_sandbox_policy,
                 sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
                 enforce_managed_network,
+                managed_network: None,
                 environment_id: None,
                 network: network.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,

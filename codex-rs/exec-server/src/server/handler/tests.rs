@@ -36,6 +36,7 @@ fn exec_params_with_argv(process_id: &str, argv: Vec<String>) -> ExecParams {
         arg0: None,
         sandbox: None,
         enforce_managed_network: false,
+        managed_network: None,
     }
 }
 

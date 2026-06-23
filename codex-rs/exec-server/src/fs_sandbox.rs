@@ -115,6 +115,7 @@ impl FileSystemSandboxRunner {
             args: vec![CODEX_FS_HELPER_ARG1.to_string()],
             cwd: cwd.uri.clone(),
             env: self.helper_env.clone(),
+            managed_network: None,
             additional_permissions: None,
         };
         let native_workspace_roots = sandbox_context

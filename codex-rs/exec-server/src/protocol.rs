@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
@@ -109,6 +110,12 @@ pub struct ExecParams {
     /// Whether the eventual executor-side sandbox must enforce managed networking.
     #[serde(default)]
     pub enforce_managed_network: bool,
+    /// Optional details for enforcing managed networking without a live proxy object.
+    ///
+    /// When `enforce_managed_network` is true and these details are absent, the executor must
+    /// continue to fail closed. This preserves compatibility with older clients.
+    #[serde(default)]
+    pub managed_network: Option<ManagedNetworkSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -504,12 +511,60 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
+    use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
+    use super::ProcessId;
     use codex_file_system::FileSystemSandboxContext;
+    use codex_network_proxy::ManagedNetworkSandboxContext;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+
+    #[test]
+    fn exec_params_managed_network_context_round_trips_and_defaults_for_legacy_peers() {
+        let cwd =
+            PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                .expect("cwd URI");
+        let params = ExecParams {
+            process_id: ProcessId::from("managed-network"),
+            argv: vec!["true".to_string()],
+            cwd,
+            env_policy: None,
+            env: HashMap::new(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: None,
+            enforce_managed_network: true,
+            managed_network: Some(ManagedNetworkSandboxContext {
+                loopback_ports: vec![43123, 48081],
+                allow_local_binding: false,
+            }),
+        };
+
+        let mut serialized = serde_json::to_value(&params).expect("serialize exec params");
+        assert_eq!(
+            serialized["managedNetwork"],
+            serde_json::json!({
+                "loopbackPorts": [43123, 48081],
+                "allowLocalBinding": false,
+            })
+        );
+        let round_trip: ExecParams =
+            serde_json::from_value(serialized.clone()).expect("deserialize exec params");
+        assert_eq!(round_trip, params);
+
+        serialized
+            .as_object_mut()
+            .expect("exec params object")
+            .remove("managedNetwork");
+        let legacy: ExecParams =
+            serde_json::from_value(serialized).expect("deserialize legacy exec params");
+        assert!(legacy.enforce_managed_network);
+        assert_eq!(legacy.managed_network, None);
+    }
 
     #[test]
     fn filesystem_protocol_accepts_legacy_absolute_paths_and_serializes_path_uris() {
