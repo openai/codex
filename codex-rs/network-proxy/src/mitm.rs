@@ -107,11 +107,19 @@ impl MitmState {
         // generate/load a local CA and issue per-host leaf certs so we can terminate TLS and
         // apply policy.
         let ca = ManagedMitmCa::load_or_create()?;
+        let upstream_tls_root_store =
+            crate::certs::upstream_tls_root_store(&crate::certs::ca_env_from_process())?;
 
         let upstream = if config.allow_upstream_proxy {
-            UpstreamClient::from_env_proxy_with_allow_local_binding(config.allow_local_binding)
+            UpstreamClient::from_env_proxy_with_allow_local_binding(
+                config.allow_local_binding,
+                upstream_tls_root_store,
+            )
         } else {
-            UpstreamClient::direct_with_allow_local_binding(config.allow_local_binding)
+            UpstreamClient::direct_with_allow_local_binding(
+                config.allow_local_binding,
+                upstream_tls_root_store,
+            )
         };
 
         Ok(Self {

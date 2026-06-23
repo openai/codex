@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -354,7 +353,7 @@ impl RmcpClient {
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
         env_vars: &[McpServerEnvVar],
-        cwd: Option<PathBuf>,
+        cwd: Option<String>,
         launcher: Arc<dyn StdioServerLauncher>,
     ) -> io::Result<Self> {
         let transport_recipe = TransportRecipe::Stdio {

@@ -352,7 +352,8 @@ pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         ResponseItem::AgentMessage { .. } => true,
         ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::CompactionTrigger { .. } => false,
-        ResponseItem::Reasoning { .. }
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::ToolSearchCall { .. }
@@ -414,31 +415,31 @@ fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseIt
             id,
             call_id,
             output,
-            metadata,
+            internal_chat_message_metadata_passthrough: metadata,
         } => ResponseItem::FunctionCallOutput {
             id: id.clone(),
             call_id: call_id.clone(),
             output: truncated_output_payload(output),
-            metadata: metadata.clone(),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
         },
         ResponseItem::CustomToolCallOutput {
             id,
             call_id,
             name,
             output,
-            metadata,
+            internal_chat_message_metadata_passthrough: metadata,
         } => ResponseItem::CustomToolCallOutput {
             id: id.clone(),
             call_id: call_id.clone(),
             name: name.clone(),
             output: truncated_output_payload(output),
-            metadata: metadata.clone(),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
         },
         ResponseItem::ToolSearchOutput {
             call_id,
             status,
             execution,
-            metadata,
+            internal_chat_message_metadata_passthrough: metadata,
             ..
         } => ResponseItem::ToolSearchOutput {
             id: item.id().map(str::to_string),
@@ -446,7 +447,7 @@ fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseIt
             status: status.clone(),
             execution: execution.clone(),
             tools: Vec::new(),
-            metadata: metadata.clone(),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
         },
         _ => return None,
     })

@@ -2854,7 +2854,7 @@ mod tests {
         );
 
         let chatgpt = v2::Account::Chatgpt {
-            email: "user@example.com".to_string(),
+            email: Some("user@example.com".to_string()),
             plan_type: PlanType::Plus,
         };
         assert_eq!(
@@ -2864,6 +2864,19 @@ mod tests {
                 "planType": "plus",
             }),
             serde_json::to_value(&chatgpt)?,
+        );
+
+        let chatgpt_without_email = v2::Account::Chatgpt {
+            email: None,
+            plan_type: PlanType::Pro,
+        };
+        assert_eq!(
+            json!({
+                "type": "chatgpt",
+                "email": null,
+                "planType": "pro",
+            }),
+            serde_json::to_value(&chatgpt_without_email)?,
         );
 
         let codex_managed_bedrock = v2::Account::AmazonBedrock {
@@ -3379,9 +3392,11 @@ mod tests {
             v2::ModelSafetyBufferingUpdatedNotification {
                 thread_id: "thr_123".to_string(),
                 turn_id: "turn_123".to_string(),
-                model: "gpt-5.4".to_string(),
+                model: "current-model".to_string(),
                 use_cases: vec!["cyber".to_string()],
                 reasons: vec!["user_risk".to_string()],
+                show_buffering_ui: true,
+                faster_model: Some("faster-model".to_string()),
             },
         );
         assert_eq!(
@@ -3390,9 +3405,11 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "turnId": "turn_123",
-                    "model": "gpt-5.4",
+                    "model": "current-model",
                     "useCases": ["cyber"],
-                    "reasons": ["user_risk"]
+                    "reasons": ["user_risk"],
+                    "showBufferingUi": true,
+                    "fasterModel": "faster-model"
                 }
             }),
             serde_json::to_value(&notification)?,

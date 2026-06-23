@@ -2,9 +2,11 @@ use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
+use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
+use crate::safety_buffering::treatment_from_headers;
 use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
@@ -595,12 +597,12 @@ fn map_wrapped_websocket_error_event(
     Some(ApiError::Transport(TransportError::Http {
         status,
         url: None,
-        headers: headers.map(json_headers_to_http_headers),
+        headers: headers.as_ref().map(json_headers_to_http_headers),
         body: Some(original_payload),
     }))
 }
 
-fn json_headers_to_http_headers(headers: JsonMap<String, Value>) -> HeaderMap {
+fn json_headers_to_http_headers(headers: &JsonMap<String, Value>) -> HeaderMap {
     let mut mapped = HeaderMap::new();
     for (name, value) in headers {
         let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
@@ -614,9 +616,9 @@ fn json_headers_to_http_headers(headers: JsonMap<String, Value>) -> HeaderMap {
     mapped
 }
 
-fn json_header_value(value: Value) -> Option<HeaderValue> {
+fn json_header_value(value: &Value) -> Option<HeaderValue> {
     let value = match value {
-        Value::String(value) => value,
+        Value::String(value) => value.clone(),
         Value::Number(value) => value.to_string(),
         Value::Bool(value) => value.to_string(),
         _ => return None,
@@ -634,6 +636,7 @@ async fn run_websocket_response_stream(
     turn_state: Option<&OnceLock<String>>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
     send_websocket_request(
         ws_stream,
         request_text,
@@ -668,7 +671,6 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
-                trace!("websocket event: {text}");
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
@@ -688,9 +690,17 @@ async fn run_websocket_response_stream(
                 {
                     let _ = turn_state.set(response_turn_state);
                 }
+                if let Some(headers) = event.headers.as_ref().and_then(Value::as_object)
+                    && let Some(treatment) =
+                        treatment_from_headers(&json_headers_to_http_headers(headers))
+                {
+                    safety_buffering_treatment = treatment;
+                }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
-                let safety_buffering = event.safety_buffering();
+                let safety_buffering = event
+                    .safety_buffering()
+                    .map(|buffering| buffering.with_treatment(&safety_buffering_treatment));
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -826,13 +836,13 @@ mod tests {
                     text: "hello".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
-            tools: vec![json!({
+            tools: Some(vec![json!({
                 "type": "function",
                 "name": "lookup",
                 "parameters": {"type": "object"}
-            })],
+            })]),
             tool_choice: "auto".to_string(),
             parallel_tool_calls: true,
             reasoning: None,

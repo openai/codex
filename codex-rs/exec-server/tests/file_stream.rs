@@ -45,7 +45,10 @@ async fn stream_stops_after_an_exact_block_boundary() -> Result<()> {
     std::fs::write(&path, vec![b'x'; BLOCK_SIZE * 2])?;
 
     let chunks = file_system
-        .read_file_stream(&PathUri::from_path(path)?, /*sandbox*/ None)
+        .read_file_stream(
+            &PathUri::from_host_native_path(path)?,
+            /*sandbox*/ None,
+        )
         .await?
         .try_collect::<Vec<_>>()
         .await?;
@@ -64,7 +67,7 @@ async fn completed_streams_release_handle_capacity() -> Result<()> {
     let tmp = TempDir::new()?;
     let path = tmp.path().join("repeated.txt");
     std::fs::write(&path, b"repeated")?;
-    let path = PathUri::from_path(path)?;
+    let path = PathUri::from_host_native_path(path)?;
 
     for _ in 0..=OPEN_FILE_LIMIT {
         let chunks = file_system
@@ -88,7 +91,7 @@ async fn stream_rejects_platform_sandbox() -> Result<()> {
 
     let result = file_system
         .read_file_stream(
-            &PathUri::from_path(&path)?,
+            &PathUri::from_host_native_path(&path)?,
             Some(&read_only_sandbox(tmp.path().to_path_buf())),
         )
         .await;
@@ -120,7 +123,7 @@ async fn file_reads_reject_fifo_without_waiting_for_a_writer() -> Result<()> {
         );
     }
 
-    let path_uri = PathUri::from_path(&path)?;
+    let path_uri = PathUri::from_host_native_path(&path)?;
     let read_error = timeout(
         Duration::from_secs(1),
         file_system.read_file(&path_uri, /*sandbox*/ None),
@@ -158,7 +161,7 @@ async fn file_reads_reject_named_pipes() -> Result<()> {
     let read_error = timeout(
         Duration::from_secs(1),
         file_system.read_file(
-            &PathUri::from_path(std::path::Path::new(&read_path))?,
+            &PathUri::from_host_native_path(std::path::Path::new(&read_path))?,
             /*sandbox*/ None,
         ),
     )
@@ -173,7 +176,7 @@ async fn file_reads_reject_named_pipes() -> Result<()> {
     let stream_result = timeout(
         Duration::from_secs(1),
         file_system.read_file_stream(
-            &PathUri::from_path(std::path::Path::new(&stream_path))?,
+            &PathUri::from_host_native_path(std::path::Path::new(&stream_path))?,
             /*sandbox*/ None,
         ),
     )
@@ -202,7 +205,10 @@ async fn stream_keeps_reading_the_open_file_after_path_replacement() -> Result<(
     let path = tmp.path().join("replaceable.bin");
     std::fs::write(&path, vec![b'a'; BLOCK_SIZE + 1])?;
     let mut stream = file_system
-        .read_file_stream(&PathUri::from_path(&path)?, /*sandbox*/ None)
+        .read_file_stream(
+            &PathUri::from_host_native_path(&path)?,
+            /*sandbox*/ None,
+        )
         .await?;
 
     assert_eq!(
@@ -236,7 +242,7 @@ async fn read_block_supports_non_sequential_offsets_and_lengths() -> Result<()> 
     let open = client
         .fs_open(FsOpenParams {
             handle_id: Uuid::new_v4().simple().to_string(),
-            path: PathUri::from_path(path)?,
+            path: PathUri::from_host_native_path(path)?,
             sandbox: None,
         })
         .await?;
@@ -295,7 +301,7 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
     let tmp = TempDir::new()?;
     let path = tmp.path().join("limited.bin");
     std::fs::write(&path, b"limited")?;
-    let path = PathUri::from_path(path)?;
+    let path = PathUri::from_host_native_path(path)?;
     let mut handles = Vec::with_capacity(OPEN_FILE_LIMIT);
     for _ in 0..OPEN_FILE_LIMIT {
         let open = client
@@ -359,7 +365,7 @@ async fn open_rejects_handle_ids_longer_than_32_bytes() -> Result<()> {
     let error = client
         .fs_open(FsOpenParams {
             handle_id: "x".repeat(33),
-            path: PathUri::from_path(path)?,
+            path: PathUri::from_host_native_path(path)?,
             sandbox: None,
         })
         .await

@@ -72,7 +72,7 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
             text: text.to_string(),
         }],
         phase,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -92,7 +92,7 @@ fn spawn_agent_call(call_id: &str) -> ResponseItem {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: call_id.to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -887,6 +887,15 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     parent_thread
         .inject_user_message_without_turn("parent seed context".to_string())
         .await;
+    let expected_parent_seed = parent_thread
+        .codex
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .first()
+        .cloned()
+        .expect("parent seed should be recorded");
     let turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-history".to_string();
     let trigger_message = InterAgentCommunication::new(
@@ -909,7 +918,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                         text: "Parent root guidance.".to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -918,7 +927,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                         text: "Parent subagent guidance.".to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
@@ -928,7 +937,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     summary: Vec::new(),
                     content: None,
                     encrypted_content: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 trigger_message.to_response_input_item().into(),
                 spawn_agent_call(&parent_spawn_call_id),
@@ -988,17 +997,12 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     );
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
+    let mut expected_final_answer =
+        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer));
+    expected_final_answer.set_turn_id_if_missing(&turn_context.sub_id);
     let expected_history = [
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "parent seed context".to_string(),
-            }],
-            phase: None,
-            metadata: None,
-        },
-        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
+        expected_parent_seed,
+        expected_final_answer,
         ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -1006,7 +1010,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 text: "Child subagent guidance.".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     assert_eq!(
@@ -1125,7 +1129,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 text: "compacted parent summary".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -1134,7 +1138,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 text: "Parent root guidance.".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     parent_thread
@@ -1449,7 +1453,7 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
                     text: "parent startup developer context".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
         )
         .await;
@@ -1571,7 +1575,7 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
                         text: "Parent root guidance.".to_string(),
                     }],
                     phase: None,
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 spawn_agent_call(&parent_spawn_call_id),
             ],

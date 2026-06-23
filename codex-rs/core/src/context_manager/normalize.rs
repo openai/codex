@@ -50,7 +50,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         id: None,
                         call_id: call_id.clone(),
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        metadata: None,
+                        internal_chat_message_metadata_passthrough: None,
                     },
                 ));
             }
@@ -67,7 +67,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         status: "completed".to_string(),
                         execution: "client".to_string(),
                         tools: Vec::new(),
-                        metadata: None,
+                        internal_chat_message_metadata_passthrough: None,
                     },
                 ));
             }
@@ -84,7 +84,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         call_id: call_id.clone(),
                         name: None,
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        metadata: None,
+                        internal_chat_message_metadata_passthrough: None,
                     },
                 ));
             }
@@ -102,7 +102,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         id: None,
                         call_id: call_id.clone(),
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        metadata: None,
+                        internal_chat_message_metadata_passthrough: None,
                     },
                 ));
             }

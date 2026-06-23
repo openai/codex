@@ -477,6 +477,23 @@ fn from_sources_ignores_removed_image_detail_original_feature_key() {
 }
 
 #[test]
+fn from_sources_ignores_removed_resize_all_images_feature_key() {
+    let features_toml =
+        FeaturesToml::from(BTreeMap::from([("resize_all_images".to_string(), false)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
 fn from_sources_ignores_removed_undo_feature_key() {
     let features_toml = FeaturesToml::from(BTreeMap::from([("undo".to_string(), true)]));
 
@@ -531,6 +548,25 @@ fn from_sources_ignores_removed_apply_patch_freeform_feature_key() {
 #[test]
 fn from_sources_ignores_removed_plugin_hooks_feature_key() {
     let features_toml = FeaturesToml::from(BTreeMap::from([("plugin_hooks".to_string(), true)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
+fn from_sources_ignores_removed_tool_search_always_defer_mcp_tools_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([(
+        "tool_search_always_defer_mcp_tools".to_string(),
+        false,
+    )]));
 
     let features = Features::from_sources(
         FeatureConfigSource {

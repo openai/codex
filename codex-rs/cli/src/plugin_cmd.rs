@@ -566,11 +566,13 @@ pub(crate) async fn load_cli_auth_mode(config: &Config) -> Option<AuthMode> {
         return Some(CodexAuth::from_api_key(&api_key).api_auth_mode());
     }
 
+    let auth_route_config = config.auth_route_config();
     CodexAuth::from_auth_storage(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await
     .ok()

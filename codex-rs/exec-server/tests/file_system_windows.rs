@@ -74,7 +74,10 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy() ->
     let readable_file = readonly_dir.join("readable.txt");
     std::fs::write(&readable_file, b"readable")?;
     let read_result = file_system
-        .read_file(&PathUri::from_path(&readable_file)?, Some(&sandbox))
+        .read_file(
+            &PathUri::from_host_native_path(&readable_file)?,
+            Some(&sandbox),
+        )
         .await;
     // Some local Windows hosts cannot create restricted tokens. Reaching that
     // error still proves the remote fs helper went through the Windows sandbox
@@ -87,7 +90,7 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy() ->
     let blocked_file = readonly_dir.join("blocked.txt");
     let error = file_system
         .write_file(
-            &PathUri::from_path(&blocked_file)?,
+            &PathUri::from_host_native_path(&blocked_file)?,
             b"blocked".to_vec(),
             Some(&sandbox),
         )
@@ -104,7 +107,7 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy() ->
 fn read_only_sandbox_for_cwd(cwd: std::path::PathBuf) -> Result<FileSystemSandboxContext> {
     Ok(FileSystemSandboxContext::from_legacy_sandbox_policy(
         SandboxPolicy::new_read_only_policy(),
-        PathUri::from_path(cwd)?,
+        PathUri::from_host_native_path(cwd)?,
     )?)
 }
 

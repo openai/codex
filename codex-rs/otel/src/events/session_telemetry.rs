@@ -94,6 +94,8 @@ pub struct SessionTelemetryMetadata {
     pub(crate) session_source: String,
     pub(crate) model: String,
     pub(crate) slug: String,
+    pub(crate) service_tier: Option<String>,
+    pub(crate) model_reasoning_effort: Option<String>,
     pub(crate) log_user_prompts: bool,
     pub(crate) app_version: &'static str,
     pub(crate) terminal_type: String,
@@ -115,6 +117,16 @@ impl SessionTelemetry {
     pub fn with_model(mut self, model: &str, slug: &str) -> Self {
         self.metadata.model = model.to_owned();
         self.metadata.slug = slug.to_owned();
+        self
+    }
+
+    pub fn with_inference_request(
+        mut self,
+        service_tier: Option<&str>,
+        model_reasoning_effort: Option<&ReasoningEffort>,
+    ) -> Self {
+        self.metadata.service_tier = service_tier.map(str::to_owned);
+        self.metadata.model_reasoning_effort = model_reasoning_effort.map(ToString::to_string);
         self
     }
 
@@ -389,6 +401,8 @@ impl SessionTelemetry {
                 session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),
+                service_tier: None,
+                model_reasoning_effort: None,
                 log_user_prompts,
                 app_version: env!("CARGO_PKG_VERSION"),
                 terminal_type,
@@ -707,7 +721,6 @@ impl SessionTelemetry {
         duration: Duration,
     ) {
         let mut kind = None;
-        let mut error_message = None;
         let mut success = true;
 
         match result {
@@ -724,49 +737,26 @@ impl SessionTelemetry {
                             }
                             if kind.as_deref() == Some("response.failed") {
                                 success = false;
-                                error_message = value
-                                    .get("response")
-                                    .and_then(|value| value.get("error"))
-                                    .map(serde_json::Value::to_string)
-                                    .or_else(|| Some("response.failed event received".to_string()));
                             }
                         }
-                        Err(err) => {
+                        Err(_) => {
                             kind = Some("parse_error".to_string());
-                            error_message = Some(err.to_string());
                             success = false;
                         }
                     }
-                }
-                tokio_tungstenite::tungstenite::Message::Binary(_) => {
-                    success = false;
-                    error_message = Some("unexpected binary websocket event".to_string());
                 }
                 tokio_tungstenite::tungstenite::Message::Ping(_)
                 | tokio_tungstenite::tungstenite::Message::Pong(_) => {
                     return;
                 }
-                tokio_tungstenite::tungstenite::Message::Close(_) => {
+                tokio_tungstenite::tungstenite::Message::Binary(_)
+                | tokio_tungstenite::tungstenite::Message::Close(_)
+                | tokio_tungstenite::tungstenite::Message::Frame(_) => {
                     success = false;
-                    error_message =
-                        Some("websocket closed by server before response.completed".to_string());
-                }
-                tokio_tungstenite::tungstenite::Message::Frame(_) => {
-                    success = false;
-                    error_message = Some("unexpected websocket frame".to_string());
                 }
             },
-            Ok(Some(Err(err))) => {
+            Ok(Some(Err(_))) | Ok(None) | Err(_) => {
                 success = false;
-                error_message = Some(err.to_string());
-            }
-            Ok(None) => {
-                success = false;
-                error_message = Some("stream closed before response.completed".to_string());
-            }
-            Err(err) => {
-                success = false;
-                error_message = Some(err.to_string());
             }
         }
 
@@ -775,18 +765,6 @@ impl SessionTelemetry {
         let tags = [("kind", kind_str), ("success", success_str)];
         self.counter(WEBSOCKET_EVENT_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
-        log_and_trace_event!(
-            self,
-            common: {
-                event.name = "codex.websocket_event",
-                event.kind = %kind_str,
-                duration_ms = %duration.as_millis(),
-                success = success_str,
-                error.message = error_message.as_deref(),
-            },
-            log: {},
-            trace: {},
-        );
     }
 
     pub fn log_sse_event<E>(
@@ -932,6 +910,8 @@ impl SessionTelemetry {
                 cached_token_count = cached_token_count,
                 reasoning_token_count = reasoning_token_count,
                 tool_token_count = %tool_token_count,
+                service_tier = self.metadata.service_tier.as_deref(),
+                model_reasoning_effort = self.metadata.model_reasoning_effort.as_deref(),
             },
             log: {},
             trace: {},
@@ -1218,6 +1198,7 @@ impl SessionTelemetry {
 
     fn responses_item_type(item: &ResponseItem) -> String {
         match item {
+            ResponseItem::AdditionalTools { .. } => "additional_tools".into(),
             ResponseItem::Message { role, .. } => format!("message_from_{role}"),
             ResponseItem::AgentMessage { .. } => "agent_message".into(),
             ResponseItem::Reasoning { .. } => "reasoning".into(),

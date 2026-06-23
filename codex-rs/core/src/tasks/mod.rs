@@ -113,7 +113,7 @@ pub(crate) fn interrupted_turn_history_marker(
                     text: marker.render(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             })
         }
     }
@@ -483,7 +483,7 @@ impl Session {
         }
 
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+        self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
             .await;
         self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;

@@ -157,7 +157,7 @@ pub enum Feature {
     AppsMcpPathOverride,
     /// Removed compatibility flag retained as a no-op now that tool_search is always enabled.
     ToolSearch,
-    /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
+    /// Removed compatibility flag. MCP tools are always deferred when tool_search is available.
     ToolSearchAlwaysDeferMcpTools,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
     NonPrefixedMcpToolNames,
@@ -175,6 +175,10 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     BrowserUse,
+    /// Allow Browser Use integration to access the full Chrome DevTools Protocol surface.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    BrowserUseFullCdpAccess,
     /// Allow Browser Use integration with external browsers.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -193,7 +197,7 @@ pub enum Feature {
     ImageGeneration,
     /// Replace hosted image generation with the standalone image-generation extension.
     ImageGenExt,
-    /// Resize all inline data-URL images before recording them in history.
+    /// Removed compatibility flag for always-on centralized image preparation.
     ResizeAllImages,
     /// Generate Responses API item IDs for client-created history items.
     ItemIds,
@@ -469,10 +473,10 @@ impl Features {
                 "apply_patch_freeform" => {
                     continue;
                 }
-                "tool_search" | "apps_mcp_path_override" => {
+                "tool_search" | "tool_search_always_defer_mcp_tools" | "apps_mcp_path_override" => {
                     continue;
                 }
-                "image_detail_original" => {
+                "image_detail_original" | "resize_all_images" => {
                     continue;
                 }
                 "plugin_hooks" => {
@@ -1070,8 +1074,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ToolSearchAlwaysDeferMcpTools,
         key: "tool_search_always_defer_mcp_tools",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Removed,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::NonPrefixedMcpToolNames,
@@ -1112,6 +1116,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::BrowserUse,
         key: "browser_use",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::BrowserUseFullCdpAccess,
+        key: "browser_use_full_cdp_access",
         stage: Stage::Stable,
         default_enabled: true,
     },
@@ -1160,8 +1170,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResizeAllImages,
         key: "resize_all_images",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Removed,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ItemIds,

@@ -160,6 +160,9 @@ pub struct ReadResponse {
     pub exit_code: Option<i32>,
     pub closed: bool,
     pub failure: Option<String>,
+    /// Whether the executor classified the process failure as a sandbox denial.
+    #[serde(default)]
+    pub sandbox_denied: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -570,7 +573,7 @@ mod tests {
         let legacy_cwd = std::env::current_dir().expect("current directory");
         let native_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::default(),
-            PathUri::from_path(&legacy_cwd).expect("cwd URI"),
+            PathUri::from_host_native_path(&legacy_cwd).expect("cwd URI"),
         );
         let mut legacy_sandbox =
             serde_json::to_value(&native_sandbox).expect("sandbox should serialize");
@@ -582,7 +585,7 @@ mod tests {
         .expect("legacy absolute path should deserialize");
         let expected_sandbox = native_sandbox;
         let expected = FsReadFileParams {
-            path: PathUri::from_path(legacy_path).expect("path URI"),
+            path: PathUri::from_host_native_path(legacy_path).expect("path URI"),
             sandbox: Some(expected_sandbox.clone()),
         };
 
