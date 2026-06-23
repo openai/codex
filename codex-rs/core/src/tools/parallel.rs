@@ -251,6 +251,7 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputPayload;
     use pretty_assertions::assert_eq;
     use tokio::sync::Notify;
+    use tokio::sync::mpsc;
     use tokio::sync::oneshot;
 
     struct ImmediateHandler {
@@ -284,6 +285,56 @@ mod tests {
     }
 
     impl CoreToolRuntime for ImmediateHandler {}
+
+    struct BlockingHandler {
+        tool_name: codex_tools::ToolName,
+        supports_parallel: bool,
+        started: mpsc::UnboundedSender<String>,
+        release: Arc<Notify>,
+    }
+
+    impl ToolExecutor<ToolInvocation> for BlockingHandler {
+        fn tool_name(&self) -> codex_tools::ToolName {
+            self.tool_name.clone()
+        }
+
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: self.tool_name.name.clone(),
+                description: "Blocking test tool.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+            })
+        }
+
+        fn supports_parallel_tool_calls(&self) -> bool {
+            self.supports_parallel
+        }
+
+        fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+            Box::pin(self.handle_call(invocation))
+        }
+    }
+
+    impl BlockingHandler {
+        async fn handle_call(
+            &self,
+            invocation: ToolInvocation,
+        ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+            self.started
+                .send(invocation.call_id)
+                .expect("test receiver should remain open");
+            self.release.notified().await;
+            Ok(
+                Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+                    as Box<dyn crate::tools::context::ToolOutput>,
+            )
+        }
+    }
+
+    impl CoreToolRuntime for BlockingHandler {}
 
     struct CancellationCleanupHandler {
         tool_name: codex_tools::ToolName,
@@ -398,6 +449,116 @@ mod tests {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(outcome);
             })
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_allows_only_parallel_capable_tools_to_overlap() -> anyhow::Result<()> {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+
+        assert_tool_start_overlap(
+            Arc::clone(&session),
+            Arc::clone(&turn_context),
+            /*supports_parallel*/ true,
+            /*expect_overlap*/ true,
+        )
+        .await?;
+        assert_tool_start_overlap(
+            session,
+            turn_context,
+            /*supports_parallel*/ false,
+            /*expect_overlap*/ false,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn assert_tool_start_overlap(
+        session: Arc<Session>,
+        turn_context: Arc<TurnContext>,
+        supports_parallel: bool,
+        expect_overlap: bool,
+    ) -> anyhow::Result<()> {
+        let tool_name = codex_tools::ToolName::plain(if supports_parallel {
+            "parallel_blocking_tool"
+        } else {
+            "serial_blocking_tool"
+        });
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let release = Arc::new(Notify::new());
+        let handler = Arc::new(BlockingHandler {
+            tool_name: tool_name.clone(),
+            supports_parallel,
+            started: started_tx,
+            release: Arc::clone(&release),
+        }) as Arc<dyn CoreToolRuntime>;
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+        ));
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(
+            router,
+            Arc::clone(&session),
+            Arc::clone(&turn_context),
+            tracker,
+        );
+        let cancellation_token = CancellationToken::new();
+        let first = tokio::spawn(runtime.clone().handle_tool_call(
+            blocking_call(&tool_name, "call-1"),
+            cancellation_token.clone(),
+        ));
+        let second = tokio::spawn(
+            runtime.handle_tool_call(blocking_call(&tool_name, "call-2"), cancellation_token),
+        );
+
+        let first_started = tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+            .await?
+            .expect("first tool call should start");
+        assert_eq!(first_started, "call-1");
+
+        let second_started_before_release =
+            tokio::time::timeout(Duration::from_millis(100), started_rx.recv()).await;
+        if expect_overlap {
+            assert_eq!(
+                second_started_before_release?
+                    .expect("second tool call should start before release"),
+                "call-2"
+            );
+        } else {
+            assert!(
+                second_started_before_release.is_err(),
+                "non-parallel tool call should wait for the write lock"
+            );
+        }
+
+        release.notify_waiters();
+        if !expect_overlap {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+                    .await?
+                    .expect("second tool call should start after first release"),
+                "call-2"
+            );
+            release.notify_waiters();
+        }
+
+        first.await??;
+        second.await??;
+
+        Ok(())
+    }
+
+    fn blocking_call(tool_name: &codex_tools::ToolName, call_id: &str) -> ToolCall {
+        ToolCall {
+            tool_name: tool_name.clone(),
+            call_id: call_id.to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
         }
     }
 

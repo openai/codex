@@ -4,9 +4,12 @@ use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
 use codex_core::context::extension_image_generation_output_hint;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
+use codex_model_provider::create_model_provider;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -18,12 +21,14 @@ use codex_tools::ResponsesApiNamespaceTool;
 use pretty_assertions::assert_eq;
 
 use super::GeneratedImageOutput;
+use super::ImageGenerationTool;
 use super::ImageRequest;
 use super::ImagegenArgs;
 use super::imagegen_tool_spec;
 use super::request_for_call_args;
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
+use crate::backend::CodexImagesBackend;
 
 const RESULT: &str = "cG5n";
 
@@ -35,6 +40,22 @@ fn uses_reserved_image_gen_namespace() {
     assert_eq!(spec.name, IMAGE_GEN_NAMESPACE);
     let ResponsesApiNamespaceTool::Function(function) = &spec.tools[0];
     assert_eq!(function.name, IMAGEGEN_TOOL_NAME);
+}
+
+#[test]
+fn imagegen_tool_supports_parallel_calls() {
+    let tool = ImageGenerationTool::new(
+        CodexImagesBackend::new(create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        )),
+        "/tmp/codex-home"
+            .try_into()
+            .expect("test path should be absolute"),
+        "thread-id".to_string(),
+    );
+
+    assert!(tool.supports_parallel_tool_calls());
 }
 
 #[tokio::test]
