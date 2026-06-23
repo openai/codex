@@ -266,6 +266,7 @@ fn copy_binary_to_remote_env(
 
 struct TestMcpServerOptions {
     environment_id: String,
+    use_chatgpt_auth: bool,
     supports_parallel_tool_calls: bool,
     tool_timeout_sec: Option<Duration>,
 }
@@ -274,6 +275,7 @@ impl Default for TestMcpServerOptions {
     fn default() -> Self {
         Self {
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+            use_chatgpt_auth: false,
             supports_parallel_tool_calls: false,
             tool_timeout_sec: None,
         }
@@ -314,7 +316,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
-            use_chatgpt_auth: false,
+            use_chatgpt_auth: options.use_chatgpt_auth,
             environment_id: options.environment_id,
             enabled: true,
             required: false,
@@ -1227,6 +1229,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
                     environment_id: remote_aware_environment_id(),
+                    use_chatgpt_auth: false,
                     supports_parallel_tool_calls: true,
                     tool_timeout_sec: Some(Duration::from_secs(2)),
                 },
@@ -2296,6 +2299,73 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     server.verify().await;
 
     http_server.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let Some(chatgpt_auth_server) =
+        start_streamable_http_test_server("chatgpt-auth", Some("Access Token")).await?
+    else {
+        return Ok(());
+    };
+    let Some(configured_auth_server) =
+        start_streamable_http_test_server("configured-auth", Some("configured-token")).await?
+    else {
+        return Ok(());
+    };
+    let chatgpt_auth_url = chatgpt_auth_server.url().to_string();
+    let configured_auth_url = configured_auth_server.url().to_string();
+
+    let fixture = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                "chatgpt_auth",
+                McpServerTransportConfig::StreamableHttp {
+                    url: chatgpt_auth_url,
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                TestMcpServerOptions {
+                    environment_id: remote_aware_environment_id(),
+                    use_chatgpt_auth: true,
+                    ..Default::default()
+                },
+            );
+            insert_mcp_server(
+                config,
+                "configured_auth",
+                McpServerTransportConfig::StreamableHttp {
+                    url: configured_auth_url,
+                    bearer_token_env_var: None,
+                    http_headers: Some(HashMap::from([(
+                        "Authorization".to_string(),
+                        "Bearer configured-token".to_string(),
+                    )])),
+                    env_http_headers: None,
+                },
+                TestMcpServerOptions {
+                    environment_id: remote_aware_environment_id(),
+                    use_chatgpt_auth: true,
+                    ..Default::default()
+                },
+            );
+        })
+        .build_with_remote_env(&server)
+        .await?;
+
+    wait_for_mcp_server(&fixture.codex, "chatgpt_auth").await?;
+    wait_for_mcp_server(&fixture.codex, "configured_auth").await?;
+
+    chatgpt_auth_server.shutdown().await;
+    configured_auth_server.shutdown().await;
 
     Ok(())
 }
