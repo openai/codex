@@ -1,5 +1,5 @@
 name: check-clean-worktree
-description: Fail when a CI job leaves tracked or untracked files in the repository worktree.
+description: Fail when a CI job leaves tracked changes or untracked files in the repository worktree.
 
 runs:
   using: composite
@@ -14,6 +14,6 @@ runs:
           exit 0
         fi
 
-        echo "::error::CI job left tracked or untracked changes in the repository worktree"
+        echo "::error::CI job left tracked changes or untracked files in the repository worktree"
         printf '%s\n' "${status}"
         exit 1
