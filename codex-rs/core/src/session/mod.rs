@@ -2246,8 +2246,7 @@ impl Session {
                     strict_auto_review: false,
                 });
             }
-            AskForApproval::OnFailure
-            | AskForApproval::OnRequest
+            AskForApproval::OnRequest
             | AskForApproval::UnlessTrusted
             | AskForApproval::Granular(_) => {}
         }

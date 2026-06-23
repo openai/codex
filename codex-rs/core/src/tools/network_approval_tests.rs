@@ -250,7 +250,6 @@ fn allow_once_and_allow_for_session_both_allow_network() {
 fn only_never_policy_disables_network_approval_flow() {
     assert!(!allows_network_approval_flow(AskForApproval::Never));
     assert!(allows_network_approval_flow(AskForApproval::OnRequest));
-    assert!(allows_network_approval_flow(AskForApproval::OnFailure));
     assert!(allows_network_approval_flow(AskForApproval::UnlessTrusted));
 }
 

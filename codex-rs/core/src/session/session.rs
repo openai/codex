@@ -748,15 +748,6 @@ impl Session {
             ) {
                 post_session_configured_events.push(event);
             }
-            if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
-                post_session_configured_events.push(Event {
-                    id: "".to_owned(),
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: "`on-failure` approval policy is deprecated and will be removed in a future release. Use `on-request` for interactive approvals or `never` for non-interactive runs.".to_string(),
-                    }),
-                });
-            }
-
             let auth = auth.as_ref();
             let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
             let account_id = auth.and_then(CodexAuth::get_account_id);

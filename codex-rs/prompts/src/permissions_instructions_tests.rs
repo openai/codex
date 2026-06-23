@@ -176,26 +176,6 @@ fn includes_request_permissions_tool_instructions_for_unless_trusted_when_enable
 }
 
 #[test]
-fn includes_request_permissions_tool_instructions_for_on_failure_when_enabled() {
-    let instructions = PermissionsInstructions::from_permissions_with_network(
-        SandboxMode::WorkspaceWrite,
-        NetworkAccess::Enabled,
-        PermissionsPromptConfig {
-            approval_policy: AskForApproval::OnFailure,
-            approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &Policy::empty(),
-            exec_permission_approvals_enabled: false,
-            request_permissions_tool_enabled: true,
-        },
-        /*writable_roots*/ None,
-    );
-
-    let text = instructions.body();
-    assert!(text.contains("`approval_policy` is `on-failure`"));
-    assert!(text.contains("# request_permissions Tool"));
-}
-
-#[test]
 fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
     let instructions = PermissionsInstructions::from_permissions_with_network(
         SandboxMode::WorkspaceWrite,

@@ -206,9 +206,6 @@ fn tool_with_model_visible_input_schema_leaves_tools_without_file_params_unchang
 #[test]
 fn elicitation_granular_policy_defaults_to_prompting() {
     assert!(!elicitation_is_rejected_by_policy(
-        AskForApproval::OnFailure
-    ));
-    assert!(!elicitation_is_rejected_by_policy(
         AskForApproval::OnRequest
     ));
     assert!(!elicitation_is_rejected_by_policy(
@@ -789,7 +786,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -826,7 +823,7 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -865,7 +862,7 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -909,7 +906,7 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -952,7 +949,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -989,7 +986,7 @@ async fn shutdown_cancels_pending_tool_listing() {
     }
     .boxed()
     .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -1078,7 +1075,7 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -1118,7 +1115,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
     ))
     .boxed()
     .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -1165,7 +1162,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -1232,7 +1229,7 @@ fn server_metadata_preserves_tool_approval_policy() {
 
 #[test]
 fn host_owned_codex_apps_requires_server_metadata() {
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -1245,7 +1242,7 @@ fn host_owned_codex_apps_requires_server_metadata() {
 
 #[test]
 fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
@@ -1267,7 +1264,7 @@ fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
 
 #[tokio::test]
 async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let (tx_event, rx_event) = async_channel::unbounded();
     drop(rx_event);
     let codex_home = tempdir().expect("tempdir");

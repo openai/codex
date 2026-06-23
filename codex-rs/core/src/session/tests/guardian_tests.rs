@@ -407,7 +407,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
 
     turn_context_raw
         .approval_policy
-        .set(AskForApproval::OnFailure)
+        .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
     turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let mut config = (*turn_context_raw.config).clone();

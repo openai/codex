@@ -44,10 +44,7 @@ pub fn assess_patch_safety(
     }
 
     match policy {
-        AskForApproval::OnFailure
-        | AskForApproval::Never
-        | AskForApproval::OnRequest
-        | AskForApproval::Granular(_) => {
+        AskForApproval::Never | AskForApproval::OnRequest | AskForApproval::Granular(_) => {
             // Continue to see if this can be auto-approved.
         }
         // TODO(ragona): I'm not sure this is actually correct? I believe in this case
@@ -66,9 +63,7 @@ pub fn assess_patch_safety(
     // Even though the patch appears to be constrained to writable paths, it is
     // possible that paths in the patch are hard links to files outside the
     // writable roots, so we should still run `apply_patch` in a sandbox in that case.
-    if is_write_patch_constrained_to_writable_paths(action, file_system_sandbox_policy, cwd)
-        || matches!(policy, AskForApproval::OnFailure)
-    {
+    if is_write_patch_constrained_to_writable_paths(action, file_system_sandbox_policy, cwd) {
         if matches!(
             permission_profile,
             PermissionProfile::Disabled | PermissionProfile::External { .. }
