@@ -11,6 +11,7 @@ use opentelemetry::Context;
 use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::trace::Span as _;
+use opentelemetry::trace::TraceContextExt as _;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::LogExporter;
@@ -46,6 +47,14 @@ use tracing_subscriber::registry::LookupSpan;
 
 const ENV_ATTRIBUTE: &str = "env";
 const HOST_NAME_ATTRIBUTE: &str = "host.name";
+const DATADOG_TRACE_STATE_KEY: &str = "dd";
+const FORCE_TRACE_STATE_FIELD: &str = "t.oai_ft:1";
+const FORCE_TRACE_INCOMPLETE_STATE_FIELD: &str = "t.oai_ft_incomplete:1";
+const SAMPLING_PRIORITY_ATTRIBUTE: &str = "sampling.priority";
+const FORCE_TRACE_ATTRIBUTE: &str = "_dd.p.oai_ft";
+const FORCE_TRACE_INCOMPLETE_ATTRIBUTE: &str = "_dd.p.oai_ft_incomplete";
+const FORCE_TRACE_ATTRIBUTE_VALUE: &str = "1";
+const USER_KEEP_SAMPLING_PRIORITY: i64 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResourceKind {
@@ -255,13 +264,15 @@ fn tracer_provider_builder(
     span_attributes: BTreeMap<String, String>,
 ) -> TracerProviderBuilder {
     let builder = SdkTracerProvider::builder().with_resource(resource.clone());
-    if span_attributes.is_empty() {
+    let builder = if span_attributes.is_empty() {
         builder
     } else {
         builder.with_span_processor(SpanAttributesProcessor {
             attributes: span_attributes,
         })
-    }
+    };
+
+    builder.with_span_processor(ForceTracePropagationProcessor)
 }
 
 /// Applies configured attributes when spans start.
@@ -277,6 +288,68 @@ impl SpanProcessor for SpanAttributesProcessor {
     fn on_start(&self, span: &mut Span, _cx: &Context) {
         for (key, value) in self.attributes.iter() {
             span.set_attribute(KeyValue::new(key.clone(), value.clone()));
+        }
+    }
+
+    fn on_end(&self, _span: SpanData) {}
+
+    fn force_flush(&self) -> OTelSdkResult {
+        Ok(())
+    }
+
+    fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
+        Ok(())
+    }
+}
+
+/// Reapplies inherited ForceTrace retention state to every local child span.
+///
+/// OpenTelemetry propagates Datadog's ForceTrace fields through the `dd`
+/// tracestate member, but it does not materialize them as attributes on child
+/// spans. The OTLP retention pipeline requires these attributes on each span.
+#[derive(Debug)]
+struct ForceTracePropagationProcessor;
+
+impl SpanProcessor for ForceTracePropagationProcessor {
+    fn on_start(&self, span: &mut Span, parent_cx: &Context) {
+        let parent = parent_cx.span();
+        let Some(datadog_state) = parent
+            .span_context()
+            .trace_state()
+            .get(DATADOG_TRACE_STATE_KEY)
+        else {
+            return;
+        };
+
+        let mut force_trace = false;
+        let mut force_trace_incomplete = false;
+
+        for field in datadog_state.split(';') {
+            match field {
+                FORCE_TRACE_STATE_FIELD => force_trace = true,
+                FORCE_TRACE_INCOMPLETE_STATE_FIELD => force_trace_incomplete = true,
+                _ => {}
+            }
+        }
+
+        if !force_trace {
+            return;
+        }
+
+        span.set_attribute(KeyValue::new(
+            SAMPLING_PRIORITY_ATTRIBUTE,
+            USER_KEEP_SAMPLING_PRIORITY,
+        ));
+        span.set_attribute(KeyValue::new(
+            FORCE_TRACE_ATTRIBUTE,
+            FORCE_TRACE_ATTRIBUTE_VALUE,
+        ));
+
+        if force_trace_incomplete {
+            span.set_attribute(KeyValue::new(
+                FORCE_TRACE_INCOMPLETE_ATTRIBUTE,
+                FORCE_TRACE_ATTRIBUTE_VALUE,
+            ));
         }
     }
 
