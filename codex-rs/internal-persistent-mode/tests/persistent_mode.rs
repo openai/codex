@@ -89,6 +89,7 @@ async fn stores_config_and_starts_configured_turn_after_idle() {
             state_db.clone(),
             installation_id.clone(),
             /*attestation_provider*/ None,
+            /*external_time_provider*/ None,
         )
     });
     let codex = thread_manager

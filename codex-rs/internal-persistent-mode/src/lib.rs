@@ -56,7 +56,7 @@ impl ThreadLifecycleContributor<Config> for PersistentModeExtension {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: message }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             };
 
             if thread.try_start_turn_if_idle(vec![item]).await.is_err() {
