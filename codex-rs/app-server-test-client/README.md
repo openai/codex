@@ -47,12 +47,12 @@ cargo run -p codex-app-server-test-client -- \
 Use `--capture-file /tmp/plugin-analytics.jsonl` to select the output path.
 The command validates one `codex_plugin_disabled`, `codex_plugin_enabled`, and
 `codex_plugin_used` event with the expected local and remote plugin identities
-and capability metadata. Each event retains the local ID in both `plugin_id` and
-`local_plugin_id`, and includes the backend ID in `remote_plugin_id`. The enabled
-and disabled events come from successful writes to the temporary config; the
-command does not mutate the remote enabled state. It prints the events and
-leaves the JSONL file in place for inspection. It does not install or uninstall
-plugins and does not modify the profile's persistent config.
+and capability metadata. Each event includes the local ID in `plugin_id` and the
+backend ID in `remote_plugin_id`. The enabled and disabled events come from
+successful writes to the temporary config; the command does not mutate the
+remote enabled state. It prints the events and leaves the JSONL file in place
+for inspection. It does not install or uninstall plugins and does not modify
+the profile's persistent config.
 
 ### Testing remote install and uninstall analytics
 
@@ -67,9 +67,8 @@ installed, installs it, validates `codex_plugin_installed`, uninstalls it, and
 validates `codex_plugin_uninstalled`, and verifies that the original
 uninstalled state was restored.
 
-The mutation events retain the backend ID in the legacy `plugin_id` field,
-include the local Codex ID in `local_plugin_id`, and include the backend ID in
-`remote_plugin_id`.
+The mutation events include the local Codex ID in `plugin_id` and the backend ID
+in `remote_plugin_id`.
 
 `--remote-plugin-id` takes the backend ID, such as `plugins~Plugin_...`, not the
 local `<plugin>@<marketplace>` ID.

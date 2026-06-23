@@ -323,7 +323,7 @@ fn run_mutation_sequence(
         let events = validate_mutation_events(
             captured_events,
             PluginEventIdentity {
-                local_plugin_id: &expected.plugin_id,
+                plugin_id: &expected.plugin_id,
                 remote_plugin_id: &expected.remote_plugin_id,
                 plugin_name: &expected.plugin_name,
                 marketplace_name: &expected.marketplace_name,

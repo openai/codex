@@ -447,7 +447,6 @@ fn event_count(events: &[Value], event_type: &str) -> usize {
 fn validate_identity(event: &Value, expected: &ExpectedPlugin) -> Result<()> {
     let params = &event["event_params"];
     require_string(params, "plugin_id", &expected.plugin_id)?;
-    require_string(params, "local_plugin_id", &expected.plugin_id)?;
     require_string(params, "remote_plugin_id", &expected.remote_plugin_id)?;
     require_string(params, "plugin_name", &expected.plugin_name)?;
     require_string(params, "marketplace_name", &expected.marketplace_name)

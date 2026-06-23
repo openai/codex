@@ -140,7 +140,6 @@ use codex_login::default_client::originator;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
-use codex_plugin::PluginTelemetryLegacyIdSource;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -3027,7 +3026,6 @@ fn plugin_used_event_serializes_expected_shape() {
             "event_type": "codex_plugin_used",
             "event_params": {
                 "plugin_id": "sample@test",
-                "local_plugin_id": "sample@test",
                 "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
@@ -3059,7 +3057,6 @@ fn plugin_management_event_serializes_expected_shape() {
             "event_type": "codex_plugin_installed",
             "event_params": {
                 "plugin_id": "sample@test",
-                "local_plugin_id": "sample@test",
                 "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
@@ -3090,7 +3087,6 @@ fn plugin_install_failed_event_serializes_expected_shape() {
             "event_type": "codex_plugin_install_failed",
             "event_params": {
                 "plugin_id": "sample@test",
-                "local_plugin_id": "sample@test",
                 "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
@@ -3105,7 +3101,7 @@ fn plugin_install_failed_event_serializes_expected_shape() {
 }
 
 #[test]
-fn plugin_management_event_preserves_local_legacy_plugin_id() {
+fn plugin_management_event_keeps_plugin_id_local_when_remote_id_exists() {
     let mut plugin = sample_plugin_metadata();
     plugin.remote_plugin_id = Some("plugins~Plugin_remote".to_string());
     let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
@@ -3121,38 +3117,6 @@ fn plugin_management_event_preserves_local_legacy_plugin_id() {
             "event_type": "codex_plugin_installed",
             "event_params": {
                 "plugin_id": "sample@test",
-                "local_plugin_id": "sample@test",
-                "remote_plugin_id": "plugins~Plugin_remote",
-                "plugin_name": "sample",
-                "marketplace_name": "test",
-                "has_skills": true,
-                "mcp_server_count": 2,
-                "connector_ids": ["calendar", "drive"],
-                "product_client_id": originator().value
-            }
-        })
-    );
-}
-
-#[test]
-fn plugin_management_event_preserves_remote_legacy_plugin_id() {
-    let mut plugin = sample_plugin_metadata();
-    plugin.remote_plugin_id = Some("plugins~Plugin_remote".to_string());
-    plugin.legacy_plugin_id_source = PluginTelemetryLegacyIdSource::Remote;
-    let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
-        event_type: "codex_plugin_installed",
-        event_params: codex_plugin_metadata(plugin),
-    });
-
-    let payload = serde_json::to_value(&event).expect("serialize plugin installed event");
-
-    assert_eq!(
-        payload,
-        json!({
-            "event_type": "codex_plugin_installed",
-            "event_params": {
-                "plugin_id": "plugins~Plugin_remote",
-                "local_plugin_id": "sample@test",
                 "remote_plugin_id": "plugins~Plugin_remote",
                 "plugin_name": "sample",
                 "marketplace_name": "test",
@@ -3502,7 +3466,6 @@ async fn reducer_ingests_plugin_state_changed_fact() {
             "event_type": "codex_plugin_disabled",
             "event_params": {
                 "plugin_id": "sample@test",
-                "local_plugin_id": "sample@test",
                 "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
@@ -3539,7 +3502,6 @@ async fn reducer_ingests_plugin_install_failed_fact() {
             "event_type": "codex_plugin_install_failed",
             "event_params": {
                 "plugin_id": "sample@test",
-                "local_plugin_id": "sample@test",
                 "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
@@ -3560,7 +3522,6 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
     let plugin = PluginTelemetryMetadata {
         plugin_id: None,
         remote_plugin_id: Some("plugins~Plugin_00000000000000000000000000000000".to_string()),
-        legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Remote,
         capability_summary: None,
     };
 
@@ -3582,8 +3543,7 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
         json!([{
             "event_type": "codex_plugin_install_failed",
             "event_params": {
-                "plugin_id": "plugins~Plugin_00000000000000000000000000000000",
-                "local_plugin_id": null,
+                "plugin_id": null,
                 "remote_plugin_id": "plugins~Plugin_00000000000000000000000000000000",
                 "plugin_name": null,
                 "marketplace_name": null,
@@ -4627,7 +4587,6 @@ fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
         plugin_id: Some(PluginId::parse("sample@test").expect("valid plugin id")),
         remote_plugin_id: None,
-        legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
         capability_summary: Some(PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),

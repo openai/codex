@@ -139,7 +139,6 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
                 "event_type": "codex_plugin_uninstalled",
                 "event_params": {
                     "plugin_id": "sample-plugin@debug",
-                    "local_plugin_id": "sample-plugin@debug",
                     "remote_plugin_id": null,
                     "plugin_name": "sample-plugin",
                     "marketplace_name": "debug",
@@ -278,8 +277,7 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
             "events": [{
                 "event_type": "codex_plugin_uninstalled",
                 "event_params": {
-                    "plugin_id": REMOTE_PLUGIN_ID,
-                    "local_plugin_id": "linear@openai-curated-remote",
+                    "plugin_id": "linear@openai-curated-remote",
                     "remote_plugin_id": REMOTE_PLUGIN_ID,
                     "plugin_name": "linear",
                     "marketplace_name": "openai-curated-remote",

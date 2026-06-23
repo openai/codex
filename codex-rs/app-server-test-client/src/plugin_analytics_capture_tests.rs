@@ -18,7 +18,8 @@ fn reads_and_validates_remote_plugin_mutation_events() {
     let unrelated = json!({
         "event_type": "codex_plugin_installed",
         "event_params": {
-            "plugin_id": "plugins~Plugin_other"
+            "plugin_id": "other@openai-curated-remote",
+            "remote_plugin_id": "plugins~Plugin_other"
         }
     });
     let contents = [
@@ -63,8 +64,7 @@ fn mutation_event(event_type: &str) -> Value {
     json!({
         "event_type": event_type,
         "event_params": {
-            "plugin_id": REMOTE_PLUGIN_ID,
-            "local_plugin_id": "sample@openai-curated-remote",
+            "plugin_id": "sample@openai-curated-remote",
             "remote_plugin_id": REMOTE_PLUGIN_ID,
             "plugin_name": "sample",
             "marketplace_name": "openai-curated-remote",
@@ -78,7 +78,7 @@ fn mutation_event(event_type: &str) -> Value {
 
 fn expected_identity() -> PluginEventIdentity<'static> {
     PluginEventIdentity {
-        local_plugin_id: "sample@openai-curated-remote",
+        plugin_id: "sample@openai-curated-remote",
         remote_plugin_id: REMOTE_PLUGIN_ID,
         plugin_name: "sample",
         marketplace_name: "openai-curated-remote",

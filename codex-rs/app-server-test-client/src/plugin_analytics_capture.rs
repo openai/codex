@@ -35,7 +35,7 @@ pub(super) fn read_events_for_remote_plugin(
         matching.extend(
             events
                 .iter()
-                .filter(|event| event["event_params"]["plugin_id"] == remote_plugin_id)
+                .filter(|event| event["event_params"]["remote_plugin_id"] == remote_plugin_id)
                 .cloned(),
         );
     }
@@ -43,7 +43,7 @@ pub(super) fn read_events_for_remote_plugin(
 }
 
 pub(super) struct PluginEventIdentity<'a> {
-    pub(super) local_plugin_id: &'a str,
+    pub(super) plugin_id: &'a str,
     pub(super) remote_plugin_id: &'a str,
     pub(super) plugin_name: &'a str,
     pub(super) marketplace_name: &'a str,
@@ -74,8 +74,7 @@ pub(super) fn validate_mutation_events(
 
 fn validate_event(event: &Value, expected: &PluginEventIdentity<'_>) -> Result<()> {
     let params = &event["event_params"];
-    require_string(params, "plugin_id", expected.remote_plugin_id)?;
-    require_string(params, "local_plugin_id", expected.local_plugin_id)?;
+    require_string(params, "plugin_id", expected.plugin_id)?;
     require_string(params, "remote_plugin_id", expected.remote_plugin_id)?;
     require_string(params, "plugin_name", expected.plugin_name)?;
     require_string(params, "marketplace_name", expected.marketplace_name)?;

@@ -861,7 +861,6 @@ async fn installed_plugin_telemetry_metadata_collects_capabilities() {
         PluginTelemetryMetadata {
             plugin_id: Some(plugin_id),
             remote_plugin_id: None,
-            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(PluginCapabilitySummary {
                 config_name: "sample@test".to_string(),
                 display_name: "sample".to_string(),
@@ -894,7 +893,6 @@ async fn installed_plugin_telemetry_metadata_resolves_persisted_remote_identity(
         PluginTelemetryMetadata {
             plugin_id: Some(plugin_id),
             remote_plugin_id: Some("plugins~Plugin_linear".to_string()),
-            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(PluginCapabilitySummary {
                 config_name: "linear@openai-curated-remote".to_string(),
                 display_name: "linear".to_string(),
@@ -928,7 +926,6 @@ async fn installed_plugin_telemetry_metadata_prefers_remote_snapshot_identity() 
         PluginTelemetryMetadata {
             plugin_id: Some(plugin_id),
             remote_plugin_id: Some("plugins~Plugin_linear".to_string()),
-            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(PluginCapabilitySummary {
                 config_name: "linear@openai-curated-remote".to_string(),
                 display_name: "linear".to_string(),
@@ -957,7 +954,6 @@ async fn installed_plugin_telemetry_metadata_accepts_authoritative_remote_identi
         PluginTelemetryMetadata {
             plugin_id: Some(plugin_id),
             remote_plugin_id: Some("plugins~Plugin_linear".to_string()),
-            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Remote,
             capability_summary: None,
         }
     );
@@ -985,7 +981,6 @@ fn capability_summary_telemetry_metadata_uses_local_identity() {
                 PluginId::parse("linear@openai-curated-remote").expect("plugin id should parse"),
             ),
             remote_plugin_id: None,
-            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(summary),
         })
     );
@@ -1017,7 +1012,6 @@ fn capability_summary_telemetry_metadata_resolves_persisted_remote_identity() {
         Some(PluginTelemetryMetadata {
             plugin_id: Some(plugin_id),
             remote_plugin_id: Some("plugins~Plugin_linear".to_string()),
-            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(summary),
         })
     );

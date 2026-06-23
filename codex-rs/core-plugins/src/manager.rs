@@ -72,7 +72,6 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
-use codex_plugin::PluginTelemetryLegacyIdSource;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
@@ -773,7 +772,6 @@ impl PluginsManager {
         PluginTelemetryMetadata {
             plugin_id: Some(plugin_id.clone()),
             remote_plugin_id: self.remote_plugin_id_for(plugin_id),
-            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: None,
         }
     }
@@ -785,7 +783,6 @@ impl PluginsManager {
     ) -> PluginTelemetryMetadata {
         PluginTelemetryMetadata {
             remote_plugin_id: Some(remote_plugin_id.to_string()),
-            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Remote,
             ..self.telemetry_metadata_for_plugin_id(plugin_id)
         }
     }
@@ -798,7 +795,6 @@ impl PluginsManager {
         Some(PluginTelemetryMetadata {
             remote_plugin_id: self.remote_plugin_id_for(&plugin_id),
             plugin_id: Some(plugin_id),
-            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(summary.clone()),
         })
     }
