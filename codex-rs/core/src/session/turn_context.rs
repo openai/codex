@@ -797,7 +797,7 @@ impl Session {
         turn_context
     }
 
-    pub(crate) async fn maybe_emit_unknown_model_warning_for_turn(&self, tc: &TurnContext) {
+    pub(crate) async fn maybe_emit_model_warnings_for_turn(&self, tc: &TurnContext) {
         if tc.model_info.used_fallback_model_metadata {
             self.send_event(
                 tc,
@@ -809,6 +809,13 @@ impl Session {
                 }),
             )
             .await;
+        }
+
+        if let Some(message) =
+            unsupported_code_mode_warning(&tc.model_info, tc.config.features.get())
+        {
+            self.send_event(tc, EventMsg::Warning(WarningEvent { message }))
+                .await;
         }
     }
 
