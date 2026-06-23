@@ -867,10 +867,9 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
+        self.maybe_start_remote_installed_plugins_cache_refresh(
             config,
             auth.clone(),
-            RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
             on_effective_plugins_changed,
         );
 
@@ -881,6 +880,20 @@ impl PluginsManager {
                 .recommended_plugins_mode_for_config(&config, auth.as_ref())
                 .await;
         });
+    }
+
+    pub fn maybe_start_remote_installed_plugins_cache_refresh(
+        self: &Arc<Self>,
+        config: &PluginsConfigInput,
+        auth: Option<CodexAuth>,
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    ) {
+        self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
+            config,
+            auth,
+            RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
+            on_effective_plugins_changed,
+        );
     }
 
     pub fn maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
@@ -1838,7 +1851,6 @@ impl PluginsManager {
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth_manager: Arc<AuthManager>,
-        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         if config.plugins_enabled {
             let use_remote_global_catalog =
@@ -1897,26 +1909,15 @@ impl PluginsManager {
                     warn!("failed to start configured marketplace auto-upgrade task: {err}");
                 }
             }
-            let config_for_remote_sync = config.clone();
-            let manager = Arc::clone(self);
-            let auth_manager_for_remote_sync = auth_manager.clone();
-            let on_effective_plugins_changed = on_effective_plugins_changed.clone();
-            tokio::spawn(async move {
-                let auth = auth_manager_for_remote_sync.auth().await;
-                manager.maybe_start_remote_plugin_caches_refresh(
-                    &config_for_remote_sync,
-                    auth.clone(),
-                    on_effective_plugins_changed.clone(),
-                );
-                manager.maybe_start_remote_installed_plugin_bundle_sync(
-                    &config_for_remote_sync,
-                    auth.clone(),
-                    on_effective_plugins_changed,
-                );
-                if config_for_remote_sync.remote_plugin_enabled {
+            if config.remote_plugin_enabled {
+                let config_for_remote_catalog = config.clone();
+                let manager = Arc::clone(self);
+                let auth_manager_for_remote_catalog = auth_manager.clone();
+                tokio::spawn(async move {
+                    let auth = auth_manager_for_remote_catalog.auth().await;
                     match crate::remote::fetch_and_cache_global_remote_plugin_catalog(
                         manager.codex_home.as_path(),
-                        &remote_plugin_service_config(&config_for_remote_sync),
+                        &remote_plugin_service_config(&config_for_remote_catalog),
                         auth.as_ref(),
                     )
                     .await
@@ -1933,8 +1934,8 @@ impl PluginsManager {
                             );
                         }
                     }
-                }
-            });
+                });
+            }
 
             let config_for_featured_plugins = config.clone();
             let manager = Arc::clone(self);
