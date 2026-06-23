@@ -1414,6 +1414,16 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     .await;
     api_key_auth.assert_visible_lacks(&["image_generation"]);
 
+    let provider_authenticated = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.model_provider.requires_openai_auth = false;
+        });
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    provider_authenticated.assert_visible_contains(&["image_generation"]);
+
     let image_generation = probe(|turn| {
         use_chatgpt_auth(turn);
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
