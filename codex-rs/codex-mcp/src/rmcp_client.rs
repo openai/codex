@@ -281,15 +281,16 @@ impl AsyncManagedClient {
             }
         }?;
         Some(if self.is_codex_apps_mcp_server {
-            annotate_codex_apps_tools(tools, &self.tool_plugin_provenance)
+            prepare_codex_apps_tools_for_model(tools, &self.tool_plugin_provenance)
         } else {
-            annotate_regular_mcp_tools(tools, &self.tool_plugin_provenance)
+            prepare_regular_mcp_tools_for_model(tools, &self.tool_plugin_provenance)
         })
     }
 }
 
-/// Applies the model-visible schema and connector-scoped plugin provenance trusted for Codex Apps.
-fn annotate_codex_apps_tools(
+/// Masks Codex Apps file inputs in the model-visible schema and adds plugin names to each tool.
+/// Plugin membership is resolved by connector ID, falling back to the MCP server when absent.
+fn prepare_codex_apps_tools_for_model(
     mut tools: Vec<ToolInfo>,
     tool_plugin_provenance: &ToolPluginProvenance,
 ) -> Vec<ToolInfo> {
@@ -302,25 +303,26 @@ fn annotate_codex_apps_tools(
             None => tool_plugin_provenance
                 .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
         };
-        annotate_plugin_source(tool, plugin_names);
+        add_plugin_provenance_to_tool(tool, plugin_names);
     }
     tools
 }
 
-/// Keeps regular MCP tool schemas unchanged and resolves plugin provenance at the server boundary.
-fn annotate_regular_mcp_tools(
+/// Adds server-scoped plugin names to regular MCP tools without changing their input schemas.
+fn prepare_regular_mcp_tools_for_model(
     mut tools: Vec<ToolInfo>,
     tool_plugin_provenance: &ToolPluginProvenance,
 ) -> Vec<ToolInfo> {
     for tool in &mut tools {
         let plugin_names = tool_plugin_provenance
             .plugin_display_names_for_mcp_server_name(tool.server_name.as_str());
-        annotate_plugin_source(tool, plugin_names);
+        add_plugin_provenance_to_tool(tool, plugin_names);
     }
     tools
 }
 
-fn annotate_plugin_source(tool: &mut ToolInfo, plugin_names: &[String]) {
+/// Stores plugin names on the tool and appends a model-visible plugin membership note.
+fn add_plugin_provenance_to_tool(tool: &mut ToolInfo, plugin_names: &[String]) {
     tool.plugin_display_names = plugin_names.to_vec();
     if plugin_names.is_empty() {
         return;
@@ -410,7 +412,8 @@ fn tool_info_from_listed_tool(
     }
 }
 
-/// Preserves trusted connector metadata and derives the model-visible Codex Apps tool identity.
+/// Converts a Codex Apps tool by preserving connector fields, removing connector prefixes from
+/// model-visible names and titles, and using the connector description for its tool namespace.
 fn codex_apps_tool_info_from_listed_tool(
     server_name: &str,
     server_instructions: Option<&str>,
@@ -454,7 +457,8 @@ fn codex_apps_tool_info_from_listed_tool(
     }
 }
 
-/// Removes untrusted connector metadata and keeps a regular MCP tool scoped to its server.
+/// Converts a regular MCP tool by removing reserved connector metadata, keeping its raw tool name,
+/// and using the MCP server name and instructions for the model-visible namespace.
 fn regular_mcp_tool_info_from_listed_tool(
     server_name: &str,
     server_instructions: Option<&str>,
