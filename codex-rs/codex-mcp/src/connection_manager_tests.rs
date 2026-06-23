@@ -1031,7 +1031,7 @@ async fn shutdown_continues_after_caller_is_aborted() {
     }
     .boxed()
     .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
         &approval_policy,
