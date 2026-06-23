@@ -482,6 +482,27 @@ fn test_normalize_tools_disambiguates_sanitized_tool_name_collisions() {
 }
 
 #[test]
+fn test_normalize_tools_disambiguates_canonical_flat_name_collisions() {
+    let tools = vec![create_test_tool("a", "b__c"), create_test_tool("a__b", "c")];
+
+    let model_tools =
+        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
+
+    assert_eq!(model_tools.len(), 2);
+    assert_eq!(model_tool_names(&model_tools).len(), 2);
+    let canonical_flat_names = model_tools
+        .iter()
+        .map(|tool| {
+            tool.canonical_tool_name()
+                .canonical_flat_name()
+                .into_owned()
+        })
+        .collect::<HashSet<_>>();
+    assert_eq!(canonical_flat_names.len(), 2);
+    assert!(canonical_flat_names.contains("mcp__a__b__c"));
+}
+
+#[test]
 fn tool_filter_allows_by_default() {
     let filter = ToolFilter::default();
 
