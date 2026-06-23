@@ -42,6 +42,7 @@ use tokio::net::TcpListener;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(20);
+const EXECUTOR_HTTP_MCP_URL: &str = "http://executor-only.invalid/mcp";
 const HTTP_MCP_SERVER_NAME: &str = "executor_http";
 const MCP_SERVER_NAME: &str = "executor_demo";
 const EXECUTOR_ENV_NAME: &str = "MCP_EXECUTOR_MARKER";
@@ -58,7 +59,7 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
     let http_mcp_service = StreamableHttpService::new(
         || Ok(ExecutorHttpMcpServer),
         Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
+        StreamableHttpServerConfig::default().with_allowed_hosts(["executor-only.invalid"]),
     );
     let http_router = Router::new().nest_service("/mcp", http_mcp_service);
     let http_server_handle = tokio::spawn(async move {
@@ -74,6 +75,12 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
         "mock_provider",
         "compact",
     )?;
+    let codex_bin = toml::Value::String(
+        codex_utils_cargo_bin::cargo_bin("codex")?
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let http_proxy = toml::Value::String(format!("http://{http_addr}"));
     std::fs::write(
         codex_home.path().join("environments.toml"),
         format!(
@@ -82,16 +89,12 @@ include_local = true
 
 [[environments]]
 id = "{EXECUTOR_ID}"
-program = {}
+program = {codex_bin}
 args = ["exec-server", "--listen", "stdio"]
 [environments.env]
 {EXECUTOR_ENV_NAME} = "{EXECUTOR_ENV_VALUE}"
-"#,
-            toml::Value::String(
-                codex_utils_cargo_bin::cargo_bin("codex")?
-                    .to_string_lossy()
-                    .into_owned()
-            )
+HTTP_PROXY = {http_proxy}
+"#
         ),
     )?;
 
@@ -111,7 +114,7 @@ args = ["exec-server", "--listen", "stdio"]
                     "startup_timeout_sec": 10,
                 },
                 (HTTP_MCP_SERVER_NAME): {
-                    "url": format!("http://{http_addr}/mcp"),
+                    "url": EXECUTOR_HTTP_MCP_URL,
                     "environment_id": "local",
                     "startup_timeout_sec": 10,
                 }

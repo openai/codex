@@ -182,6 +182,9 @@ fn bind_environment_env_vars(config: &mut McpServerConfig) -> Result<(), String>
             env_http_headers,
             ..
         } => {
+            if is_local_environment {
+                return Ok(());
+            }
             if bearer_token_env_var.is_some() {
                 return Err(
                     "`bearer_token_env_var` requires executor-side environment resolution for an executor-owned HTTP MCP"
