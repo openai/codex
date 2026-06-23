@@ -343,7 +343,7 @@ fn rollout_turn_sizes_support_legacy_implicit_turns() {
     };
     let mut tracker = RolloutTurnSizeTracker::default();
     for item in [user(), answer(), user(), answer()] {
-        tracker.observe(&item, 5);
+        tracker.observe(&item, /*payload_bytes*/ 5);
     }
 
     assert_eq!(
@@ -392,10 +392,10 @@ fn rollout_turn_sizes_exclude_incomplete_and_commentary_only_turns() {
         time_to_first_token_ms: None,
     }));
     for item in [start("turn-1"), user(), commentary, complete] {
-        tracker.observe(&item, 1);
+        tracker.observe(&item, /*payload_bytes*/ 1);
     }
     for item in [start("turn-2"), user()] {
-        tracker.observe(&item, 1);
+        tracker.observe(&item, /*payload_bytes*/ 1);
     }
 
     assert_eq!(tracker.finish(), Vec::<RolloutSizeTotals>::new());
