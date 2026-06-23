@@ -111,7 +111,6 @@ pub use mcp_edit::ConfigEditsBuilder;
 pub use mcp_edit::load_global_mcp_servers;
 pub use mcp_requirements::McpServerCommandMatcher;
 pub use mcp_requirements::McpServerMatcher;
-pub use mcp_requirements::McpServerPolicy;
 pub use mcp_requirements::McpServerUrlMatcher;
 pub use mcp_requirements::McpServerValueMatcher;
 pub use mcp_types::AppToolApproval;

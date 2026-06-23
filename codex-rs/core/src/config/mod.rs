@@ -14,7 +14,12 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
+use codex_config::McpServerIdentity;
+use codex_config::McpServerMatcher;
+use codex_config::McpServerRequirement;
+use codex_config::PluginRequirementsToml;
 use codex_config::ProfileV2Name;
+use codex_config::RequirementSource;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
@@ -36,6 +41,8 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerDisabledReason;
+use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
@@ -1482,9 +1489,22 @@ impl Config {
         plugin_id: &str,
         mcp_servers: &mut HashMap<String, McpServerConfig>,
     ) {
-        self.config_layer_stack
-            .requirements()
-            .apply_to_plugin_mcp_servers(plugin_id, mcp_servers);
+        let requirements = self.config_layer_stack.requirements();
+        filter_plugin_mcp_servers_by_requirements(
+            plugin_id,
+            mcp_servers,
+            requirements.plugins.as_ref(),
+            requirements.mcp_server_matchers.as_ref(),
+        );
+        let empty_mcp_allowlist = requirements
+            .mcp_servers
+            .as_ref()
+            .filter(|requirements| requirements.value.is_empty());
+        filter_mcp_servers_by_requirements(
+            mcp_servers,
+            empty_mcp_allowlist,
+            /*mcp_matchers*/ None,
+        );
     }
 
     pub async fn to_mcp_config(
@@ -1851,6 +1871,112 @@ fn load_model_catalog(
         .transpose()
 }
 
+fn filter_mcp_servers_by_requirements(
+    mcp_servers: &mut HashMap<String, McpServerConfig>,
+    mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
+    mcp_matchers: Option<&Sourced<BTreeMap<String, McpServerMatcher>>>,
+) {
+    if mcp_requirements.is_none() && mcp_matchers.is_none() {
+        return;
+    }
+
+    let source = RequirementSource::composite(
+        mcp_requirements
+            .iter()
+            .map(|requirements| requirements.source.clone())
+            .chain(
+                mcp_matchers
+                    .iter()
+                    .map(|requirements| requirements.source.clone()),
+            ),
+    );
+    for (name, server) in mcp_servers.iter_mut() {
+        let identity_requirement =
+            mcp_requirements.and_then(|requirements| requirements.value.get(name));
+        let matcher = mcp_matchers.and_then(|matchers| matchers.value.get(name));
+        let allowed = (identity_requirement.is_some() || matcher.is_some())
+            && identity_requirement
+                .is_none_or(|requirement| mcp_server_matches_requirement(requirement, server))
+            && matcher.is_none_or(|matcher| matcher.matches(server));
+        if allowed {
+            server.disabled_reason = None;
+        } else {
+            server.enabled = false;
+            server.disabled_reason = Some(McpServerDisabledReason::Requirements {
+                source: source.clone(),
+            });
+        }
+    }
+}
+
+fn filter_plugin_mcp_servers_by_requirements(
+    plugin_config_name: &str,
+    mcp_servers: &mut HashMap<String, McpServerConfig>,
+    plugin_requirements: Option<&Sourced<BTreeMap<String, PluginRequirementsToml>>>,
+    mcp_matchers: Option<&Sourced<BTreeMap<String, McpServerMatcher>>>,
+) {
+    if plugin_requirements.is_none() && mcp_matchers.is_none() {
+        return;
+    }
+
+    let source = RequirementSource::composite(
+        plugin_requirements
+            .iter()
+            .map(|requirements| requirements.source.clone())
+            .chain(
+                mcp_matchers
+                    .iter()
+                    .map(|requirements| requirements.source.clone()),
+            ),
+    );
+    let plugin_mcp_requirements = plugin_requirements
+        .and_then(|requirements| requirements.value.get(plugin_config_name))
+        .and_then(|plugin| plugin.mcp_servers.as_ref());
+
+    for (name, server) in mcp_servers.iter_mut() {
+        let allowed_by_plugin_requirement = plugin_requirements.is_none()
+            || plugin_mcp_requirements
+                .and_then(|mcp_requirements| mcp_requirements.get(name))
+                .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+        let allowed_by_matcher = mcp_matchers.is_none_or(|matchers| {
+            matchers
+                .value
+                .get(name)
+                .is_some_and(|matcher| matcher.matches(server))
+        });
+        let allowed = allowed_by_plugin_requirement && allowed_by_matcher;
+        if allowed {
+            server.disabled_reason = None;
+        } else {
+            server.enabled = false;
+            server.disabled_reason = Some(McpServerDisabledReason::Requirements {
+                source: source.clone(),
+            });
+        }
+    }
+}
+
+fn constrain_mcp_servers(
+    mcp_servers: HashMap<String, McpServerConfig>,
+    mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
+    mcp_matchers: Option<&Sourced<BTreeMap<String, McpServerMatcher>>>,
+) -> ConstraintResult<Constrained<HashMap<String, McpServerConfig>>> {
+    if mcp_requirements.is_none() && mcp_matchers.is_none() {
+        return Ok(Constrained::allow_any(mcp_servers));
+    }
+
+    let mcp_requirements = mcp_requirements.cloned();
+    let mcp_matchers = mcp_matchers.cloned();
+    Constrained::normalized(mcp_servers, move |mut servers| {
+        filter_mcp_servers_by_requirements(
+            &mut servers,
+            mcp_requirements.as_ref(),
+            mcp_matchers.as_ref(),
+        );
+        servers
+    })
+}
+
 fn apply_requirement_constrained_value<T>(
     field_name: &'static str,
     configured_value: T,
@@ -1885,6 +2011,26 @@ where
     }
 
     Ok(false)
+}
+
+fn mcp_server_matches_requirement(
+    requirement: &McpServerRequirement,
+    server: &McpServerConfig,
+) -> bool {
+    match &requirement.identity {
+        McpServerIdentity::Command {
+            command: want_command,
+        } => matches!(
+            &server.transport,
+            McpServerTransportConfig::Stdio { command: got_command, .. }
+                if got_command == want_command
+        ),
+        McpServerIdentity::Url { url: want_url } => matches!(
+            &server.transport,
+            McpServerTransportConfig::StreamableHttp { url: got_url, .. }
+                if got_url == want_url
+        ),
+    }
 }
 
 pub async fn load_global_mcp_servers(
@@ -2823,8 +2969,6 @@ impl Config {
             resolve_orchestrator_feature_enabled(orchestrator.and_then(|value| value.mcp.as_ref()));
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
-        let requirements = config_layer_stack.requirements().clone();
-        let mcp_server_policy = requirements.mcp_server_policy();
         let ConfigRequirements {
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,
@@ -2837,15 +2981,15 @@ impl Config {
             computer_use: _,
             feature_requirements,
             managed_hooks: _,
-            mcp_servers: _,
-            mcp_server_matchers: _,
+            mcp_servers,
+            mcp_server_matchers,
             plugins: _,
             exec_policy: _,
             enforce_residency,
             network: network_requirements,
             filesystem: filesystem_requirements,
             guardian_policy_config_source: _,
-        } = requirements;
+        } = config_layer_stack.requirements().clone();
 
         let mut startup_warnings = config_layer_stack
             .startup_warnings()
@@ -3594,9 +3738,12 @@ impl Config {
             &mut startup_warnings,
         )?;
 
-        let mcp_servers = mcp_server_policy
-            .constrain(cfg.mcp_servers.clone())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+        let mcp_servers = constrain_mcp_servers(
+            cfg.mcp_servers.clone(),
+            mcp_servers.as_ref(),
+            mcp_server_matchers.as_ref(),
+        )
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
         let network_permission_profile = constrained_permission_profile.get().clone();
         let network = build_network_proxy_spec(
