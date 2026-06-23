@@ -3337,7 +3337,14 @@ impl ThreadRequestProcessor {
                 .await?;
             ResumeHistoryExtent::Full
         };
-        let mut response_thread = stored_thread.clone();
+        let mut response_thread = self
+            .read_stored_thread_for_resume(thread_id, path, /*include_history*/ false)
+            .await
+            .ok()
+            .filter(|response_thread| {
+                stored_threads_have_same_resume_source(response_thread, &stored_thread)
+            })
+            .unwrap_or_else(|| stored_thread.clone());
         response_thread.history = None;
         let history = self.take_stored_thread_initial_history(&mut stored_thread)?;
         Ok((history, response_thread, history_extent))
@@ -4986,6 +4993,13 @@ fn set_thread_name_from_title(thread: &mut Thread, title: String) {
         return;
     }
     thread.name = Some(title);
+}
+
+fn stored_threads_have_same_resume_source(
+    candidate: &StoredThread,
+    verified: &StoredThread,
+) -> bool {
+    candidate.thread_id == verified.thread_id && candidate.rollout_path == verified.rollout_path
 }
 
 pub(crate) fn thread_from_stored_thread(
