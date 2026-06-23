@@ -647,11 +647,13 @@ fn open_create_new_with_mode(path: &Path, _mode: u32) -> Result<File> {
 mod tests {
     use super::*;
 
+    use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     #[test]
     fn managed_ca_private_key_is_not_persisted() {
+        ensure_rustls_crypto_provider();
         let dir = tempdir().unwrap();
         let ca = ManagedMitmCa::create(dir.path()).unwrap();
         ca.tls_acceptor_data_for_host("example.com").unwrap();
