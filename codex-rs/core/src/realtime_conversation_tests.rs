@@ -181,35 +181,26 @@ fn omits_quicksilver_alpha_header_for_realtime_v2() {
 }
 
 #[test]
-fn realtime_headers_include_non_default_originator() {
-    let headers = realtime_request_headers(
-        Some("session_1"),
-        Some("sk-test"),
-        RealtimeWsVersion::V2,
-        "codex_work_desktop",
-    )
-    .expect("headers")
-    .expect("headers");
-
-    assert_eq!(
-        headers
-            .get("originator")
-            .and_then(|value| value.to_str().ok()),
-        Some("codex_work_desktop")
-    );
-}
-
-#[test]
-fn realtime_headers_omit_default_originator() {
+fn realtime_headers_include_only_non_default_originator() {
     let default_originator = codex_login::default_client::originator();
-    let headers = realtime_request_headers(
-        Some("session_1"),
-        Some("sk-test"),
-        RealtimeWsVersion::V2,
-        default_originator.value.as_str(),
-    )
-    .expect("headers")
-    .expect("headers");
+    for (originator, expected_header) in [
+        ("codex_work_desktop", Some("codex_work_desktop")),
+        (default_originator.value.as_str(), None),
+    ] {
+        let headers = realtime_request_headers(
+            Some("session_1"),
+            Some("sk-test"),
+            RealtimeWsVersion::V2,
+            originator,
+        )
+        .expect("headers")
+        .expect("headers");
 
-    assert!(headers.get("originator").is_none());
+        assert_eq!(
+            headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            expected_header
+        );
+    }
 }
