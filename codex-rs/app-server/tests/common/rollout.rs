@@ -202,6 +202,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
         dynamic_tools: None,
         memory_mode: None,
         multi_agent_version: None,
+        context_window: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
@@ -289,6 +290,7 @@ pub fn create_fake_rollout_with_text_elements(
         dynamic_tools: None,
         memory_mode: None,
         multi_agent_version: None,
+        context_window: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,

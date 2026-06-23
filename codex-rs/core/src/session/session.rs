@@ -546,6 +546,7 @@ impl Session {
                 SessionId::from(thread_id)
             }
         });
+        let initial_auto_compact_window_ids = AutoCompactWindowIds::new_initial();
         let agent_control = agent_control.with_session_id(
             session_id,
             config
@@ -585,6 +586,9 @@ impl Session {
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
                             multi_agent_version: initial_multi_agent_version,
+                            initial_window_id: initial_auto_compact_window_ids
+                                .window_id
+                                .to_string(),
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),
                                 model_provider: config.model_provider_id.clone(),
@@ -889,7 +893,10 @@ impl Session {
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
-            let state = SessionState::new(session_configuration.clone());
+            let state = SessionState::new_with_auto_compact_window_ids(
+                session_configuration.clone(),
+                initial_auto_compact_window_ids,
+            );
             let managed_network_requirements_configured = config
                 .config_layer_stack
                 .requirements_toml()

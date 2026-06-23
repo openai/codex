@@ -3844,6 +3844,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
@@ -6715,6 +6716,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),

@@ -1975,6 +1975,7 @@ mod tests {
                 dynamic_tools: None,
                 memory_mode: Some("polluted".to_string()),
                 multi_agent_version: None,
+                context_window: None,
             },
             git: None,
         })];
@@ -2037,6 +2038,7 @@ mod tests {
                 dynamic_tools: None,
                 memory_mode: None,
                 multi_agent_version: None,
+                context_window: None,
             },
             git: Some(GitInfo {
                 commit_hash: Some(codex_git_utils::GitSha::new("rollout-sha")),

@@ -8,6 +8,17 @@ pub(crate) struct AutoCompactWindowIds {
     pub(crate) window_id: Uuid,
 }
 
+impl AutoCompactWindowIds {
+    pub(crate) fn new_initial() -> Self {
+        let window_id = Uuid::now_v7();
+        Self {
+            first_window_id: window_id,
+            previous_window_id: None,
+            window_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AutoCompactWindowSnapshot {
     pub(crate) prefill_input_tokens: Option<i64>,
@@ -34,15 +45,10 @@ pub(super) struct AutoCompactWindow {
 }
 
 impl AutoCompactWindow {
-    pub(super) fn new() -> Self {
-        let window_id = Uuid::now_v7();
+    pub(super) fn new_with_ids(ids: AutoCompactWindowIds) -> Self {
         Self {
             window_number: 0,
-            ids: AutoCompactWindowIds {
-                first_window_id: window_id,
-                previous_window_id: None,
-                window_id,
-            },
+            ids,
             new_context_window_requested: false,
             prefill_input_tokens: None,
             token_budget_reminder_delivered: false,
@@ -135,7 +141,7 @@ mod tests {
 
     #[test]
     fn tracks_prefill_and_window_boundaries() {
-        let mut window = AutoCompactWindow::new();
+        let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial());
 
         assert_eq!(window.window_number(), 0);
         let initial_window_id = window.ids().window_id;

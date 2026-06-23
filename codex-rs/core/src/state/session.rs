@@ -47,7 +47,18 @@ pub(crate) struct SessionState {
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
+    #[cfg(test)]
     pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
+        Self::new_with_auto_compact_window_ids(
+            session_configuration,
+            AutoCompactWindowIds::new_initial(),
+        )
+    }
+
+    pub(crate) fn new_with_auto_compact_window_ids(
+        session_configuration: SessionConfiguration,
+        auto_compact_window_ids: AutoCompactWindowIds,
+    ) -> Self {
         let history = ContextManager::new();
         Self {
             session_configuration,
@@ -57,7 +68,7 @@ impl SessionState {
             mcp_dependency_prompted: HashSet::new(),
             additional_context: AdditionalContextStore::default(),
             previous_turn_settings: None,
-            auto_compact_window: AutoCompactWindow::new(),
+            auto_compact_window: AutoCompactWindow::new_with_ids(auto_compact_window_ids),
             startup_prewarm: None,
             current_time_reminder: CurrentTimeReminderState::default(),
             active_connector_selection: HashSet::new(),
