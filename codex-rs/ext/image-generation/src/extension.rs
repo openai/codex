@@ -10,6 +10,7 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
@@ -28,6 +29,7 @@ struct ImageGenerationExtensionConfig {
     available: bool,
     provider: ModelProviderInfo,
     codex_home: AbsolutePathBuf,
+    basic: bool,
 }
 
 impl From<&Config> for ImageGenerationExtensionConfig {
@@ -38,6 +40,7 @@ impl From<&Config> for ImageGenerationExtensionConfig {
             available: config.model_provider.is_openai(),
             provider: config.model_provider.clone(),
             codex_home: config.codex_home.clone(),
+            basic: config.features.enabled(Feature::ImageGenBasic),
         }
     }
 }
@@ -90,6 +93,7 @@ impl ToolContributor for ImageGenerationExtension {
             )),
             config.codex_home.clone(),
             thread_store.level_id().to_string(),
+            config.basic,
         ))]
     }
 }

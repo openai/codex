@@ -4,6 +4,7 @@ use std::sync::Arc;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_extension_api::ExtensionData;
+use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::TurnItem;
@@ -133,6 +134,9 @@ pub(crate) async fn persist_image_generation_item(
     image_item: &mut ImageGenerationItem,
 ) -> Option<AbsolutePathBuf> {
     image_item.saved_path = None;
+    if turn_context.config.features.enabled(Feature::ImageGenBasic) {
+        return None;
+    }
     let session_id = sess.thread_id.to_string();
     match save_image_generation_result(
         &turn_context.config.codex_home,

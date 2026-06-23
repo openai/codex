@@ -18,6 +18,7 @@ use codex_tools::ResponsesApiNamespaceTool;
 use pretty_assertions::assert_eq;
 
 use super::GeneratedImageOutput;
+use super::IMAGEGEN_BASIC_DESCRIPTION;
 use super::ImageRequest;
 use super::ImagegenArgs;
 use super::imagegen_tool_spec;
@@ -29,12 +30,33 @@ const RESULT: &str = "cG5n";
 
 #[test]
 fn uses_reserved_image_gen_namespace() {
-    let ToolSpec::Namespace(spec) = imagegen_tool_spec() else {
+    let ToolSpec::Namespace(spec) = imagegen_tool_spec(/*basic*/ false) else {
         panic!("imagegen should advertise a namespace tool");
     };
     assert_eq!(spec.name, IMAGE_GEN_NAMESPACE);
     let ResponsesApiNamespaceTool::Function(function) = &spec.tools[0];
     assert_eq!(function.name, IMAGEGEN_TOOL_NAME);
+}
+
+#[test]
+fn basic_model_contract_omits_filesystem_paths() {
+    let ToolSpec::Namespace(basic) = imagegen_tool_spec(/*basic*/ true) else {
+        panic!("basic imagegen should advertise a namespace tool");
+    };
+    let ResponsesApiNamespaceTool::Function(basic) = &basic.tools[0];
+    let basic_properties = basic
+        .parameters
+        .properties
+        .as_ref()
+        .expect("basic imagegen should define properties");
+    assert_eq!(
+        basic_properties.keys().cloned().collect::<Vec<_>>(),
+        vec![
+            "num_last_images_to_include".to_string(),
+            "prompt".to_string(),
+        ]
+    );
+    assert_eq!(basic.description, IMAGEGEN_BASIC_DESCRIPTION);
 }
 
 #[tokio::test]

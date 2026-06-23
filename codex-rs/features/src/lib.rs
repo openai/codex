@@ -197,6 +197,8 @@ pub enum Feature {
     ImageGeneration,
     /// Replace hosted image generation with the standalone image-generation extension.
     ImageGenExt,
+    /// Use the basic image-generation contract without filesystem paths.
+    ImageGenBasic,
     /// Removed compatibility flag for always-on centralized image preparation.
     ResizeAllImages,
     /// Generate Responses API item IDs for client-created history items.
@@ -1164,6 +1166,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageGenExt,
         key: "imagegenext",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ImageGenBasic,
+        key: "imagegenbasic",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

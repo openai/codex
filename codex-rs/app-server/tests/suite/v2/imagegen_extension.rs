@@ -40,6 +40,7 @@ const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA
 enum ImagegenTestMode {
     Direct,
     CodeModeOnly,
+    Basic,
 }
 
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
@@ -142,6 +143,93 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
             .iter()
             .any(|text| text.contains("Generated images are saved to")),
         "standalone image generation should not emit the legacy developer-message hint"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn basic_image_generation_stays_in_conversation() -> Result<()> {
+    let call_id = "image-run-conversation-only";
+    let server = responses::start_mock_server().await;
+    mount_image_response(&server).await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    call_id,
+                    "image_gen",
+                    "imagegen",
+                    &json!({"prompt": "paint a blue whale"}).to_string(),
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), ImagegenTestMode::Basic)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    start_image_generation_turn(&mut mcp).await?;
+    let completed = timeout(
+        DEFAULT_READ_TIMEOUT,
+        wait_for_image_generation_completed(&mut mcp),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert_eq!(
+        completed.item,
+        ThreadItem::ImageGeneration {
+            id: call_id.to_string(),
+            status: "completed".to_string(),
+            revised_prompt: Some("paint a blue whale".to_string()),
+            result: RESULT.to_string(),
+            saved_path: None,
+        }
+    );
+    assert!(!codex_home.path().join("generated_images").exists());
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let tool = requests[0]
+        .tool_by_name("image_gen", "imagegen")
+        .context("basic imagegen tool should be sent to the model")?;
+    assert!(
+        tool.pointer("/parameters/properties/referenced_image_paths")
+            .is_none()
+    );
+    assert!(
+        tool["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("conversation images"))
+    );
+    assert_eq!(
+        requests[1].function_call_output(call_id)["output"],
+        json!([{
+            "type": "input_image",
+            "image_url": format!("data:image/png;base64,{RESULT}"),
+            "detail": "high",
+        }])
     );
 
     Ok(())
@@ -552,9 +640,10 @@ fn create_config_toml(
     server_uri: &str,
     mode: ImagegenTestMode,
 ) -> std::io::Result<()> {
-    let code_mode_only = match mode {
+    let mode_feature = match mode {
         ImagegenTestMode::Direct => "",
         ImagegenTestMode::CodeModeOnly => "code_mode_only = true",
+        ImagegenTestMode::Basic => "imagegenbasic = true",
     };
     std::fs::write(
         codex_home.join("config.toml"),
@@ -568,7 +657,7 @@ chatgpt_base_url = "{server_uri}"
 
 [features]
 imagegenext = true
-{code_mode_only}
+{mode_feature}
 
 [model_providers.openai-custom]
 name = "OpenAI"

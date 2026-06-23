@@ -47,12 +47,14 @@ use crate::backend::CodexImagesBackend;
 const IMAGE_MODEL: &str = "gpt-image-2";
 const MAX_EDIT_IMAGES: usize = 5;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
+const IMAGEGEN_BASIC_DESCRIPTION: &str = include_str!("../imagegen_basic_description.md");
 
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
     codex_home: AbsolutePathBuf,
     thread_id: String,
+    basic: bool,
 }
 
 impl ImageGenerationTool {
@@ -61,11 +63,13 @@ impl ImageGenerationTool {
         backend: CodexImagesBackend,
         codex_home: AbsolutePathBuf,
         thread_id: String,
+        basic: bool,
     ) -> Self {
         Self {
             backend,
             codex_home,
             thread_id,
+            basic,
         }
     }
 }
@@ -88,7 +92,7 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
 
     /// Advertises the model contract: a rewritten prompt and optional edit references.
     fn spec(&self) -> ToolSpec {
-        imagegen_tool_spec()
+        imagegen_tool_spec(self.basic)
     }
 
     /// Exposes image generation directly and through the nested code-mode tool surface.
@@ -154,13 +158,16 @@ impl ImageGenerationTool {
                 saved_path: None,
             }))
             .await;
-        let output_path =
-            image_generation_artifact_path(&self.codex_home, &self.thread_id, &call.call_id);
-        let output_dir = output_path
-            .parent()
-            .unwrap_or_else(|| self.codex_home.clone());
-        let output_hint =
-            extension_image_generation_output_hint(output_dir.display(), output_path.display());
+        let output_hint = if self.basic {
+            None
+        } else {
+            let output_path =
+                image_generation_artifact_path(&self.codex_home, &self.thread_id, &call.call_id);
+            let output_dir = output_path
+                .parent()
+                .unwrap_or_else(|| self.codex_home.clone());
+            extension_image_generation_output_hint(output_dir.display(), output_path.display())
+        };
         Ok(Box::new(GeneratedImageOutput {
             result,
             output_hint,
@@ -373,7 +380,7 @@ fn parse_args(call: &ToolCall) -> Result<ImagegenArgs, FunctionCallError> {
 }
 
 /// Builds the namespace function schema exposed to the model.
-fn imagegen_tool_spec() -> ToolSpec {
+fn imagegen_tool_spec(basic: bool) -> ToolSpec {
     let mut schema_value = serde_json::to_value(
         SchemaSettings::draft2019_09()
             .with(|settings| settings.inline_subschemas = true)
@@ -384,6 +391,9 @@ fn imagegen_tool_spec() -> ToolSpec {
     let Value::Object(ref mut schema) = schema_value else {
         unreachable!("imagegen root schema must be an object");
     };
+    if basic && let Some(Value::Object(properties)) = schema.get_mut("properties") {
+        properties.remove("referenced_image_paths");
+    }
     let mut input_schema = Map::new();
     for key in ["properties", "required", "type", "additionalProperties"] {
         if let Some(value) = schema.remove(key) {
@@ -395,7 +405,12 @@ fn imagegen_tool_spec() -> ToolSpec {
         description: default_namespace_description(IMAGE_GEN_NAMESPACE),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: IMAGEGEN_TOOL_NAME.to_string(),
-            description: IMAGEGEN_DESCRIPTION.to_string(),
+            description: if basic {
+                IMAGEGEN_BASIC_DESCRIPTION
+            } else {
+                IMAGEGEN_DESCRIPTION
+            }
+            .to_string(),
             strict: false,
             parameters: parse_tool_input_schema(&Value::Object(input_schema))
                 .unwrap_or_else(|err| panic!("imagegen input schema should parse: {err}")),
