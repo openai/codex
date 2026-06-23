@@ -39,6 +39,8 @@ use tokio::time::timeout;
 use wiremock::MockServer;
 
 const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const REMOTE_IMAGE_URL_ERROR: &str =
+    "remote image URLs are not supported; use an inline data URL instead";
 
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
 // subprocesses or processing test RPCs under load.
@@ -552,15 +554,19 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     Ok(())
 }
 
-/// Ensures dynamic tool call responses can include structured content items.
-#[tokio::test]
-async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<()> {
-    let call_id = "dyn-call-items-1";
+struct PendingDynamicToolCall {
+    mcp: TestAppServer,
+    server: MockServer,
+    request_id: RequestId,
+    params: DynamicToolCallParams,
+}
+
+async fn start_function_dynamic_tool_call(call_id: &str) -> Result<PendingDynamicToolCall> {
     let tool_name = "demo_tool";
     let tool_args = json!({ "city": "Paris" });
     let tool_call_arguments = serde_json::to_string(&tool_args)?;
 
-    let responses = vec![
+    let response_sequence = vec![
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
@@ -568,7 +574,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
         ]),
         create_final_assistant_message_sse_response("Done")?,
     ];
-    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(response_sequence).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -632,20 +638,39 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let (request_id, params) = match request {
+    let (request_id, actual_params) = match request {
         ServerRequest::DynamicToolCall { request_id, params } => (request_id, params),
         other => panic!("expected DynamicToolCall request, got {other:?}"),
     };
 
-    let expected = DynamicToolCallParams {
+    let params = DynamicToolCallParams {
         thread_id,
-        turn_id: turn_id.clone(),
+        turn_id,
         call_id: call_id.to_string(),
         namespace: None,
         tool: tool_name.to_string(),
         arguments: tool_args,
     };
-    assert_eq!(params, expected);
+    assert_eq!(actual_params, params);
+
+    Ok(PendingDynamicToolCall {
+        mcp,
+        server,
+        request_id,
+        params,
+    })
+}
+
+/// Ensures dynamic tool call responses can include structured content items.
+#[tokio::test]
+async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<()> {
+    let call_id = "dyn-call-items-1";
+    let PendingDynamicToolCall {
+        mut mcp,
+        server,
+        request_id,
+        params,
+    } = start_function_dynamic_tool_call(call_id).await?;
 
     let response_content_items = vec![
         DynamicToolCallOutputContentItem::InputText {
@@ -678,8 +703,8 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
         .await?;
 
     let completed = wait_for_dynamic_tool_completed(&mut mcp, call_id).await?;
-    assert_eq!(completed.thread_id, expected.thread_id.clone());
-    assert_eq!(completed.turn_id, turn_id);
+    assert_eq!(completed.thread_id, params.thread_id);
+    assert_eq!(completed.turn_id, params.turn_id);
     let ThreadItem::DynamicToolCall {
         status,
         content_items: completed_content_items,
@@ -742,6 +767,62 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
         serde_json::to_string(&payload)?,
         serde_json::to_string(&content_items)?
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn dynamic_tool_remote_image_response_becomes_model_visible_error() -> Result<()> {
+    let call_id = "dyn-call-remote-image";
+    let PendingDynamicToolCall {
+        mut mcp,
+        server,
+        request_id,
+        params,
+    } = start_function_dynamic_tool_call(call_id).await?;
+
+    let response = DynamicToolCallResponse {
+        content_items: vec![DynamicToolCallOutputContentItem::InputImage {
+            image_url: "https://example.com/tool.png".to_string(),
+        }],
+        success: true,
+    };
+    mcp.send_response(request_id, serde_json::to_value(response)?)
+        .await?;
+
+    let completed = wait_for_dynamic_tool_completed(&mut mcp, call_id).await?;
+    assert_eq!(completed.thread_id, params.thread_id);
+    assert_eq!(completed.turn_id, params.turn_id);
+    let ThreadItem::DynamicToolCall {
+        status,
+        content_items,
+        success,
+        ..
+    } = completed.item
+    else {
+        panic!("expected dynamic tool call item");
+    };
+    assert_eq!(status, DynamicToolCallStatus::Failed);
+    assert_eq!(
+        content_items,
+        Some(vec![DynamicToolCallOutputContentItem::InputText {
+            text: REMOTE_IMAGE_URL_ERROR.to_string(),
+        }])
+    );
+    assert_eq!(success, Some(false));
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let output = responses_bodies(&server)
+        .await?
+        .iter()
+        .find_map(|body| function_call_output_raw_output(body, call_id))
+        .context("expected function_call_output output in follow-up request")?;
+    assert_eq!(output, json!(REMOTE_IMAGE_URL_ERROR));
 
     Ok(())
 }
