@@ -15,3 +15,14 @@ WHERE title <> ''
 UPDATE threads
 SET title_snapshot = title
 WHERE name_state = 'legacy_unknown';
+
+CREATE TRIGGER threads_title_snapshot_after_insert
+AFTER INSERT ON threads
+WHEN NEW.title_snapshot = ''
+ AND NEW.title <> ''
+ AND NEW.title_state = 'legacy_unknown'
+BEGIN
+    UPDATE threads
+    SET title_snapshot = NEW.title
+    WHERE id = NEW.id;
+END;

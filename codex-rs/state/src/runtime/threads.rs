@@ -946,13 +946,16 @@ ON CONFLICT(id) DO UPDATE SET
     cli_version = excluded.cli_version,
     name = CASE
         WHEN threads.title <> threads.title_snapshot THEN NULLIF(threads.title, '')
-        WHEN threads.name_state <> 'legacy_unknown' THEN threads.name
+        WHEN excluded.name_state = 'explicit' THEN excluded.name
+        WHEN excluded.name_state = 'cleared' THEN NULL
+        WHEN threads.name_state IN ('explicit', 'cleared') THEN threads.name
         WHEN excluded.name_state = 'legacy_unknown' THEN NULL
         ELSE excluded.name
     END,
     name_state = CASE
         WHEN threads.title <> threads.title_snapshot THEN CASE WHEN threads.title = '' THEN 'cleared' ELSE 'explicit' END
-        WHEN threads.name_state <> 'legacy_unknown' THEN threads.name_state
+        WHEN excluded.name_state IN ('explicit', 'cleared') THEN excluded.name_state
+        WHEN threads.name_state IN ('explicit', 'cleared') THEN threads.name_state
         WHEN excluded.name_state = 'legacy_unknown' THEN 'unnamed'
         ELSE excluded.name_state
     END,
