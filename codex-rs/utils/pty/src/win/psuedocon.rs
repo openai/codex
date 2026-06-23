@@ -27,6 +27,7 @@ use anyhow::ensure;
 use filedescriptor::FileDescriptor;
 use filedescriptor::OwnedHandle;
 use lazy_static::lazy_static;
+use portable_pty::Child;
 use portable_pty::cmdbuilder::CommandBuilder;
 use shared_library::shared_library;
 use std::env;
@@ -153,11 +154,33 @@ impl PsuedoCon {
             result == S_OK,
             "failed to create psuedo console: HRESULT {result}"
         );
-        Ok(Self {
+        let pseudoconsole = Self {
             con,
             _input: input,
             _output: output,
-        })
+        };
+        pseudoconsole.initialize_utf8_code_page()?;
+        Ok(pseudoconsole)
+    }
+
+    fn initialize_utf8_code_page(&self) -> anyhow::Result<()> {
+        // The code page belongs to the console, so configure it with a short-lived
+        // client before attaching the requested process. Redirecting output keeps
+        // the initialization invisible to the terminal session.
+        let program = env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        let mut command = CommandBuilder::new(program);
+        command.arg("/D");
+        command.arg("/Q");
+        command.arg("/C");
+        command.arg("chcp 65001>NUL");
+
+        let status = self.spawn_command(command)?.wait()?;
+        ensure!(
+            status.success(),
+            "failed to initialize ConPTY UTF-8 code page: exit code {}",
+            status.exit_code()
+        );
+        Ok(())
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {
