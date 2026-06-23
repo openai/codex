@@ -806,7 +806,7 @@ impl ChatWidget {
             if curated_loading && !curated_has_entries {
                 (
                     "Loading OpenAI Curated plugins...",
-                    "This section updates when app-server returns it.",
+                    "This updates when these plugins finish loading.",
                 )
             } else if let Some(section_error) = by_openai_section_error
                 && !curated_has_entries
@@ -1680,7 +1680,7 @@ fn is_personal_marketplace_path(marketplace_path: &AbsolutePathBuf) -> bool {
 fn remote_section_loading_item(label: &str) -> SelectionItem {
     SelectionItem {
         name: format!("Loading {label} plugins..."),
-        description: Some("This section updates when app-server returns it.".to_string()),
+        description: Some("This updates when these plugins finish loading.".to_string()),
         is_disabled: true,
         ..Default::default()
     }

@@ -1216,10 +1216,10 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
         .join("\n\n"),
         @r###"
         OpenAI Curated marketplace.
-        Loading OpenAI Curated plugins...  This section updates when app-server returns it.
+        Loading OpenAI Curated plugins...  This updates when these plugins finish loading.
 
         Loading Workspace plugins.
-        Loading Workspace plugins...  This section updates when app-server returns it.
+        Loading Workspace plugins...  This updates when these plugins finish loading.
 
         Workspace unavailable.
         Workspace unavailable  Sign in to ChatGPT to load workspace plugins.
