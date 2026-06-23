@@ -308,7 +308,6 @@ async fn extension_tool_uses_granted_turn_permissions_without_local_persistence(
         json!([{
             "type": "input_image",
             "image_url": TINY_PNG_DATA_URL,
-            "detail": "high",
         }])
     );
     assert!(!test.config.codex_home.join("generated_images").exists());
