@@ -826,7 +826,7 @@
         "enabled": {
           "type": "boolean"
         },
-        "reminder_interval_model_requests": {
+        "reminder_interval_seconds": {
           "format": "uint64",
           "minimum": 1.0,
           "type": "integer"
