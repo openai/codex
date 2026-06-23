@@ -7,6 +7,9 @@ use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecutorFileSystem;
+use codex_extension_api::EnvironmentStartupFuture;
+use codex_extension_api::EnvironmentStartupOutcome;
+use codex_extension_api::StartingEnvironment;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -54,6 +57,21 @@ impl fmt::Debug for StartingTurnEnvironment {
             .field("selection", &self.selection)
             .field("resolved", &self.resolution.peek().is_some())
             .finish_non_exhaustive()
+    }
+}
+
+impl StartingEnvironment for StartingTurnEnvironment {
+    fn environment_id(&self) -> &str {
+        &self.selection.environment_id
+    }
+
+    fn wait_until_ready(&self) -> EnvironmentStartupFuture<'_> {
+        Box::pin(async move {
+            match self.resolution.clone().await {
+                Ok(_) => EnvironmentStartupOutcome::Ready,
+                Err(_) => EnvironmentStartupOutcome::Failed,
+            }
+        })
     }
 }
 

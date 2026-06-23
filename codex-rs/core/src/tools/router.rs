@@ -9,6 +9,8 @@ use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec_plan::build_tool_router;
+use codex_extension_api::StartingEnvironment;
+use codex_extension_api::ToolContributionInput;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
@@ -246,17 +248,27 @@ impl ToolRouter {
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn extension_tool_executors(
     session: &Session,
+    step_context: &StepContext,
 ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
+    let starting_environments = step_context
+        .environments
+        .starting
+        .iter()
+        .cloned()
+        .map(|environment| Arc::new(environment) as Arc<dyn StartingEnvironment>)
+        .collect::<Vec<_>>();
     session
         .services
         .extensions
         .tool_contributors()
         .iter()
         .flat_map(|contributor| {
-            contributor.tools(
-                &session.services.session_extension_data,
-                &session.services.thread_extension_data,
-            )
+            contributor.tools_for_step(ToolContributionInput {
+                session_store: &session.services.session_extension_data,
+                thread_store: &session.services.thread_extension_data,
+                turn_store: step_context.turn.extension_data.as_ref(),
+                starting_environments: &starting_environments,
+            })
         })
         .collect()
 }

@@ -365,7 +365,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            extension_tool_executors: extension_tool_executors(&session),
+            extension_tool_executors: extension_tool_executors(&session, step_context.as_ref()),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
         &Default::default(),

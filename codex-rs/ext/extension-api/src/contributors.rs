@@ -10,6 +10,7 @@ use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
+use crate::StartingEnvironment;
 
 mod context;
 mod mcp;
@@ -231,14 +232,35 @@ pub trait TokenUsageContributor: Send + Sync {
     }
 }
 
+/// Host context available while extensions contribute tools for one model request.
+#[derive(Clone, Copy)]
+pub struct ToolContributionInput<'a> {
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+    /// Store scoped to this turn runtime.
+    pub turn_store: &'a ExtensionData,
+    /// Selected environments that are still starting for this request.
+    pub starting_environments: &'a [Arc<dyn StartingEnvironment>],
+}
+
 /// Extension contribution that exposes native tools owned by a feature.
 pub trait ToolContributor: Send + Sync {
-    /// Returns the native tools visible for the supplied extension stores.
+    /// Returns tools that depend only on session- and thread-scoped state.
     fn tools(
         &self,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>;
+
+    /// Returns the complete native tool list for one model request.
+    fn tools_for_step(
+        &self,
+        input: ToolContributionInput<'_>,
+    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        self.tools(input.session_store, input.thread_store)
+    }
 }
 
 /// Contributor for host-owned tool lifecycle gates.
