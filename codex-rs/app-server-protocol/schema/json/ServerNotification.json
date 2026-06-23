@@ -3766,6 +3766,10 @@
       ],
       "type": "object"
     },
+    "ThreadExtra": {
+      "description": "Extra app-server data for a thread.",
+      "type": "object"
+    },
     "ThreadGoal": {
       "properties": {
         "createdAt": {
