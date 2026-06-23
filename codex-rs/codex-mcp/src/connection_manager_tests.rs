@@ -179,12 +179,12 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
             "properties": {
                 "file": {
                     "type": "string",
-                    "description": "Original file payload. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                    "description": "Original file payload. This parameter expects an absolute local file path or an RFC 2397 data URI with a name parameter. If you want to upload a file, provide the path or data URI here."
                 },
                 "files": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                    "description": "This parameter expects an absolute local file path or an RFC 2397 data URI with a name parameter. If you want to upload a file, provide the path or data URI here."
                 }
             }
         })

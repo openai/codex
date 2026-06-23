@@ -297,7 +297,7 @@ fn mask_input_property_schema(schema: &mut JsonValue) {
         .and_then(JsonValue::as_str)
         .map(str::to_string)
         .unwrap_or_default();
-    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
+    let guidance = "This parameter expects an absolute local file path or an RFC 2397 data URI with a name parameter. If you want to upload a file, provide the path or data URI here.";
     if description.is_empty() {
         description = guidance.to_string();
     } else if !description.contains(guidance) {
