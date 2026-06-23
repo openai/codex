@@ -1974,19 +1974,21 @@ fn mcp_server_matches_requirement(
     requirement: &McpServerRequirement,
     server: &McpServerConfig,
 ) -> bool {
-    match &requirement.identity {
-        McpServerIdentity::Command {
-            command: want_command,
-        } => matches!(
-            &server.transport,
-            McpServerTransportConfig::Stdio { command: got_command, .. }
-                if got_command == want_command
-        ),
-        McpServerIdentity::Url { url: want_url } => matches!(
-            &server.transport,
-            McpServerTransportConfig::StreamableHttp { url: got_url, .. }
-                if got_url == want_url
-        ),
+    match requirement {
+        McpServerRequirement::Identity { identity } => match identity {
+            McpServerIdentity::Command {
+                command: want_command,
+            } => matches!(
+                &server.transport,
+                McpServerTransportConfig::Stdio { command: got_command, .. }
+                    if got_command == want_command
+            ),
+            McpServerIdentity::Url { url: want_url } => matches!(
+                &server.transport,
+                McpServerTransportConfig::StreamableHttp { url: got_url, .. }
+                    if got_url == want_url
+            ),
+        },
     }
 }
 

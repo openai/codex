@@ -225,8 +225,9 @@ pub enum McpServerIdentity {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct McpServerRequirement {
-    pub identity: McpServerIdentity,
+#[serde(untagged)]
+pub enum McpServerRequirement {
+    Identity { identity: McpServerIdentity },
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -3469,7 +3470,7 @@ command = "python3 /enterprise/hooks/pre.py"
                 BTreeMap::from([
                     (
                         "docs".to_string(),
-                        McpServerRequirement {
+                        McpServerRequirement::Identity {
                             identity: McpServerIdentity::Command {
                                 command: "codex-mcp".to_string(),
                             },
@@ -3477,7 +3478,7 @@ command = "python3 /enterprise/hooks/pre.py"
                     ),
                     (
                         "remote".to_string(),
-                        McpServerRequirement {
+                        McpServerRequirement::Identity {
                             identity: McpServerIdentity::Url {
                                 url: "https://example.com/mcp".to_string(),
                             },
@@ -3511,7 +3512,7 @@ command = "python3 /enterprise/hooks/pre.py"
                         PluginRequirementsToml {
                             mcp_servers: Some(BTreeMap::from([(
                                 "remote".to_string(),
-                                McpServerRequirement {
+                                McpServerRequirement::Identity {
                                     identity: McpServerIdentity::Url {
                                         url: "https://example.com/mcp".to_string(),
                                     },
@@ -3524,7 +3525,7 @@ command = "python3 /enterprise/hooks/pre.py"
                         PluginRequirementsToml {
                             mcp_servers: Some(BTreeMap::from([(
                                 "sample".to_string(),
-                                McpServerRequirement {
+                                McpServerRequirement::Identity {
                                     identity: McpServerIdentity::Command {
                                         command: "sample-mcp".to_string(),
                                     },
