@@ -214,9 +214,13 @@ async fn basic_image_generation_stays_in_conversation() -> Result<()> {
     let tool = requests[0]
         .tool_by_name("image_gen", "imagegen")
         .context("basic imagegen tool should be sent to the model")?;
-    assert!(
-        tool.pointer("/parameters/properties/referenced_image_paths")
-            .is_none()
+    let properties = tool
+        .pointer("/parameters/properties")
+        .and_then(serde_json::Value::as_object)
+        .context("basic imagegen should define properties")?;
+    assert_eq!(
+        properties.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["num_last_images_to_include", "prompt"]
     );
     assert!(
         tool["description"]
