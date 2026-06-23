@@ -239,8 +239,6 @@ pub struct ToolContributionInput<'a> {
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.
     pub thread_store: &'a ExtensionData,
-    /// Store scoped to this turn runtime.
-    pub turn_store: &'a ExtensionData,
     /// Selected environments that are still starting for this request.
     pub starting_environments: &'a [Arc<dyn StartingEnvironment>],
 }

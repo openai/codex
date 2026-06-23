@@ -266,7 +266,6 @@ pub(crate) fn extension_tool_executors(
             contributor.tools_for_step(ToolContributionInput {
                 session_store: &session.services.session_extension_data,
                 thread_store: &session.services.thread_extension_data,
-                turn_store: step_context.turn.extension_data.as_ref(),
                 starting_environments: &starting_environments,
             })
         })
