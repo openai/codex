@@ -1088,10 +1088,15 @@ pub struct ThreadListParams {
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,
-    /// Optional direct parent thread filter.
+    /// Optional direct parent thread filter. Mutually exclusive with `ancestorThreadId`.
     #[experimental("thread/list.parentThreadId")]
     #[ts(optional = nullable)]
     pub parent_thread_id: Option<String>,
+    /// Optional ancestor thread filter. Returns spawned descendants at any depth, excluding the
+    /// ancestor itself. Mutually exclusive with `parentThreadId`.
+    #[experimental("thread/list.ancestorThreadId")]
+    #[ts(optional = nullable)]
+    pub ancestor_thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
