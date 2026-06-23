@@ -1455,7 +1455,9 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
 
     let provider_without_actor_auth = probe(|turn| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
-        use_provider_auth(turn, /*requires_openai_auth*/ false, /*actor_header*/ None);
+        use_provider_auth(
+            turn, /*requires_openai_auth*/ false, /*actor_header*/ None,
+        );
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
