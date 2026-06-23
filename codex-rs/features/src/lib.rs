@@ -145,7 +145,7 @@ pub enum Feature {
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
-    /// Removed compatibility flag retained as a no-op.
+    /// Enable Ultra reasoning effort and its proactive multi-agent behavior.
     MultiAgentMode,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
@@ -1038,7 +1038,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MultiAgentMode,
         key: "multi_agent_mode",
-        stage: Stage::Removed,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

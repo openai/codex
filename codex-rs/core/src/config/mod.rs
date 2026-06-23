@@ -1461,6 +1461,7 @@ impl Config {
             tool_output_token_limit: self.tool_output_token_limit,
             base_instructions: self.base_instructions.clone(),
             personality_enabled: self.features.enabled(Feature::Personality),
+            ultra_reasoning_enabled: self.features.enabled(Feature::MultiAgentMode),
             model_supports_reasoning_summaries: self.model_supports_reasoning_summaries,
             model_catalog: self.model_catalog.clone(),
         }

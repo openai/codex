@@ -157,9 +157,13 @@ impl CatalogRequestProcessor {
         &self,
         params: ModelListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        Self::list_models(self.thread_manager.clone(), params)
-            .await
-            .map(|response| Some(response.into()))
+        Self::list_models(
+            self.thread_manager.clone(),
+            params,
+            self.config.features.enabled(Feature::MultiAgentMode),
+        )
+        .await
+        .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn experimental_feature_list(
@@ -248,13 +252,19 @@ impl CatalogRequestProcessor {
     async fn list_models(
         thread_manager: Arc<ThreadManager>,
         params: ModelListParams,
+        ultra_reasoning_enabled: bool,
     ) -> Result<ModelListResponse, JSONRPCErrorError> {
         let ModelListParams {
             limit,
             cursor,
             include_hidden,
         } = params;
-        let models = supported_models(thread_manager, include_hidden.unwrap_or(false)).await;
+        let models = supported_models(
+            thread_manager,
+            include_hidden.unwrap_or(false),
+            ultra_reasoning_enabled,
+        )
+        .await;
         let total = models.len();
 
         if total == 0 {

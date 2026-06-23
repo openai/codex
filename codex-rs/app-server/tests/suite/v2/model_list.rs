@@ -7,6 +7,7 @@ use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
+use app_test_support::write_models_cache_with_models;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Model;
@@ -20,6 +21,8 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -155,6 +158,81 @@ async fn list_models_includes_hidden_models() -> Result<()> {
 
     assert!(items.iter().any(|item| item.hidden));
     assert!(next_cursor.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_models_only_exposes_ultra_when_feature_is_enabled() -> Result<()> {
+    let mut model = codex_models_manager::bundled_models_response()?
+        .models
+        .into_iter()
+        .find(|model| model.visibility == codex_protocol::openai_models::ModelVisibility::List)
+        .expect("bundled catalog should contain a visible model");
+    model.default_reasoning_level = Some(ReasoningEffort::Ultra);
+    model.supported_reasoning_levels = vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Low".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Ultra,
+            description: "Uses maximum reasoning with proactive delegation".to_string(),
+        },
+    ];
+    let model_slug = model.slug.clone();
+    let expected_without_ultra = vec![ReasoningEffortOption {
+        reasoning_effort: ReasoningEffort::Low,
+        description: "Low".to_string(),
+    }];
+    let expected_with_ultra = vec![
+        expected_without_ultra[0].clone(),
+        ReasoningEffortOption {
+            reasoning_effort: ReasoningEffort::Ultra,
+            description: "Uses maximum reasoning with proactive delegation".to_string(),
+        },
+    ];
+
+    for (feature_enabled, expected_efforts, expected_default) in [
+        (false, expected_without_ultra, ReasoningEffort::Low),
+        (true, expected_with_ultra, ReasoningEffort::Ultra),
+    ] {
+        let codex_home = TempDir::new()?;
+        write_models_cache_with_models(codex_home.path(), vec![model.clone()])?;
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            format!("[features]\nmulti_agent_mode = {feature_enabled}\n"),
+        )?;
+        let mut mcp = TestAppServer::new(codex_home.path()).await?;
+        timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+        let request_id = mcp
+            .send_list_models_request(ModelListParams {
+                limit: Some(100),
+                cursor: None,
+                include_hidden: None,
+            })
+            .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let response = to_response::<ModelListResponse>(response)?;
+
+        let model = response
+            .data
+            .iter()
+            .find(|model| model.model == model_slug)
+            .expect("configured model should be listed");
+        assert_eq!(
+            (
+                &model.supported_reasoning_efforts,
+                &model.default_reasoning_effort,
+            ),
+            (&expected_efforts, &expected_default),
+        );
+    }
+
     Ok(())
 }
 

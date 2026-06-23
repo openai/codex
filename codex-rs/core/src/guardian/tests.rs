@@ -6,6 +6,7 @@ use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
 use crate::guardian::approval_request::guardian_request_target_item_id;
+use crate::guardian::review::guardian_review_session_config;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
@@ -36,6 +37,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -1418,6 +1420,44 @@ fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
 enum GuardianTestCatalog {
     Bundled,
     ParentOnly,
+}
+
+#[tokio::test]
+async fn guardian_review_does_not_select_ultra_when_feature_is_disabled() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let (mut session, turn) = guardian_test_session_and_turn(&server).await;
+    assert!(!turn.config.features.enabled(Feature::MultiAgentMode));
+
+    let mut review_model = turn.model_info.clone();
+    review_model.slug = turn.provider.approval_review_preferred_model().to_string();
+    review_model.default_reasoning_level = Some(ReasoningEffort::Ultra);
+    review_model.supported_reasoning_levels = vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "High".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Ultra,
+            description: "Ultra".to_string(),
+        },
+    ];
+    let models_manager = StaticModelsManager::new(
+        Some(Arc::clone(&session.services.auth_manager)),
+        ModelsResponse {
+            models: vec![review_model],
+        },
+    );
+    Arc::get_mut(&mut session)
+        .expect("session should be unique")
+        .services
+        .models_manager = Arc::new(models_manager);
+
+    let guardian_config = guardian_review_session_config(&session, &turn).await?;
+    assert_eq!(
+        guardian_config.spawn_config.model_reasoning_effort,
+        Some(ReasoningEffort::High)
+    );
+    Ok(())
 }
 
 async fn guardian_request_model_for_auto_review(

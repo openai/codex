@@ -1,6 +1,41 @@
 use super::*;
 use crate::ModelsManagerConfig;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use pretty_assertions::assert_eq;
+
+#[test]
+fn ultra_reasoning_requires_feature() {
+    let mut model = model_info_from_slug("unknown-model");
+    model.default_reasoning_level = Some(ReasoningEffort::Ultra);
+    model.supported_reasoning_levels = vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Low".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Ultra,
+            description: "Ultra".to_string(),
+        },
+    ];
+    let mut expected_without_ultra = model.clone();
+    expected_without_ultra.default_reasoning_level = Some(ReasoningEffort::Low);
+    expected_without_ultra.supported_reasoning_levels.pop();
+
+    assert_eq!(
+        with_config_overrides(model.clone(), &ModelsManagerConfig::default()),
+        expected_without_ultra
+    );
+    assert_eq!(
+        with_config_overrides(
+            model.clone(),
+            &ModelsManagerConfig {
+                ultra_reasoning_enabled: true,
+                ..Default::default()
+            },
+        ),
+        model
+    );
+}
 
 #[test]
 fn reasoning_summaries_override_true_enables_support() {
