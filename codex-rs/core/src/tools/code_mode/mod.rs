@@ -12,6 +12,7 @@ use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::InProcessCodeModeSession;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
@@ -68,7 +69,7 @@ impl CodeModeService {
     pub(crate) fn new() -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Some(Arc::new(codex_code_mode::CodeModeService::with_delegate(
+            session: Some(Arc::new(InProcessCodeModeSession::with_delegate(
                 dispatch_broker.clone(),
             ))),
             dispatch_broker,
