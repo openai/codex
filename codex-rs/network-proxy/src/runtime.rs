@@ -100,6 +100,8 @@ pub struct BlockedRequest {
     pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    #[serde(skip)]
+    pub request_origin: Option<String>,
     pub timestamp: i64,
 }
 
@@ -138,6 +140,7 @@ impl BlockedRequest {
             decision,
             source,
             port,
+            request_origin: None,
             timestamp: unix_timestamp(),
         }
     }
@@ -208,6 +211,7 @@ pub struct NetworkProxyState {
     reloader: Arc<dyn ConfigReloader>,
     blocked_request_observer: Arc<RwLock<Option<Arc<dyn BlockedRequestObserver>>>>,
     audit_metadata: NetworkProxyAuditMetadata,
+    request_origin: Option<Arc<str>>,
 }
 
 impl std::fmt::Debug for NetworkProxyState {
@@ -225,6 +229,7 @@ impl Clone for NetworkProxyState {
             reloader: self.reloader.clone(),
             blocked_request_observer: self.blocked_request_observer.clone(),
             audit_metadata: self.audit_metadata.clone(),
+            request_origin: self.request_origin.clone(),
         }
     }
 }
@@ -275,7 +280,20 @@ impl NetworkProxyState {
             reloader,
             blocked_request_observer: Arc::new(RwLock::new(blocked_request_observer)),
             audit_metadata,
+            request_origin: None,
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn with_request_origin(&self, request_origin: String) -> Self {
+        Self {
+            request_origin: Some(request_origin.into()),
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn request_origin(&self) -> Option<String> {
+        self.request_origin.as_deref().map(str::to_string)
     }
 
     pub async fn set_blocked_request_observer(
@@ -429,8 +447,9 @@ impl NetworkProxyState {
         }
     }
 
-    pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
+    pub async fn record_blocked(&self, mut entry: BlockedRequest) -> Result<()> {
         self.reload_if_needed().await?;
+        entry.request_origin = self.request_origin();
         let blocked_for_observer = entry.clone();
         let blocked_request_observer = self.blocked_request_observer.read().await.clone();
         let violation_line = blocked_request_violation_log_line(&entry);
@@ -1204,6 +1223,7 @@ mod tests {
             decision: Some("ask".to_string()),
             source: Some("decider".to_string()),
             port: Some(80),
+            request_origin: None,
             timestamp: 1_735_689_600,
         };
 

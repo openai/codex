@@ -164,6 +164,7 @@ fn denied_network_policy_message_requires_deny_decision() {
         decision: Some("ask".to_string()),
         source: Some("decider".to_string()),
         port: Some(80),
+        request_origin: None,
         timestamp: 0,
     };
     assert_eq!(denied_network_policy_message(&blocked), None);
@@ -181,6 +182,7 @@ fn denied_network_policy_message_for_denylist_block_is_explicit() {
         decision: Some("deny".to_string()),
         source: Some("baseline_policy".to_string()),
         port: Some(80),
+        request_origin: None,
         timestamp: 0,
     };
     assert_eq!(

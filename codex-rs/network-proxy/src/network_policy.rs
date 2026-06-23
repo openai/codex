@@ -84,6 +84,7 @@ pub struct NetworkPolicyRequest {
     pub method: Option<String>,
     pub command: Option<String>,
     pub exec_policy_hint: Option<String>,
+    pub request_origin: Option<String>,
 }
 
 pub struct NetworkPolicyRequestArgs {
@@ -118,6 +119,7 @@ impl NetworkPolicyRequest {
             method,
             command,
             exec_policy_hint,
+            request_origin: None,
         }
     }
 }
@@ -300,7 +302,10 @@ pub(crate) async fn evaluate_host_policy(
         HostBlockDecision::Allowed => (NetworkDecision::Allow, false),
         HostBlockDecision::Blocked(HostBlockReason::NotAllowed) => {
             if let Some(decider) = decider {
-                let decider_decision = map_decider_decision(decider.decide(request.clone()).await);
+                let mut request = request.clone();
+                // Trust only the listener-scoped state, never request metadata from the client.
+                request.request_origin = state.request_origin();
+                let decider_decision = map_decider_decision(decider.decide(request).await);
                 let policy_override = matches!(decider_decision, NetworkDecision::Allow);
                 (decider_decision, policy_override)
             } else {
