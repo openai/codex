@@ -462,10 +462,7 @@ const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 
 fn model_requires_legacy_skills_instructions(model: &str) -> bool {
-    matches!(
-        model,
-        "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.3-codex" | "gpt-5.2" | "codex-auto-review"
-    )
+    model == "gpt-5.5"
 }
 
 impl Codex {
