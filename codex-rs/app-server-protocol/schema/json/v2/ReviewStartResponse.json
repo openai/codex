@@ -30,6 +30,7 @@
         {
           "enum": [
             "contextWindowExceeded",
+            "rolloutBudgetExceeded",
             "usageLimitExceeded",
             "serverOverloaded",
             "cyberPolicy",
