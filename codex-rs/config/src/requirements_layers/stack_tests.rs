@@ -390,6 +390,46 @@ command = "high-mcp"
 }
 
 #[test]
+fn mcp_server_matchers_use_regular_toml_merge() {
+    let composed = compose(vec![
+        layer(
+            "req_low",
+            "Low",
+            r#"
+[mcp_server_matchers.shared]
+url = { match = "prefix", value = "https://low.example.com/" }
+
+[mcp_server_matchers.low]
+url = { match = "exact", value = "https://low.example.com/mcp" }
+"#,
+        ),
+        layer(
+            "req_high",
+            "High",
+            r#"
+[mcp_server_matchers.shared]
+url = { match = "prefix", value = "https://high.example.com/" }
+"#,
+        ),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+[mcp_server_matchers.low]
+url = { match = "exact", value = "https://low.example.com/mcp" }
+
+[mcp_server_matchers.shared]
+url = { match = "prefix", value = "https://high.example.com/" }
+"#
+        )
+    );
+}
+
+#[test]
 fn network_maps_use_regular_toml_merge() {
     let composed = compose(vec![
         layer(

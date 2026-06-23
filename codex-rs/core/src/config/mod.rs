@@ -15,9 +15,11 @@ use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
 use codex_config::McpServerIdentity;
+use codex_config::McpServerMatcher;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
 use codex_config::ProfileV2Name;
+use codex_config::RequirementSource;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
@@ -1498,7 +1500,13 @@ impl Config {
             .mcp_servers
             .as_ref()
             .filter(|requirements| requirements.value.is_empty());
-        filter_mcp_servers_by_requirements(mcp_servers, empty_mcp_allowlist);
+        let empty_mcp_matchers = self
+            .config_layer_stack
+            .requirements()
+            .mcp_server_matchers
+            .as_ref()
+            .filter(|requirements| requirements.value.is_empty());
+        filter_mcp_servers_by_requirements(mcp_servers, empty_mcp_allowlist, empty_mcp_matchers);
     }
 
     pub async fn to_mcp_config(
@@ -1868,17 +1876,30 @@ fn load_model_catalog(
 fn filter_mcp_servers_by_requirements(
     mcp_servers: &mut HashMap<String, McpServerConfig>,
     mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
+    mcp_matchers: Option<&Sourced<BTreeMap<String, McpServerMatcher>>>,
 ) {
-    let Some(allowlist) = mcp_requirements else {
+    if mcp_requirements.is_none() && mcp_matchers.is_none() {
         return;
-    };
+    }
 
-    let source = allowlist.source.clone();
+    let source = RequirementSource::composite(
+        mcp_requirements
+            .iter()
+            .map(|requirements| requirements.source.clone())
+            .chain(
+                mcp_matchers
+                    .iter()
+                    .map(|requirements| requirements.source.clone()),
+            ),
+    );
     for (name, server) in mcp_servers.iter_mut() {
-        let allowed = allowlist
-            .value
-            .get(name)
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+        let identity_requirement =
+            mcp_requirements.and_then(|requirements| requirements.value.get(name));
+        let matcher = mcp_matchers.and_then(|matchers| matchers.value.get(name));
+        let allowed = (identity_requirement.is_some() || matcher.is_some())
+            && identity_requirement
+                .is_none_or(|requirement| mcp_server_matches_requirement(requirement, server))
+            && matcher.is_none_or(|matcher| matcher.matches(server));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -1922,14 +1943,20 @@ fn filter_plugin_mcp_servers_by_requirements(
 fn constrain_mcp_servers(
     mcp_servers: HashMap<String, McpServerConfig>,
     mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
+    mcp_matchers: Option<&Sourced<BTreeMap<String, McpServerMatcher>>>,
 ) -> ConstraintResult<Constrained<HashMap<String, McpServerConfig>>> {
-    if mcp_requirements.is_none() {
+    if mcp_requirements.is_none() && mcp_matchers.is_none() {
         return Ok(Constrained::allow_any(mcp_servers));
     }
 
     let mcp_requirements = mcp_requirements.cloned();
+    let mcp_matchers = mcp_matchers.cloned();
     Constrained::normalized(mcp_servers, move |mut servers| {
-        filter_mcp_servers_by_requirements(&mut servers, mcp_requirements.as_ref());
+        filter_mcp_servers_by_requirements(
+            &mut servers,
+            mcp_requirements.as_ref(),
+            mcp_matchers.as_ref(),
+        );
         servers
     })
 }
@@ -2939,6 +2966,7 @@ impl Config {
             feature_requirements,
             managed_hooks: _,
             mcp_servers,
+            mcp_server_matchers,
             plugins: _,
             exec_policy: _,
             enforce_residency,
@@ -3694,8 +3722,12 @@ impl Config {
             &mut startup_warnings,
         )?;
 
-        let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+        let mcp_servers = constrain_mcp_servers(
+            cfg.mcp_servers.clone(),
+            mcp_servers.as_ref(),
+            mcp_server_matchers.as_ref(),
+        )
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
         let network_permission_profile = constrained_permission_profile.get().clone();
         let network = build_network_proxy_spec(

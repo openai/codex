@@ -18,6 +18,7 @@ use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
+use crate::McpServerMatcher;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::WindowsSandboxModeToml;
@@ -154,6 +155,7 @@ pub struct ConfigRequirements {
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub mcp_server_matchers: Option<Sourced<BTreeMap<String, McpServerMatcher>>>,
     pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
@@ -195,6 +197,7 @@ impl Default for ConfigRequirements {
             feature_requirements: None,
             managed_hooks: None,
             mcp_servers: None,
+            mcp_server_matchers: None,
             plugins: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(
@@ -841,6 +844,7 @@ pub struct ConfigRequirementsToml {
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+    pub mcp_server_matchers: Option<BTreeMap<String, McpServerMatcher>>,
     pub plugins: Option<BTreeMap<String, PluginRequirementsToml>>,
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
@@ -895,6 +899,7 @@ pub struct ConfigRequirementsWithSources {
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub mcp_server_matchers: Option<Sourced<BTreeMap<String, McpServerMatcher>>>,
     pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
@@ -938,6 +943,7 @@ impl ConfigRequirementsWithSources {
             feature_requirements: _,
             hooks: _,
             mcp_servers: _,
+            mcp_server_matchers: _,
             plugins: _,
             apps: _,
             rules: _,
@@ -974,6 +980,7 @@ impl ConfigRequirementsWithSources {
                 feature_requirements,
                 hooks,
                 mcp_servers,
+                mcp_server_matchers,
                 plugins,
                 rules,
                 enforce_residency,
@@ -1008,6 +1015,7 @@ impl ConfigRequirementsWithSources {
             feature_requirements,
             hooks,
             mcp_servers,
+            mcp_server_matchers,
             plugins,
             apps,
             rules,
@@ -1032,6 +1040,7 @@ impl ConfigRequirementsWithSources {
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
+            mcp_server_matchers: mcp_server_matchers.map(|sourced| sourced.value),
             plugins: plugins.map(|sourced| sourced.value),
             apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
@@ -1134,6 +1143,7 @@ impl ConfigRequirementsToml {
                 .as_ref()
                 .is_none_or(ManagedHooksRequirementsToml::is_empty)
             && self.mcp_servers.is_none()
+            && self.mcp_server_matchers.is_none()
             && self
                 .plugins
                 .as_ref()
@@ -1175,6 +1185,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             feature_requirements,
             hooks,
             mcp_servers,
+            mcp_server_matchers,
             plugins,
             apps: _apps,
             rules,
@@ -1183,6 +1194,22 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             permissions,
             guardian_policy_config,
         } = toml;
+
+        if let Some(Sourced {
+            value: matchers,
+            source,
+        }) = &mcp_server_matchers
+        {
+            for (server_name, matcher) in matchers {
+                matcher
+                    .validate()
+                    .map_err(|reason| ConstraintError::McpServerMatcherParse {
+                        server_name: server_name.clone(),
+                        requirement_source: source.clone(),
+                        reason,
+                    })?;
+            }
+        }
 
         let approval_policy = match allowed_approval_policies {
             Some(Sourced {
@@ -1455,6 +1482,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             feature_requirements,
             managed_hooks,
             mcp_servers,
+            mcp_server_matchers,
             plugins,
             exec_policy,
             enforce_residency,
@@ -1492,6 +1520,8 @@ pub fn sandbox_mode_requirement_for_permission_profile(
 mod tests {
     use super::*;
     use crate::HookEventsToml;
+    use crate::McpServerCommandMatcher;
+    use crate::McpServerValueMatcher;
     use anyhow::Result;
     use codex_execpolicy::Decision;
     use codex_execpolicy::Evaluation;
@@ -1548,6 +1578,7 @@ mod tests {
             feature_requirements,
             hooks,
             mcp_servers,
+            mcp_server_matchers,
             plugins,
             apps,
             rules,
@@ -1581,6 +1612,8 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            mcp_server_matchers: mcp_server_matchers
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             plugins: plugins.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1784,6 +1817,7 @@ mod tests {
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
+            mcp_server_matchers: None,
             plugins: None,
             apps: None,
             rules: None,
@@ -1833,6 +1867,7 @@ mod tests {
                 )),
                 hooks: None,
                 mcp_servers: None,
+                mcp_server_matchers: None,
                 plugins: None,
                 apps: None,
                 rules: None,
@@ -1879,6 +1914,7 @@ mod tests {
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                mcp_server_matchers: None,
                 plugins: None,
                 apps: None,
                 rules: None,
@@ -1933,6 +1969,7 @@ mod tests {
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                mcp_server_matchers: None,
                 plugins: None,
                 apps: None,
                 rules: None,
@@ -3442,6 +3479,75 @@ command = "python3 /enterprise/hooks/pre.py"
                 RequirementSource::Unknown,
             ))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_mcp_server_matchers() -> Result<()> {
+        let toml_str = r#"
+            [mcp_server_matchers.bloomberg_forge]
+            command = "forge"
+            args = [
+                { match = "exact", value = "mcp" },
+                { match = "exact", value = "proxy" },
+                { match = "exact", value = "--server" },
+                { match = "regex", expression = '^https://[A-Za-z0-9-]+\.mcp\.internal\.example\.com(?::443)?(?:/.*)?$' },
+            ]
+        "#;
+        let requirements: ConfigRequirements =
+            with_unknown_source(from_str(toml_str)?).try_into()?;
+
+        assert_eq!(
+            requirements.mcp_server_matchers,
+            Some(Sourced::new(
+                BTreeMap::from([(
+                    "bloomberg_forge".to_string(),
+                    McpServerMatcher::Command(McpServerCommandMatcher {
+                        command: "forge".to_string(),
+                        args: vec![
+                            McpServerValueMatcher::Exact {
+                                value: "mcp".to_string(),
+                            },
+                            McpServerValueMatcher::Exact {
+                                value: "proxy".to_string(),
+                            },
+                            McpServerValueMatcher::Exact {
+                                value: "--server".to_string(),
+                            },
+                            McpServerValueMatcher::Regex {
+                                expression: r"^https://[A-Za-z0-9-]+\.mcp\.internal\.example\.com(?::443)?(?:/.*)?$"
+                                    .to_string(),
+                            },
+                        ],
+                    }),
+                )]),
+                RequirementSource::Unknown,
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_mcp_server_matcher_regex_reports_the_server_name_and_source() -> Result<()> {
+        let toml_str = r#"
+            [mcp_server_matchers.broken_rule]
+            url = { match = "regex", expression = "[" }
+        "#;
+
+        let err = ConfigRequirements::try_from(with_unknown_source(from_str(toml_str)?))
+            .expect_err("invalid matcher regex should fail requirements normalization");
+        let ConstraintError::McpServerMatcherParse {
+            server_name,
+            requirement_source,
+            reason,
+        } = err
+        else {
+            panic!("unexpected error: {err:?}");
+        };
+
+        assert_eq!(server_name, "broken_rule");
+        assert_eq!(requirement_source, RequirementSource::Unknown);
+        assert!(reason.contains("invalid regex `[`"), "{reason}");
         Ok(())
     }
 

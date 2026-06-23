@@ -5,6 +5,9 @@ use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
+use codex_config::McpServerCommandMatcher;
+use codex_config::McpServerMatcher;
+use codex_config::McpServerValueMatcher;
 use codex_config::ProfileV2Name;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
@@ -112,10 +115,14 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 fn stdio_mcp(command: &str) -> McpServerConfig {
+    stdio_mcp_with_args(command, &[])
+}
+
+fn stdio_mcp_with_args(command: &str, args: &[&str]) -> McpServerConfig {
     McpServerConfig {
         transport: McpServerTransportConfig::Stdio {
             command: command.to_string(),
-            args: Vec::new(),
+            args: args.iter().map(ToString::to_string).collect(),
             env: None,
             env_vars: Vec::new(),
             cwd: None,
@@ -4172,7 +4179,11 @@ fn filter_mcp_servers_by_allowlist_enforces_identity_rules() {
         ]),
         source.clone(),
     );
-    filter_mcp_servers_by_requirements(&mut servers, Some(&requirements));
+    filter_mcp_servers_by_requirements(
+        &mut servers,
+        Some(&requirements),
+        /*mcp_matchers*/ None,
+    );
 
     let reason = Some(McpServerDisabledReason::Requirements { source });
     assert_eq!(
@@ -4203,7 +4214,11 @@ fn filter_mcp_servers_by_allowlist_allows_all_when_unset() {
         ("server-b".to_string(), http_mcp("https://example.com/b")),
     ]);
 
-    filter_mcp_servers_by_requirements(&mut servers, /*mcp_requirements*/ None);
+    filter_mcp_servers_by_requirements(
+        &mut servers,
+        /*mcp_requirements*/ None,
+        /*mcp_matchers*/ None,
+    );
 
     assert_eq!(
         servers
@@ -4221,6 +4236,205 @@ fn filter_mcp_servers_by_allowlist_allows_all_when_unset() {
 }
 
 #[test]
+fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
+    let mut servers = HashMap::from([
+        (
+            "bloomberg_forge".to_string(),
+            stdio_mcp_with_args(
+                "forge",
+                &[
+                    "mcp",
+                    "proxy",
+                    "--server",
+                    "https://pricing.mcp.internal.example.com",
+                ],
+            ),
+        ),
+        (
+            "unlisted".to_string(),
+            stdio_mcp_with_args(
+                "forge",
+                &[
+                    "mcp",
+                    "proxy",
+                    "--server",
+                    "https://pricing.mcp.internal.example.com",
+                ],
+            ),
+        ),
+        (
+            "wrong-order".to_string(),
+            stdio_mcp_with_args(
+                "forge",
+                &[
+                    "proxy",
+                    "mcp",
+                    "--server",
+                    "https://pricing.mcp.internal.example.com",
+                ],
+            ),
+        ),
+        (
+            "trailing-arg".to_string(),
+            stdio_mcp_with_args(
+                "forge",
+                &[
+                    "mcp",
+                    "proxy",
+                    "--server",
+                    "https://pricing.mcp.internal.example.com",
+                    "--verbose",
+                ],
+            ),
+        ),
+        (
+            "wrong-host".to_string(),
+            stdio_mcp_with_args(
+                "forge",
+                &["mcp", "proxy", "--server", "https://mcp.example.com"],
+            ),
+        ),
+    ]);
+    let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+    let matcher = McpServerMatcher::Command(McpServerCommandMatcher {
+        command: "forge".to_string(),
+        args: vec![
+            McpServerValueMatcher::Exact {
+                value: "mcp".to_string(),
+            },
+            McpServerValueMatcher::Exact {
+                value: "proxy".to_string(),
+            },
+            McpServerValueMatcher::Exact {
+                value: "--server".to_string(),
+            },
+            McpServerValueMatcher::Regex {
+                expression:
+                    r"^https://[A-Za-z0-9-]+\.mcp\.internal\.example\.com(?::443)?(?:/.*)?$"
+                        .to_string(),
+            },
+        ],
+    });
+    let matchers = Sourced::new(
+        BTreeMap::from([
+            ("bloomberg_forge".to_string(), matcher.clone()),
+            ("wrong-order".to_string(), matcher.clone()),
+            ("trailing-arg".to_string(), matcher.clone()),
+            ("wrong-host".to_string(), matcher),
+        ]),
+        source.clone(),
+    );
+
+    filter_mcp_servers_by_requirements(
+        &mut servers,
+        /*mcp_requirements*/ None,
+        Some(&matchers),
+    );
+
+    let reason = Some(McpServerDisabledReason::Requirements { source });
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([
+            ("bloomberg_forge".to_string(), (true, None)),
+            ("unlisted".to_string(), (false, reason.clone())),
+            ("wrong-order".to_string(), (false, reason.clone())),
+            ("trailing-arg".to_string(), (false, reason.clone())),
+            ("wrong-host".to_string(), (false, reason)),
+        ])
+    );
+}
+
+#[test]
+fn filter_mcp_servers_by_requirements_enforces_all_same_name_rules() {
+    const BOTH_MATCH: &str = "both-match";
+    const EXACT_ONLY_MATCHES: &str = "exact-only-matches";
+    const MATCHER_ONLY_MATCHES: &str = "matcher-only-matches";
+
+    let mut servers = HashMap::from([
+        (
+            BOTH_MATCH.to_string(),
+            stdio_mcp_with_args("forge", &["approved"]),
+        ),
+        (
+            EXACT_ONLY_MATCHES.to_string(),
+            stdio_mcp_with_args("forge", &["rejected"]),
+        ),
+        (
+            MATCHER_ONLY_MATCHES.to_string(),
+            stdio_mcp_with_args("forge", &["approved"]),
+        ),
+    ]);
+    let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+    let requirements = Sourced::new(
+        BTreeMap::from([
+            (
+                BOTH_MATCH.to_string(),
+                McpServerRequirement {
+                    identity: McpServerIdentity::Command {
+                        command: "forge".to_string(),
+                    },
+                },
+            ),
+            (
+                EXACT_ONLY_MATCHES.to_string(),
+                McpServerRequirement {
+                    identity: McpServerIdentity::Command {
+                        command: "forge".to_string(),
+                    },
+                },
+            ),
+            (
+                MATCHER_ONLY_MATCHES.to_string(),
+                McpServerRequirement {
+                    identity: McpServerIdentity::Command {
+                        command: "different-command".to_string(),
+                    },
+                },
+            ),
+        ]),
+        source.clone(),
+    );
+    let matcher = McpServerMatcher::Command(McpServerCommandMatcher {
+        command: "forge".to_string(),
+        args: vec![McpServerValueMatcher::Exact {
+            value: "approved".to_string(),
+        }],
+    });
+    let matchers = Sourced::new(
+        BTreeMap::from([
+            (BOTH_MATCH.to_string(), matcher.clone()),
+            (EXACT_ONLY_MATCHES.to_string(), matcher.clone()),
+            (MATCHER_ONLY_MATCHES.to_string(), matcher),
+        ]),
+        source.clone(),
+    );
+
+    filter_mcp_servers_by_requirements(&mut servers, Some(&requirements), Some(&matchers));
+
+    let reason = Some(McpServerDisabledReason::Requirements { source });
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([
+            (BOTH_MATCH.to_string(), (true, None)),
+            (EXACT_ONLY_MATCHES.to_string(), (false, reason.clone())),
+            (MATCHER_ONLY_MATCHES.to_string(), (false, reason)),
+        ])
+    );
+}
+
+#[test]
 fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
     let mut servers = HashMap::from([
         ("server-a".to_string(), stdio_mcp("cmd-a")),
@@ -4229,7 +4443,11 @@ fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
 
     let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
     let requirements = Sourced::new(BTreeMap::new(), source.clone());
-    filter_mcp_servers_by_requirements(&mut servers, Some(&requirements));
+    filter_mcp_servers_by_requirements(
+        &mut servers,
+        Some(&requirements),
+        /*mcp_matchers*/ None,
+    );
 
     let reason = Some(McpServerDisabledReason::Requirements { source });
     assert_eq!(
@@ -8678,6 +8896,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
+        mcp_server_matchers: None,
         plugins: None,
         apps: None,
         rules: None,
