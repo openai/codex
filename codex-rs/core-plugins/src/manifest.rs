@@ -1,5 +1,7 @@
 use codex_config::HooksFile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::find_plugin_manifest_path;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -15,6 +17,8 @@ pub type PluginManifestInterface = codex_plugin::manifest::PluginManifestInterfa
 pub type PluginManifestMcpServers =
     codex_plugin::manifest::PluginManifestMcpServers<AbsolutePathBuf>;
 pub type PluginManifestPaths = codex_plugin::manifest::PluginManifestPaths<AbsolutePathBuf>;
+
+pub(crate) type UriPluginManifest = codex_plugin::manifest::PluginManifest<PathUri>;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,6 +152,18 @@ pub(crate) fn parse_plugin_manifest(
     parse_plugin_manifest_with_resolver(&resolver, contents)
 }
 
+pub(crate) fn parse_plugin_manifest_uri(
+    plugin_root: &PathUri,
+    manifest_path: &PathUri,
+    contents: &str,
+) -> Result<UriPluginManifest, serde_json::Error> {
+    let resolver = UriManifestResourceResolver {
+        plugin_root,
+        manifest_path,
+    };
+    parse_plugin_manifest_with_resolver(&resolver, contents)
+}
+
 trait ManifestResourceResolver {
     type Resource;
 
@@ -177,6 +193,27 @@ impl ManifestResourceResolver for HostManifestResourceResolver<'_> {
 
     fn resolve_path(&self, field: &'static str, path: Option<&str>) -> Option<Self::Resource> {
         resolve_manifest_path(self.plugin_root, field, path)
+    }
+}
+
+struct UriManifestResourceResolver<'a> {
+    plugin_root: &'a PathUri,
+    manifest_path: &'a PathUri,
+}
+
+impl ManifestResourceResolver for UriManifestResourceResolver<'_> {
+    type Resource = PathUri;
+
+    fn plugin_name_fallback(&self) -> Option<String> {
+        self.plugin_root.basename()
+    }
+
+    fn manifest_path_for_warning(&self) -> String {
+        self.manifest_path.to_string()
+    }
+
+    fn resolve_path(&self, field: &'static str, path: Option<&str>) -> Option<Self::Resource> {
+        resolve_manifest_path_uri(self.plugin_root, field, path)
     }
 }
 
@@ -533,6 +570,60 @@ fn resolve_manifest_path(
         .ok()
 }
 
+fn resolve_manifest_path_uri(
+    plugin_root: &PathUri,
+    field: &'static str,
+    path: Option<&str>,
+) -> Option<PathUri> {
+    let path = path?;
+    if path.is_empty() {
+        return None;
+    }
+    let Some(relative_path) = path.strip_prefix("./") else {
+        tracing::warn!("ignoring {field}: path must start with `./` relative to plugin root");
+        return None;
+    };
+    if relative_path.is_empty() {
+        tracing::warn!("ignoring {field}: path must not be `./`");
+        return None;
+    }
+
+    let convention = plugin_root.infer_path_convention();
+    let has_parent_component = match convention {
+        Some(PathConvention::Windows) => relative_path
+            .split(['/', '\\'])
+            .any(|component| component == ".."),
+        Some(PathConvention::Posix) | None => {
+            relative_path.split('/').any(|component| component == "..")
+        }
+    };
+    if has_parent_component {
+        tracing::warn!("ignoring {field}: path must not contain '..'");
+        return None;
+    }
+
+    let has_windows_root = convention == Some(PathConvention::Windows)
+        && (relative_path.starts_with('\\')
+            || matches!(relative_path.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic()));
+    if relative_path.starts_with('/') || has_windows_root {
+        tracing::warn!("ignoring {field}: path must stay within the plugin root");
+        return None;
+    }
+
+    let resolved = match plugin_root.join(relative_path) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            tracing::warn!("ignoring {field}: path must resolve under plugin root: {err}");
+            return None;
+        }
+    };
+    if !resolved.starts_with(plugin_root) {
+        tracing::warn!("ignoring {field}: path must stay within the plugin root");
+        return None;
+    }
+    Some(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::MAX_DEFAULT_PROMPT_LEN;
@@ -542,9 +633,15 @@ mod tests {
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_plugin::PluginProvider;
     use codex_plugin::ResolvedPlugin;
+    use codex_plugin::manifest::PluginManifest as GenericPluginManifest;
+    use codex_plugin::manifest::PluginManifestHooks;
+    use codex_plugin::manifest::PluginManifestInterface;
+    use codex_plugin::manifest::PluginManifestMcpServers;
+    use codex_plugin::manifest::PluginManifestPaths;
     use codex_protocol::capabilities::CapabilityRootLocation;
     use codex_protocol::capabilities::SelectedCapabilityRoot;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -766,14 +863,16 @@ mod tests {
     "composerIcon": "./assets/icon.svg"
   }"#,
         );
-        let host_manifest = load_plugin_manifest(&plugin_root).expect("host manifest");
+        let plugin_root =
+            AbsolutePathBuf::from_absolute_path_checked(plugin_root).expect("absolute plugin root");
+        let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
         let provider =
             ExecutorPluginProvider::new(Arc::new(EnvironmentManager::default_for_tests()));
         let selected_root = SelectedCapabilityRoot {
             id: "selected-demo".to_string(),
             location: CapabilityRootLocation::Environment {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                path: plugin_root.to_string_lossy().into_owned(),
+                path: plugin_root_uri.clone(),
             },
         };
 
@@ -782,17 +881,130 @@ mod tests {
             .await
             .expect("resolve executor plugin")
             .expect("plugin descriptor");
-        let plugin_root =
-            AbsolutePathBuf::from_absolute_path_checked(plugin_root).expect("absolute plugin root");
+        let manifest_path = plugin_root_uri
+            .join(".codex-plugin/plugin.json")
+            .expect("manifest URI");
+        let manifest_contents =
+            fs::read_to_string(plugin_root.join(".codex-plugin/plugin.json")).expect("manifest");
+        let expected_manifest =
+            super::parse_plugin_manifest_uri(&plugin_root_uri, &manifest_path, &manifest_contents)
+                .expect("URI manifest");
         let expected_plugin = ResolvedPlugin::from_environment(
             "selected-demo".to_string(),
             LOCAL_ENVIRONMENT_ID.to_string(),
-            plugin_root.clone(),
-            plugin_root.join(".codex-plugin/plugin.json"),
-            host_manifest,
+            plugin_root_uri,
+            manifest_path,
+            expected_manifest,
         )
         .expect("valid expected descriptor");
 
         assert_eq!(executor_plugin, expected_plugin);
+    }
+
+    #[test]
+    fn uri_manifest_resolves_resources_below_foreign_root() {
+        let plugin_root =
+            PathUri::parse("file:///C:/plugins/demo-plugin").expect("plugin root URI");
+        let manifest_path = plugin_root
+            .join(".codex-plugin/plugin.json")
+            .expect("manifest URI");
+        let manifest = super::parse_plugin_manifest_uri(
+            &plugin_root,
+            &manifest_path,
+            r#"{
+  "name": "demo-plugin",
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "apps": "./apps",
+  "hooks": "./hooks.json",
+  "interface": {
+    "displayName": "Demo Plugin",
+    "composerIcon": "./assets/icon.svg"
+  }
+}"#,
+        )
+        .expect("URI manifest");
+
+        assert_eq!(
+            manifest,
+            GenericPluginManifest {
+                name: "demo-plugin".to_string(),
+                version: None,
+                description: None,
+                keywords: Vec::new(),
+                paths: PluginManifestPaths {
+                    skills: vec![plugin_root.join("skills").expect("skills URI")],
+                    mcp_servers: Some(PluginManifestMcpServers::Path(
+                        plugin_root.join(".mcp.json").expect("MCP URI"),
+                    )),
+                    apps: Some(plugin_root.join("apps").expect("apps URI")),
+                    hooks: Some(PluginManifestHooks::Paths(vec![
+                        plugin_root.join("hooks.json").expect("hooks URI"),
+                    ])),
+                },
+                interface: Some(PluginManifestInterface {
+                    display_name: Some("Demo Plugin".to_string()),
+                    composer_icon: Some(
+                        plugin_root
+                            .join("assets/icon.svg")
+                            .expect("composer icon URI"),
+                    ),
+                    ..PluginManifestInterface::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn uri_manifest_validates_paths_using_the_root_convention() {
+        let windows_root =
+            PathUri::parse("file:///C:/plugins/demo-plugin").expect("Windows plugin root URI");
+        let posix_root =
+            PathUri::parse("file:///plugins/demo-plugin").expect("POSIX plugin root URI");
+
+        for composer_icon in [
+            "./assets/../icon.svg",
+            r"./assets\..\icon.svg",
+            ".//outside.svg",
+            "./C:/outside.svg",
+        ] {
+            assert_eq!(
+                parse_uri_composer_icon(&windows_root, composer_icon),
+                None,
+                "parsing {composer_icon} under a Windows root"
+            );
+        }
+        for (composer_icon, relative_path) in [
+            (r"./assets\..\icon.svg", r"assets\..\icon.svg"),
+            (r"./\icon.svg", r"\icon.svg"),
+            ("./C:/icon.svg", "C:/icon.svg"),
+        ] {
+            assert_eq!(
+                parse_uri_composer_icon(&posix_root, composer_icon),
+                Some(posix_root.join(relative_path).expect("composer icon URI")),
+                "parsing {composer_icon} under a POSIX root"
+            );
+        }
+    }
+
+    fn parse_uri_composer_icon(plugin_root: &PathUri, composer_icon: &str) -> Option<PathUri> {
+        let manifest_path = plugin_root
+            .join(".codex-plugin/plugin.json")
+            .expect("manifest URI");
+        let composer_icon_json =
+            serde_json::to_string(composer_icon).expect("serialize composer icon");
+        let contents = format!(
+            r#"{{
+  "name": "demo-plugin",
+  "interface": {{
+    "displayName": "Demo Plugin",
+    "composerIcon": {composer_icon_json}
+  }}
+}}"#
+        );
+        super::parse_plugin_manifest_uri(plugin_root, &manifest_path, &contents)
+            .expect("URI manifest")
+            .interface
+            .and_then(|interface| interface.composer_icon)
     }
 }

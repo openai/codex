@@ -7044,7 +7044,13 @@
                 "type": "string"
               },
               "path": {
-                "type": "string"
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/PathUri"
+                  }
+                ],
+                "description": "Canonical `file:` URI for the root in the selected environment.",
+                "pattern": "^file:"
               },
               "type": {
                 "enum": [
@@ -12999,6 +13005,9 @@
             "type": "object"
           }
         ]
+      },
+      "PathUri": {
+        "type": "string"
       },
       "PermissionProfileListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

@@ -13,6 +13,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
+use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
 use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
@@ -92,7 +93,7 @@ args = ["exec-server", "--listen", "stdio"]
             id: "executor-demo@1".to_string(),
             location: CapabilityRootLocation::Environment {
                 environment_id: EXECUTOR_ID.to_string(),
-                path: plugin.path().to_string_lossy().into_owned(),
+                path: PathUri::from_host_native_path(plugin.path())?,
             },
         }]),
     )

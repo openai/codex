@@ -1,3 +1,4 @@
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -25,6 +26,22 @@ pub enum CapabilityRootLocation {
         #[serde(rename = "environmentId")]
         #[ts(rename = "environmentId")]
         environment_id: String,
-        path: String,
+        /// Canonical `file:` URI for the root in the selected environment.
+        #[serde(deserialize_with = "deserialize_strict_path_uri")]
+        #[schemars(regex(pattern = r"^file:"))]
+        #[ts(type = "string")]
+        path: PathUri,
     },
 }
+
+fn deserialize_strict_path_uri<'de, D>(deserializer: D) -> Result<PathUri, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let path = String::deserialize(deserializer)?;
+    PathUri::parse(&path).map_err(serde::de::Error::custom)
+}
+
+#[cfg(test)]
+#[path = "capabilities_tests.rs"]
+mod tests;
