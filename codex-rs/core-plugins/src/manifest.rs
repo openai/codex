@@ -454,7 +454,7 @@ fn resolve_default_prompt_str(manifest_path: &str, field: &str, prompt: &str) ->
 }
 
 fn warn_invalid_default_prompt(manifest_path: &str, field: &str, message: &str) {
-    tracing::warn!(path = manifest_path, "ignoring {field}: {message}");
+    tracing::warn!(path = %manifest_path, "ignoring {field}: {message}");
 }
 
 fn json_value_type(value: &JsonValue) -> &'static str {
