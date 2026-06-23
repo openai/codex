@@ -458,9 +458,10 @@ fn test_invocation(
     call_id: &str,
     tool_name: codex_tools::ToolName,
 ) -> ToolInvocation {
+    let step_context = StepContext::for_test(Arc::clone(&turn));
     ToolInvocation {
         session,
-        step_context: Arc::new(StepContext::from_turn_context(turn.as_ref())),
+        step_context,
         turn,
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(tokio::sync::Mutex::new(

@@ -30,10 +30,11 @@ fn sample_patch() -> &'static str {
 
 async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
     let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
     ToolInvocation {
         session: session.into(),
-        step_context: Arc::new(StepContext::from_turn_context(&turn)),
-        turn: turn.into(),
+        step_context: StepContext::for_test(Arc::clone(&turn)),
+        turn,
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-apply-patch".to_string(),
