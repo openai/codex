@@ -130,7 +130,7 @@ pub fn run_setup_refresh(
             proxy_enforced,
         },
         SetupRootOverrides::default(),
-        None,
+        /*offline_proxy_settings_override*/ None,
     )
 }
 
@@ -176,7 +176,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
             deny_read_paths: None,
             deny_write_paths: None,
         },
-        None,
+        /*offline_proxy_settings_override*/ None,
     )
 }
 
@@ -843,7 +843,9 @@ pub fn run_elevated_setup(
     request: SandboxSetupRequest<'_>,
     overrides: SetupRootOverrides,
 ) -> Result<()> {
-    run_elevated_setup_inner(request, overrides, None)
+    run_elevated_setup_inner(
+        request, overrides, /*offline_proxy_settings_override*/ None,
+    )
 }
 
 pub(crate) fn run_elevated_setup_with_proxy_settings(
