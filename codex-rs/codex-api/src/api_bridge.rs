@@ -23,15 +23,19 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::Retryable { message, delay } => CodexErr::Stream(message, delay),
         ApiError::Stream(msg) => CodexErr::Stream(msg, None),
         ApiError::ServerOverloaded => CodexErr::ServerOverloaded,
-        ApiError::Api { status, message } => CodexErr::UnexpectedStatus(UnexpectedResponseError {
-            status,
-            body: message,
-            url: None,
-            cf_ray: None,
-            request_id: None,
-            identity_authorization_error: None,
-            identity_error_code: None,
-        }),
+        ApiError::Api { status, message } => {
+            let user_message = api_error_user_message(status, &message);
+            CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status,
+                body: message,
+                user_message,
+                url: None,
+                cf_ray: None,
+                request_id: None,
+                identity_authorization_error: None,
+                identity_error_code: None,
+            })
+        }
         ApiError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
         ApiError::CyberPolicy { message } => CodexErr::CyberPolicy { message },
         ApiError::Transport(transport) => match transport {
@@ -111,6 +115,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 } else {
                     CodexErr::UnexpectedStatus(UnexpectedResponseError {
                         status,
+                        user_message: api_error_user_message(status, &body_text),
                         body: body_text,
                         url,
                         cf_ray: extract_header(headers.as_ref(), CF_RAY_HEADER),
@@ -145,6 +150,8 @@ const X_ERROR_JSON_HEADER: &str = "x-error-json";
 const CYBER_POLICY_ERROR_CODE: &str = "cyber_policy";
 const CYBER_POLICY_FALLBACK_MESSAGE: &str =
     "This request has been flagged for possible cybersecurity risk.";
+const CLOUDFLARE_BLOCKED_MESSAGE: &str =
+    "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
 
 #[cfg(test)]
 #[path = "api_bridge_tests.rs"]
@@ -152,6 +159,17 @@ mod tests;
 
 fn extract_request_tracking_id(headers: Option<&HeaderMap>) -> Option<String> {
     extract_request_id(headers).or_else(|| extract_header(headers, CF_RAY_HEADER))
+}
+
+fn api_error_user_message(status: http::StatusCode, body: &str) -> Option<String> {
+    if status == http::StatusCode::FORBIDDEN
+        && body.contains("Cloudflare")
+        && body.contains("blocked")
+    {
+        Some(format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status})"))
+    } else {
+        None
+    }
 }
 
 fn extract_request_id(headers: Option<&HeaderMap>) -> Option<String> {

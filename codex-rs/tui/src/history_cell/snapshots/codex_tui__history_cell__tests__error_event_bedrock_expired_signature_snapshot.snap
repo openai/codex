@@ -1,0 +1,5 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: rendered
+---
+■ Amazon Bedrock rejected the request because its AWS signature has expired. Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex, url: https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses
