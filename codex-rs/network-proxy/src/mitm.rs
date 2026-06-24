@@ -39,7 +39,6 @@ use rama_http::header::HOST;
 use rama_http::layer::remove_header::RemoveRequestHeaderLayer;
 use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http_backend::server::HttpServer;
-use rama_http_backend::server::layer::upgrade::Upgraded;
 use rama_net::proxy::ProxyTarget;
 use rama_net::stream::SocketInfo;
 use rama_tls_rustls::server::TlsAcceptorData;
@@ -143,11 +142,6 @@ impl MitmState {
     }
 }
 
-/// Terminate the upgraded CONNECT stream with a generated leaf cert and proxy inner HTTPS traffic.
-pub(crate) async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
-    mitm_stream(upgraded).await
-}
-
 /// Terminate a raw client stream with a generated leaf cert and proxy inner HTTPS traffic.
 pub(crate) async fn mitm_stream<S>(stream: S) -> Result<()>
 where
@@ -247,6 +241,10 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
     let log_path = path_for_log(req.uri());
 
     let (mut parts, body) = req.into_parts();
+    request_ctx
+        .policy
+        .app_state
+        .inject_request_credentials(&target_host, &mut parts.headers);
     apply_mitm_hook_actions(&mut parts.headers, hook_actions.as_ref());
     let authority = authority_header_value(&target_host, target_port);
     parts.uri = build_https_uri(&authority, &path)?;

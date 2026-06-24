@@ -341,10 +341,10 @@ async fn handle_socks5_tcp(
         }
     }
 
-    let host_has_mitm_hooks = match app_state.host_has_mitm_hooks(&host).await {
-        Ok(has_hooks) => has_hooks,
+    let host_requires_mitm = match app_state.host_requires_mitm(&host, port).await {
+        Ok(requires_mitm) => requires_mitm,
         Err(err) => {
-            error!("failed to inspect MITM hooks for {host}: {err}");
+            error!("failed to inspect MITM requirements for {host}: {err}");
             return Err(io::Error::other("proxy error").into());
         }
     };
@@ -356,8 +356,8 @@ async fn handle_socks5_tcp(
         }
     };
     let socks_needs_mitm =
-        socks5_tcp_target_is_https && (mode == NetworkMode::Limited || host_has_mitm_hooks);
-    if (host_has_mitm_hooks && !socks5_tcp_target_is_https)
+        socks5_tcp_target_is_https && (mode == NetworkMode::Limited || host_requires_mitm);
+    if (host_requires_mitm && !socks5_tcp_target_is_https)
         || (socks_needs_mitm && mitm_state.is_none())
     {
         emit_socks_block_decision_audit_event(
@@ -392,7 +392,7 @@ async fn handle_socks5_tcp(
             .await;
         let client = client.as_deref().unwrap_or_default();
         warn!(
-            "SOCKS blocked; MITM required to enforce HTTPS policy (client={client}, host={host}, mode={mode:?}, hooked_host={host_has_mitm_hooks}, https_target={socks5_tcp_target_is_https})"
+            "SOCKS blocked; MITM required to enforce HTTPS policy (client={client}, host={host}, mode={mode:?}, host_requires_mitm={host_requires_mitm}, https_target={socks5_tcp_target_is_https})"
         );
         return Err(policy_denied_error(REASON_MITM_REQUIRED, &details).into());
     }
@@ -752,6 +752,7 @@ mod tests {
     use rama_net::address::HostWithPort;
     use rama_net::address::SocketAddress;
     use rama_socks5::server::udp::RelayDirection;
+    use std::collections::HashMap;
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::sync::Arc;
@@ -906,6 +907,35 @@ mod tests {
         assert_eq!(event.field("server.port"), Some("80"));
         assert_eq!(event.field("http.request.method"), Some("none"));
         assert_eq!(event.field("client.address"), Some("unknown"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handle_socks5_tcp_uses_mitm_for_brokered_host_in_full_mode() {
+        let mut settings = NetworkProxySettings {
+            enabled: true,
+            mode: NetworkMode::Full,
+            mitm: true,
+            credential_broker: true,
+            ..NetworkProxySettings::default()
+        };
+        settings.set_allowed_domains(vec!["api.openai.com".to_string()]);
+        let state = state_for_settings(settings);
+        let mut env = HashMap::from([("OPENAI_API_KEY".to_string(), "sk-real".to_string())]);
+        state.virtualize_child_credentials(&mut env);
+        let mut request =
+            TcpRequest::new(HostWithPort::try_from("api.openai.com:443").expect("valid authority"));
+        request.extensions_mut().insert(state.clone());
+
+        let result = handle_socks5_tcp(
+            request,
+            TargetCheckedTcpConnector::new(state),
+            /*policy_decider*/ None,
+            /*environment_id*/ None,
+        )
+        .await
+        .expect("brokered HTTPS should use MITM");
+
+        assert!(matches!(result.conn, Socks5TcpConnection::Mitm { .. }));
     }
 
     #[tokio::test(flavor = "current_thread")]
