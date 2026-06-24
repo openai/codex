@@ -1,6 +1,7 @@
 use crate::ExecutorFileSystem;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 use std::io;
@@ -28,15 +29,66 @@ pub async fn find_nearest_ancestor_with_markers(
     error_policy: FindUpErrorPolicy,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> FileSystemResult<Option<PathUri>> {
-    let mut ancestors = start.ancestors();
+    find_nearest_ancestor(
+        file_system,
+        start.clone(),
+        markers,
+        PathUri::parent,
+        |ancestor, marker| {
+            ancestor
+                .join(marker)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
+        },
+        error_policy,
+        sandbox,
+    )
+    .await
+}
+
+/// Finds the nearest native ancestor containing one of the provided marker names.
+///
+/// Ancestors and marker paths remain native until each complete probe is converted to a URI. This
+/// preserves paths that require an opaque [`PathUri`] fallback.
+pub async fn find_nearest_native_ancestor_with_markers(
+    file_system: &dyn ExecutorFileSystem,
+    start: &AbsolutePathBuf,
+    markers: Vec<String>,
+    error_policy: FindUpErrorPolicy,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> FileSystemResult<Option<AbsolutePathBuf>> {
+    find_nearest_ancestor(
+        file_system,
+        start.clone(),
+        markers,
+        AbsolutePathBuf::parent,
+        |ancestor, marker| Ok(PathUri::from_abs_path(&ancestor.join(marker))),
+        error_policy,
+        sandbox,
+    )
+    .await
+}
+
+async fn find_nearest_ancestor<P, Parent, MarkerPath>(
+    file_system: &dyn ExecutorFileSystem,
+    start: P,
+    markers: Vec<String>,
+    parent: Parent,
+    mut marker_path: MarkerPath,
+    error_policy: FindUpErrorPolicy,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> FileSystemResult<Option<P>>
+where
+    P: Clone + Send,
+    Parent: FnMut(&P) -> Option<P> + Send,
+    MarkerPath: FnMut(&P, &str) -> FileSystemResult<PathUri> + Send,
+{
+    let mut ancestors = std::iter::successors(Some(start), parent);
     let mut ancestor = ancestors.next();
     let mut marker_index = 0;
     let probes = std::iter::from_fn(move || {
         let current_ancestor = ancestor.clone()?;
         let marker = markers.get(marker_index)?;
-        let marker_path = current_ancestor
-            .join(marker)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err));
+        let marker_path = marker_path(&current_ancestor, marker);
 
         marker_index += 1;
         if marker_index == markers.len() {

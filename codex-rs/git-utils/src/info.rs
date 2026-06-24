@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::FindUpErrorPolicy;
-use codex_file_system::find_nearest_ancestor_with_markers;
+use codex_file_system::find_nearest_native_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::future::join_all;
@@ -54,18 +54,15 @@ pub async fn get_git_repo_root_with_fs(
         Ok(metadata) if metadata.is_directory => cwd.clone(),
         _ => cwd.parent()?,
     };
-    let base_uri = PathUri::from_abs_path(&base);
-    find_nearest_ancestor_with_markers(
+    find_nearest_native_ancestor_with_markers(
         fs,
-        &base_uri,
+        &base,
         vec![".git".to_string()],
         FindUpErrorPolicy::Ignore,
         /*sandbox*/ None,
     )
     .await
-    .ok()??
-    .to_abs_path()
-    .ok()
+    .ok()?
 }
 
 /// Timeout for git commands to prevent freezing on large repositories

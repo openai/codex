@@ -11,6 +11,7 @@ use codex_utils_path::normalize_for_path_comparison;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::skip_if_sandbox;
+use pretty_assertions::assert_eq;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -514,6 +515,23 @@ async fn get_git_repo_root_with_fs_starts_at_parent_for_file() {
     assert_eq!(
         get_git_repo_root_with_fs(LOCAL_FS.as_ref(), &file.abs()).await,
         Some(proj.abs())
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn get_git_repo_root_with_fs_supports_windows_namespace_paths() {
+    let tmp = TempDir::new().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(repo.join("nested")).unwrap();
+
+    let namespace_repo = PathBuf::from(format!(r"\\?\{}", repo.display()));
+    let namespace_nested = namespace_repo.join("nested");
+
+    assert_eq!(
+        get_git_repo_root_with_fs(LOCAL_FS.as_ref(), &namespace_nested.abs()).await,
+        Some(namespace_repo.abs())
     );
 }
 
