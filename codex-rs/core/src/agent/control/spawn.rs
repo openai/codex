@@ -610,7 +610,6 @@ impl AgentControl {
         session_source: SessionSource,
     ) -> CodexResult<(ThreadId, MultiAgentVersion)> {
         let state = self.upgrade()?;
-        let state_db_ctx = state.state_db();
         let stored_thread = state
             .read_stored_thread(ReadThreadParams {
                 thread_id,
@@ -618,6 +617,14 @@ impl AgentControl {
                 include_history: true,
             })
             .await?;
+        let resumed_agent_path = stored_thread
+            .agent_path
+            .as_deref()
+            .map(AgentPath::try_from)
+            .transpose()
+            .map_err(|err| CodexErr::InvalidRequest(format!("invalid stored agent path: {err}")))?;
+        let resumed_agent_nickname = stored_thread.agent_nickname.clone();
+        let resumed_agent_role = stored_thread.agent_role.clone();
         let history = stored_thread
             .history
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?
@@ -646,26 +653,15 @@ impl AgentControl {
                 agent_path,
                 agent_role: _,
                 agent_nickname: _,
-            }) => {
-                let (resumed_agent_nickname, resumed_agent_role) =
-                    if let Some(state_db_ctx) = state_db_ctx.as_ref() {
-                        match state_db_ctx.get_thread(thread_id).await {
-                            Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
-                            Ok(None) | Err(_) => (None, None),
-                        }
-                    } else {
-                        (None, None)
-                    };
-                self.prepare_thread_spawn(
-                    &mut reservation,
-                    &config,
-                    parent_thread_id,
-                    depth,
-                    agent_path,
-                    resumed_agent_role,
-                    resumed_agent_nickname,
-                )?
-            }
+            }) => self.prepare_thread_spawn(
+                &mut reservation,
+                &config,
+                parent_thread_id,
+                depth,
+                agent_path.or(resumed_agent_path),
+                resumed_agent_role,
+                resumed_agent_nickname,
+            )?,
             other => (other, AgentMetadata::default()),
         };
         let notification_source = session_source.clone();

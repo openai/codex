@@ -248,7 +248,6 @@ pub(crate) struct ThreadManagerState {
     session_source: SessionSource,
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
-    state_db: Option<StateDbHandle>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -306,7 +305,6 @@ impl ThreadManager {
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         agent_graph_store: Option<Arc<dyn AgentGraphStore>>,
-        state_db: Option<StateDbHandle>,
         installation_id: String,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         external_time_provider: Option<Arc<dyn TimeProvider>>,
@@ -347,7 +345,6 @@ impl ThreadManager {
                 session_source,
                 installation_id,
                 analytics_events_client,
-                state_db,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -455,7 +452,6 @@ impl ThreadManager {
                 session_source: SessionSource::Exec,
                 installation_id,
                 analytics_events_client: None,
-                state_db,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -1072,10 +1068,6 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
-    pub(crate) fn state_db(&self) -> Option<StateDbHandle> {
-        self.state_db.clone()
-    }
-
     pub(crate) fn agent_graph_store(&self) -> Option<Arc<dyn AgentGraphStore>> {
         self.agent_graph_store.clone()
     }

@@ -135,7 +135,6 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),
         local_agent_graph_store_from_state_db(state_db.as_ref()),
-        state_db,
         installation_id,
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
