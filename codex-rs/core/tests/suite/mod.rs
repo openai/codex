@@ -89,6 +89,7 @@ mod prompt_caching;
 mod prompt_debug_tests;
 mod quota_exceeded;
 mod realtime_conversation;
+mod realtime_transcript_tail;
 mod remote_env;
 mod remote_models;
 mod request_compression;

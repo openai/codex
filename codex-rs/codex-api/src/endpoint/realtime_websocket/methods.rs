@@ -219,6 +219,8 @@ pub struct RealtimeWebsocketEvents {
 struct ActiveTranscriptState {
     entries: Vec<RealtimeTranscriptEntry>,
     last_handoff_entry_count: usize,
+    last_requested_handoff_entry_count: usize,
+    handoff_entry_counts: HashMap<String, usize>,
     new_input_entry: bool,
     new_output_entry: bool,
 }
@@ -391,6 +393,25 @@ impl RealtimeWebsocketWriter {
 }
 
 impl RealtimeWebsocketEvents {
+    /// Marks the transcript included in a handoff as durably accepted by the caller.
+    pub async fn commit_transcript_handoff(&self, handoff_id: &str) {
+        let mut active_transcript = self.active_transcript.lock().await;
+        if let Some(entry_count) = active_transcript.handoff_entry_counts.remove(handoff_id) {
+            active_transcript.last_handoff_entry_count =
+                active_transcript.last_handoff_entry_count.max(entry_count);
+        }
+    }
+
+    /// Takes transcript entries not committed through a handoff, advancing the cursor once.
+    pub async fn take_transcript_tail(&self) -> Vec<RealtimeTranscriptEntry> {
+        let mut active_transcript = self.active_transcript.lock().await;
+        let tail = active_transcript.entries[active_transcript.last_handoff_entry_count..].to_vec();
+        active_transcript.last_handoff_entry_count = active_transcript.entries.len();
+        active_transcript.last_requested_handoff_entry_count = active_transcript.entries.len();
+        active_transcript.handoff_entry_counts.clear();
+        tail
+    }
+
     pub async fn next_event(&self) -> Result<Option<RealtimeEvent>, ApiError> {
         if self.is_closed.load(Ordering::SeqCst) {
             return Ok(None);
@@ -485,10 +506,14 @@ impl RealtimeWebsocketEvents {
             }
             RealtimeEvent::HandoffRequested(handoff) => {
                 append_handoff_input(&mut active_transcript.entries, &handoff.input_transcript);
+                let entry_count = active_transcript.entries.len();
                 handoff.active_transcript = active_transcript.entries
-                    [active_transcript.last_handoff_entry_count..]
+                    [active_transcript.last_requested_handoff_entry_count..entry_count]
                     .to_vec();
-                active_transcript.last_handoff_entry_count = active_transcript.entries.len();
+                active_transcript.last_requested_handoff_entry_count = entry_count;
+                active_transcript
+                    .handoff_entry_counts
+                    .insert(handoff.handoff_id.clone(), entry_count);
                 active_transcript.new_input_entry = true;
                 active_transcript.new_output_entry = true;
             }
@@ -871,6 +896,94 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::tungstenite::Message;
+
+    fn transcript_events() -> RealtimeWebsocketEvents {
+        let (_tx_message, rx_message) = async_channel::unbounded();
+        RealtimeWebsocketEvents {
+            rx_message,
+            active_transcript: Arc::new(Mutex::new(ActiveTranscriptState::default())),
+            event_parser: RealtimeEventParser::RealtimeV2,
+            is_closed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_transcript_has_no_tail() {
+        assert_eq!(transcript_events().take_transcript_tail().await, Vec::new());
+    }
+
+    #[tokio::test]
+    async fn takes_trailing_transcript_once() {
+        let events = transcript_events();
+        events
+            .update_active_transcript(&mut RealtimeEvent::InputTranscriptDelta(
+                RealtimeTranscriptDelta {
+                    delta: "trailing words".to_string(),
+                },
+            ))
+            .await;
+
+        assert_eq!(
+            events.take_transcript_tail().await,
+            vec![RealtimeTranscriptEntry {
+                role: "user".to_string(),
+                text: "trailing words".to_string(),
+            }]
+        );
+        assert_eq!(events.take_transcript_tail().await, Vec::new());
+    }
+
+    #[tokio::test]
+    async fn committed_handoff_is_not_returned_as_tail() {
+        let events = transcript_events();
+        events
+            .update_active_transcript(&mut RealtimeEvent::InputTranscriptDelta(
+                RealtimeTranscriptDelta {
+                    delta: "already handed off".to_string(),
+                },
+            ))
+            .await;
+        let mut handoff = RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+            handoff_id: "handoff_1".to_string(),
+            item_id: "item_1".to_string(),
+            input_transcript: "already handed off".to_string(),
+            active_transcript: Vec::new(),
+        });
+        events.update_active_transcript(&mut handoff).await;
+        events.commit_transcript_handoff("handoff_1").await;
+
+        assert_eq!(events.take_transcript_tail().await, Vec::new());
+    }
+
+    #[tokio::test]
+    async fn uncommitted_handoff_is_still_returned_as_tail() {
+        let events = transcript_events();
+        events
+            .update_active_transcript(&mut RealtimeEvent::InputTranscriptDelta(
+                RealtimeTranscriptDelta {
+                    delta: "queued handoff".to_string(),
+                },
+            ))
+            .await;
+        events
+            .update_active_transcript(&mut RealtimeEvent::HandoffRequested(
+                RealtimeHandoffRequested {
+                    handoff_id: "handoff_1".to_string(),
+                    item_id: "item_1".to_string(),
+                    input_transcript: "queued handoff".to_string(),
+                    active_transcript: Vec::new(),
+                },
+            ))
+            .await;
+
+        assert_eq!(
+            events.take_transcript_tail().await,
+            vec![RealtimeTranscriptEntry {
+                role: "user".to_string(),
+                text: "queued handoff".to_string(),
+            }]
+        );
+    }
 
     #[test]
     fn parse_session_updated_event() {

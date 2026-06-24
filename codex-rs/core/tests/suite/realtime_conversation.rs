@@ -57,6 +57,8 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
+use super::realtime_transcript_tail::persisted_realtime_transcript_tails;
+
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const STARTUP_CONTEXT_OPEN_TAG: &str = "<startup_context>";
 const STARTUP_CONTEXT_CLOSE_TAG: &str = "</startup_context>";
@@ -3196,7 +3198,10 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text
         == "<realtime_delegation>\n  <input>text from realtime</input>\n  <transcript_delta>user: text from realtime</transcript_delta>\n</realtime_delegation>"));
-
+    assert_eq!(
+        persisted_realtime_transcript_tails(&test),
+        Vec::<String>::new()
+    );
     realtime_server.shutdown().await;
     Ok(())
 }

@@ -3,6 +3,7 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_speech as handle_realtime_conversation_speech;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
+use crate::realtime_conversation::shutdown_realtime_conversation;
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::protocol::Submission;
@@ -592,7 +593,7 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
         startup_prewarm.abort().await;
     }
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-    let _ = sess.conversation.shutdown().await;
+    shutdown_realtime_conversation(sess).await;
     sess.services
         .unified_exec_manager
         .terminate_all_processes()
