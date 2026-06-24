@@ -215,6 +215,7 @@ impl ExternalAgentSessionImporter {
                     .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             },
             dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
             multi_agent_version: Some(MultiAgentVersion::V1),
             initial_window_id: uuid::Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {

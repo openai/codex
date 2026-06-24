@@ -4043,6 +4043,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
@@ -6919,6 +6920,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {

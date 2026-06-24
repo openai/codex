@@ -10,6 +10,7 @@ use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_protocol::SessionId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -555,6 +556,10 @@ impl Session {
             config.current_time_reminder.as_ref(),
             external_time_provider,
         )?;
+        let selected_capability_roots = thread_extension_init
+            .get::<Vec<SelectedCapabilityRoot>>()
+            .map(|roots| roots.as_ref().clone())
+            .unwrap_or_else(|| initial_history.get_selected_capability_roots());
         let mcp_thread_init = thread_extension_init.clone();
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
             thread_id.to_string(),
@@ -584,6 +589,7 @@ impl Session {
                                 text: session_configuration.base_instructions.clone(),
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
+                            selected_capability_roots: selected_capability_roots.clone(),
                             multi_agent_version: initial_multi_agent_version,
                             initial_window_id: initial_auto_compact_window_ids
                                 .window_id

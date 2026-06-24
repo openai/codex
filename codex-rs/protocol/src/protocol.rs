@@ -19,6 +19,7 @@ use crate::AgentPath;
 use crate::SessionId;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
+use crate::capabilities::SelectedCapabilityRoot;
 use crate::config_types::ApprovalsReviewer;
 use crate::config_types::CollaborationMode;
 use crate::config_types::ModeKind;
@@ -2570,6 +2571,12 @@ impl InitialHistory {
         }
     }
 
+    pub fn get_selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
+        self.get_session_meta()
+            .map(|meta| meta.selected_capability_roots.clone())
+            .unwrap_or_default()
+    }
+
     pub fn get_multi_agent_version(&self) -> Option<MultiAgentVersion> {
         match self {
             InitialHistory::New | InitialHistory::Cleared => None,
@@ -3003,6 +3010,9 @@ pub struct SessionMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    /// Capability roots selected for this thread by the hosting platform.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3032,6 +3042,7 @@ impl Default for SessionMeta {
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
+            selected_capability_roots: Vec::new(),
             memory_mode: None,
             multi_agent_version: None,
             context_window: None,
