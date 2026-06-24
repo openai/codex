@@ -7,7 +7,8 @@ use std::time::UNIX_EPOCH;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
-use codex_rmcp_client::McpAuthStatus;
+use codex_rmcp_client::McpAuthState;
+use codex_rmcp_client::McpLoginRequirement;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthTokens;
 use codex_rmcp_client::WrappedOAuthTokenResponse;
@@ -146,6 +147,21 @@ async fn reports_auth_status_for_persisted_credentials() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[ignore = "spawned by reports_auth_status_for_persisted_credentials"]
 async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
+    let first_login_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "authorization_endpoint": format!("{}/oauth/authorize", first_login_server.uri()),
+            "token_endpoint": format!("{}/oauth/token", first_login_server.uri()),
+        })))
+        .expect(1)
+        .mount(&first_login_server)
+        .await;
+
+    let status = auth_status(&format!("{}/mcp", first_login_server.uri())).await?;
+    assert_eq!(status, McpAuthState::LoggedOut(McpLoginRequirement::Login));
+    first_login_server.verify().await;
+
     let response = OAuthTokenResponse::new(
         AccessToken::new(EXPIRED_ACCESS_TOKEN.to_string()),
         BasicTokenType::Bearer,
@@ -166,7 +182,10 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
     )?;
 
     let status = auth_status(UNREFRESHABLE_SERVER_URL).await?;
-    assert_eq!(status, McpAuthStatus::NotLoggedIn);
+    assert_eq!(
+        status,
+        McpAuthState::LoggedOut(McpLoginRequirement::Reauthentication)
+    );
 
     let response = OAuthTokenResponse::new(
         AccessToken::new("unexpired-access-token".to_string()),
@@ -192,7 +211,7 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
     )?;
 
     let status = auth_status(UNEXPIRED_SERVER_URL).await?;
-    assert_eq!(status, McpAuthStatus::OAuth);
+    assert_eq!(status, McpAuthState::OAuth);
 
     let mut response = OAuthTokenResponse::new(
         AccessToken::new(EXPIRED_ACCESS_TOKEN.to_string()),
@@ -215,11 +234,11 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
     )?;
 
     let status = auth_status(REFRESHABLE_SERVER_URL).await?;
-    assert_eq!(status, McpAuthStatus::OAuth);
+    assert_eq!(status, McpAuthState::OAuth);
     Ok(())
 }
 
-async fn auth_status(server_url: &str) -> anyhow::Result<McpAuthStatus> {
+async fn auth_status(server_url: &str) -> anyhow::Result<McpAuthState> {
     determine_streamable_http_auth_status(
         SERVER_NAME,
         server_url,

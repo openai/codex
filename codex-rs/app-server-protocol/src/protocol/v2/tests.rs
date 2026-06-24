@@ -1,4 +1,5 @@
 use super::*;
+use crate::ServerNotification;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::items::AgentMessageContent;
@@ -2164,6 +2165,25 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
             "name": "optional_broken",
             "status": "failed",
             "error": "handshake failed",
+        })
+    );
+}
+
+#[test]
+fn mcp_server_reauthentication_required_serializes_server_name() {
+    let notification = ServerNotification::McpServerReauthenticationRequired(
+        McpServerReauthenticationRequiredNotification {
+            name: "expired-oauth".to_string(),
+        },
+    );
+
+    assert_eq!(
+        serde_json::to_value(notification).expect("notification should serialize"),
+        json!({
+            "method": "mcpServer/reauthenticationRequired",
+            "params": {
+                "name": "expired-oauth",
+            },
         })
     );
 }

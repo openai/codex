@@ -163,6 +163,7 @@ pub(super) fn server_notification_thread_target(
         }
         ServerNotification::SkillsChanged(_)
         | ServerNotification::McpServerOauthLoginCompleted(_)
+        | ServerNotification::McpServerReauthenticationRequired(_)
         | ServerNotification::AccountUpdated(_)
         | ServerNotification::AccountRateLimitsUpdated(_)
         | ServerNotification::AppListUpdated(_)
