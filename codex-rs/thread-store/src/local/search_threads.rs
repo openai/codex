@@ -10,9 +10,10 @@ use codex_rollout::parse_cursor;
 use codex_rollout::search_rollout_matches;
 
 use super::LocalThreadStore;
-use super::helpers::distinct_thread_metadata_title;
-use super::helpers::set_thread_name_from_title;
+use super::helpers::ThreadMetadataName;
+use super::helpers::apply_thread_metadata_name;
 use super::helpers::stored_thread_from_rollout_item;
+use super::helpers::thread_metadata_name;
 use super::list_threads::list_rollout_threads;
 use crate::ListThreadsParams;
 use crate::SearchThreadsParams;
@@ -205,14 +206,14 @@ async fn set_thread_search_result_names(
         .iter()
         .map(|item| item.thread.thread_id)
         .collect::<HashSet<_>>();
-    let mut names = HashMap::<ThreadId, String>::with_capacity(thread_ids.len());
+    let mut names = HashMap::<ThreadId, ThreadMetadataName>::with_capacity(thread_ids.len());
     if let Some(state_db_ctx) = store.state_db().await {
         for &thread_id in &thread_ids {
             let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
                 continue;
             };
-            if let Some(title) = distinct_thread_metadata_title(&metadata) {
-                names.insert(thread_id, title);
+            if let Some(name) = thread_metadata_name(&metadata) {
+                names.insert(thread_id, name);
             }
         }
     }
@@ -221,12 +222,14 @@ async fn set_thread_search_result_names(
             find_thread_names_by_ids(store.config.codex_home.as_path(), &thread_ids).await
     {
         for (thread_id, title) in legacy_names {
-            names.entry(thread_id).or_insert(title);
+            names
+                .entry(thread_id)
+                .or_insert(ThreadMetadataName::Legacy(title));
         }
     }
     for item in items {
-        if let Some(title) = names.get(&item.thread.thread_id).cloned() {
-            set_thread_name_from_title(&mut item.thread, title);
+        if let Some(name) = names.get(&item.thread.thread_id).cloned() {
+            apply_thread_metadata_name(&mut item.thread, name);
         }
     }
 }

@@ -40,7 +40,7 @@ pub(crate) fn load_session_for_import_with_content_sha256(
         .iter()
         .find(|message| message.role == MessageRole::User)
         .map(|message| summarize_for_label(&message.text));
-    let title = parsed.source_title.or_else(|| first_user_message.clone());
+    let title = parsed.source_title;
     let rollout_items = rollout_items_from_messages(messages);
     if rollout_items.is_empty() {
         return Ok(None);

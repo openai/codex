@@ -530,7 +530,6 @@ pub async fn reconcile_rollout(
     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
     if let Ok(Some(existing_metadata)) = ctx.get_thread(metadata.id).await {
         metadata.prefer_existing_git_info(&existing_metadata);
-        metadata.prefer_existing_explicit_title(&existing_metadata);
     }
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {
@@ -577,29 +576,24 @@ pub async fn read_repair_rollout_path(
         && let Ok(Some(metadata)) = ctx.get_thread(thread_id).await
     {
         saw_existing_metadata = true;
-        let mut repaired = metadata.clone();
-        repaired.rollout_path = rollout_path.to_path_buf();
-        repaired.cwd = normalize_cwd_for_state_db(&repaired.cwd);
-        match archived_only {
-            Some(true) if repaired.archived_at.is_none() => {
-                repaired.archived_at = Some(repaired.updated_at);
+        let cwd = normalize_cwd_for_state_db(&metadata.cwd);
+        let archive_state = match archived_only {
+            Some(true) => codex_state::ThreadArchiveState::Archived,
+            Some(false) => codex_state::ThreadArchiveState::Active,
+            None => codex_state::ThreadArchiveState::Preserve,
+        };
+        match ctx
+            .repair_thread_rollout_location(thread_id, rollout_path, cwd.as_path(), archive_state)
+            .await
+        {
+            Ok(true) => return,
+            Ok(false) => return,
+            Err(err) => {
+                warn!(
+                    "state db read-repair update failed for {}: {err}",
+                    rollout_path.display()
+                );
             }
-            Some(false) => {
-                repaired.archived_at = None;
-            }
-            Some(true) | None => {}
-        }
-        if repaired == metadata {
-            return;
-        }
-        warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (fast path)");
-        if let Err(err) = ctx.upsert_thread(&repaired).await {
-            warn!(
-                "state db read-repair upsert failed for {}: {err}",
-                rollout_path.display()
-            );
-        } else {
-            return;
         }
     }
 

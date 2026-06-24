@@ -29,6 +29,62 @@ pub enum SortDirection {
     Desc,
 }
 
+/// Archive-state change applied while repairing a thread's rollout location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadArchiveState {
+    /// Keep the existing archive state.
+    Preserve,
+    /// Mark the thread active.
+    Active,
+    /// Mark the thread archived.
+    Archived,
+}
+
+/// Provenance-aware user-assigned thread name state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThreadName {
+    /// A row migrated from the legacy mixed title column that has not been reconciled yet.
+    LegacyUnknown,
+    /// The thread has no explicit user-assigned name.
+    Unnamed,
+    /// The thread had an explicit user-assigned name cleared by a provenance-aware writer.
+    Cleared,
+    /// The thread has an explicit user-assigned name.
+    Explicit(String),
+}
+
+impl ThreadName {
+    /// Return the explicit name, if one is present.
+    pub fn explicit(&self) -> Option<&str> {
+        match self {
+            Self::Explicit(name) => Some(name),
+            Self::LegacyUnknown | Self::Unnamed | Self::Cleared => None,
+        }
+    }
+
+    pub(crate) fn state_str(&self) -> &'static str {
+        match self {
+            Self::LegacyUnknown => "legacy_unknown",
+            Self::Unnamed => "unnamed",
+            Self::Cleared => "cleared",
+            Self::Explicit(_) => "explicit",
+        }
+    }
+
+    pub(crate) fn from_db(state: &str, name: Option<String>) -> Result<Self> {
+        match state {
+            "legacy_unknown" => Ok(Self::LegacyUnknown),
+            "unnamed" => Ok(Self::Unnamed),
+            "cleared" => Ok(Self::Cleared),
+            "explicit" => name
+                .filter(|name| !name.is_empty())
+                .map(Self::Explicit)
+                .ok_or_else(|| anyhow::anyhow!("explicit thread name is missing")),
+            _ => Err(anyhow::anyhow!("unknown thread name state `{state}`")),
+        }
+    }
+}
+
 /// A pagination anchor used for keyset pagination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
@@ -47,6 +103,60 @@ pub struct ThreadsPage {
     pub next_anchor: Option<Anchor>,
     /// The number of rows scanned to produce this page.
     pub num_scanned_rows: usize,
+}
+
+/// A single page of lightweight thread list results.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadListPage {
+    /// The thread summary items in this page.
+    pub items: Vec<ThreadListItem>,
+    /// The next anchor to use for pagination, if any.
+    pub next_anchor: Option<Anchor>,
+    /// The number of rows scanned to produce this page.
+    pub num_scanned_rows: usize,
+}
+
+/// Thread metadata fields needed to render list pages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadListItem {
+    /// The thread identifier.
+    pub id: ThreadId,
+    /// The local rollout path.
+    pub rollout_path: PathBuf,
+    /// The creation timestamp.
+    pub created_at: DateTime<Utc>,
+    /// The latest metadata timestamp.
+    pub updated_at: DateTime<Utc>,
+    /// The product recency timestamp.
+    pub recency_at: DateTime<Utc>,
+    /// The serialized session source.
+    pub source: String,
+    /// The canonical parent thread identifier for spawned threads.
+    pub parent_thread_id: Option<ThreadId>,
+    /// The optional agent nickname.
+    pub agent_nickname: Option<String>,
+    /// The optional agent role.
+    pub agent_role: Option<String>,
+    /// The model provider identifier.
+    pub model_provider: String,
+    /// The working directory.
+    pub cwd: PathBuf,
+    /// The CLI version that created the thread.
+    pub cli_version: String,
+    /// The best-effort history-derived title.
+    pub title: String,
+    /// The user-assigned name and its provenance.
+    pub name: ThreadName,
+    /// The best available list preview.
+    pub preview: Option<String>,
+    /// The first user message, when known.
+    pub first_user_message: Option<String>,
+    /// The git commit SHA, when known.
+    pub git_sha: Option<String>,
+    /// The git branch, when known.
+    pub git_branch: Option<String>,
+    /// The git origin URL, when known.
+    pub git_origin_url: Option<String>,
 }
 
 /// The outcome of extracting metadata from a rollout.
@@ -95,6 +205,8 @@ pub struct ThreadMetadata {
     pub cli_version: String,
     /// A best-effort thread title.
     pub title: String,
+    /// The user-assigned thread name and its provenance.
+    pub name: ThreadName,
     /// Best available user-facing preview for discovery and list display.
     pub preview: Option<String>,
     /// The sandbox policy (stringified enum).
@@ -226,6 +338,7 @@ impl ThreadMetadataBuilder {
             cwd: self.cwd.clone(),
             cli_version: self.cli_version.clone().unwrap_or_default(),
             title: String::new(),
+            name: ThreadName::Unnamed,
             preview: None,
             sandbox_policy,
             approval_mode,
@@ -250,21 +363,6 @@ impl ThreadMetadata {
         }
         if existing.git_origin_url.is_some() {
             self.git_origin_url = existing.git_origin_url.clone();
-        }
-    }
-
-    /// Preserve an existing user-facing title when reconciling rollout-derived metadata.
-    pub fn prefer_existing_explicit_title(&mut self, existing: &Self) {
-        let existing_title = existing.title.trim();
-        if existing_title.is_empty()
-            || existing.first_user_message.as_deref().map(str::trim) == Some(existing_title)
-        {
-            return;
-        }
-
-        let title = self.title.trim();
-        if title.is_empty() || self.first_user_message.as_deref().map(str::trim) == Some(title) {
-            self.title = existing.title.clone();
         }
     }
 
@@ -312,6 +410,9 @@ impl ThreadMetadata {
         }
         if self.title != other.title {
             diffs.push("title");
+        }
+        if self.name != other.name {
+            diffs.push("name");
         }
         if self.preview != other.preview {
             diffs.push("preview");
@@ -366,6 +467,8 @@ pub(crate) struct ThreadRow {
     cwd: String,
     cli_version: String,
     title: String,
+    name: Option<String>,
+    name_state: String,
     preview: String,
     sandbox_policy: String,
     approval_mode: String,
@@ -396,6 +499,8 @@ impl ThreadRow {
             cwd: row.try_get("cwd")?,
             cli_version: row.try_get("cli_version")?,
             title: row.try_get("title")?,
+            name: row.try_get("name")?,
+            name_state: row.try_get("name_state")?,
             preview: row.try_get("preview")?,
             sandbox_policy: row.try_get("sandbox_policy")?,
             approval_mode: row.try_get("approval_mode")?,
@@ -430,6 +535,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             cwd,
             cli_version,
             title,
+            name,
+            name_state,
             preview,
             sandbox_policy,
             approval_mode,
@@ -462,6 +569,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             cwd: PathBuf::from(cwd),
             cli_version,
             title,
+            name: ThreadName::from_db(name_state.as_str(), name)?,
             preview: (!preview.is_empty()).then_some(preview),
             sandbox_policy,
             approval_mode,
@@ -527,6 +635,7 @@ pub struct BackfillStats {
 #[cfg(test)]
 mod tests {
     use super::ThreadMetadata;
+    use super::ThreadName;
     use super::ThreadRow;
     use chrono::DateTime;
     use chrono::Utc;
@@ -553,6 +662,8 @@ mod tests {
             cwd: "/tmp/workspace".to_string(),
             cli_version: "0.0.0".to_string(),
             title: String::new(),
+            name: None,
+            name_state: "unnamed".to_string(),
             preview: String::new(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
@@ -584,6 +695,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/workspace"),
             cli_version: "0.0.0".to_string(),
             title: String::new(),
+            name: ThreadName::Unnamed,
             preview: None,
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),

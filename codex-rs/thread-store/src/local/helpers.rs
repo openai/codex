@@ -18,6 +18,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
 use codex_state::ThreadMetadata;
+use codex_state::ThreadName;
 
 use crate::StoredThread;
 use crate::ThreadStoreError;
@@ -176,12 +177,39 @@ pub(super) fn permission_profile_to_metadata_value(
     }
 }
 
-pub(super) fn distinct_thread_metadata_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = metadata.title.trim();
-    if title.is_empty() || metadata.first_user_message.as_deref().map(str::trim) == Some(title) {
+#[derive(Clone)]
+pub(super) enum ThreadMetadataName {
+    Explicit(String),
+    Legacy(String),
+    Cleared,
+}
+
+pub(super) fn thread_metadata_name(metadata: &ThreadMetadata) -> Option<ThreadMetadataName> {
+    match &metadata.name {
+        ThreadName::Explicit(name) => {
+            return Some(ThreadMetadataName::Explicit(name.clone()));
+        }
+        ThreadName::Unnamed => return None,
+        ThreadName::Cleared => return Some(ThreadMetadataName::Cleared),
+        ThreadName::LegacyUnknown => {}
+    }
+
+    // Preserve display names from rows that have not yet reconciled the legacy mixed title.
+    let legacy_title = metadata.title.trim();
+    if legacy_title.is_empty()
+        || metadata.first_user_message.as_deref().map(str::trim) == Some(legacy_title)
+    {
         None
     } else {
-        Some(title.to_string())
+        Some(ThreadMetadataName::Legacy(legacy_title.to_string()))
+    }
+}
+
+pub(super) fn apply_thread_metadata_name(thread: &mut StoredThread, name: ThreadMetadataName) {
+    match name {
+        ThreadMetadataName::Explicit(name) => thread.name = Some(name),
+        ThreadMetadataName::Legacy(name) => set_thread_name_from_title(thread, name),
+        ThreadMetadataName::Cleared => {}
     }
 }
 

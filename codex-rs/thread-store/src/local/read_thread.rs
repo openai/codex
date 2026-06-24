@@ -13,12 +13,14 @@ use codex_rollout::read_thread_item_from_rollout;
 use codex_state::ThreadMetadata;
 
 use super::LocalThreadStore;
-use super::helpers::distinct_thread_metadata_title;
+use super::helpers::ThreadMetadataName;
+use super::helpers::apply_thread_metadata_name;
 use super::helpers::git_info_from_parts;
 use super::helpers::permission_profile_from_metadata_value;
 use super::helpers::rollout_path_is_archived;
 use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
+use super::helpers::thread_metadata_name;
 use super::live_writer;
 use crate::ReadThreadParams;
 use crate::StoredThread;
@@ -117,6 +119,9 @@ pub(super) async fn read_thread_by_rollout_path(
     }
     if let Some(metadata) = read_sqlite_metadata(store, thread.thread_id).await {
         thread.recency_at = metadata.recency_at;
+        if let Some(name) = thread_metadata_name(&metadata) {
+            apply_thread_metadata_name(&mut thread, name);
+        }
         let existing_git_info = thread.git_info.take();
         let (fallback_sha, fallback_branch, fallback_origin_url) = match existing_git_info {
             Some(info) => (
@@ -303,8 +308,9 @@ async fn stored_thread_from_sqlite_metadata(
     store: &LocalThreadStore,
     metadata: ThreadMetadata,
 ) -> StoredThread {
-    let name = match distinct_thread_metadata_title(&metadata) {
-        Some(title) => Some(title),
+    let name = match thread_metadata_name(&metadata) {
+        Some(ThreadMetadataName::Explicit(name) | ThreadMetadataName::Legacy(name)) => Some(name),
+        Some(ThreadMetadataName::Cleared) => None,
         None => find_thread_name_by_id(store.config.codex_home.as_path(), &metadata.id)
             .await
             .ok()
@@ -701,7 +707,7 @@ mod tests {
         builder.cwd = home.path().to_path_buf();
         builder.cli_version = Some("test_version".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        metadata.title = "Saved title".to_string();
+        metadata.name = codex_state::ThreadName::Explicit("Saved title".to_string());
         metadata.first_user_message = Some("Hello from user".to_string());
         runtime
             .upsert_thread(&metadata)
@@ -852,7 +858,7 @@ mod tests {
         builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().join("sqlite-workspace");
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        metadata.title = "Saved title".to_string();
+        metadata.name = codex_state::ThreadName::Explicit("Saved title".to_string());
         metadata.first_user_message = Some("Hello from sqlite".to_string());
         metadata.sandbox_policy = "workspace-write".to_string();
         runtime
@@ -893,10 +899,28 @@ mod tests {
     #[tokio::test]
     async fn read_thread_uses_legacy_thread_name_when_sqlite_title_is_missing() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
         let uuid = Uuid::from_u128(213);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let mut builder =
+            ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
+        builder.model_provider = Some(config.default_model_provider_id.clone());
+        builder.cwd = home.path().to_path_buf();
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        metadata.first_user_message = Some("Hello from user".to_string());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
         codex_rollout::append_thread_name(home.path(), thread_id, "Legacy title")
             .await
             .expect("append legacy thread name");
@@ -956,7 +980,7 @@ mod tests {
         builder.cwd = home.path().join("workspace");
         builder.cli_version = Some("sqlite-cli".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        metadata.title = "Command-only thread".to_string();
+        metadata.name = codex_state::ThreadName::Explicit("Command-only thread".to_string());
         runtime
             .upsert_thread(&metadata)
             .await
