@@ -442,7 +442,6 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
-            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
@@ -648,7 +647,6 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
-            multi_agent_mode: None,
             parent_trace: None,
             environments: vec![
                 TurnEnvironmentSelection {

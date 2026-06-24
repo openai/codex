@@ -489,9 +489,6 @@ pub struct ThreadSettingsOverrides {
     /// Takes precedence over model, effort, and developer instructions if set.
     pub collaboration_mode: Option<CollaborationMode>,
 
-    /// Updated multi-agent mode for this turn and subsequent turns.
-    pub multi_agent_mode: Option<MultiAgentMode>,
-
     /// Updated personality preference.
     pub personality: Option<Personality>,
 }
@@ -2023,8 +2020,6 @@ pub struct ThreadSettingsSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
-    #[serde(default)]
-    pub multi_agent_mode: MultiAgentMode,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]

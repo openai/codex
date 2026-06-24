@@ -40,7 +40,6 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
@@ -188,7 +187,6 @@ pub struct StartThreadOptions {
     pub thread_source: Option<ThreadSource>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
-    pub multi_agent_mode: Option<MultiAgentMode>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
     pub thread_extension_init: ExtensionDataInit,
@@ -639,7 +637,6 @@ impl ThreadManager {
             thread_source: None,
             dynamic_tools,
             metrics_service_name: None,
-            multi_agent_mode: None,
             parent_trace: None,
             environments,
             thread_extension_init: ExtensionDataInit::default(),
@@ -679,7 +676,6 @@ impl ThreadManager {
             thread_source,
             options.dynamic_tools,
             options.metrics_service_name,
-            options.multi_agent_mode,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             options.parent_trace,
@@ -764,7 +760,6 @@ impl ThreadManager {
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
-        let initial_multi_agent_mode = initial_history.get_latest_effective_multi_agent_mode();
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
@@ -776,7 +771,6 @@ impl ThreadManager {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            initial_multi_agent_mode,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
@@ -809,7 +803,6 @@ impl ThreadManager {
             /*thread_source*/ None,
             Vec::new(),
             /*metrics_service_name*/ None,
-            /*initial_multi_agent_mode*/ None,
             /*parent_trace*/ None,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
@@ -836,7 +829,6 @@ impl ThreadManager {
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
-        let initial_multi_agent_mode = initial_history.get_latest_effective_multi_agent_mode();
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
@@ -848,7 +840,6 @@ impl ThreadManager {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            initial_multi_agent_mode,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*parent_trace*/ None,
@@ -1004,13 +995,6 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let initial_multi_agent_mode = match source_thread_id {
-            Some(thread_id) => match self.get_thread(thread_id).await {
-                Ok(thread) => Some(thread.config_snapshot().await.multi_agent_mode),
-                Err(_) => history.get_latest_effective_multi_agent_mode(),
-            },
-            None => history.get_latest_effective_multi_agent_mode(),
-        };
         let multi_agent_version = self
             .state
             .effective_multi_agent_version_for_spawn(
@@ -1039,7 +1023,6 @@ impl ThreadManager {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            initial_multi_agent_mode,
             parent_trace,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
@@ -1322,7 +1305,6 @@ impl ThreadManagerState {
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             /*metrics_service_name*/ None,
-            /*initial_multi_agent_mode*/ None,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
@@ -1340,7 +1322,6 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         metrics_service_name: Option<String>,
-        initial_multi_agent_mode: Option<MultiAgentMode>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -1359,7 +1340,6 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             metrics_service_name,
-            initial_multi_agent_mode,
             inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1387,7 +1367,6 @@ impl ThreadManagerState {
         let environments =
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
         let thread_source = initial_history.get_resumed_thread_source();
-        let initial_multi_agent_mode = initial_history.get_latest_effective_multi_agent_mode();
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
@@ -1399,7 +1378,6 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            initial_multi_agent_mode,
             inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1421,7 +1399,6 @@ impl ThreadManagerState {
         thread_source: Option<ThreadSource>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
-        initial_multi_agent_mode: Option<MultiAgentMode>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -1440,7 +1417,6 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            initial_multi_agent_mode,
             inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1465,7 +1441,6 @@ impl ThreadManagerState {
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
-        initial_multi_agent_mode: Option<MultiAgentMode>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         thread_extension_init: ExtensionDataInit,
@@ -1483,7 +1458,6 @@ impl ThreadManagerState {
             thread_source,
             dynamic_tools,
             metrics_service_name,
-            initial_multi_agent_mode,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
@@ -1508,7 +1482,6 @@ impl ThreadManagerState {
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
-        initial_multi_agent_mode: Option<MultiAgentMode>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
@@ -1598,7 +1571,6 @@ impl ThreadManagerState {
             attestation_provider: self.attestation_provider.clone(),
             external_time_provider: self.external_time_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
-            initial_multi_agent_mode,
         }))
         .await?;
         let new_thread = self
