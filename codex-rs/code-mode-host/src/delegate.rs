@@ -12,6 +12,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::peer::HostPeer;
 
+/// Forwards delegate calls from one hosted session to the connected client.
+///
+/// The session ID associates each reverse request with the client-side delegate
+/// that owns the corresponding logical session.
 pub(super) struct RemoteDelegate {
     session_id: SessionId,
     peer: Arc<HostPeer>,

@@ -222,6 +222,10 @@ where
     Ok(true)
 }
 
+/// Owns the sessions and in-flight operations for one client connection.
+///
+/// Disconnecting this state shuts down every hosted session before waiting for
+/// its request tasks to finish.
 struct HostState {
     sessions: Mutex<HashMap<SessionId, Arc<InProcessCodeModeSession>>>,
     seen_session_ids: Mutex<HashSet<SessionId>>,
@@ -268,13 +272,22 @@ impl HostState {
                         return;
                     }
                 };
-                let result = match self.session(&session_id) {
-                    Ok(session) => session.execute_with_cell_id(cell_id.into(), request).await,
+                let session = match self.session(&session_id) {
+                    Ok(session) => session,
                     Err(err) => {
                         self.respond(request_id, Err(err));
                         return;
                     }
                 };
+                let registration = match self.peer.register_cell(session_id, cell_id.clone().into())
+                {
+                    Ok(registration) => registration,
+                    Err(err) => {
+                        self.respond(request_id, Err(err));
+                        return;
+                    }
+                };
+                let result = session.execute_with_cell_id(cell_id.into(), request).await;
                 match result {
                     Ok(started) => {
                         let cell_id = started.cell_id.clone();
@@ -284,7 +297,7 @@ impl HostState {
                                 cell_id: cell_id.into(),
                             }),
                         );
-                        self.peer.start_cell(session_id, request_id, started);
+                        self.peer.start_cell(registration, request_id, started);
                     }
                     Err(err) => self.respond(request_id, Err(err)),
                 }

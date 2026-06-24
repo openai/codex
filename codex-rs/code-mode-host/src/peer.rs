@@ -19,19 +19,30 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+/// Multiplexes host-to-client traffic for all sessions on one connection.
+///
+/// It correlates reverse delegate calls with their responses and routes each
+/// cell's initial response, delegate requests, and closure notification through
+/// a single cell driver.
 pub(super) struct HostPeer {
     outgoing_tx: mpsc::UnboundedSender<HostToClient>,
     pending: Mutex<HashMap<DelegateRequestId, oneshot::Sender<Result<DelegateResponse, String>>>>,
     next_request_id: AtomicI64,
     disconnected: CancellationToken,
-    cell_routes: StdMutex<HashMap<(SessionId, CellId), CellRoute>>,
+    cell_routes: StdMutex<HashMap<(SessionId, CellId), mpsc::UnboundedSender<CellMessage>>>,
 }
 
-enum CellRoute {
-    Pending(Vec<CellMessage>),
-    Active(mpsc::UnboundedSender<CellMessage>),
+/// Registers a cell's message channel before its runtime task can emit callbacks.
+///
+/// Dropping the registration removes the route, including when runtime admission
+/// fails before the cell driver starts.
+pub(super) struct CellRegistration {
+    peer: Arc<HostPeer>,
+    key: (SessionId, CellId),
+    messages_rx: mpsc::UnboundedReceiver<CellMessage>,
 }
 
+/// An event emitted by a hosted session for its per-cell driver to serialize.
 enum CellMessage {
     Delegate {
         id: DelegateRequestId,
@@ -72,10 +83,17 @@ impl HostPeer {
             DelegateRequest::InvokeTool { invocation } => invocation.cell_id.clone(),
             DelegateRequest::Notify { cell_id, .. } => cell_id.clone(),
         };
-        self.route_cell_message(
-            (session_id.clone(), cell_id.into()),
+        if !self.route_cell_message(
+            (session_id.clone(), cell_id.clone().into()),
             CellMessage::Delegate { id, request },
-        );
+        ) {
+            self.pending.lock().await.remove(&id);
+            pending.disarm();
+            return Err(format!(
+                "code-mode cell {} is not registered for session {session_id}",
+                cell_id.as_str()
+            ));
+        }
 
         tokio::select! {
             response = response_rx => {
@@ -85,9 +103,11 @@ impl HostPeer {
                 })?
             }
             _ = cancellation_token.cancelled() => {
-                if self.pending.lock().await.remove(&id).is_some() {
+                let mut pending_calls = self.pending.lock().await;
+                if pending_calls.remove(&id).is_some() {
                     self.send(HostToClient::CancelDelegateRequest { id });
                 }
+                drop(pending_calls);
                 pending.disarm();
                 Err("code mode delegate request cancelled".to_string())
             }
@@ -113,53 +133,64 @@ impl HostPeer {
         self.disconnected.cancel();
     }
 
-    pub(super) fn start_cell(
+    pub(super) fn register_cell(
         self: &Arc<Self>,
         session_id: SessionId,
-        request_id: RequestId,
-        started: StartedCell,
-    ) {
-        let key = (session_id, started.cell_id.clone());
-        let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-        let pending = self
-            .cell_routes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(key.clone(), CellRoute::Active(messages_tx.clone()));
-        if let Some(CellRoute::Pending(messages)) = pending {
-            for message in messages {
-                let _ = messages_tx.send(message);
-            }
-        }
-        let peer = Arc::clone(self);
-        tokio::spawn(async move {
-            drive_cell(peer, key, request_id, started, messages_rx).await;
-        });
-    }
-
-    pub(super) fn close_cell(&self, session_id: SessionId, cell_id: CellId) {
-        self.route_cell_message((session_id, cell_id), CellMessage::Closed);
-    }
-
-    fn route_cell_message(&self, key: (SessionId, CellId), message: CellMessage) {
+        cell_id: CellId,
+    ) -> Result<CellRegistration, String> {
         use std::collections::hash_map::Entry;
 
+        let key = (session_id, cell_id);
+        let (messages_tx, messages_rx) = mpsc::unbounded_channel();
         match self
             .cell_routes
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .entry(key)
+            .entry(key.clone())
         {
-            Entry::Occupied(mut entry) => match entry.get_mut() {
-                CellRoute::Pending(messages) => messages.push(message),
-                CellRoute::Active(sender) => {
-                    let _ = sender.send(message);
-                }
-            },
+            Entry::Occupied(_) => {
+                return Err(format!(
+                    "code-mode cell {} is already registered for session {}",
+                    key.1, key.0
+                ));
+            }
             Entry::Vacant(entry) => {
-                entry.insert(CellRoute::Pending(vec![message]));
+                entry.insert(messages_tx);
             }
         }
+        Ok(CellRegistration {
+            peer: Arc::clone(self),
+            key,
+            messages_rx,
+        })
+    }
+
+    pub(super) fn start_cell(
+        self: &Arc<Self>,
+        registration: CellRegistration,
+        request_id: RequestId,
+        started: StartedCell,
+    ) {
+        debug_assert!(Arc::ptr_eq(self, &registration.peer));
+        debug_assert_eq!(registration.key.1, started.cell_id);
+        tokio::spawn(async move {
+            drive_cell(registration, request_id, started).await;
+        });
+    }
+
+    pub(super) fn close_cell(&self, session_id: SessionId, cell_id: CellId) {
+        let _ = self.route_cell_message((session_id, cell_id), CellMessage::Closed);
+    }
+
+    fn route_cell_message(&self, key: (SessionId, CellId), message: CellMessage) -> bool {
+        let routes = self
+            .cell_routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(sender) = routes.get(&key) else {
+            return false;
+        };
+        sender.send(message).is_ok()
     }
 
     async fn send_delegate_if_pending(
@@ -168,23 +199,28 @@ impl HostPeer {
         session_id: SessionId,
         request: DelegateRequest,
     ) {
-        if self.pending.lock().await.contains_key(&id) {
-            self.send(HostToClient::DelegateRequest {
-                id,
-                session_id,
-                request,
-            });
+        // Keep the pending entry locked through enqueueing the request so a
+        // concurrent cancellation can only be sent after it.
+        let pending_calls = self.pending.lock().await;
+        if !pending_calls.contains_key(&id) {
+            return;
         }
+        self.send(HostToClient::DelegateRequest {
+            id,
+            session_id,
+            request,
+        });
+        drop(pending_calls);
     }
 }
 
 async fn drive_cell(
-    peer: Arc<HostPeer>,
-    key: (SessionId, CellId),
+    mut registration: CellRegistration,
     request_id: RequestId,
     started: StartedCell,
-    mut messages_rx: mpsc::UnboundedReceiver<CellMessage>,
 ) {
+    let peer = Arc::clone(&registration.peer);
+    let key = registration.key.clone();
     let initial_response = started.initial_response();
     tokio::pin!(initial_response);
     let closed = loop {
@@ -197,7 +233,7 @@ async fn drive_cell(
                 });
                 break false;
             }
-            message = messages_rx.recv() => match message {
+            message = registration.messages_rx.recv() => match message {
                 Some(CellMessage::Delegate { id, request }) => {
                     peer.send_delegate_if_pending(id, key.0.clone(), request).await;
                 }
@@ -215,7 +251,7 @@ async fn drive_cell(
     } else {
         loop {
             tokio::select! {
-                message = messages_rx.recv() => match message {
+                message = registration.messages_rx.recv() => match message {
                     Some(CellMessage::Delegate { id, request }) => {
                         peer.send_delegate_if_pending(id, key.0.clone(), request).await;
                     }
@@ -229,12 +265,19 @@ async fn drive_cell(
         session_id: key.0.clone(),
         cell_id: key.1.clone().into(),
     });
-    peer.cell_routes
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(&key);
 }
 
+impl Drop for CellRegistration {
+    fn drop(&mut self) {
+        self.peer
+            .cell_routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.key);
+    }
+}
+
+/// Cancels a reverse delegate request if its waiting future is dropped.
 struct PendingDelegateRequest {
     peer: Arc<HostPeer>,
     id: Option<DelegateRequestId>,
@@ -257,9 +300,14 @@ impl Drop for PendingDelegateRequest {
         };
         let peer = Arc::clone(&self.peer);
         tokio::spawn(async move {
-            if peer.pending.lock().await.remove(&id).is_some() {
+            let mut pending_calls = peer.pending.lock().await;
+            if pending_calls.remove(&id).is_some() {
                 peer.send(HostToClient::CancelDelegateRequest { id });
             }
         });
     }
 }
+
+#[cfg(test)]
+#[path = "peer_tests.rs"]
+mod tests;

@@ -172,6 +172,7 @@ pub enum HostToClient {
     },
 }
 
+/// An operation requested by the client after connection negotiation.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, tag = "method", rename_all_fields = "camelCase")]
 pub enum HostRequest {
@@ -197,6 +198,10 @@ pub enum HostRequest {
     ShutdownSession { session_id: SessionId },
 }
 
+/// The host's immediate response to a client operation.
+///
+/// An accepted execution returns its initial runtime output separately as a
+/// [`HostToClient::InitialResponse`].
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, tag = "type", rename_all_fields = "camelCase")]
 pub enum HostResponse {
@@ -210,6 +215,7 @@ pub enum HostResponse {
     SessionClosed { session_id: SessionId },
 }
 
+/// A reverse call from a hosted runtime to its client-side delegate.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, tag = "type", rename_all_fields = "camelCase")]
 pub enum DelegateRequest {
@@ -223,6 +229,7 @@ pub enum DelegateRequest {
     },
 }
 
+/// The client-side delegate's result for a reverse call from the host.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, tag = "type", rename_all_fields = "camelCase")]
 pub enum DelegateResponse {
@@ -232,6 +239,7 @@ pub enum DelegateResponse {
     NotificationDelivered,
 }
 
+/// A serializable success or error payload used by protocol response frames.
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, tag = "status", rename_all_fields = "camelCase")]
 pub enum WireResult<T> {

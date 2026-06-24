@@ -38,6 +38,10 @@ mod stderr;
 
 const IPC_CHANNEL_CAPACITY: usize = 128;
 
+/// Owns one live sidecar process connection and its background IPC tasks.
+///
+/// Dropping the last connection handle cancels those tasks and causes the child
+/// supervisor to terminate the sidecar.
 pub(super) struct Connection {
     state: Arc<ConnectionState>,
     cancellation: CancellationToken,
@@ -327,6 +331,7 @@ impl Drop for Connection {
     }
 }
 
+/// Shares response routing, delegates, and terminal failure state across IPC tasks.
 struct ConnectionState {
     outgoing_tx: mpsc::Sender<ClientToHost>,
     pending: Mutex<HashMap<RequestId, oneshot::Sender<Result<HostResponse, String>>>>,

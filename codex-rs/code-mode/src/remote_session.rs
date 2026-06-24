@@ -76,6 +76,10 @@ impl CodeModeSessionProvider for ProcessOwnedCodeModeSessionProvider {
     }
 }
 
+/// Lazily maintains the shared sidecar connection used by a session provider.
+///
+/// It serializes process creation and allocates session IDs outside any one
+/// connection so those IDs remain unique when the sidecar is replaced.
 struct OwnedProcessHost {
     host_program: PathBuf,
     connection: StdMutex<Option<Arc<Connection>>>,
@@ -132,13 +136,17 @@ impl OwnedProcessHost {
     }
 }
 
+/// Tracks a logical session's binding to the current sidecar connection.
 enum SessionState {
     New,
     Open(Arc<Connection>),
     Shutdown,
 }
 
-/// A logical code-mode session assigned to a process-owned host.
+/// A logical code-mode session that lazily opens on a process-owned host.
+///
+/// It retains its client-assigned session and cell IDs if a failed sidecar must
+/// be replaced, while the hosted runtime state itself starts over.
 pub struct ProcessOwnedCodeModeSession {
     process_host: Arc<OwnedProcessHost>,
     session_id: SessionId,
