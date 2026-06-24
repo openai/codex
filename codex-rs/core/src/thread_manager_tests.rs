@@ -428,8 +428,27 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
 #[tokio::test]
 async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() {
     struct InitialDataRecorder {
+        init_observed: Arc<std::sync::Mutex<Vec<String>>>,
         lifecycle_observed: Arc<std::sync::Mutex<Vec<(String, String)>>>,
         mcp_observed: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl codex_extension_api::ThreadExtensionInitContributor for InitialDataRecorder {
+        fn initialize<'a>(
+            &'a self,
+            thread_init: &'a mut codex_extension_api::ExtensionDataInit,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                let selected_root = thread_init
+                    .get::<Vec<SelectedCapabilityRoot>>()
+                    .and_then(|roots| roots.first().cloned())
+                    .expect("selected root should be available");
+                self.init_observed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(selected_root.id);
+            })
+        }
     }
 
     impl codex_extension_api::ThreadLifecycleContributor<Config> for InitialDataRecorder {
@@ -502,13 +521,16 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
+    let init_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
     let lifecycle_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mcp_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorder = Arc::new(InitialDataRecorder {
+        init_observed: Arc::clone(&init_observed),
         lifecycle_observed: Arc::clone(&lifecycle_observed),
         mcp_observed: Arc::clone(&mcp_observed),
     });
     let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    extensions.thread_extension_init_contributor(recorder.clone());
     extensions.thread_lifecycle_contributor(recorder.clone());
     extensions.mcp_server_contributor(recorder);
     let manager = ThreadManager::new(
@@ -572,6 +594,12 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     let first_resolved = first_thread.thread.runtime_mcp_config(&config).await;
     let second_resolved = second_thread.thread.runtime_mcp_config(&config).await;
 
+    assert_eq!(
+        *init_observed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec!["selected-a".to_string(), "selected-b".to_string()]
+    );
     assert_eq!(
         *lifecycle_observed
             .lock()

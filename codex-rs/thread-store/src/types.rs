@@ -5,6 +5,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
@@ -85,6 +86,9 @@ pub struct CreateThreadParams {
     pub base_instructions: BaseInstructions,
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
+    /// Environment-qualified capability roots selected for this thread.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
     /// Multi-agent runtime selected when the thread was created.
     pub multi_agent_version: Option<MultiAgentVersion>,
     /// Initial context-window identity captured when the thread was created.

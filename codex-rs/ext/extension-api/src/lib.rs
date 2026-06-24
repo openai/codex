@@ -40,6 +40,7 @@ pub use contributors::McpServerContributionContext;
 pub use contributors::McpServerContributor;
 pub use contributors::PromptFragment;
 pub use contributors::PromptSlot;
+pub use contributors::ThreadExtensionInitContributor;
 pub use contributors::ThreadIdleInput;
 pub use contributors::ThreadLifecycleContributor;
 pub use contributors::ThreadResumeInput;

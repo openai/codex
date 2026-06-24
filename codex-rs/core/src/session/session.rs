@@ -9,6 +9,7 @@ use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::SessionId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -594,6 +595,10 @@ impl Session {
                                 text: session_configuration.base_instructions.clone(),
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
+                            selected_capability_roots: mcp_thread_init
+                                .get::<Vec<SelectedCapabilityRoot>>()
+                                .map(|roots| roots.as_ref().clone())
+                                .unwrap_or_default(),
                             multi_agent_version: initial_multi_agent_version,
                             initial_window_id: initial_auto_compact_window_ids
                                 .window_id

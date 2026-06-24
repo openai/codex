@@ -9,6 +9,16 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
 
+fn selected_capability_thread_init(
+    selected_capability_roots: Vec<SelectedCapabilityRoot>,
+) -> ExtensionDataInit {
+    let mut thread_init = ExtensionDataInit::new();
+    if !selected_capability_roots.is_empty() {
+        thread_init.insert(selected_capability_roots);
+    }
+    thread_init
+}
+
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
@@ -1131,11 +1141,7 @@ impl ThreadRequestProcessor {
                 DynamicToolSpec::Namespace(namespace) => namespace.tools.len(),
             })
             .sum();
-        let mut thread_extension_init = ExtensionDataInit::new();
-        if !selected_capability_roots.is_empty() {
-            thread_extension_init.insert(selected_capability_roots);
-            codex_mcp_extension::initialize_executor_plugin_thread_data(&mut thread_extension_init);
-        }
+        let thread_extension_init = selected_capability_thread_init(selected_capability_roots);
         let create_thread_started_at = std::time::Instant::now();
         let NewThread {
             thread_id,

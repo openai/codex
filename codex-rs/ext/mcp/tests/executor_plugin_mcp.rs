@@ -109,7 +109,7 @@ async fn selected_plugin_contributions(
             path: PathUri::from_host_native_path(plugin_root)?,
         },
     }]);
-    codex_mcp_extension::initialize_executor_plugin_thread_data(&mut thread_init);
+    registry.initialize_thread_data(&mut thread_init).await;
 
     Ok(registry.mcp_server_contributors()[0]
         .contribute(McpServerContributionContext::for_thread(

@@ -10,6 +10,7 @@ use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
+use crate::ExtensionDataInit;
 
 mod context;
 mod mcp;
@@ -42,6 +43,16 @@ pub use turn_lifecycle::TurnStopInput;
 
 /// Boxed, sendable future returned by asynchronous extension contributors.
 pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Extension contribution that seeds thread data before runtime startup.
+///
+/// Implementations may derive extension-owned state from host-provided values.
+/// Initialization completes before startup-time contributors consume the
+/// thread data.
+pub trait ThreadExtensionInitContributor: Send + Sync {
+    /// Adds extension-owned state to the host-provided thread initializer.
+    fn initialize<'a>(&'a self, thread_init: &'a mut ExtensionDataInit) -> ExtensionFuture<'a, ()>;
+}
 
 /// Extension contribution that resolves runtime MCP servers from host config.
 ///

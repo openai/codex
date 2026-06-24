@@ -39,6 +39,7 @@ use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErr;
@@ -1513,7 +1514,7 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
-        thread_extension_init: ExtensionDataInit,
+        mut thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
@@ -1539,6 +1540,19 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
+        if thread_extension_init
+            .get::<Vec<SelectedCapabilityRoot>>()
+            .is_none()
+        {
+            let selected_capability_roots = initial_history.get_selected_capability_roots();
+            if !selected_capability_roots.is_empty() {
+                thread_extension_init.insert(selected_capability_roots);
+            }
+        }
+        self.extensions
+            .initialize_thread_data(&mut thread_extension_init)
+            .await;
+
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;

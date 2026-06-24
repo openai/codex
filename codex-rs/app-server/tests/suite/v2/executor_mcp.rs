@@ -9,6 +9,10 @@ use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -32,7 +36,7 @@ const REFRESH_PROBE_SERVER_NAME: &str = "refresh_probe";
 const TOOL_CALL_ID: &str = "executor-mcp-call";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn selected_executor_plugin_exposes_its_stdio_mcp_only_to_that_thread() -> Result<()> {
+async fn selected_executor_plugin_mcp_survives_fork_and_resume() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
@@ -99,27 +103,6 @@ args = ["exec-server", "--listen", "stdio"]
     )
     .await?;
 
-    std::fs::write(plugin.path().join(".mcp.json"), r#"{"mcpServers":{}}"#)?;
-    let config_path = codex_home.path().join("config.toml");
-    let mut config = std::fs::read_to_string(&config_path)?;
-    config.push_str(&format!(
-        r#"
-[mcp_servers.{REFRESH_PROBE_SERVER_NAME}]
-command = {}
-startup_timeout_sec = 10
-"#,
-        toml::Value::String(stdio_server_bin()?)
-    ));
-    std::fs::write(config_path, config)?;
-    let request_id = app_server
-        .send_raw_request("config/mcpServer/reload", /*params*/ None)
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
     let namespace = format!("mcp__{MCP_SERVER_NAME}");
     let response_mock = responses::mount_sse_sequence(
         &responses_server,
@@ -177,6 +160,116 @@ startup_timeout_sec = 10
         .expect("MCP function output should be text");
     assert!(output.contains("ECHOING: hello from executor"));
     assert!(output.contains(EXECUTOR_ENV_VALUE));
+
+    let request_id = app_server
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: selected_thread.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadForkResponse {
+        thread: forked_thread,
+        ..
+    } = to_response(response)?;
+    let forked_thread_id = forked_thread.id;
+    assert!(
+        mcp_server_names(&mut app_server, forked_thread_id.clone())
+            .await?
+            .iter()
+            .any(|name| name == MCP_SERVER_NAME)
+    );
+
+    let config_path = codex_home.path().join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(&format!(
+        r#"
+[mcp_servers.{REFRESH_PROBE_SERVER_NAME}]
+command = {}
+startup_timeout_sec = 10
+"#,
+        toml::Value::String(stdio_server_bin()?)
+    ));
+    std::fs::write(config_path, config)?;
+
+    drop(app_server);
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
+    let request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: selected_thread.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response(response)?;
+    assert_eq!(thread.id, selected_thread);
+    assert!(
+        mcp_server_names(&mut app_server, thread.id)
+            .await?
+            .iter()
+            .any(|name| name == MCP_SERVER_NAME)
+    );
+
+    let request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: forked_thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response(response)?;
+    assert_eq!(thread.id, forked_thread_id);
+    assert!(
+        mcp_server_names(&mut app_server, thread.id)
+            .await?
+            .iter()
+            .any(|name| name == MCP_SERVER_NAME)
+    );
+
+    std::fs::write(plugin.path().join(".mcp.json"), r#"{"mcpServers":{}}"#)?;
+    let request_id = app_server
+        .send_raw_request("config/mcpServer/reload", /*params*/ None)
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let request_id = app_server
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: selected_thread.clone(),
+            server: MCP_SERVER_NAME.to_string(),
+            tool: "echo".to_string(),
+            arguments: Some(json!({"message": "frozen after reload"})),
+            meta: None,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: McpServerToolCallResponse = to_response(response)?;
+    assert_eq!(
+        response
+            .structured_content
+            .and_then(|content| content.get("echo").cloned()),
+        Some(json!("ECHOING: frozen after reload"))
+    );
 
     let request_id = app_server
         .send_mcp_server_tool_call_request(McpServerToolCallParams {

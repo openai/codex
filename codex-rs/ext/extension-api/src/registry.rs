@@ -9,6 +9,7 @@ use crate::ExtensionData;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
 use crate::NoopExtensionEventSink;
+use crate::ThreadExtensionInitContributor;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
 use crate::ToolContributor;
@@ -21,6 +22,7 @@ use crate::TurnLifecycleContributor;
 pub struct ExtensionRegistryBuilder<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
+    thread_init_contributors: Vec<Arc<dyn ThreadExtensionInitContributor>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
@@ -38,6 +40,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
         Self {
             event_sink: Arc::new(NoopExtensionEventSink),
             thread_lifecycle_contributors: Vec::new(),
+            thread_init_contributors: Vec::new(),
             turn_lifecycle_contributors: Vec::new(),
             config_contributors: Vec::new(),
             token_usage_contributors: Vec::new(),
@@ -82,6 +85,14 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         contributor: Arc<dyn ThreadLifecycleContributor<C>>,
     ) {
         self.thread_lifecycle_contributors.push(contributor);
+    }
+
+    /// Registers one startup-time thread-data contributor.
+    pub fn thread_extension_init_contributor(
+        &mut self,
+        contributor: Arc<dyn ThreadExtensionInitContributor>,
+    ) {
+        self.thread_init_contributors.push(contributor);
     }
 
     /// Registers one turn-lifecycle contributor.
@@ -134,6 +145,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         ExtensionRegistry {
             event_sink: self.event_sink,
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
+            thread_init_contributors: self.thread_init_contributors,
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
             config_contributors: self.config_contributors,
             token_usage_contributors: self.token_usage_contributors,
@@ -152,6 +164,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
 pub struct ExtensionRegistry<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
+    thread_init_contributors: Vec<Arc<dyn ThreadExtensionInitContributor>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
@@ -173,6 +186,13 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered thread-lifecycle contributors.
     pub fn thread_lifecycle_contributors(&self) -> &[Arc<dyn ThreadLifecycleContributor<C>>] {
         &self.thread_lifecycle_contributors
+    }
+
+    /// Applies registered startup-time thread-data contributors in order.
+    pub async fn initialize_thread_data(&self, thread_init: &mut crate::ExtensionDataInit) {
+        for contributor in &self.thread_init_contributors {
+            contributor.initialize(thread_init).await;
+        }
     }
 
     /// Returns the registered turn-lifecycle contributors.

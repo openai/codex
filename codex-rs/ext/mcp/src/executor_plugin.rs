@@ -6,6 +6,7 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
+use codex_extension_api::ThreadExtensionInitContributor;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,6 +35,22 @@ pub(crate) struct SelectedExecutorPluginMcpState {
 
 pub(crate) fn seed_thread_state(thread_init: &mut ExtensionDataInit) {
     thread_init.insert(SelectedExecutorPluginMcpState::default());
+}
+
+pub(crate) struct SelectedExecutorPluginMcpInitializer;
+
+impl ThreadExtensionInitContributor for SelectedExecutorPluginMcpInitializer {
+    fn initialize<'a>(&'a self, thread_init: &'a mut ExtensionDataInit) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if thread_init.get::<Vec<SelectedCapabilityRoot>>().is_some()
+                && thread_init
+                    .get::<SelectedExecutorPluginMcpState>()
+                    .is_none()
+            {
+                seed_thread_state(thread_init);
+            }
+        })
+    }
 }
 
 pub(crate) struct SelectedExecutorPluginMcpContributor {
