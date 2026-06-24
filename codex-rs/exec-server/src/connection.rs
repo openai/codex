@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::extract::ws::Message as AxumWebSocketMessage;
 use axum::extract::ws::WebSocket as AxumWebSocket;
-use codex_app_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCMessage;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -44,6 +44,7 @@ pub(crate) enum JsonRpcConnectionEvent {
 
 #[derive(Clone)]
 pub(crate) enum JsonRpcTransport {
+    // Plain means no child process; transport bytes may still be encrypted.
     Plain,
     Stdio { transport: StdioTransport },
 }
@@ -596,8 +597,8 @@ mod tests {
     use std::task::Context;
     use std::task::Poll;
 
-    use codex_app_server_protocol::JSONRPCRequest;
-    use codex_app_server_protocol::RequestId;
+    use codex_exec_server_protocol::JSONRPCRequest;
+    use codex_exec_server_protocol::RequestId;
     use futures::channel::mpsc as futures_mpsc;
     use futures::task::AtomicWaker;
     use tokio::net::TcpListener;
@@ -666,7 +667,6 @@ mod tests {
             id: RequestId::Integer(1),
             method: "test".to_string(),
             params: None,
-            trace: None,
         });
 
         server_websocket
@@ -731,7 +731,6 @@ mod tests {
             id: RequestId::Integer(1),
             method: "test".to_string(),
             params: None,
-            trace: None,
         })
     }
 

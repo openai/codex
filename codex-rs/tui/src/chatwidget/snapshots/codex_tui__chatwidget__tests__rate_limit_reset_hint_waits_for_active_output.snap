@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/usage.rs
+expression: "lines_to_single_string(&chat.active_cell_transcript_lines(80).expect(\"active output with reset hint\"),)"
+---
+active tool
+
+• You have 2 usage limit resets available. Run /usage to use one.

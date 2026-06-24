@@ -10,10 +10,13 @@ use crate::ExecServerError;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
 use crate::FileMetadata;
+use crate::FileSystemReadStream;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
+use crate::WalkOptions;
+use crate::WalkOutcome;
 use crate::client::LazyRemoteExecServerClient;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
@@ -22,10 +25,14 @@ use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
+use crate::protocol::FsWalkParams;
 use crate::protocol::FsWriteFileParams;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const NOT_FOUND_ERROR_CODE: i64 = -32004;
+
+#[path = "remote_file_stream.rs"]
+mod file_stream;
 
 pub(crate) struct RemoteFileSystem {
     client: LazyRemoteExecServerClient,
@@ -74,6 +81,22 @@ impl RemoteFileSystem {
                 format!("remote fs/readFile returned invalid base64 dataBase64: {err}"),
             )
         })
+    }
+
+    async fn read_file_stream(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileSystemReadStream> {
+        if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "streaming file reads do not support platform sandboxing",
+            ));
+        }
+        trace!("remote fs read_file_stream");
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        file_stream::open(client, path.clone(), remote_sandbox_context(sandbox)).await
     }
 
     async fn write_file(
@@ -163,6 +186,25 @@ impl RemoteFileSystem {
             .collect())
     }
 
+    async fn walk(
+        &self,
+        path: &PathUri,
+        options: WalkOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<WalkOutcome> {
+        trace!("remote fs walk");
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let response = client
+            .fs_walk(FsWalkParams {
+                path: path.clone(),
+                options,
+                sandbox: remote_sandbox_context(sandbox),
+            })
+            .await
+            .map_err(map_remote_error)?;
+        Ok(response)
+    }
+
     async fn remove(
         &self,
         path: &PathUri,
@@ -222,6 +264,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Box::pin(RemoteFileSystem::read_file(self, path, sandbox))
     }
 
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(RemoteFileSystem::read_file_stream(self, path, sandbox))
+    }
+
     fn write_file<'a>(
         &'a self,
         path: &'a PathUri,
@@ -256,6 +306,15 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(RemoteFileSystem::read_directory(self, path, sandbox))
+    }
+
+    fn walk<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: WalkOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        Box::pin(RemoteFileSystem::walk(self, path, options, sandbox))
     }
 
     fn remove<'a>(

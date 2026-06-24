@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_core::compact::SUMMARIZATION_PROMPT;
@@ -26,6 +25,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -169,14 +169,10 @@ fn json_fragment(text: &str) -> String {
 }
 
 fn read_hook_inputs(path: &Path) -> Vec<Value> {
-    let text = fs::read_to_string(path)
-        .unwrap_or_else(|err| panic!("failed to read hook input log {}: {err}", path.display()));
+    let text = fs::read_to_string(path).expect("failed to read hook input log");
     text.lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str(line)
-                .unwrap_or_else(|err| panic!("failed to parse hook input log line: {err}"))
-        })
+        .map(|line| serde_json::from_str(line).expect("failed to parse hook input log line"))
         .collect()
 }
 
@@ -364,13 +360,12 @@ fn local_compaction_provider(server: &wiremock::MockServer) -> ModelProviderInfo
 }
 
 fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo {
-    let models_response = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let models_response = bundled_models_response().expect("bundled models.json should parse");
     let mut model_info = models_response
         .models
         .into_iter()
         .find(|model| model.slug == slug)
-        .unwrap_or_else(|| panic!("model `{slug}` missing from models.json"));
+        .expect("model missing from models.json");
     model_info.context_window = Some(context_window);
     model_info
 }
@@ -641,12 +636,7 @@ async fn summarize_context_three_requests_and_instructions() {
 
     // Verify rollout contains user-turn TurnContext entries and a Compacted entry.
     println!("rollout path: {}", rollout_path.display());
-    let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
-        panic!(
-            "failed to read rollout file {}: {e}",
-            rollout_path.display()
-        )
-    });
+    let text = std::fs::read_to_string(&rollout_path).expect("failed to read rollout file");
     let mut regular_turn_context_count = 0usize;
     let mut saw_compacted_summary = false;
     for line in text.lines() {
@@ -2003,9 +1993,12 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
                 text: remote_summary.to_string(),
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
+            id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let compact_mock =
@@ -2982,12 +2975,7 @@ async fn auto_compact_persists_rollout_entries() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
     let rollout_path = session_configured.rollout_path.expect("rollout path");
-    let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
-        panic!(
-            "failed to read rollout file {}: {e}",
-            rollout_path.display()
-        )
-    });
+    let text = std::fs::read_to_string(&rollout_path).expect("failed to read rollout file");
 
     let mut turn_context_count = 0usize;
     for line in text.lines() {
@@ -3087,10 +3075,10 @@ async fn manual_compact_retries_after_context_window_error() {
 
     let compact_input = compact_attempt["input"]
         .as_array()
-        .unwrap_or_else(|| panic!("compact attempt missing input array: {compact_attempt}"));
+        .expect("compact attempt missing input array");
     let retry_input = retry_attempt["input"]
         .as_array()
-        .unwrap_or_else(|| panic!("retry attempt missing input array: {retry_attempt}"));
+        .expect("retry attempt missing input array");
     let compact_contains_prompt =
         body_contains_text(&compact_attempt.to_string(), SUMMARIZATION_PROMPT);
     let retry_contains_prompt =
@@ -3413,7 +3401,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let first_turn_user_index = first_request_user_texts
         .len()
         .checked_sub(1)
-        .unwrap_or_else(|| panic!("first turn request missing user messages"));
+        .expect("first turn request missing user messages");
     assert_eq!(
         first_request_user_texts[first_turn_user_index], first_user_message,
         "first turn request should end with the submitted user message"
@@ -3422,7 +3410,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     let final_request_user_texts = requests
         .last()
-        .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
+        .expect("final turn request missing")
         .message_input_texts("user");
     assert!(
         !initial_seeded_user_prefix.is_empty(),
@@ -3430,18 +3418,14 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     );
     let (final_request_last_user_text, final_request_before_last_user) = final_request_user_texts
         .split_last()
-        .unwrap_or_else(|| panic!("final turn request missing user messages"));
+        .expect("final turn request missing user messages");
     assert_eq!(
         final_request_last_user_text, final_user_message,
         "final turn request should end with the submitted user message"
     );
     let history_before_seeded_prefix = final_request_before_last_user
         .strip_suffix(initial_seeded_user_prefix)
-        .unwrap_or_else(|| {
-            panic!(
-                "final request should end with the seeded user prefix from the first request: {initial_seeded_user_prefix:?}"
-            )
-        });
+        .expect("final request should end with the seeded user prefix from the first request");
     let expected_history = vec![
         first_user_message.to_string(),
         second_user_message.to_string(),
@@ -4009,9 +3993,12 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
+            id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let compact_mock =
@@ -4134,9 +4121,12 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
+            id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let compact_mock =
@@ -4243,7 +4233,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     )
     .await
     .expect("override thread settings");
-    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
         .to_string();
     codex
         .submit(Op::UserInput {
@@ -4604,7 +4594,7 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     // Assert the pre-compaction source list points at the creation-time file.
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![PathUri::from_abs_path(&source)],
         "thread reports the creation-time global source before compaction"
     );
 
@@ -4634,7 +4624,7 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     assert_single_instruction_fragment(&requests[2], &expected_fragment);
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source],
+        vec![PathUri::from_abs_path(&source)],
         "thread retains the creation-time global source after compaction"
     );
 
@@ -4684,7 +4674,7 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     // Assert the pre-compaction source list points at the creation-time file.
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![PathUri::from_abs_path(&source)],
         "thread reports the creation-time global source before mid-turn compaction"
     );
 
@@ -4706,7 +4696,7 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     assert_single_instruction_fragment(&requests[2], &expected_fragment);
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source],
+        vec![PathUri::from_abs_path(&source)],
         "thread retains the creation-time global source after mid-turn compaction"
     );
 
@@ -4791,7 +4781,7 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
     );
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![PathUri::from_abs_path(&source)],
         "running thread retains the selected same-path source"
     );
     assert_eq!(
@@ -4840,7 +4830,7 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
     );
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![source],
+        vec![PathUri::from_abs_path(&source)],
         "cold-resumed thread reports the same rewritten source path"
     );
 

@@ -255,7 +255,13 @@ fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
             "type": "agent_message",
             "author": "/root",
             "recipient": "/root/reviewer",
-            "content": [{"type": "input_text", "text": "review this"}]
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Message Type: NEW_TASK\nTask name: /root/reviewer\nSender: /root\nPayload:\n"
+                },
+                {"type": "encrypted_content", "encrypted_content": "review this"}
+            ]
         })],
     )?;
 

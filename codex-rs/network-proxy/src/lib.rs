@@ -6,6 +6,7 @@ mod connect_policy;
 mod http_proxy;
 mod mitm;
 mod mitm_hook;
+mod native_certs;
 mod network_policy;
 mod policy;
 mod proxy;
@@ -46,6 +47,7 @@ pub use proxy::Args;
 #[cfg(target_os = "macos")]
 pub use proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 pub use proxy::DEFAULT_NO_PROXY_VALUE;
+pub use proxy::ManagedNetworkSandboxContext;
 pub use proxy::NO_PROXY_ENV_KEYS;
 pub use proxy::NetworkProxy;
 pub use proxy::NetworkProxyBuilder;
@@ -55,6 +57,7 @@ pub use proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 pub use proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 pub use proxy::PROXY_URL_ENV_KEYS;
+pub use proxy::PreparedManagedNetwork;
 pub use proxy::has_proxy_url_env_vars;
 pub use proxy::proxy_url_env_value;
 pub use runtime::BlockedRequest;

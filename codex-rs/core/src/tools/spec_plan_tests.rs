@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -30,17 +31,23 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
+use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
+use crate::tools::router::ToolSuggestCandidates;
+use crate::tools::router::ToolSuggestPresentation;
+
+const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
 #[derive(Default)]
 struct ToolPlanInputs {
     mcp_tools: Option<Vec<ToolInfo>>,
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    discoverable_tools: Option<Vec<DiscoverableTool>>,
+    tool_suggest_candidates: Option<ToolSuggestCandidates>,
     extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     dynamic_tools: Vec<DynamicToolSpec>,
 }
@@ -175,15 +182,18 @@ async fn probe_with(
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
     configure_turn(&mut turn);
-    let router = ToolRouter::from_turn_context(
-        &turn,
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let router = ToolRouter::from_context(
+        step_context.as_ref(),
         ToolRouterParams {
+            tool_suggest_candidates: inputs.tool_suggest_candidates,
             mcp_tools: inputs.mcp_tools,
             deferred_mcp_tools: inputs.deferred_mcp_tools,
-            discoverable_tools: inputs.discoverable_tools,
             extension_tool_executors: inputs.extension_tool_executors,
             dynamic_tools: inputs.dynamic_tools.as_slice(),
         },
+        &Default::default(),
     );
     ToolPlanProbe::from_router(router)
 }
@@ -193,16 +203,6 @@ async fn probe(configure_turn: impl FnOnce(&mut TurnContext)) -> ToolPlanProbe {
 }
 
 fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
-    if enabled {
-        turn.features
-            .enable(feature)
-            .expect("test feature should be enableable");
-    } else {
-        turn.features
-            .disable(feature)
-            .expect("test feature should be disableable");
-    }
-
     let mut config = (*turn.config).clone();
     if enabled {
         config
@@ -217,15 +217,6 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
     }
     turn.multi_agent_version = config.multi_agent_version_from_features();
     turn.config = Arc::new(config);
-    turn.tool_mode = turn.model_info.tool_mode.unwrap_or_else(|| {
-        if turn.config.features.enabled(Feature::CodeModeOnly) {
-            ToolMode::CodeModeOnly
-        } else if turn.config.features.enabled(Feature::CodeMode) {
-            ToolMode::CodeMode
-        } else {
-            ToolMode::Direct
-        }
-    });
 }
 
 fn set_features(turn: &mut TurnContext, features: &[Feature]) {
@@ -281,6 +272,29 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
         config.model_provider = provider_info.clone();
     });
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
+fn use_provider_auth(
+    turn: &mut TurnContext,
+    requires_openai_auth: bool,
+    actor_header: Option<(&str, &str)>,
+) {
+    let mut provider_info = turn.config.model_provider.clone();
+    provider_info.requires_openai_auth = requires_openai_auth;
+    provider_info.http_headers = actor_header.map(|(name, value)| {
+        HashMap::from([
+            (name.to_string(), value.to_string()),
+            (
+                "ChatGPT-Account-ID".to_string(),
+                "test-account-id".to_string(),
+            ),
+        ])
+    });
+    turn.auth_manager = None;
+    update_config(turn, |config| {
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
 }
 
 struct WebRunExtensionTool;
@@ -408,17 +422,19 @@ fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> Dyn
     }
 }
 
-fn discoverable_plugin(id: &str, name: &str) -> DiscoverableTool {
-    DiscoverablePluginInfo {
-        id: id.to_string(),
-        remote_plugin_id: None,
-        name: name.to_string(),
-        description: Some(format!("{name} plugin")),
-        has_skills: false,
-        mcp_server_names: Vec::new(),
-        app_connector_ids: Vec::new(),
+fn plugin_candidates(presentation: ToolSuggestPresentation) -> ToolSuggestCandidates {
+    ToolSuggestCandidates {
+        tools: vec![DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+            id: "github@openai-curated-remote".to_string(),
+            remote_plugin_id: None,
+            name: "GitHub".to_string(),
+            description: Some("Work with GitHub repositories".to_string()),
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        }))],
+        presentation,
     }
-    .into()
 }
 
 fn has_parameter(spec: &ToolSpec, parameter_name: &str) -> bool {
@@ -615,6 +631,7 @@ async fn environment_count_controls_environment_backed_tools() {
     let no_environment = probe(|turn| {
         turn.environments.turn_environments.clear();
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
+        set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     })
     .await;
@@ -623,22 +640,30 @@ async fn environment_count_controls_environment_backed_tools() {
         "exec_command",
         "apply_patch",
         "view_image",
+        "request_permissions",
     ]);
     no_environment.assert_registered_lacks(&[
         "shell_command",
         "exec_command",
         "apply_patch",
         "view_image",
+        "request_permissions",
     ]);
 
     let multiple_environments = probe(|turn| {
         duplicate_primary_environment(turn);
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
         set_feature(turn, Feature::UnifiedExec, /*enabled*/ true);
+        set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     })
     .await;
-    multiple_environments.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
+    multiple_environments.assert_visible_contains(&[
+        "exec_command",
+        "apply_patch",
+        "view_image",
+        "request_permissions",
+    ]);
     assert!(has_parameter(
         multiple_environments.visible_spec("exec_command"),
         "environment_id"
@@ -650,6 +675,31 @@ async fn environment_count_controls_environment_backed_tools() {
         multiple_environments.visible_spec("view_image"),
         "environment_id"
     ));
+}
+
+#[tokio::test]
+async fn environment_tools_follow_the_step_context() {
+    let (_session, mut turn) = make_session_and_context().await;
+    set_feature(&mut turn, Feature::UnifiedExec, /*enabled*/ true);
+    turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+
+    let environments = turn.environments.clone();
+    turn.environments.turn_environments.clear();
+    let step_context = Arc::new(StepContext::new(Arc::new(turn), environments));
+
+    let plan = ToolPlanProbe::from_router(ToolRouter::from_context(
+        step_context.as_ref(),
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            tool_suggest_candidates: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: &[],
+        },
+        &Default::default(),
+    ));
+
+    plan.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
 }
 
 #[tokio::test]
@@ -668,6 +718,21 @@ async fn host_context_gates_agent_job_tools() {
     })
     .await;
     worker_agent_job.assert_visible_contains(&["spawn_agents_on_csv", "report_agent_job_result"]);
+}
+
+#[tokio::test]
+async fn sleep_tool_follows_feature_gate() {
+    let disabled = probe(|turn| {
+        set_feature(turn, Feature::SleepTool, /*enabled*/ false);
+    })
+    .await;
+    disabled.assert_visible_lacks(&["sleep"]);
+
+    let enabled = probe(|turn| {
+        set_feature(turn, Feature::SleepTool, /*enabled*/ true);
+    })
+    .await;
+    enabled.assert_visible_contains(&["sleep"]);
 }
 
 #[tokio::test]
@@ -766,6 +831,65 @@ async fn deferred_extension_tools_are_discoverable_with_tool_search() {
 }
 
 #[tokio::test]
+async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
+    let cache = ToolSearchHandlerCache::default();
+
+    let (_session, mut first_turn) = make_session_and_context().await;
+    first_turn.model_info.supports_search_tool = true;
+    let first_turn = Arc::new(first_turn);
+    let first_step_context = StepContext::for_test(Arc::clone(&first_turn));
+    let first_router = ToolRouter::from_context(
+        first_step_context.as_ref(),
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: Some(vec![mcp_tool("first", "mcp__first", "lookup")]),
+            tool_suggest_candidates: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: &[],
+        },
+        &cache,
+    );
+    let first_plan = ToolPlanProbe::from_router(first_router);
+
+    let (_session, mut second_turn) = make_session_and_context().await;
+    second_turn.model_info.supports_search_tool = true;
+    let second_turn = Arc::new(second_turn);
+    let second_step_context = StepContext::for_test(Arc::clone(&second_turn));
+    let second_router = ToolRouter::from_context(
+        second_step_context.as_ref(),
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: Some(vec![mcp_tool("second", "mcp__second", "lookup")]),
+            tool_suggest_candidates: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: &[],
+        },
+        &cache,
+    );
+    let second_plan = ToolPlanProbe::from_router(second_router);
+
+    let ToolSpec::ToolSearch {
+        description: first_description,
+        ..
+    } = first_plan.visible_spec("tool_search")
+    else {
+        panic!("expected first tool_search spec");
+    };
+    assert!(first_description.contains("- first: Tools from first."));
+    assert!(!first_description.contains("- second: Tools from second."));
+
+    let ToolSpec::ToolSearch {
+        description: second_description,
+        ..
+    } = second_plan.visible_spec("tool_search")
+    else {
+        panic!("expected second tool_search spec");
+    };
+    assert!(second_description.contains("- second: Tools from second."));
+    assert!(!second_description.contains("- first: Tools from first."));
+}
+
+#[tokio::test]
 async fn invalid_mcp_tools_are_not_registered() {
     let plan = probe_with(
         |_| {},
@@ -781,8 +905,7 @@ async fn invalid_mcp_tools_are_not_registered() {
 }
 
 #[tokio::test]
-async fn request_plugin_install_requires_all_discovery_features_and_discoverable_tools() {
-    let discoverable_tools = Some(vec![discoverable_plugin("github", "GitHub")]);
+async fn request_plugin_install_requires_all_discovery_features() {
     for disabled_feature in [Feature::ToolSuggest, Feature::Apps, Feature::Plugins] {
         let plan = probe_with(
             |turn| {
@@ -793,7 +916,7 @@ async fn request_plugin_install_requires_all_discovery_features_and_discoverable
                 set_feature(turn, disabled_feature, /*enabled*/ false);
             },
             ToolPlanInputs {
-                discoverable_tools: discoverable_tools.clone(),
+                tool_suggest_candidates: Some(plugin_candidates(ToolSuggestPresentation::ListTool)),
                 ..ToolPlanInputs::default()
             },
         )
@@ -804,17 +927,31 @@ async fn request_plugin_install_requires_all_discovery_features_and_discoverable
         ]);
     }
 
-    let no_candidates = probe(|turn| {
-        set_features(
-            turn,
-            &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
-        );
-    })
-    .await;
-    no_candidates.assert_visible_lacks(&[
-        "list_available_plugins_to_install",
-        "request_plugin_install",
-    ]);
+    for tool_suggest_candidates in [
+        None,
+        Some(ToolSuggestCandidates {
+            tools: Vec::new(),
+            presentation: ToolSuggestPresentation::RecommendationContext,
+        }),
+    ] {
+        let plan = probe_with(
+            |turn| {
+                set_features(
+                    turn,
+                    &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+                );
+            },
+            ToolPlanInputs {
+                tool_suggest_candidates,
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+        plan.assert_visible_lacks(&[
+            "list_available_plugins_to_install",
+            "request_plugin_install",
+        ]);
+    }
 
     let enabled = probe_with(
         |turn| {
@@ -824,7 +961,7 @@ async fn request_plugin_install_requires_all_discovery_features_and_discoverable
             );
         },
         ToolPlanInputs {
-            discoverable_tools,
+            tool_suggest_candidates: Some(plugin_candidates(ToolSuggestPresentation::ListTool)),
             ..ToolPlanInputs::default()
         },
     )
@@ -836,7 +973,7 @@ async fn request_plugin_install_requires_all_discovery_features_and_discoverable
 }
 
 #[tokio::test]
-async fn install_suggestion_tools_stay_visible_without_tool_search() {
+async fn request_plugin_install_stays_visible_without_tool_search() {
     let plan = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = false;
@@ -846,7 +983,7 @@ async fn install_suggestion_tools_stay_visible_without_tool_search() {
             );
         },
         ToolPlanInputs {
-            discoverable_tools: Some(vec![discoverable_plugin("github", "GitHub")]),
+            tool_suggest_candidates: Some(plugin_candidates(ToolSuggestPresentation::ListTool)),
             ..ToolPlanInputs::default()
         },
     )
@@ -860,7 +997,7 @@ async fn install_suggestion_tools_stay_visible_without_tool_search() {
 }
 
 #[tokio::test]
-async fn request_plugin_install_description_defers_inventory_to_list_tool() {
+async fn request_plugin_install_description_refers_to_recommended_plugins_hint() {
     let plan = probe_with(
         |turn| {
             set_features(
@@ -869,34 +1006,32 @@ async fn request_plugin_install_description_defers_inventory_to_list_tool() {
             );
         },
         ToolPlanInputs {
-            discoverable_tools: Some(vec![discoverable_plugin("github", "GitHub")]),
+            tool_suggest_candidates: Some(plugin_candidates(
+                ToolSuggestPresentation::RecommendationContext,
+            )),
             ..ToolPlanInputs::default()
         },
     )
     .await;
 
-    let ToolSpec::Function(ResponsesApiTool {
-        description: list_description,
-        ..
-    }) = plan.visible_spec("list_available_plugins_to_install")
-    else {
-        panic!("expected list_available_plugins_to_install function spec");
-    };
-    assert!(list_description.contains(
-        "Returns known plugins and connectors that can be passed to `request_plugin_install`."
-    ));
-
+    let request_spec = plan.visible_spec("request_plugin_install");
     let ToolSpec::Function(ResponsesApiTool {
         description: request_description,
         ..
-    }) = plan.visible_spec("request_plugin_install")
+    }) = request_spec
     else {
         panic!("expected request_plugin_install function spec");
     };
-    assert!(request_description.contains(
-        "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request."
-    ));
+    assert!(request_description.contains("the `<recommended_plugins>` list"));
+    assert!(!request_description.contains("list_available_plugins_to_install"));
     assert!(!request_description.contains("github"));
+    assert!(has_parameter(request_spec, "plugin_id"));
+    assert!(has_parameter(request_spec, "suggest_reason"));
+    assert!(!has_parameter(request_spec, "tool_id"));
+    assert!(!has_parameter(request_spec, "tool_type"));
+    assert!(!has_parameter(request_spec, "action_type"));
+    plan.assert_visible_lacks(&["list_available_plugins_to_install"]);
+    plan.assert_registered_lacks(&["list_available_plugins_to_install"]);
 }
 
 #[tokio::test]
@@ -941,6 +1076,48 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
         code_mode_only.namespace_function_names("codex_app"),
         Vec::<String>::new().as_slice()
     );
+}
+
+#[tokio::test]
+async fn code_mode_only_exposes_configured_dynamic_namespace_directly() {
+    let plan = probe_with(
+        |turn| {
+            set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+            turn.model_info.supports_search_tool = true;
+            update_config(turn, |config| {
+                config.code_mode.direct_only_tool_namespaces = vec!["direct_only".to_string()];
+            });
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                Some("direct_only"),
+                "lookup",
+                /*defer_loading*/ true,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+        "direct_only",
+    ]);
+    plan.assert_visible_lacks(&["tool_search"]);
+    assert_eq!(
+        plan.exposure(&ToolName::namespaced("direct_only", "lookup").to_string()),
+        ToolExposure::DirectModelOnly
+    );
+    let ToolSpec::Namespace(namespace) = plan.visible_spec("direct_only") else {
+        panic!("expected direct-only namespace spec");
+    };
+    let ResponsesApiNamespaceTool::Function(tool) = &namespace.tools[0];
+    assert_eq!(tool.defer_loading, None);
+    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+        panic!("expected code mode exec tool");
+    };
+    assert!(!exec.description.contains("direct_only_lookup(args:"));
 }
 
 #[tokio::test]
@@ -1041,19 +1218,48 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         });
     })
     .await;
-    v2.assert_visible_contains(&[
+    v2.assert_visible_contains(&[MULTI_AGENT_V2_NAMESPACE]);
+    v2.assert_visible_lacks(&[
         "spawn_agent",
         "send_message",
         "followup_task",
         "wait_agent",
         "interrupt_agent",
         "list_agents",
+        "send_input",
+        "resume_agent",
+        "assign_task",
+        "close_agent",
     ]);
-    v2.assert_visible_lacks(&["send_input", "resume_agent", "assign_task", "close_agent"]);
-    let spawn_agent_description = match v2.visible_spec("spawn_agent") {
-        ToolSpec::Function(tool) => tool.description.as_str(),
-        other => panic!("expected spawn_agent function spec, got {other:?}"),
+    for tool_name in [
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "interrupt_agent",
+        "list_agents",
+    ] {
+        assert!(
+            v2.namespace_function_names(MULTI_AGENT_V2_NAMESPACE)
+                .iter()
+                .any(|name| name == tool_name),
+            "expected {tool_name} in {MULTI_AGENT_V2_NAMESPACE} namespace"
+        );
+    }
+    let ToolSpec::Namespace(namespace) = v2.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {
+        panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
     };
+    let Some(ResponsesApiNamespaceTool::Function(spawn_agent)) =
+        namespace.tools.iter().find(|tool| {
+            matches!(
+                tool,
+                ResponsesApiNamespaceTool::Function(tool) if tool.name == "spawn_agent"
+            )
+        })
+    else {
+        panic!("expected spawn_agent in {MULTI_AGENT_V2_NAMESPACE} namespace");
+    };
+    let spawn_agent_description = spawn_agent.description.as_str();
     assert!(!spawn_agent_description.contains("max_concurrent_threads_per_session"));
     assert!(spawn_agent_description.contains(
         "Note that passing `fork_turns=\"none\"` will not pass any surrounding context to the spawned subagent"
@@ -1073,9 +1279,11 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         });
     })
     .await;
-    direct_model_only.assert_visible_contains(&["spawn_agent", "send_message", "wait_agent"]);
+    direct_model_only.assert_visible_contains(&[MULTI_AGENT_V2_NAMESPACE]);
+    direct_model_only.assert_visible_lacks(&["spawn_agent", "send_message", "wait_agent"]);
     assert_eq!(
-        direct_model_only.exposure("spawn_agent"),
+        direct_model_only
+            .exposure(&ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, "spawn_agent").to_string()),
         ToolExposure::DirectModelOnly
     );
 }
@@ -1086,9 +1294,17 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
     })
     .await;
+    let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {
+        panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
+    };
     for tool_name in ["spawn_agent", "send_message", "followup_task"] {
-        let ToolSpec::Function(tool) = plan.visible_spec(tool_name) else {
-            panic!("expected {tool_name} function spec");
+        let Some(ResponsesApiNamespaceTool::Function(tool)) = namespace.tools.iter().find(|tool| {
+            matches!(
+                tool,
+                ResponsesApiNamespaceTool::Function(tool) if tool.name == tool_name
+            )
+        }) else {
+            panic!("expected {tool_name} in {MULTI_AGENT_V2_NAMESPACE} namespace");
         };
         let properties = tool
             .parameters
@@ -1109,7 +1325,6 @@ async fn tool_mode_selector_overrides_feature_flags() {
     let direct = probe(|turn| {
         set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
         turn.model_info.tool_mode = Some(ToolMode::Direct);
-        turn.tool_mode = ToolMode::Direct;
     })
     .await;
     direct.assert_visible_lacks(&[
@@ -1305,6 +1520,110 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     .await;
     api_key_auth.assert_visible_lacks(&["image_generation"]);
 
+    let unrelated_chatgpt_auth = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        let mut provider_info = turn.provider.info().clone();
+        provider_info.requires_openai_auth = false;
+        provider_info.http_headers = None;
+        update_config(turn, |config| {
+            config.model_provider = provider_info.clone();
+        });
+        turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    unrelated_chatgpt_auth.assert_visible_lacks(&["image_generation"]);
+
+    let provider_without_actor_auth = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn, /*requires_openai_auth*/ false, /*actor_header*/ None,
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    provider_without_actor_auth.assert_visible_lacks(&["image_generation"]);
+
+    let provider_authenticated = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("X-OpenAI-Actor-Authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    provider_authenticated.assert_visible_contains(&["image_generation"]);
+
+    let empty_actor_auth = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "  ")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    empty_actor_auth.assert_visible_lacks(&["image_generation"]);
+
+    let feature_disabled = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    feature_disabled.assert_visible_lacks(&["image_generation"]);
+
+    let text_only_model = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![];
+    })
+    .await;
+    text_only_model.assert_visible_lacks(&["image_generation"]);
+
+    let unsupported_image_generation_provider = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_bedrock_provider(turn);
+        let mut provider_info = turn.provider.info().clone();
+        provider_info.requires_openai_auth = false;
+        provider_info.http_headers = Some(HashMap::from([(
+            "x-openai-actor-authorization".to_string(),
+            "test-actor-authorization".to_string(),
+        )]));
+        turn.auth_manager = None;
+        update_config(turn, |config| {
+            config.model_provider = provider_info.clone();
+        });
+        turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    unsupported_image_generation_provider.assert_visible_lacks(&["image_generation"]);
+
+    let codex_managed_auth_provider = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ true,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    codex_managed_auth_provider.assert_visible_lacks(&["image_generation"]);
+
     let image_generation = probe(|turn| {
         use_chatgpt_auth(turn);
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
@@ -1332,6 +1651,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         live_web_search.visible_spec("web_search"),
         &ToolSpec::WebSearch {
             external_web_access: Some(true),
+            index_gated_web_access: None,
             filters: None,
             user_location: None,
             search_context_size: None,
@@ -1354,12 +1674,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
             codex_code_mode::WAIT_TOOL_NAME,
             "request_user_input",
             // Multi-agent v2 tools.
-            "spawn_agent",
-            "send_message",
-            "followup_task",
-            "wait_agent",
-            "interrupt_agent",
-            "list_agents",
+            MULTI_AGENT_V2_NAMESPACE,
             // Hosted Responses tools.
             "web_search",
             "image_generation",

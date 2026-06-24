@@ -56,7 +56,9 @@ impl DynamicToolHandler {
             namespace.map(|namespace| namespace.name.clone()),
             tool.name.clone(),
         );
-        let output_tool = dynamic_tool_to_responses_api_tool(tool).ok()?;
+        let mut output_tool = dynamic_tool_to_responses_api_tool(tool).ok()?;
+        // Exposure controls deferral; tool search restores this marker for deferred results.
+        output_tool.defer_loading = None;
         let spec = match namespace {
             Some(namespace) => ToolSpec::Namespace(ResponsesApiNamespace {
                 name: namespace.name.clone(),

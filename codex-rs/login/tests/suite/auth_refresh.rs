@@ -3,7 +3,6 @@ use anyhow::Result;
 use base64::Engine;
 use chrono::Duration;
 use chrono::Utc;
-use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
@@ -15,6 +14,7 @@ use codex_login::load_auth_dot_json;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::auth::RefreshTokenFailedReason;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -1217,8 +1217,10 @@ impl RefreshTokenTestContext {
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await;
 
@@ -1295,14 +1297,8 @@ fn jwt_with_payload(payload: serde_json::Value) -> String {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
     }
 
-    let header_bytes = match serde_json::to_vec(&header) {
-        Ok(bytes) => bytes,
-        Err(err) => panic!("serialize header: {err}"),
-    };
-    let payload_bytes = match serde_json::to_vec(&payload) {
-        Ok(bytes) => bytes,
-        Err(err) => panic!("serialize payload: {err}"),
-    };
+    let header_bytes = serde_json::to_vec(&header).expect("header should serialize");
+    let payload_bytes = serde_json::to_vec(&payload).expect("payload should serialize");
     let header_b64 = b64(&header_bytes);
     let payload_b64 = b64(&payload_bytes);
     let signature_b64 = b64(b"sig");

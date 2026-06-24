@@ -6,8 +6,11 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
+use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::validate_thread_goal_objective;
 
 use crate::runtime::GoalRuntimeHandle;
@@ -61,6 +64,14 @@ pub struct GoalSetOutcome {
 }
 
 impl GoalSetOutcome {
+    pub fn thread_goal_updated_item(&self) -> RolloutItem {
+        RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+            thread_id: self.goal.thread_id,
+            turn_id: None,
+            goal: self.goal.clone(),
+        }))
+    }
+
     pub async fn apply_runtime_effects(&self, goal_service: &GoalService) {
         if let Some(runtime) = goal_service.runtime_for_thread(self.goal.thread_id)
             && let Err(err) = runtime

@@ -1,5 +1,4 @@
 use super::windows_common::finish_driver_spawn;
-use super::windows_common::normalize_windows_tty_input;
 use crate::conpty::ConptyInstance;
 use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
@@ -22,6 +21,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
+use codex_utils_pty::WindowsTtyInputNormalizer;
 use std::collections::HashMap;
 use std::path::Path;
 use std::ptr;
@@ -153,13 +153,13 @@ fn spawn_input_writer(
     normalize_newlines: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
-        let mut previous_was_cr = false;
+        let mut windows_input = WindowsTtyInputNormalizer::default();
         while let Some(bytes) = writer_rx.blocking_recv() {
             let Some(handle) = input_write else {
                 continue;
             };
             let bytes = if normalize_newlines {
-                normalize_windows_tty_input(&bytes, &mut previous_was_cr)
+                windows_input.normalize(&bytes)
             } else {
                 bytes
             };

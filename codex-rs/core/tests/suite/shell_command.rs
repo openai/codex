@@ -8,8 +8,8 @@ use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::skip_if_host_windows;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_windows;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
@@ -38,7 +38,6 @@ fn shell_responses_with_timeout(
         "login": login,
     });
 
-    #[allow(clippy::expect_used)]
     let arguments = serde_json::to_string(&args).expect("serialize shell command arguments");
 
     vec![
@@ -182,7 +181,7 @@ async fn multi_line_output_with_login() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_output_with_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
@@ -205,7 +204,7 @@ async fn pipe_output_with_login() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_output_without_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 

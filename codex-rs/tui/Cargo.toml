@@ -62,6 +62,7 @@ codex-utils-fuzzy-match = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-oss = { workspace = true }
 codex-utils-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-sandbox-summary = { workspace = true }
 codex-utils-sleep-inhibitor = { workspace = true }
@@ -147,6 +148,7 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
+app_test_support = { workspace = true }
 codex-cli = { workspace = true }
 codex-mcp = { workspace = true }
 core_test_support = { workspace = true }

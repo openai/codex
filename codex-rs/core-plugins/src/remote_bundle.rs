@@ -34,6 +34,7 @@ const TEST_ALLOW_LOOPBACK_HTTP_REMOTE_PLUGIN_BUNDLES_ENV: &str =
 pub struct ValidatedRemotePluginBundle {
     pub plugin_id: PluginId,
     pub plugin_version: String,
+    remote_plugin_id: String,
     app_manifest: Option<JsonValue>,
     bundle_download_url: String,
 }
@@ -190,6 +191,7 @@ pub fn validate_remote_plugin_bundle(
     Ok(ValidatedRemotePluginBundle {
         plugin_id,
         plugin_version,
+        remote_plugin_id: remote_plugin_id.to_string(),
         app_manifest,
         bundle_download_url,
     })
@@ -293,13 +295,37 @@ async fn download_remote_plugin_bundle_with_limit(
     let url = final_url.to_string();
     let status = response.status();
     if !status.is_success() {
-        let body = read_response_body_with_limit(
-            response,
-            &url,
-            /*max_bytes*/ REMOTE_PLUGIN_BUNDLE_ERROR_BODY_MAX_BYTES,
-        )
-        .await?;
-        let body = String::from_utf8_lossy(&body).to_string();
+        let mut response = response;
+        let mut body = Vec::new();
+        let mut body_truncated = false;
+        let mut body_read_error = None;
+        loop {
+            let chunk = match response.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(source) => {
+                    body_read_error = Some(source);
+                    break;
+                }
+            };
+            let remaining = REMOTE_PLUGIN_BUNDLE_ERROR_BODY_MAX_BYTES as usize - body.len();
+            if chunk.len() > remaining {
+                body.extend_from_slice(&chunk[..remaining]);
+                body_truncated = true;
+                break;
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        let mut body = String::from_utf8_lossy(&body).into_owned();
+        if body_truncated {
+            body.push_str(&format!(
+                "\n[response body truncated after {REMOTE_PLUGIN_BUNDLE_ERROR_BODY_MAX_BYTES} bytes]"
+            ));
+        }
+        if let Some(source) = body_read_error {
+            body.push_str(&format!("\n[failed to read response body: {source}]"));
+        }
         return Err(RemotePluginBundleInstallError::DownloadStatus { url, status, body });
     }
 
@@ -379,9 +405,12 @@ fn install_remote_plugin_bundle(
     })?;
 
     let store = PluginStore::try_new(codex_home)?;
-    store
+    let remote_plugin_id = bundle.remote_plugin_id;
+    let result = store
         .install_with_version(plugin_root, bundle.plugin_id, bundle.plugin_version)
-        .map_err(RemotePluginBundleInstallError::from)
+        .map_err(RemotePluginBundleInstallError::from)?;
+    store.write_remote_plugin_id(&result.plugin_id, &remote_plugin_id)?;
+    Ok(result)
 }
 
 fn extract_remote_plugin_bundle_to_path(
@@ -718,6 +747,43 @@ mod tests {
 
         assert!(
             format!("{err}").contains("did not contain a standard plugin root with plugin.json")
+        );
+    }
+
+    #[test]
+    fn install_persists_remote_plugin_install_metadata() {
+        let codex_home = tempdir().expect("tempdir");
+        let bundle = valid_remote_plugin_bundle();
+
+        let result = install_remote_plugin_bundle(
+            codex_home.path().to_path_buf(),
+            bundle,
+            tar_gz_bytes(&[(
+                ".codex-plugin/plugin.json",
+                br#"{"name":"linear","version":"1.2.3"}"#,
+                /*mode*/ 0o644,
+            )]),
+        )
+        .expect("install bundle");
+        let store = PluginStore::new(codex_home.path().to_path_buf());
+
+        assert_eq!(
+            store.remote_plugin_id(&result.plugin_id).unwrap(),
+            Some(REMOTE_PLUGIN_ID.to_string())
+        );
+        let metadata_path = store
+            .plugin_base_root(&result.plugin_id)
+            .join(".codex-remote-plugin-install.json");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(metadata_path.as_path())
+                    .expect("read remote plugin install metadata")
+            )
+            .expect("parse remote plugin install metadata"),
+            serde_json::json!({
+                "schema_version": 1,
+                "remote_plugin_id": REMOTE_PLUGIN_ID,
+            })
         );
     }
 

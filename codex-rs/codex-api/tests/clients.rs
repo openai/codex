@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -53,7 +54,7 @@ impl RecordingState {
         let mut guard = self
             .stream_requests
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("stream requests mutex should not be poisoned");
         guard.push(req);
     }
 
@@ -61,7 +62,7 @@ impl RecordingState {
         let mut guard = self
             .stream_requests
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("stream requests mutex should not be poisoned");
         std::mem::take(&mut *guard)
     }
 }
@@ -172,14 +173,14 @@ impl FlakyTransport {
     fn attempts(&self) -> i64 {
         self.state
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+            .expect("flaky transport state mutex should not be poisoned")
             .attempts
     }
 
     fn requests(&self) -> Vec<(RequestBody, HeaderMap, codex_client::RequestCompression)> {
         self.state
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+            .expect("flaky transport state mutex should not be poisoned")
             .requests
             .clone()
     }
@@ -212,14 +213,14 @@ impl FailsOnceAuth {
         *self
             .attempts
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+            .expect("auth attempts mutex should not be poisoned")
     }
 
     async fn apply_auth(&self, request: Request) -> Result<Request, AuthError> {
         let mut attempts = self
             .attempts
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("auth attempts mutex should not be poisoned");
         *attempts += 1;
 
         if *attempts == 1 {
@@ -253,7 +254,7 @@ impl HttpTransport for FlakyTransport {
         let mut state = self
             .state
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("flaky transport state mutex should not be poisoned");
         state.attempts += 1;
         state
             .requests
@@ -300,7 +301,7 @@ async fn responses_client_uses_responses_path() -> Result<()> {
 }
 
 #[tokio::test]
-async fn responses_client_stream_request_preserves_exact_json_body() -> Result<()> {
+async fn responses_client_stream_request_preserves_item_ids() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
     let client = ResponsesClient::new(transport, provider("openai"), Arc::new(NoAuth));
@@ -312,8 +313,9 @@ async fn responses_client_stream_request_preserves_exact_json_body() -> Result<(
             role: "user".into(),
             content: vec![ContentItem::InputText { text: "hi".into() }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         }],
-        tools: Vec::new(),
+        tools: Some(Vec::new()),
         tool_choice: "auto".into(),
         parallel_tool_calls: false,
         reasoning: None,
@@ -325,7 +327,7 @@ async fn responses_client_stream_request_preserves_exact_json_body() -> Result<(
         text: None,
         client_metadata: None,
     };
-    let expected = serde_json::to_vec(&request)?;
+    let expected = serde_json::to_value(&request)?;
 
     let _stream = client
         .stream_request(request, ResponsesOptions::default())
@@ -336,7 +338,10 @@ async fn responses_client_stream_request_preserves_exact_json_body() -> Result<(
     let prepared = requests[0]
         .prepare_body_for_send()
         .expect("body should prepare");
-    assert_eq!(prepared.body.as_deref(), Some(expected.as_slice()));
+    let body: serde_json::Value =
+        serde_json::from_slice(prepared.body.as_deref().expect("body should be JSON"))?;
+    assert_eq!(body, expected);
+    assert_eq!(body["input"][0]["id"], "msg_1");
     assert_eq!(
         prepared.headers.get(http::header::CONTENT_TYPE),
         Some(&HeaderValue::from_static("application/json"))
@@ -396,7 +401,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         model: "gpt-test".into(),
         instructions: "Say hi".into(),
         input: Vec::new(),
-        tools: Vec::new(),
+        tools: Some(Vec::new()),
         tool_choice: "auto".into(),
         parallel_tool_calls: false,
         reasoning: None,
@@ -485,10 +490,9 @@ async fn streaming_client_does_not_retry_auth_build_error() -> Result<()> {
             /*turn_state*/ None,
         )
         .await;
-    let err = match result {
-        Ok(_) => panic!("auth build errors should fail without retry"),
-        Err(err) => err,
-    };
+    let err = result
+        .err()
+        .expect("auth build errors should fail without retry");
 
     assert!(matches!(
         err,
@@ -501,7 +505,7 @@ async fn streaming_client_does_not_retry_auth_build_error() -> Result<()> {
 }
 
 #[tokio::test]
-async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
+async fn azure_store_sends_ids_and_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
     let client = ResponsesClient::new(transport, provider("azure"), Arc::new(NoAuth));
@@ -514,8 +518,9 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
             role: "user".into(),
             content: vec![ContentItem::InputText { text: "hi".into() }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         }],
-        tools: Vec::new(),
+        tools: Some(Vec::new()),
         tool_choice: "auto".into(),
         parallel_tool_calls: false,
         reasoning: None,

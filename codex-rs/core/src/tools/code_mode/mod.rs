@@ -12,6 +12,7 @@ use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::InProcessCodeModeSession;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
@@ -21,11 +22,13 @@ use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
+use crate::tools::effective_tool_mode;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
@@ -66,7 +69,7 @@ impl CodeModeService {
     pub(crate) fn new() -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Some(Arc::new(codex_code_mode::CodeModeService::with_delegate(
+            session: Some(Arc::new(InProcessCodeModeSession::with_delegate(
                 dispatch_broker.clone(),
             ))),
             dispatch_broker,
@@ -112,11 +115,13 @@ impl CodeModeService {
     pub(crate) fn start_turn_worker(
         &self,
         session: &Arc<Session>,
-        turn: &Arc<TurnContext>,
+        step_context: Arc<StepContext>,
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
-        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
+        let turn = &step_context.turn;
+        let tool_mode = effective_tool_mode(turn);
+        if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
             || self.session.is_none()
         {
             return None;
@@ -128,7 +133,7 @@ impl CodeModeService {
         };
         Some(
             self.dispatch_broker
-                .start_turn_worker(exec, router, tracker),
+                .start_turn_worker(exec, router, step_context, tracker),
         )
     }
 
@@ -321,8 +326,10 @@ fn build_freeform_tool_payload(
 #[cfg(test)]
 mod tests {
     use super::build_nested_tool_payload;
+    use super::truncate_code_mode_result;
     use crate::tools::context::ToolPayload;
     use codex_code_mode::CodeModeToolKind;
+    use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_tools::ToolName;
     use serde_json::json;
 
@@ -358,5 +365,24 @@ mod tests {
             }
             other => panic!("expected freeform payload, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn truncated_text_output_starts_with_warning() {
+        let items = vec![FunctionCallOutputContentItem::InputText {
+            text: "0123456789012345678901234567890123456789".to_string(),
+        }];
+
+        assert_eq!(
+            truncate_code_mode_result(items, Some(5)),
+            vec![FunctionCallOutputContentItem::InputText {
+                text: concat!(
+                    "Warning: truncated output (original token count: 10)\n",
+                    "Total output lines: 1\n\n",
+                    "0123456789…5 tokens truncated…0123456789"
+                )
+                .to_string(),
+            }]
+        );
     }
 }

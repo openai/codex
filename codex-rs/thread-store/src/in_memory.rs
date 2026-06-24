@@ -10,6 +10,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadMemoryMode;
@@ -79,7 +80,7 @@ mod tests {
         let items_err = store
             .list_items(ListItemsParams {
                 thread_id,
-                turn_id: "turn_1".to_string(),
+                turn_id: None,
                 include_archived: true,
                 cursor: None,
                 page_size: 10,
@@ -110,15 +111,18 @@ mod tests {
         ] {
             store
                 .create_thread(CreateThreadParams {
+                    session_id: thread_id.into(),
                     thread_id,
                     extra_config: None,
                     forked_from_id: None,
                     parent_thread_id,
                     source: SessionSource::Exec,
                     thread_source: None,
+                    originator: "test_originator".to_string(),
                     base_instructions: BaseInstructions::default(),
                     dynamic_tools: Vec::new(),
                     multi_agent_version: None,
+                    initial_window_id: uuid::Uuid::now_v7().to_string(),
                     metadata: ThreadPersistenceMetadata {
                         cwd: None,
                         model_provider: "test-provider".to_string(),
@@ -231,6 +235,7 @@ impl InMemoryThreadStore {
         let mut state = self.state.lock().await;
         state.calls.create_thread += 1;
         let session_meta = SessionMeta {
+            session_id: params.session_id,
             id: params.thread_id,
             forked_from_id: params.forked_from_id,
             parent_thread_id: params.parent_thread_id,
@@ -238,6 +243,7 @@ impl InMemoryThreadStore {
             agent_nickname: params.source.get_nickname(),
             agent_role: params.source.get_agent_role(),
             agent_path: params.source.get_agent_path().map(Into::into),
+            originator: params.originator.clone(),
             source: params.source.clone(),
             thread_source: params.thread_source.clone(),
             model_provider: Some(params.metadata.model_provider.clone()),
@@ -246,6 +252,7 @@ impl InMemoryThreadStore {
             memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
                 .then_some("disabled".to_string()),
             multi_agent_version: params.multi_agent_version,
+            context_window: Some(SessionContextWindow::new(params.initial_window_id.clone())),
             ..SessionMeta::default()
         };
         state
@@ -264,7 +271,9 @@ impl InMemoryThreadStore {
         let mut state = self.state.lock().await;
         state.calls.resume_thread += 1;
         if let Some(history) = params.history {
-            state.histories.insert(params.thread_id, history);
+            state
+                .histories
+                .insert(params.thread_id, Arc::unwrap_or_clone(history));
         } else {
             state.histories.entry(params.thread_id).or_default();
         }
@@ -534,6 +543,9 @@ fn stored_thread_from_state(
             .unwrap_or_else(Utc::now),
         updated_at: metadata
             .and_then(|metadata| metadata.updated_at)
+            .unwrap_or_else(Utc::now),
+        recency_at: metadata
+            .and_then(|metadata| metadata.advance_recency_at.or(metadata.updated_at))
             .unwrap_or_else(Utc::now),
         archived_at: None,
         cwd: metadata

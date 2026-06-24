@@ -5,18 +5,27 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_app_server_protocol::AppBranding;
-use codex_app_server_protocol::AppInfo;
-use codex_app_server_protocol::AppMetadata;
 use serde::Deserialize;
 use serde::Serialize;
 
 pub mod accessible;
+mod app_info;
+mod app_tool_policy;
 mod directory_cache;
 pub mod filter;
 pub mod merge;
 pub mod metadata;
 
+pub use app_info::AppBranding;
+pub use app_info::AppInfo;
+pub use app_info::AppMetadata;
+pub use app_info::AppReview;
+pub use app_info::AppScreenshot;
+pub use app_tool_policy::AppToolPolicy;
+pub use app_tool_policy::AppToolPolicyEvaluator;
+pub use app_tool_policy::AppToolPolicyInput;
+pub use app_tool_policy::app_is_enabled;
+pub use app_tool_policy::apps_config_from_layer_stack;
 pub use directory_cache::ConnectorDirectoryCacheContext;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);

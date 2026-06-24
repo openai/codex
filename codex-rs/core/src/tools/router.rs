@@ -1,9 +1,10 @@
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
@@ -39,14 +40,30 @@ pub struct ToolRouter {
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
+    pub(crate) tool_suggest_candidates: Option<ToolSuggestCandidates>,
     pub(crate) extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToolSuggestPresentation {
+    ListTool,
+    RecommendationContext,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ToolSuggestCandidates {
+    pub(crate) tools: Vec<DiscoverableTool>,
+    pub(crate) presentation: ToolSuggestPresentation,
+}
+
 impl ToolRouter {
-    pub fn from_turn_context(turn_context: &TurnContext, params: ToolRouterParams<'_>) -> Self {
-        build_tool_router(turn_context, params)
+    pub(crate) fn from_context(
+        step_context: &StepContext,
+        params: ToolRouterParams<'_>,
+        tool_search_handler_cache: &ToolSearchHandlerCache,
+    ) -> Self {
+        build_tool_router(step_context, params, tool_search_handler_cache)
     }
 
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
@@ -147,7 +164,7 @@ impl ToolRouter {
     pub async fn dispatch_tool_call_with_code_mode_result(
         &self,
         session: Arc<Session>,
-        turn: Arc<TurnContext>,
+        step_context: Arc<StepContext>,
         cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
@@ -155,7 +172,7 @@ impl ToolRouter {
     ) -> Result<AnyToolResult, FunctionCallError> {
         self.dispatch_tool_call_with_code_mode_result_inner(
             session,
-            turn,
+            step_context,
             cancellation_token,
             tracker,
             call,
@@ -170,7 +187,7 @@ impl ToolRouter {
     pub(crate) async fn dispatch_tool_call_with_terminal_outcome(
         &self,
         session: Arc<Session>,
-        turn: Arc<TurnContext>,
+        step_context: Arc<StepContext>,
         cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
@@ -179,7 +196,7 @@ impl ToolRouter {
     ) -> Result<AnyToolResult, FunctionCallError> {
         self.dispatch_tool_call_with_code_mode_result_inner(
             session,
-            turn,
+            step_context,
             cancellation_token,
             tracker,
             call,
@@ -193,7 +210,7 @@ impl ToolRouter {
     async fn dispatch_tool_call_with_code_mode_result_inner(
         &self,
         session: Arc<Session>,
-        turn: Arc<TurnContext>,
+        step_context: Arc<StepContext>,
         cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
@@ -206,9 +223,12 @@ impl ToolRouter {
             payload,
         } = call;
 
+        // Keep the legacy ToolInvocation.turn field tied to the same request state until handlers migrate.
+        let turn = Arc::clone(&step_context.turn);
         let invocation = ToolInvocation {
             session,
             turn,
+            step_context,
             cancellation_token,
             tracker,
             call_id,
@@ -223,6 +243,7 @@ impl ToolRouter {
     }
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn extension_tool_executors(
     session: &Session,
 ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {

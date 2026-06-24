@@ -1,4 +1,4 @@
-#![expect(clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use anyhow::Context as _;
 use anyhow::ensure;
@@ -32,8 +32,19 @@ pub mod responses;
 pub mod streaming_sse;
 pub mod test_codex;
 pub mod test_codex_exec;
+mod test_environment;
 pub mod tracing;
 pub mod zsh_fork;
+
+pub(crate) use test_environment::TestEnvironment;
+pub use test_environment::TestTargetOs;
+pub use test_environment::is_remote_test_environment;
+#[doc(hidden)]
+pub use test_environment::is_wine_exec_test_environment;
+#[doc(hidden)]
+pub use test_environment::test_docker_container_name;
+pub(crate) use test_environment::test_environment;
+pub use test_environment::test_target_os;
 
 static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
 
@@ -70,12 +81,10 @@ fn configure_insta_workspace_root_for_snapshot_tests() {
 
 #[track_caller]
 pub fn assert_regex_match<'s>(pattern: &str, actual: &'s str) -> regex_lite::Captures<'s> {
-    let regex = Regex::new(pattern).unwrap_or_else(|err| {
-        panic!("failed to compile regex {pattern:?}: {err}");
-    });
+    let regex = Regex::new(pattern).expect("failed to compile regex");
     regex
         .captures(actual)
-        .unwrap_or_else(|| panic!("regex {pattern:?} did not match {actual:?}"))
+        .expect("regex did not match actual value")
 }
 
 pub fn test_path_buf_with_windows(unix_path: &str, windows_path: Option<&str>) -> PathBuf {
@@ -357,33 +366,6 @@ pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
-const REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";
-
-pub fn remote_env_env_var() -> &'static str {
-    REMOTE_ENV_ENV_VAR
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteEnvConfig {
-    pub container_name: String,
-}
-
-pub fn get_remote_test_env() -> Option<RemoteEnvConfig> {
-    if std::env::var_os(REMOTE_ENV_ENV_VAR).is_none() {
-        eprintln!("Skipping test because {REMOTE_ENV_ENV_VAR} is not set.");
-        return None;
-    }
-
-    let container_name = std::env::var(REMOTE_ENV_ENV_VAR)
-        .unwrap_or_else(|_| panic!("{REMOTE_ENV_ENV_VAR} must be set"));
-    assert!(
-        !container_name.trim().is_empty(),
-        "{REMOTE_ENV_ENV_VAR} must not be empty"
-    );
-
-    Some(RemoteEnvConfig { container_name })
-}
-
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
     codex_core::shell::default_user_shell().derive_exec_args(command, /*use_login_shell*/ true)
 }
@@ -597,27 +579,94 @@ macro_rules! skip_if_no_network {
     }};
 }
 
+// Exported so the public skip macros can expand in downstream test crates.
 #[macro_export]
-macro_rules! skip_if_remote {
-    ($reason:expr $(,)?) => {{
-        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
-            eprintln!(
-                "Skipping test under {}: {}",
-                $crate::remote_env_env_var(),
-                $reason
-            );
+#[doc(hidden)]
+macro_rules! skip_if_test_condition {
+    ($condition:expr, $environment:expr, $reason:expr $(,)?) => {{
+        if $condition {
+            eprintln!("Skipping test in {}: {}", $environment, $reason);
             return;
         }
     }};
-    ($return_value:expr, $reason:expr $(,)?) => {{
-        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
-            eprintln!(
-                "Skipping test under {}: {}",
-                $crate::remote_env_env_var(),
-                $reason
-            );
+    ($return_value:expr, $condition:expr, $environment:expr, $reason:expr $(,)?) => {{
+        if $condition {
+            eprintln!("Skipping test in {}: {}", $environment, $reason);
             return $return_value;
         }
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_remote {
+    ($reason:expr $(,)?) => {{
+        $crate::skip_if_test_condition!(
+            $crate::is_remote_test_environment(),
+            "a remote test environment",
+            $reason,
+        );
+    }};
+    ($return_value:expr, $reason:expr $(,)?) => {{
+        $crate::skip_if_test_condition!(
+            $return_value,
+            $crate::is_remote_test_environment(),
+            "a remote test environment",
+            $reason,
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_no_remote_env {
+    () => {{
+        if !$crate::is_remote_test_environment() {
+            eprintln!("Skipping test because it requires a remote test environment.");
+            return;
+        }
+    }};
+    ($return_value:expr $(,)?) => {{
+        if !$crate::is_remote_test_environment() {
+            eprintln!("Skipping test because it requires a remote test environment.");
+            return $return_value;
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_wine_exec {
+    ($reason:expr $(,)?) => {{
+        $crate::skip_if_test_condition!(
+            $crate::is_wine_exec_test_environment(),
+            "the Wine-exec test environment",
+            $reason,
+        );
+    }};
+    ($return_value:expr, $reason:expr $(,)?) => {{
+        $crate::skip_if_test_condition!(
+            $return_value,
+            $crate::is_wine_exec_test_environment(),
+            "the Wine-exec test environment",
+            $reason,
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_target_windows {
+    ($reason:expr $(,)?) => {{
+        $crate::skip_if_test_condition!(
+            $crate::test_target_os() == $crate::TestTargetOs::Windows,
+            "a Windows target environment",
+            $reason,
+        );
+    }};
+    ($return_value:expr, $reason:expr $(,)?) => {{
+        $crate::skip_if_test_condition!(
+            $return_value,
+            $crate::test_target_os() == $crate::TestTargetOs::Windows,
+            "a Windows target environment",
+            $reason,
+        );
     }};
 }
 
@@ -658,7 +707,7 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
 }
 
 #[macro_export]
-macro_rules! skip_if_windows {
+macro_rules! skip_if_host_windows {
     ($return_value:expr $(,)?) => {{
         if cfg!(target_os = "windows") {
             println!("Skipping test because it cannot execute on Windows.");

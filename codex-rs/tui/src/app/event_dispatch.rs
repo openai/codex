@@ -119,8 +119,8 @@ impl App {
                 )
                 .await
                 {
-                    Ok(ExternalAgentConfigMigrationFlowOutcome::Started(message)) => {
-                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    Ok(ExternalAgentConfigMigrationFlowOutcome::Started(lines)) => {
+                        self.chat_widget.add_plain_history_lines(lines);
                     }
                     Ok(ExternalAgentConfigMigrationFlowOutcome::NoItems) => {
                         self.chat_widget.add_info_message(
@@ -246,7 +246,7 @@ impl App {
                     deferred_history_cell,
                 )?;
                 self.chat_widget.note_stream_consolidation_completed();
-                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
+                self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 let end = self.transcript_cells.len();
@@ -282,7 +282,7 @@ impl App {
                     self.maybe_finish_stream_reflow(tui)?;
                 }
                 self.chat_widget.note_stream_consolidation_completed();
-                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
+                self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -507,6 +507,9 @@ impl App {
             AppEvent::PluginsLoaded { cwd, result } => {
                 self.chat_widget.on_plugins_loaded(cwd, result);
             }
+            AppEvent::OpenPluginsList { cwd, response } => {
+                self.chat_widget.open_plugins_list(cwd, response);
+            }
             AppEvent::PluginRemoteSectionsLoaded {
                 cwd,
                 marketplaces,
@@ -716,6 +719,9 @@ impl App {
             AppEvent::RefreshTokenActivity { request_id } => {
                 self.refresh_token_activity(app_server, request_id);
             }
+            AppEvent::RefreshStatusLineWorkspaceHeadline { request_id } => {
+                self.refresh_status_line_workspace_headline(app_server, request_id);
+            }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
             }
@@ -750,28 +756,141 @@ impl App {
                     .finish_add_credits_nudge_email_request(result);
             }
             AppEvent::RateLimitsLoaded { origin, result } => match result {
-                Ok(snapshots) => {
-                    for snapshot in snapshots {
-                        self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
-                    }
+                Ok(response) => {
+                    let rate_limit_reset_credits = response.rate_limit_reset_credits.clone();
+                    let snapshots = app_server_rate_limit_snapshots(response);
                     match origin {
-                        RateLimitRefreshOrigin::StartupPrefetch => {
+                        RateLimitRefreshOrigin::StartupPrefetch {
+                            reset_hint_request_id,
+                        } => {
+                            if self.chat_widget.finish_rate_limit_reset_hint_refresh(
+                                reset_hint_request_id,
+                                snapshots,
+                                rate_limit_reset_credits.ok_or_else(|| {
+                                    "account/rateLimits/read response did not include rateLimitResetCredits"
+                                        .to_string()
+                                }),
+                            ) {
+                                self.insert_pending_usage_output_if_ready(tui);
+                            }
+                            tui.frame_requester().schedule_frame();
+                        }
+                        RateLimitRefreshOrigin::ResetConsume { request_id } => {
+                            self.chat_widget.finish_post_consume_reset_credits_refresh(
+                                request_id,
+                                snapshots,
+                                rate_limit_reset_credits.ok_or_else(|| {
+                                    "account/rateLimits/read response did not include rateLimitResetCredits"
+                                        .to_string()
+                                }),
+                            );
                             tui.frame_requester().schedule_frame();
                         }
                         RateLimitRefreshOrigin::StatusCommand { request_id } => {
                             self.chat_widget
-                                .finish_status_rate_limit_refresh(request_id);
+                                .finish_status_rate_limit_refresh(request_id, snapshots);
+                        }
+                        RateLimitRefreshOrigin::UsageMenu { request_id } => {
+                            self.chat_widget.finish_usage_menu_rate_limit_refresh(
+                                request_id,
+                                snapshots,
+                                rate_limit_reset_credits.ok_or_else(|| {
+                                    "account/rateLimits/read response did not include rateLimitResetCredits"
+                                        .to_string()
+                                }),
+                            );
                         }
                     }
                 }
                 Err(err) => {
                     tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
-                    if let RateLimitRefreshOrigin::StatusCommand { request_id } = origin {
-                        self.chat_widget
-                            .finish_status_rate_limit_refresh(request_id);
+                    match origin {
+                        RateLimitRefreshOrigin::StartupPrefetch {
+                            reset_hint_request_id,
+                        } => {
+                            self.chat_widget.finish_rate_limit_reset_hint_refresh(
+                                reset_hint_request_id,
+                                Vec::new(),
+                                Err(err),
+                            );
+                        }
+                        RateLimitRefreshOrigin::ResetConsume { request_id } => {
+                            self.chat_widget.finish_post_consume_reset_credits_refresh(
+                                request_id,
+                                Vec::new(),
+                                Err(err),
+                            );
+                        }
+                        RateLimitRefreshOrigin::StatusCommand { request_id } => {
+                            self.chat_widget
+                                .finish_status_rate_limit_refresh(request_id, Vec::new());
+                        }
+                        RateLimitRefreshOrigin::UsageMenu { request_id } => {
+                            self.chat_widget.finish_usage_menu_rate_limit_refresh(
+                                request_id,
+                                Vec::new(),
+                                Err(err),
+                            );
+                        }
                     }
                 }
             },
+            AppEvent::OpenTokenActivity => {
+                self.chat_widget
+                    .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
+            }
+            AppEvent::OpenRateLimitResetCredits => {
+                let request_id = self.chat_widget.show_rate_limit_reset_loading_popup();
+                self.refresh_rate_limit_reset_credits(app_server, request_id);
+            }
+            AppEvent::RateLimitResetCreditsLoaded { request_id, result } => match result {
+                Ok(response) => {
+                    let rate_limit_reset_credits = response.rate_limit_reset_credits.clone();
+                    self.chat_widget.finish_rate_limit_reset_credits_refresh(
+                        request_id,
+                        app_server_rate_limit_snapshots(response),
+                        rate_limit_reset_credits.ok_or_else(|| {
+                            "account/rateLimits/read response did not include rateLimitResetCredits"
+                                .to_string()
+                        }),
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "account/rateLimits/read failed during reset-credit refresh: {err}"
+                    );
+                    self.chat_widget.finish_rate_limit_reset_credits_refresh(
+                        request_id,
+                        Vec::new(),
+                        Err(err),
+                    );
+                }
+            },
+            AppEvent::ConsumeRateLimitResetCredit { idempotency_key } => {
+                let request_id = self.chat_widget.show_rate_limit_reset_consuming_popup();
+                self.consume_rate_limit_reset_credit(app_server, request_id, idempotency_key);
+            }
+            AppEvent::RateLimitResetCreditConsumed {
+                request_id,
+                idempotency_key,
+                result,
+            } => {
+                if let Err(err) = &result {
+                    tracing::warn!(
+                        "account/rateLimitResetCredit/consume failed during TUI request: {err}"
+                    );
+                }
+                if self.chat_widget.finish_rate_limit_reset_consume(
+                    request_id,
+                    idempotency_key,
+                    result,
+                ) {
+                    self.refresh_rate_limits(
+                        app_server,
+                        RateLimitRefreshOrigin::ResetConsume { request_id },
+                    );
+                }
+            }
             AppEvent::TokenActivityLoaded { request_id, result } => {
                 if let Err(err) = &result {
                     tracing::warn!("account/usage/read failed during TUI refresh: {err}");
@@ -785,11 +904,14 @@ impl App {
                     // active work, and flushing an in-progress tool cell would corrupt its lifecycle.
                     // If an answer stream is active, keep the settled card transient until its
                     // provisional transcript cells have been consolidated.
-                    self.insert_completed_token_activity_output_if_ready(tui);
+                    self.insert_pending_usage_output_if_ready(tui);
                 }
             }
-            AppEvent::CommitCompletedTokenActivityOutput => {
-                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
+            AppEvent::CommitPendingUsageOutput => {
+                self.insert_pending_usage_output_if_ready(tui);
+            }
+            AppEvent::CommitPendingUsageOutputAfterStreamShutdown => {
+                self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
@@ -810,6 +932,16 @@ impl App {
                 self.on_update_personality(personality);
                 self.sync_active_thread_personality_setting(app_server, personality)
                     .await;
+            }
+            AppEvent::SettingsSelectionClosed => {
+                self.app_event_tx.send(AppEvent::SettingsSelectionSettled);
+            }
+            AppEvent::SettingsSelectionSettled => {
+                if self.chat_widget.no_modal_or_popup_active() {
+                    self.chat_widget
+                        .set_queue_autosend_suppressed(/*suppressed*/ false);
+                    self.chat_widget.maybe_send_next_queued_input();
+                }
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -1928,6 +2060,14 @@ impl App {
             AppEvent::StatusLineGitSummaryUpdated { cwd, summary } => {
                 self.chat_widget.set_status_line_git_summary(cwd, summary);
                 self.refresh_status_line();
+            }
+            AppEvent::StatusLineWorkspaceHeadlineUpdated { request_id, result } => {
+                if self
+                    .chat_widget
+                    .set_status_line_workspace_headline(request_id, result)
+                {
+                    tui.frame_requester().schedule_frame();
+                }
             }
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();

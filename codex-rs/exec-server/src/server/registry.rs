@@ -8,20 +8,28 @@ use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
 use crate::protocol::ExecParams;
 use crate::protocol::FS_CANONICALIZE_METHOD;
+use crate::protocol::FS_CLOSE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_OPEN_METHOD;
+use crate::protocol::FS_READ_BLOCK_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WALK_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
+use crate::protocol::FsCloseParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
+use crate::protocol::FsOpenParams;
+use crate::protocol::FsReadBlockParams;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
+use crate::protocol::FsWalkParams;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::HTTP_REQUEST_METHOD;
 use crate::protocol::HttpRequestParams;
@@ -94,6 +102,24 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         },
     );
     router.request(
+        FS_OPEN_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsOpenParams| async move {
+            handler.fs_open(params).await
+        },
+    );
+    router.request(
+        FS_READ_BLOCK_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsReadBlockParams| async move {
+            handler.fs_read_block(params).await
+        },
+    );
+    router.request(
+        FS_CLOSE_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsCloseParams| async move {
+            handler.fs_close(params).await
+        },
+    );
+    router.request(
         FS_WRITE_FILE_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsWriteFileParams| async move {
             handler.fs_write_file(params).await
@@ -121,6 +147,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         FS_READ_DIRECTORY_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsReadDirectoryParams| async move {
             handler.fs_read_directory(params).await
+        },
+    );
+    router.request(
+        FS_WALK_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsWalkParams| async move {
+            handler.fs_walk(params).await
         },
     );
     router.request(

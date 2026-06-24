@@ -9,7 +9,6 @@ use codex_protocol::models::ResponseItem;
 use http::HeaderMap;
 use http::Method;
 use serde::Deserialize;
-use serde_json::to_value;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -76,7 +75,7 @@ impl<T: HttpTransport> CompactClient<T> {
         request_timeout: Duration,
         turn_state: Option<&OnceLock<String>>,
     ) -> Result<Vec<ResponseItem>, ApiError> {
-        let body = to_value(input)
+        let body = serde_json::to_value(input)
             .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
         self.compact(body, extra_headers, request_timeout, turn_state)
             .await

@@ -24,6 +24,9 @@ pub(super) fn server_request_thread_id(request: &ServerRequest) -> Option<Thread
         ServerRequest::DynamicToolCall { params, .. } => {
             ThreadId::from_string(&params.thread_id).ok()
         }
+        ServerRequest::CurrentTimeRead { params, .. } => {
+            ThreadId::from_string(&params.thread_id).ok()
+        }
         ServerRequest::ChatgptAuthTokensRefresh { .. }
         | ServerRequest::AttestationGenerate { .. }
         | ServerRequest::ApplyPatchApproval { .. }
@@ -120,6 +123,9 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ModelVerification(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::ModelSafetyBufferingUpdated(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::TurnModerationMetadata(notification) => {
             Some(notification.thread_id.as_str())
         }
@@ -161,6 +167,7 @@ pub(super) fn server_notification_thread_target(
         | ServerNotification::AccountRateLimitsUpdated(_)
         | ServerNotification::AppListUpdated(_)
         | ServerNotification::RemoteControlStatusChanged(_)
+        | ServerNotification::ExternalAgentConfigImportProgress(_)
         | ServerNotification::ExternalAgentConfigImportCompleted(_)
         | ServerNotification::DeprecationNotice(_)
         | ServerNotification::ConfigWarning(_)
@@ -226,6 +233,7 @@ mod tests {
                     developer_instructions: None,
                 },
             },
+            multi_agent_mode: Default::default(),
             personality: None,
         }
     }

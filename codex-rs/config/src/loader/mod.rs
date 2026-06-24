@@ -7,6 +7,7 @@ mod tests;
 use self::layer_io::LoadedConfigLayers;
 use crate::CONFIG_TOML_FILE;
 use crate::CloudConfigBundleLayers;
+use crate::ConfigLayerSource;
 use crate::ProfileV2Name;
 use crate::RequirementsLayerEntry;
 use crate::compose_requirements;
@@ -31,7 +32,6 @@ use crate::strict_config::ignored_toml_value_field;
 use crate::strict_config::unknown_feature_toml_value_field;
 use crate::thread_config::ThreadConfigContext;
 use crate::thread_config::ThreadConfigLoader;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_file_system::ExecutorFileSystem;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -944,6 +944,11 @@ fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
         if table.remove(*key).is_some() {
             ignored_keys.push((*key).to_string());
         }
+    }
+    if let Some(features) = table.get_mut("features").and_then(TomlValue::as_table_mut)
+        && features.remove("respect_system_proxy").is_some()
+    {
+        ignored_keys.push("features.respect_system_proxy".to_string());
     }
 
     ignored_keys

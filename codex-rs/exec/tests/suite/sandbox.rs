@@ -36,6 +36,7 @@ async fn spawn_command_under_sandbox(
             capture_policy: ExecCapturePolicy::ShellTool,
             env,
             network: None,
+            network_environment_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -60,7 +61,12 @@ async fn spawn_command_under_sandbox(
         child.arg0(arg0);
     }
     child.args(args);
-    child.current_dir(exec_request.cwd);
+    // TODO(anp): Keep PathUri through the macOS sandbox process launch boundary.
+    let native_cwd = exec_request
+        .cwd
+        .to_abs_path()
+        .map_err(|err| io::Error::other(err.to_string()))?;
+    child.current_dir(native_cwd);
     child.env_clear();
     child.envs(exec_request.env);
 
@@ -522,7 +528,6 @@ async fn allow_unix_socketpair_recvfrom() {
 
 const IN_SANDBOX_ENV_VAR: &str = "IN_SANDBOX";
 
-#[expect(clippy::expect_used)]
 pub async fn run_code_under_sandbox<F, Fut>(
     test_selector: &str,
     permission_profile: &PermissionProfile,
