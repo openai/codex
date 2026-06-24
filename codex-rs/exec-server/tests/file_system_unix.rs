@@ -290,7 +290,6 @@ async fn file_system_walk_handles_directory_symlinks(
     std::fs::write(&target_file, "target")?;
     symlink(&target, &target_link)?;
     symlink(&root, &root_link)?;
-    let canonical_target = std::fs::canonicalize(&target)?;
 
     let outcome = file_system
         .walk(
@@ -332,15 +331,15 @@ async fn file_system_walk_handles_directory_symlinks(
         WalkOutcome {
             entries: vec![
                 WalkEntry {
-                    path: PathUri::from_host_native_path(target_link)?,
+                    path: PathUri::from_host_native_path(&target_link)?,
                     kind: WalkEntryKind::Directory,
                 },
                 WalkEntry {
-                    path: PathUri::from_host_native_path(canonical_target.join("note.txt"))?,
+                    path: PathUri::from_host_native_path(target_link.join("note.txt"))?,
                     kind: WalkEntryKind::File,
                 },
                 WalkEntry {
-                    path: PathUri::from_host_native_path(canonical_target.join("root-link"))?,
+                    path: PathUri::from_host_native_path(target_link.join("root-link"))?,
                     kind: WalkEntryKind::Directory,
                 },
             ],

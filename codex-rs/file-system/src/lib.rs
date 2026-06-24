@@ -420,27 +420,10 @@ async fn walk<F: ExecutorFileSystem + ?Sized>(
                     continue;
                 }
             };
-            let traversal_path = if metadata.is_symlink {
-                if !options.follow_directory_symlinks || !metadata.is_directory {
-                    continue;
-                }
-                match file_system.canonicalize(&path, sandbox).await {
-                    Ok(path) => path,
-                    Err(error) => {
-                        if !push_walk_error(
-                            &mut outcome,
-                            &mut response_bytes,
-                            path,
-                            error.to_string(),
-                        ) {
-                            return Ok(outcome);
-                        }
-                        continue;
-                    }
-                }
-            } else {
-                path.clone()
-            };
+            if metadata.is_symlink && (!options.follow_directory_symlinks || !metadata.is_directory)
+            {
+                continue;
+            }
 
             let kind = if metadata.is_directory {
                 WalkEntryKind::Directory
@@ -462,25 +445,24 @@ async fn walk<F: ExecutorFileSystem + ?Sized>(
             });
 
             if kind == WalkEntryKind::Directory && depth < options.max_depth {
-                let directory_identity =
-                    if options.follow_directory_symlinks && !metadata.is_symlink {
-                        match file_system.canonicalize(&traversal_path, sandbox).await {
-                            Ok(path) => path,
-                            Err(error) => {
-                                if !push_walk_error(
-                                    &mut outcome,
-                                    &mut response_bytes,
-                                    path,
-                                    error.to_string(),
-                                ) {
-                                    return Ok(outcome);
-                                }
-                                continue;
+                let directory_identity = if options.follow_directory_symlinks {
+                    match file_system.canonicalize(&path, sandbox).await {
+                        Ok(path) => path,
+                        Err(error) => {
+                            if !push_walk_error(
+                                &mut outcome,
+                                &mut response_bytes,
+                                path,
+                                error.to_string(),
+                            ) {
+                                return Ok(outcome);
                             }
+                            continue;
                         }
-                    } else {
-                        traversal_path.clone()
-                    };
+                    }
+                } else {
+                    path.clone()
+                };
                 if !visited_directories.insert(directory_identity) {
                     continue;
                 }
@@ -488,7 +470,7 @@ async fn walk<F: ExecutorFileSystem + ?Sized>(
                     outcome.truncated = true;
                 } else {
                     directory_count += 1;
-                    queue.push_back((traversal_path, depth + 1));
+                    queue.push_back((path, depth + 1));
                 }
             }
         }
