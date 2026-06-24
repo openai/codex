@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use codex_protocol::protocol::W3cTraceContext;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -45,6 +46,8 @@ pub struct JSONRPCRequest {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<W3cTraceContext>,
 }
 
 /// A notification that does not expect a response.

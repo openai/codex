@@ -78,6 +78,7 @@ async fn exec_server_accepts_binary_websocket_json() -> anyhow::Result<()> {
             client_name: "exec-server-binary-test".to_string(),
             resume_session_id: None,
         })?),
+        trace: None,
     });
     server
         .send_raw_binary(serde_json::to_vec(&initialize)?)
