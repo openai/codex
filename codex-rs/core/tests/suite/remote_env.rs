@@ -5,11 +5,20 @@ use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Constrained;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecParams;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
+#[cfg(target_os = "macos")]
+use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
+use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
+use codex_network_proxy::PROXY_ENV_KEYS;
+#[cfg(target_os = "macos")]
+use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
+use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
+use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -316,6 +325,102 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_bash_c_forwards_workspace_snapshot_request() -> Result<()> {
+    const CALL_ID: &str = "remote-bash-snapshot";
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let exec_server_url = format!("ws://{}", listener.local_addr()?);
+    let captured = tokio::spawn(serve_captured_exec(listener));
+    let server = start_mock_server().await;
+    let arguments = serde_json::to_string(&json!({
+        "cmd": "printf ok",
+        "yield_time_ms": 1_000,
+    }))?;
+    let _response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(CALL_ID, "exec_command", &arguments),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_exec_server_url(exec_server_url)
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config.permissions.allow_login_shell = false;
+            config.permissions.shell_environment_policy.inherit =
+                ShellEnvironmentPolicyInherit::None;
+            config
+                .permissions
+                .shell_environment_policy
+                .r#set
+                .insert("OVERRIDE".to_string(), "explicit".to_string());
+            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the remote bash command").await?;
+    let params = timeout(Duration::from_secs(5), captured)
+        .await
+        .context("exec-server should receive process/start")??;
+    let cwd = PathUri::from_abs_path(&test.config.cwd);
+    assert_eq!(params.argv, ["/bin/bash", "-c", "printf ok"]);
+    assert_eq!(params.cwd, cwd);
+    assert!(!params.tty);
+    let policy = params.env_policy.as_ref().context("env policy")?;
+    assert_eq!(policy.inherit, ShellEnvironmentPolicyInherit::None);
+    assert!(policy.ignore_default_excludes);
+    assert!(policy.exclude.is_empty());
+    assert!(policy.include_only.is_empty());
+    assert_eq!(
+        policy.r#set,
+        HashMap::from([("OVERRIDE".to_string(), "explicit".to_string())])
+    );
+    let snapshot = params
+        .bash_env_snapshot
+        .as_ref()
+        .context("workspace Bash snapshot request")?;
+    assert_eq!(snapshot.workspace_root, cwd);
+    assert!(
+        snapshot
+            .preserve_env_keys
+            .iter()
+            .any(|key| key == "OVERRIDE")
+    );
+    for key in snapshot
+        .preserve_env_keys
+        .iter()
+        .filter(|key| key.as_str() != "OVERRIDE")
+    {
+        let value = params.env.get(key).context("preserved env value")?;
+        let mac_managed = {
+            #[cfg(target_os = "macos")]
+            {
+                key == PROXY_GIT_SSH_COMMAND_ENV_KEY
+                    && value.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER)
+            }
+            #[cfg(not(target_os = "macos"))]
+            false
+        };
+        let managed = PROXY_ENV_KEYS.contains(&key.as_str())
+            || (CUSTOM_CA_ENV_KEYS.contains(&key.as_str())
+                && is_managed_mitm_ca_trust_bundle_path(value))
+            || mac_managed;
+        assert!(managed, "unexpected preserved env key: {key}");
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deferred_executor_does_not_duplicate_initial_environment_context() -> Result<()> {
     let server = start_mock_server().await;
     let response_mock = mount_sse_once(
@@ -366,39 +471,104 @@ async fn read_exec_server_json(websocket: &mut WebSocketStream<TcpStream>) -> Va
     }
 }
 
-async fn serve_environment_info(listener: TcpListener) {
+async fn send_exec_server_result(
+    websocket: &mut WebSocketStream<TcpStream>,
+    id: &Value,
+    result: Value,
+) {
+    websocket
+        .send(Message::Text(
+            json!({ "id": id, "result": result }).to_string().into(),
+        ))
+        .await
+        .expect("exec-server response");
+}
+
+async fn send_exec_server_not_found(websocket: &mut WebSocketStream<TcpStream>, id: &Value) {
+    websocket
+        .send(Message::Text(
+            json!({
+                "id": id,
+                "error": { "code": -32004, "message": "not found" }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("exec-server not-found response");
+}
+
+async fn initialize_exec_server(listener: TcpListener, shell: &str) -> WebSocketStream<TcpStream> {
     let (stream, _) = listener.accept().await.expect("connection");
     let mut websocket = accept_async(stream).await.expect("websocket handshake");
 
     let initialize = read_exec_server_json(&mut websocket).await;
     assert_eq!(initialize["method"], "initialize");
-    websocket
-        .send(Message::Text(
-            json!({
-                "id": initialize["id"],
-                "result": { "sessionId": "test-session" }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("initialize response");
+    send_exec_server_result(
+        &mut websocket,
+        &initialize["id"],
+        json!({ "sessionId": "test-session" }),
+    )
+    .await;
     let initialized = read_exec_server_json(&mut websocket).await;
     assert_eq!(initialized["method"], "initialized");
 
     let info = read_exec_server_json(&mut websocket).await;
     assert_eq!(info["method"], "environment/info");
+    send_exec_server_result(
+        &mut websocket,
+        &info["id"],
+        json!({ "shell": { "name": shell, "path": format!("/bin/{shell}") } }),
+    )
+    .await;
     websocket
-        .send(Message::Text(
-            json!({
-                "id": info["id"],
-                "result": { "shell": { "name": "zsh", "path": "/bin/zsh" } }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("environment info response");
+}
+
+async fn serve_environment_info(listener: TcpListener) {
+    let _websocket = initialize_exec_server(listener, "zsh").await;
+}
+
+async fn serve_captured_exec(listener: TcpListener) -> ExecParams {
+    let mut websocket = initialize_exec_server(listener, "bash").await;
+    let start = loop {
+        let request = read_exec_server_json(&mut websocket).await;
+        match request["method"].as_str() {
+            Some("fs/canonicalize") => {
+                send_exec_server_result(
+                    &mut websocket,
+                    &request["id"],
+                    json!({ "path": request["params"]["path"] }),
+                )
+                .await;
+            }
+            Some("fs/getMetadata") => {
+                send_exec_server_not_found(&mut websocket, &request["id"]).await;
+            }
+            Some("process/start") => break request,
+            other => panic!("unexpected exec-server request: {other:?}"),
+        }
+    };
+    let params: ExecParams =
+        serde_json::from_value(start["params"].clone()).expect("process/start params");
+    send_exec_server_result(
+        &mut websocket,
+        &start["id"],
+        json!({ "processId": params.process_id.as_str() }),
+    )
+    .await;
+
+    let read = read_exec_server_json(&mut websocket).await;
+    assert_eq!(read["method"], "process/read");
+    send_exec_server_result(
+        &mut websocket,
+        &read["id"],
+        json!({
+            "chunks": [], "nextSeq": 1, "exited": true, "exitCode": 0,
+            "closed": true, "failure": null, "sandboxDenied": false
+        }),
+    )
+    .await;
+    params
 }
 
 fn tool_names(body: &Value) -> Vec<String> {
