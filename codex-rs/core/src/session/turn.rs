@@ -2316,7 +2316,7 @@ async fn try_run_sampling_request(
                 summary_index,
                 item_id,
             } => {
-                // Parallel truncated delivery can cancel an in-flight summary at the terminal
+                // Concurrent cutoff delivery can cancel an in-flight summary at the terminal
                 // boundary. Ignore partial deltas and present only atomic, item-scoped parts.
                 if !uses_parallel_reasoning_summaries {
                     continue;
