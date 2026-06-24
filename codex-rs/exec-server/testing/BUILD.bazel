@@ -1,4 +1,65 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/rules/testing/bwrap:defs.bzl", "BWRAP_EXEC_PROPERTIES")
+
+rust_library(
+    name = "bwrap-exec-server-test-support",
+    testonly = True,
+    srcs = [
+        "bwrap_exec_server.rs",
+        "bwrap_exec_server_tests.rs",
+    ],
+    crate_name = "bwrap_exec_server_test_support",
+    crate_root = "bwrap_exec_server.rs",
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "//bazel/rules/testing/bwrap:bwrap_test_support",
+        "//codex-rs/utils/cargo-bin",
+        "@crates//:anyhow",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)
+
+rust_binary(
+    name = "bwrap-exec-smoke",
+    testonly = True,
+    srcs = ["bwrap_exec_server_smoke.rs"],
+    crate_name = "bwrap_exec_server_smoke",
+    crate_root = "bwrap_exec_server_smoke.rs",
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "bwrap-exec-server-smoke-test",
+    crate = ":bwrap-exec-server-test-support",
+    data = [
+        ":bwrap-exec-smoke",
+        "//codex-rs/bwrap",
+        "//codex-rs/cli:codex",
+    ],
+    env = {
+        "CARGO_BIN_EXE_bwrap": "$(rlocationpath //codex-rs/bwrap:bwrap)",
+        "CARGO_BIN_EXE_bwrap-exec-smoke": "$(rlocationpath :bwrap-exec-smoke)",
+        "CARGO_BIN_EXE_codex": "$(rlocationpath //codex-rs/cli:codex)",
+    },
+    exec_properties = BWRAP_EXEC_PROPERTIES,
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//codex-rs/exec-server",
+        "//codex-rs/protocol",
+        "//codex-rs/utils/cargo-bin",
+        "//codex-rs/utils/path-uri",
+        "@crates//:pretty_assertions",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
 
 rust_library(
     name = "wine-exec-server-test-support",
