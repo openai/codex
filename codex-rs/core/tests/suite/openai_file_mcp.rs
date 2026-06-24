@@ -185,9 +185,10 @@ async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<Respo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() -> Result<()> {
-    // TODO(anp): Remove after file-upload fixtures support target-native Windows paths.
-    skip_if_wine_exec!(Ok(()), "uses a host-native file-upload path");
-
+    skip_if_wine_exec!(
+        Ok(()),
+        "13 MiB fixture exceeds the Wine exec WebSocket frame limit after base64 encoding"
+    );
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     mount_file_upload_mocks(&server, STREAMED_FILE_SIZE as u64).await;
@@ -240,6 +241,33 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
             "contains_mcp_source": true,
             "connector_id": "calendar",
         }))
+    );
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_file_params_upload_relative_path_from_selected_environment() -> Result<()> {
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_file_upload_mocks(&server, /*file_size_bytes*/ 11).await;
+
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
+        .with_workspace_setup(|cwd, fs| async move {
+            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"));
+            fs.write_file(&report_path, b"hello world".to_vec(), /*sandbox*/ None)
+                .await?;
+            Ok(())
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let _responses = run_extract_turn(&test, &server).await?;
+
+    let apps_tool_call =
+        recorded_apps_tool_call_by_name(&server, CALENDAR_EXTRACT_TEXT_TOOL_NAME).await;
+    assert_eq!(
+        apps_tool_call.pointer("/params/arguments/file"),
+        Some(&uploaded_file(&server, /*file_size_bytes*/ 11))
     );
 
     server.verify().await;
