@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
@@ -10,6 +11,8 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -147,6 +150,123 @@ async fn fork_thread_twice_drops_to_first_message() {
     pretty_assertions::assert_eq!(
         serde_json::to_value(&fork2_items).unwrap(),
         serde_json::to_value(&expected_after_second).unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupted_fork_closes_persisted_in_progress_turn() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    sse(vec![
+                        ev_response_created("delayed-response"),
+                        ev_completed("delayed-response"),
+                    ]),
+                    "text/event-stream",
+                )
+                .set_delay(Duration::from_secs(/*secs*/ 60)),
+        )
+        .mount(&server)
+        .await;
+
+    let mut builder = test_codex();
+    let test = builder
+        .build_with_auto_env(&server)
+        .await
+        .expect("create conversation");
+    let codex = test.codex.clone();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "leave this turn in progress".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submit in-progress turn");
+    let started = wait_for_event(&codex, |event| matches!(event, EventMsg::TurnStarted(_))).await;
+    let EventMsg::TurnStarted(started) = started else {
+        unreachable!("wait predicate only accepts TurnStarted")
+    };
+    let turn_id = started.turn_id;
+
+    codex.flush_rollout().await.expect("flush source rollout");
+    let source_path = codex.rollout_path().expect("source rollout path");
+    let source_items = read_rollout_items(&source_path);
+    let NewThread {
+        thread: forked_thread,
+        ..
+    } = test
+        .thread_manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            test.config.clone(),
+            source_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork interrupted snapshot");
+    let forked_path = forked_thread.rollout_path().expect("forked rollout path");
+    let forked_items = read_rollout_items(&forked_path);
+
+    codex
+        .submit(Op::Interrupt)
+        .await
+        .expect("interrupt source turn");
+    wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TurnAborted(event)
+                if event.turn_id.as_deref() == Some(turn_id.as_str())
+        )
+    })
+    .await;
+
+    let source_values = source_items
+        .iter()
+        .map(|item| serde_json::to_value(item).expect("serialize source rollout item"))
+        .collect::<Vec<_>>();
+    let forked_values = forked_items
+        .iter()
+        .map(|item| serde_json::to_value(item).expect("serialize forked rollout item"))
+        .collect::<Vec<_>>();
+    assert!(
+        forked_values.starts_with(&source_values),
+        "forked history should preserve the persisted in-progress source prefix"
+    );
+
+    let aborts = forked_items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                Some(serde_json::to_value(event).expect("serialize persisted abort"))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    pretty_assertions::assert_eq!(
+        aborts,
+        vec![
+            serde_json::to_value(TurnAbortedEvent {
+                turn_id: Some(turn_id),
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            })
+            .expect("serialize expected abort")
+        ]
     );
 }
 

@@ -1,3 +1,4 @@
+use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ResponseItem;
@@ -14,7 +15,6 @@ use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
 
-use super::CurrentExplicitTurn;
 use super::ExplicitTurnState;
 use super::RolloutTurnLifecycleTracker;
 
@@ -93,6 +93,11 @@ fn observe(tracker: &mut RolloutTurnLifecycleTracker, items: &[RolloutItem]) {
     }
 }
 
+fn current_turn(tracker: &RolloutTurnLifecycleTracker) -> Option<(&str, usize, ExplicitTurnState)> {
+    tracker
+        .current_explicit_turn()
+        .map(|turn| (turn.turn_id.as_str(), turn.rollout_start_index, turn.state))
+}
 #[test]
 fn records_raw_rollout_index_for_explicit_turn_start() {
     let mut tracker = RolloutTurnLifecycleTracker::new();
@@ -106,12 +111,8 @@ fn records_raw_rollout_index_for_explicit_turn_start() {
     );
 
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-a".to_string(),
-            rollout_start_index: 2,
-            state: ExplicitTurnState::InProgress,
-        })
+        current_turn(&tracker),
+        Some(("turn-a", 2, ExplicitTurnState::InProgress))
     );
 }
 
@@ -123,12 +124,8 @@ fn complete_closes_while_abort_and_error_retain_terminal_current_turn() {
         &[turn_started("turn-a"), turn_aborted(Some("turn-a"))],
     );
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-a".to_string(),
-            rollout_start_index: 0,
-            state: ExplicitTurnState::Terminal,
-        })
+        current_turn(&tracker),
+        Some(("turn-a", 0, ExplicitTurnState::Terminal))
     );
 
     tracker.handle_rollout_item(&turn_complete("turn-a"));
@@ -140,12 +137,8 @@ fn complete_closes_while_abort_and_error_retain_terminal_current_turn() {
         codex_error_info: None,
     })));
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-b".to_string(),
-            rollout_start_index: 3,
-            state: ExplicitTurnState::Terminal,
-        })
+        current_turn(&tracker),
+        Some(("turn-b", 3, ExplicitTurnState::Terminal))
     );
 }
 
@@ -158,12 +151,8 @@ fn second_start_finishes_and_replaces_current_turn() {
     );
 
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-b".to_string(),
-            rollout_start_index: 1,
-            state: ExplicitTurnState::InProgress,
-        })
+        current_turn(&tracker),
+        Some(("turn-b", 1, ExplicitTurnState::InProgress))
     );
 }
 
@@ -181,22 +170,14 @@ fn late_historical_ids_do_not_affect_current_but_unknown_ids_do() {
         ],
     );
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-b".to_string(),
-            rollout_start_index: 2,
-            state: ExplicitTurnState::InProgress,
-        })
+        current_turn(&tracker),
+        Some(("turn-b", 2, ExplicitTurnState::InProgress))
     );
 
     tracker.handle_rollout_item(&turn_aborted(Some("unknown")));
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-b".to_string(),
-            rollout_start_index: 2,
-            state: ExplicitTurnState::Terminal,
-        })
+        current_turn(&tracker),
+        Some(("turn-b", 2, ExplicitTurnState::Terminal))
     );
 
     tracker.handle_rollout_item(&turn_complete("unknown"));
@@ -216,12 +197,8 @@ fn rollback_zero_finishes_current_and_rolled_back_ids_become_unknown() {
         ],
     );
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-b".to_string(),
-            rollout_start_index: 2,
-            state: ExplicitTurnState::InProgress,
-        })
+        current_turn(&tracker),
+        Some(("turn-b", 2, ExplicitTurnState::InProgress))
     );
 
     observe(
@@ -250,12 +227,8 @@ fn implicit_turn_placeholders_keep_rollback_late_id_matching_aligned() {
         ],
     );
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-b".to_string(),
-            rollout_start_index: 4,
-            state: ExplicitTurnState::InProgress,
-        })
+        current_turn(&tracker),
+        Some(("turn-b", 4, ExplicitTurnState::InProgress))
     );
 
     let mut tracker = RolloutTurnLifecycleTracker::new();
@@ -289,13 +262,49 @@ fn non_user_materialized_turn_adds_an_implicit_rollback_placeholder() {
     );
 
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-b".to_string(),
-            rollout_start_index: 4,
-            state: ExplicitTurnState::InProgress,
-        })
+        current_turn(&tracker),
+        Some(("turn-b", 4, ExplicitTurnState::InProgress))
     );
+}
+
+#[test]
+fn legacy_current_turn_events_add_implicit_rollback_placeholders() {
+    let events = [
+        EventMsg::ViewImageToolCall(
+            serde_json::from_value(serde_json::json!({
+                "call_id": "image-1",
+                "path": "file:///tmp/image.png",
+            }))
+            .expect("valid view image event"),
+        ),
+        EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
+            call_id: "dynamic-1".to_string(),
+            turn_id: String::new(),
+            started_at_ms: 0,
+            namespace: None,
+            tool: "lookup".to_string(),
+            arguments: serde_json::json!({}),
+        }),
+    ];
+
+    for event in events {
+        let mut tracker = RolloutTurnLifecycleTracker::new();
+        observe(
+            &mut tracker,
+            &[
+                turn_started("turn-a"),
+                turn_complete("turn-a"),
+                RolloutItem::EventMsg(event),
+                rollback(/*num_turns*/ 1),
+                turn_started("turn-b"),
+                turn_complete("turn-a"),
+            ],
+        );
+        assert_eq!(
+            current_turn(&tracker),
+            Some(("turn-b", 4, ExplicitTurnState::InProgress))
+        );
+    }
 }
 
 #[test]
@@ -334,12 +343,8 @@ fn hook_prompt_adds_an_implicit_rollback_placeholder() {
     );
 
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-b".to_string(),
-            rollout_start_index: 4,
-            state: ExplicitTurnState::InProgress,
-        })
+        current_turn(&tracker),
+        Some(("turn-b", 4, ExplicitTurnState::InProgress))
     );
 }
 
@@ -364,12 +369,8 @@ fn hook_prompt_materializes_compaction_slot_before_user_starts_another() {
         ],
     );
     assert_eq!(
-        tracker.current_explicit_turn(),
-        Some(&CurrentExplicitTurn {
-            turn_id: "turn-b".to_string(),
-            rollout_start_index: 6,
-            state: ExplicitTurnState::InProgress,
-        })
+        current_turn(&tracker),
+        Some(("turn-b", 6, ExplicitTurnState::InProgress))
     );
 
     let mut tracker = RolloutTurnLifecycleTracker::new();

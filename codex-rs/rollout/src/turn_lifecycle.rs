@@ -1,5 +1,7 @@
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentAction;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::RolloutItem;
 
 /// Whether the current explicit turn is still running or has reached a terminal state.
@@ -97,13 +99,37 @@ impl RolloutTurnLifecycleTracker {
             EventMsg::PatchApplyEnd(event) if event.turn_id.is_empty() => {
                 self.materialize_implicit_turn();
             }
+            EventMsg::DynamicToolCallRequest(event) if event.turn_id.is_empty() => {
+                self.materialize_implicit_turn();
+            }
+            EventMsg::DynamicToolCallResponse(event) if event.turn_id.is_empty() => {
+                self.materialize_implicit_turn();
+            }
+            EventMsg::GuardianAssessment(event)
+                if event.turn_id.is_empty()
+                    && event.status != GuardianAssessmentStatus::Approved
+                    && event.target_item_id.is_some()
+                    && matches!(
+                        &event.action,
+                        GuardianAssessmentAction::Command { .. }
+                            | GuardianAssessmentAction::Execve { .. }
+                    ) =>
+            {
+                self.materialize_implicit_turn();
+            }
             EventMsg::ContextCompacted(_)
             | EventMsg::EnteredReviewMode(_)
             | EventMsg::ExitedReviewMode(_)
             | EventMsg::McpToolCallEnd(_)
             | EventMsg::WebSearchEnd(_)
             | EventMsg::ImageGenerationEnd(_)
-            | EventMsg::SubAgentActivity(_) => self.materialize_implicit_turn(),
+            | EventMsg::SubAgentActivity(_)
+            | EventMsg::ViewImageToolCall(_)
+            | EventMsg::CollabAgentSpawnEnd(_)
+            | EventMsg::CollabAgentInteractionEnd(_)
+            | EventMsg::CollabWaitingEnd(_)
+            | EventMsg::CollabCloseEnd(_)
+            | EventMsg::CollabResumeEnd(_) => self.materialize_implicit_turn(),
             EventMsg::TurnStarted(event) => {
                 self.finish_current_turn();
                 self.current_turn = Some(CurrentTurn::Explicit(CurrentExplicitTurn {
