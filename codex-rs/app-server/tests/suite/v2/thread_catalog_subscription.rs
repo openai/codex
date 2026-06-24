@@ -7,6 +7,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadCatalogChangedNotification;
+use codex_app_server_protocol::ThreadCatalogSubscribeResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadListParams;
@@ -28,10 +29,11 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 async fn catalog_subscription_reports_new_and_injected_thread() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut app = start_app(&codex_home).await?;
-    subscribe(&mut app).await?;
+    let subscribed = subscribe(&mut app).await?;
 
     let started = start_thread(&mut app, ThreadStartParams::default()).await?;
     let changed = read_catalog_change(&mut app).await?;
+    assert!(changed.revision > subscribed.revision);
     assert_eq!(changed.thread.id, started.id);
     assert_eq!(changed.thread.preview, "");
     assert!(
@@ -53,8 +55,11 @@ async fn catalog_subscription_reports_new_and_injected_thread() -> Result<()> {
         .await?;
     let _: ThreadInjectItemsResponse = read_response(&mut app, inject_id).await?;
     let injected = read_catalog_change(&mut app).await?;
+    assert!(injected.revision > changed.revision);
     assert_eq!(injected.thread.id, started.id);
     assert!(injected.thread.updated_at_ms >= changed.thread.updated_at_ms);
+    let resubscribed = subscribe(&mut app).await?;
+    assert!(resubscribed.revision >= injected.revision);
 
     Ok(())
 }
@@ -152,13 +157,11 @@ async fn start_app(codex_home: &TempDir) -> Result<TestAppServer> {
     Ok(app)
 }
 
-async fn subscribe(app: &mut TestAppServer) -> Result<()> {
+async fn subscribe(app: &mut TestAppServer) -> Result<ThreadCatalogSubscribeResponse> {
     let subscribe_id = app
         .send_raw_request("threadCatalog/subscribe", /*params*/ None)
         .await?;
-    let _: codex_app_server_protocol::ThreadCatalogSubscribeResponse =
-        read_response(app, subscribe_id).await?;
-    Ok(())
+    read_response(app, subscribe_id).await
 }
 
 async fn start_thread(

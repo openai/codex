@@ -14858,11 +14858,18 @@
     "ThreadCatalogChangedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "revision": {
+          "description": "Monotonically increasing revision for this app-server process.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "thread": {
           "$ref": "#/definitions/ThreadSummary"
         }
       },
       "required": [
+        "revision",
         "thread"
       ],
       "title": "ThreadCatalogChangedNotification",
@@ -14870,6 +14877,17 @@
     },
     "ThreadCatalogSubscribeResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "revision": {
+          "description": "Highest catalog notification revision published before this subscription was acknowledged.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision"
+      ],
       "title": "ThreadCatalogSubscribeResponse",
       "type": "object"
     },

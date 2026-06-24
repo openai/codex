@@ -1098,7 +1098,11 @@ pub struct ThreadListParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadCatalogSubscribeResponse {}
+pub struct ThreadCatalogSubscribeResponse {
+    /// Highest catalog notification revision published before this subscription was acknowledged.
+    #[ts(type = "number")]
+    pub revision: u64,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1434,6 +1438,9 @@ pub struct ThreadStatusChangedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadCatalogChangedNotification {
+    /// Monotonically increasing revision for this app-server process.
+    #[ts(type = "number")]
+    pub revision: u64,
     pub thread: ThreadSummary,
 }
 

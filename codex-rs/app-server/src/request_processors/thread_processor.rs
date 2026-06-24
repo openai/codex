@@ -2658,6 +2658,7 @@ impl ThreadRequestProcessor {
                 "thread",
             );
         }
+        self.publish_thread_catalog_change(thread_id).await;
     }
 
     async fn thread_resume_inner(

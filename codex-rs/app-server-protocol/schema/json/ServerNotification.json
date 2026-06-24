@@ -3746,11 +3746,18 @@
     },
     "ThreadCatalogChangedNotification": {
       "properties": {
+        "revision": {
+          "description": "Monotonically increasing revision for this app-server process.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "thread": {
           "$ref": "#/definitions/ThreadSummary"
         }
       },
       "required": [
+        "revision",
         "thread"
       ],
       "type": "object"

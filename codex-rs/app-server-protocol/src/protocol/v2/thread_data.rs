@@ -212,6 +212,7 @@ pub struct ThreadSummary {
     pub updated_at: i64,
     #[ts(type = "number")]
     pub updated_at_ms: i64,
+    #[ts(type = "number | null")]
     pub recency_at: Option<i64>,
     #[ts(type = "number | null")]
     pub recency_at_ms: Option<i64>,

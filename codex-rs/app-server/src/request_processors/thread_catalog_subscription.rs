@@ -4,6 +4,7 @@ use super::*;
 pub(crate) struct ThreadCatalogSubscriptions {
     outgoing: Arc<OutgoingMessageSender>,
     connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
+    revision: Arc<Mutex<u64>>,
 }
 
 impl ThreadCatalogSubscriptions {
@@ -11,6 +12,7 @@ impl ThreadCatalogSubscriptions {
         Self {
             outgoing,
             connection_ids: Arc::new(Mutex::new(HashSet::new())),
+            revision: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -18,8 +20,10 @@ impl ThreadCatalogSubscriptions {
         &self,
         connection_id: ConnectionId,
     ) -> ThreadCatalogSubscribeResponse {
-        self.connection_ids.lock().await.insert(connection_id);
-        ThreadCatalogSubscribeResponse {}
+        let mut connection_ids = self.connection_ids.lock().await;
+        connection_ids.insert(connection_id);
+        let revision = *self.revision.lock().await;
+        ThreadCatalogSubscribeResponse { revision }
     }
 
     pub(super) async fn unsubscribe(
@@ -45,10 +49,16 @@ impl ThreadCatalogSubscriptions {
         if connection_ids.is_empty() {
             return;
         }
+        let revision = {
+            let mut revision = self.revision.lock().await;
+            *revision = revision.saturating_add(1);
+            *revision
+        };
         self.outgoing
             .send_server_notification_to_connections(
                 &connection_ids,
                 ServerNotification::ThreadCatalogChanged(ThreadCatalogChangedNotification {
+                    revision,
                     thread,
                 }),
             )

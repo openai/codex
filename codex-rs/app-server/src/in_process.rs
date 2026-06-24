@@ -106,6 +106,7 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
         notification,
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
+            | ServerNotification::ThreadCatalogChanged(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
     )
 }
@@ -733,6 +734,8 @@ mod tests {
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
+    use codex_app_server_protocol::ThreadCatalogChangedNotification;
+    use codex_app_server_protocol::ThreadCatalogSubscribeResponse;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
@@ -877,6 +880,76 @@ mod tests {
             .shutdown()
             .await
             .expect("in-process runtime should shutdown cleanly");
+    }
+
+    #[tokio::test]
+    async fn in_process_catalog_notifications_survive_queue_pressure() {
+        let mut client =
+            start_test_client_with_capacity(SessionSource::Cli, /*channel_capacity*/ 1).await;
+        let subscribed = request_when_ready(&client, || ClientRequest::ThreadCatalogSubscribe {
+            request_id: RequestId::Integer(10),
+            params: None,
+        })
+        .await
+        .expect("subscribe should succeed");
+        let subscribed: ThreadCatalogSubscribeResponse =
+            serde_json::from_value(subscribed).expect("subscribe response should parse");
+
+        let mut started_ids = Vec::new();
+        for request_id in [11, 12] {
+            let started = request_when_ready(&client, || ClientRequest::ThreadStart {
+                request_id: RequestId::Integer(request_id),
+                params: ThreadStartParams::default(),
+            })
+            .await
+            .expect("thread/start should succeed");
+            let started: ThreadStartResponse =
+                serde_json::from_value(started).expect("thread/start response should parse");
+            started_ids.push(started.thread.id);
+        }
+
+        let first = next_catalog_change(&mut client).await;
+        let second = next_catalog_change(&mut client).await;
+        assert_eq!(vec![first.thread.id, second.thread.id], started_ids,);
+        assert!(first.revision > subscribed.revision);
+        assert!(second.revision > first.revision);
+
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+    }
+
+    async fn next_catalog_change(
+        client: &mut InProcessClientHandle,
+    ) -> ThreadCatalogChangedNotification {
+        timeout(SHUTDOWN_TIMEOUT, async {
+            loop {
+                if let Some(InProcessServerEvent::ServerNotification(
+                    ServerNotification::ThreadCatalogChanged(notification),
+                )) = client.next_event().await
+                {
+                    return notification;
+                }
+            }
+        })
+        .await
+        .expect("catalog notification should arrive")
+    }
+
+    async fn request_when_ready(
+        client: &InProcessClientHandle,
+        request: impl Fn() -> ClientRequest,
+    ) -> PendingClientRequestResponse {
+        loop {
+            match client.request(request()).await {
+                Ok(response) => return response,
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                    tokio::task::yield_now().await;
+                }
+                Err(err) => panic!("request transport should work: {err}"),
+            }
+        }
     }
 
     #[test]

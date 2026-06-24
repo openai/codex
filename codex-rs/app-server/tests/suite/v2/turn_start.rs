@@ -43,6 +43,8 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::TextElement;
+use codex_app_server_protocol::ThreadCatalogChangedNotification;
+use codex_app_server_protocol::ThreadCatalogSubscribeResponse;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadDeletedNotification;
@@ -3391,7 +3393,7 @@ async fn turn_start_streams_apply_patch_change_updates_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()> {
+async fn turn_start_emits_spawn_agent_item_and_catalog_metadata_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     const CHILD_PROMPT: &str = "child: do work";
@@ -3454,6 +3456,15 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
 
     let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let subscribe_id = mcp
+        .send_raw_request("threadCatalog/subscribe", /*params*/ None)
+        .await?;
+    let subscribe_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(subscribe_id)),
+    )
+    .await??;
+    let subscribed: ThreadCatalogSubscribeResponse = to_response(subscribe_response)?;
 
     let thread_req = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -3569,6 +3580,32 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         agent_state.status
     );
     assert_eq!(agent_state.message, None);
+
+    let catalog_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification(
+            "spawned thread catalog summary",
+            |notification| {
+                notification.method == "threadCatalog/changed"
+                    && notification
+                        .params
+                        .as_ref()
+                        .and_then(|params| params["thread"]["id"].as_str())
+                        == Some(receiver_thread_id.as_str())
+            },
+        ),
+    )
+    .await??;
+    let catalog_changed: ThreadCatalogChangedNotification = serde_json::from_value(
+        catalog_notification
+            .params
+            .expect("threadCatalog/changed params"),
+    )?;
+    assert!(catalog_changed.revision > subscribed.revision);
+    assert_eq!(
+        catalog_changed.thread.parent_thread_id.as_deref(),
+        Some(thread.id.as_str())
+    );
 
     let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
