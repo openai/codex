@@ -40,6 +40,7 @@ pub(crate) struct ExecOptions {
 pub(crate) struct ExecServerEnvConfig {
     pub(crate) policy: codex_exec_server::ExecEnvPolicy,
     pub(crate) local_policy_env: HashMap<String, String>,
+    pub(crate) bash_env_snapshot: Option<codex_exec_server::BashEnvSnapshotParams>,
 }
 
 #[derive(Debug)]

@@ -65,7 +65,8 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
 }
 
 #[test]
-fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
+#[cfg(unix)]
+fn test_get_command_uses_non_login_bash_when_login_shell_is_disabled() -> anyhow::Result<()> {
     let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
 
     let args: ExecCommandArgs = parse_arguments(json)?;
@@ -76,18 +77,12 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        /*allow_login_shell*/ true,
+        /*allow_login_shell*/ false,
     )
     .map_err(anyhow::Error::msg)?;
     let command = resolved.command;
 
-    assert_eq!(command.last(), Some(&"echo hello".to_string()));
-    if command
-        .iter()
-        .any(|arg| arg.eq_ignore_ascii_case("-Command"))
-    {
-        assert!(command.contains(&"-NoProfile".to_string()));
-    }
+    assert_eq!(command, ["/bin/bash", "-c", "echo hello"]);
     Ok(())
 }
 

@@ -183,7 +183,10 @@ fn exec_server_params_for_request(
         sandbox: request.exec_server_sandbox.clone(),
         enforce_managed_network: request.exec_server_enforce_managed_network,
         managed_network: request.exec_server_managed_network.clone(),
-        bash_env_snapshot: None,
+        bash_env_snapshot: request
+            .exec_server_env_config
+            .as_ref()
+            .and_then(|config| config.bash_env_snapshot.clone()),
     }
 }
 
@@ -1117,6 +1120,7 @@ impl UnifiedExecProcessManager {
                 &context.turn.config.permissions.shell_environment_policy,
             ),
             local_policy_env,
+            bash_env_snapshot: None,
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self, request.shell_mode.clone());

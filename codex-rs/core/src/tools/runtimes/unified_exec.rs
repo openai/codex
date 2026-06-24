@@ -23,6 +23,7 @@ use crate::tools::runtimes::RuntimePathPrepends;
 use crate::tools::runtimes::apply_zsh_fork_path_prepend;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
+use crate::tools::runtimes::is_managed_proxy_env_var;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
@@ -43,6 +44,7 @@ use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -131,6 +133,38 @@ fn build_unified_exec_sandbox_command(
         env: env.clone(),
         managed_network,
         additional_permissions,
+    })
+}
+
+fn remote_bash_env_snapshot_params(
+    req: &UnifiedExecRequest,
+    command: &SandboxCommand,
+) -> Option<codex_exec_server::BashEnvSnapshotParams> {
+    if !req.turn_environment.environment.is_remote() || req.shell_type != ShellType::Bash {
+        return None;
+    }
+    if command.args.first().map(String::as_str) != Some("-c") {
+        return None;
+    }
+    let mut preserve_env_keys = req
+        .explicit_env_overrides
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    if command.env.contains_key(PROXY_ACTIVE_ENV_KEY) {
+        preserve_env_keys.extend(
+            command
+                .env
+                .iter()
+                .filter(|(key, value)| is_managed_proxy_env_var(key, value))
+                .map(|(key, _)| key.clone()),
+        );
+    }
+    preserve_env_keys.sort_unstable();
+    preserve_env_keys.dedup();
+    Some(codex_exec_server::BashEnvSnapshotParams {
+        workspace_root: req.turn_environment.cwd().clone(),
+        preserve_env_keys,
     })
 }
 
@@ -469,6 +503,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             }
             error @ ToolError::Codex(_) => error,
         })?;
+        let mut exec_server_env_config = req.exec_server_env_config.clone();
+        if let Some(config) = exec_server_env_config.as_mut() {
+            config.bash_env_snapshot = remote_bash_env_snapshot_params(req, &command);
+        }
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         self.manager
             .open_session_with_exec_env(
@@ -478,7 +516,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 attempt,
                 managed_network,
                 /*environment_id*/ Some(&req.turn_environment.environment_id),
-                req.exec_server_env_config.clone(),
+                exec_server_env_config,
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
                 req.turn_environment.environment.as_ref(),
@@ -549,6 +587,62 @@ mod tests {
         let other_key = runtime.approval_keys(&request);
 
         assert_ne!(original_key, other_key);
+    }
+
+    #[tokio::test]
+    async fn remote_bash_c_requests_workspace_snapshot_reuse() {
+        let mut request = test_request(
+            SandboxPermissions::UseDefault,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        );
+        request.shell_type = ShellType::Bash;
+        request.turn_environment = TurnEnvironment::new(
+            "remote".to_string(),
+            Arc::new(
+                Environment::create_for_tests(Some("ws://127.0.0.1:1".to_string()))
+                    .expect("remote environment"),
+            ),
+            request.cwd.clone(),
+            /*shell*/ None,
+        );
+        request.explicit_env_overrides =
+            HashMap::from([("OVERRIDE".to_string(), "explicit".to_string())]);
+        let mut command = SandboxCommand {
+            program: "bash".into(),
+            args: vec!["-c".to_string(), "echo ok".to_string()],
+            cwd: request.cwd.clone(),
+            env: HashMap::from([
+                (PROXY_ACTIVE_ENV_KEY.to_string(), "1".to_string()),
+                (
+                    "HTTPS_PROXY".to_string(),
+                    "http://127.0.0.1:1234".to_string(),
+                ),
+            ]),
+            managed_network: None,
+            additional_permissions: None,
+        };
+
+        assert_eq!(
+            remote_bash_env_snapshot_params(&request, &command),
+            Some(codex_exec_server::BashEnvSnapshotParams {
+                workspace_root: request.cwd.clone(),
+                preserve_env_keys: vec![
+                    PROXY_ACTIVE_ENV_KEY.to_string(),
+                    "HTTPS_PROXY".to_string(),
+                    "OVERRIDE".to_string(),
+                ],
+            })
+        );
+
+        command.args[0] = "-lc".to_string();
+        assert_eq!(remote_bash_env_snapshot_params(&request, &command), None);
+
+        command.args[0] = "-c".to_string();
+        request.shell_type = ShellType::Zsh;
+        assert_eq!(remote_bash_env_snapshot_params(&request, &command), None);
     }
 
     #[tokio::test]

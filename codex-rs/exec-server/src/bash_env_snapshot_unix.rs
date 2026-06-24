@@ -493,3 +493,7 @@ fn fallback(
 ) -> (Vec<String>, HashMap<String, String>) {
     (params.argv.clone(), environment.clone())
 }
+
+#[cfg(test)]
+#[path = "bash_env_snapshot_tests.rs"]
+mod tests;

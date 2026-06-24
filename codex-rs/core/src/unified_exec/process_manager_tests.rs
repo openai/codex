@@ -81,6 +81,10 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         loopback_ports: vec![43123],
         allow_local_binding: false,
     };
+    let bash_env_snapshot = codex_exec_server::BashEnvSnapshotParams {
+        workspace_root: cwd.clone().into(),
+        preserve_env_keys: vec!["PATH".to_string()],
+    };
     let mut request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
         cwd: cwd.clone().into(),
@@ -119,6 +123,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
                     "/client/custom-ca.pem".to_string(),
                 ),
             ]),
+            bash_env_snapshot: Some(bash_env_snapshot.clone()),
         }),
         network: None,
         network_environment_id: None,
@@ -146,6 +151,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     assert_eq!(params.cwd, request.cwd);
     assert!(params.enforce_managed_network);
     assert_eq!(params.managed_network, Some(managed_network));
+    assert_eq!(params.bash_env_snapshot, Some(bash_env_snapshot));
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,
