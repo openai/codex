@@ -17,6 +17,7 @@ use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WALK_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -33,6 +34,8 @@ use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsWalkParams;
+use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::rpc::internal_error;
@@ -56,6 +59,8 @@ pub(crate) enum FsHelperRequest {
     Canonicalize(FsCanonicalizeParams),
     #[serde(rename = "fs/readDirectory")]
     ReadDirectory(FsReadDirectoryParams),
+    #[serde(rename = "fs/walk")]
+    Walk(FsWalkParams),
     #[serde(rename = "fs/remove")]
     Remove(FsRemoveParams),
     #[serde(rename = "fs/copy")]
@@ -84,6 +89,8 @@ pub(crate) enum FsHelperPayload {
     Canonicalize(FsCanonicalizeResponse),
     #[serde(rename = "fs/readDirectory")]
     ReadDirectory(FsReadDirectoryResponse),
+    #[serde(rename = "fs/walk")]
+    Walk(FsWalkResponse),
     #[serde(rename = "fs/remove")]
     Remove(FsRemoveResponse),
     #[serde(rename = "fs/copy")]
@@ -99,6 +106,7 @@ impl FsHelperPayload {
             Self::GetMetadata(_) => FS_GET_METADATA_METHOD,
             Self::Canonicalize(_) => FS_CANONICALIZE_METHOD,
             Self::ReadDirectory(_) => FS_READ_DIRECTORY_METHOD,
+            Self::Walk(_) => FS_WALK_METHOD,
             Self::Remove(_) => FS_REMOVE_METHOD,
             Self::Copy(_) => FS_COPY_METHOD,
         }
@@ -159,6 +167,13 @@ impl FsHelperPayload {
                 FS_READ_DIRECTORY_METHOD,
                 other.operation(),
             )),
+        }
+    }
+
+    pub(crate) fn expect_walk(self) -> Result<FsWalkResponse, JSONRPCErrorError> {
+        match self {
+            Self::Walk(response) => Ok(response),
+            other => Err(unexpected_response(FS_WALK_METHOD, other.operation())),
         }
     }
 
@@ -262,6 +277,13 @@ pub(crate) async fn run_direct_request(
             Ok(FsHelperPayload::ReadDirectory(FsReadDirectoryResponse {
                 entries,
             }))
+        }
+        FsHelperRequest::Walk(params) => {
+            let outcome = file_system
+                .walk(&params.path, params.options, /*sandbox*/ None)
+                .await
+                .map_err(map_fs_error)?;
+            Ok(FsHelperPayload::Walk(outcome))
         }
         FsHelperRequest::Remove(params) => {
             file_system
