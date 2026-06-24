@@ -1339,9 +1339,11 @@ impl Session {
             }
             InitialHistory::Forked(mut rollout_items) => {
                 let turn_context = self.new_default_turn().await;
-                for rollout_item in &mut rollout_items {
-                    if let RolloutItem::ResponseItem(response_item) = rollout_item {
-                        Self::assign_missing_response_item_id(response_item);
+                if turn_context.config.features.enabled(Feature::ItemIds) {
+                    for rollout_item in &mut rollout_items {
+                        if let RolloutItem::ResponseItem(response_item) = rollout_item {
+                            Self::assign_missing_response_item_id(response_item);
+                        }
                     }
                 }
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)

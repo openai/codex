@@ -2682,11 +2682,8 @@ async fn record_initial_history_reconstructs_forked_transcript() {
         .record_initial_history(InitialHistory::Forked(rollout_items))
         .await;
 
-    let mut actual = session.state.lock().await.clone_history().into_raw_items();
-    for item in &mut actual {
-        item.set_id(/*new_id*/ None);
-    }
-    assert_eq!(expected, actual);
+    let history = session.state.lock().await.clone_history();
+    assert_eq!(expected, history.raw_items());
 }
 
 #[tokio::test]
@@ -2741,8 +2738,16 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
 
 #[tokio::test]
 async fn record_initial_history_assigns_and_persists_id_for_forked_response_item() {
-    let (mut session, _turn_context) = make_session_and_context().await;
-    let rollout_path = attach_thread_persistence(&mut session).await;
+    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            let _ = config.features.enable(Feature::ItemIds);
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("unique session")).await;
     let response_item = crate::context_manager::updates::build_developer_update_item(vec![
         "Subagent guidance.".to_string(),
     ])
