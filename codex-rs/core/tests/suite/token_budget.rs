@@ -4,8 +4,13 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core::config::TokenBudgetConfig;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
@@ -14,6 +19,7 @@ use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::context_snapshot;
@@ -31,8 +37,11 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
@@ -41,9 +50,29 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
+use tempfile::TempDir;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
+
+fn model_info_with_context_window_and_comp_hash(
+    slug: &str,
+    context_window: i64,
+    comp_hash: &str,
+) -> ModelInfo {
+    let models_response = bundled_models_response().expect("bundled models.json should parse");
+    let mut model_info = models_response
+        .models
+        .into_iter()
+        .find(|model| model.slug == slug)
+        .expect("model missing from models.json");
+    model_info.context_window = Some(context_window);
+    model_info.max_context_window = None;
+    model_info.comp_hash = Some(comp_hash.to_string());
+    model_info.effective_context_window_percent = 100;
+    model_info
+}
 
 fn token_budget_contexts(request: &ResponsesRequest) -> Vec<String> {
     let context_window_prefix = format!("{CONTEXT_WINDOW_OPEN_TAG}\nThread id: ");
@@ -137,6 +166,42 @@ fn write_token_budget_compact_hooks(home: &Path) {
     std::fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks.json");
 }
 
+async fn submit_turn_with_model(test: &TestCodex, prompt: &str, model: &str) -> Result<()> {
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: model.to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    Ok(())
+}
+
 async fn assert_context_compaction_item_lifecycle(codex: &std::sync::Arc<codex_core::CodexThread>) {
     let mut saw_compaction_started = false;
     let mut saw_compaction_completed = false;
@@ -206,6 +271,95 @@ async fn token_budget_context_is_only_emitted_with_full_context() -> Result<()> 
         token_budget_contexts(&requests[1]),
         initial_token_budget,
         "steady-state context update should not advance the context window"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_comp_hash_reset_uses_current_model_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 100),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_dir = codex_home.path().join("skills/budget-sensitive");
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: budget-sensitive-skill\ndescription: visible only with the current model budget\n---\n\n# Body\n",
+    )?;
+
+    let previous_model = "gpt-5.3-codex";
+    let current_model = "gpt-5.2";
+    let model_catalog = ModelsResponse {
+        models: vec![
+            model_info_with_context_window_and_comp_hash(
+                previous_model,
+                /*context_window*/ 100,
+                "hash-a",
+            ),
+            model_info_with_context_window_and_comp_hash(
+                current_model,
+                /*context_window*/ 200_000,
+                "hash-b",
+            ),
+        ],
+    };
+    let codex_home_path = codex_home.path().to_path_buf();
+    let test = test_codex()
+        .with_home(codex_home)
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.cwd = codex_home_path.abs();
+            config.model_catalog = Some(model_catalog);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    submit_turn_with_model(&test, "before comp hash switch", previous_model).await?;
+    submit_turn_with_model(&test, "after comp hash switch", current_model).await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].body_json()["model"].as_str(),
+        Some(previous_model)
+    );
+    assert_eq!(
+        requests[1].body_json()["model"].as_str(),
+        Some(current_model)
+    );
+
+    let initial_developer_text = requests[0].message_input_texts("developer").join("\n\n");
+    assert!(
+        !initial_developer_text.contains("budget-sensitive-skill"),
+        "previous model's tiny context budget should omit skill metadata"
+    );
+    let current_developer_text = requests[1].message_input_texts("developer").join("\n\n");
+    assert!(
+        current_developer_text
+            .contains("budget-sensitive-skill: visible only with the current model budget"),
+        "pre-turn token-budget reset should rebuild full context with the current model budget, got {current_developer_text:?}"
+    );
+    assert!(
+        !requests[1].body_contains_text("before comp hash switch"),
+        "token-budget comp-hash reset should drop prior window history"
     );
 
     Ok(())
