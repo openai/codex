@@ -2142,7 +2142,7 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
                             CommandAction::Read {
                                 command: "cat README.md".to_string(),
                                 name: "README.md".to_string(),
-                                path: test_path_buf("/tmp/README.md").abs(),
+                                path: test_path_buf("/tmp/README.md").abs().into(),
                             },
                             CommandAction::ListFiles {
                                 command: "ls".to_string(),
