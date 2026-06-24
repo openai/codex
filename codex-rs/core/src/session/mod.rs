@@ -2738,9 +2738,8 @@ impl Session {
                 ResponseItem::WebSearchCall { .. } => "ws",
                 ResponseItem::ImageGenerationCall { .. } => "ig",
                 ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
-                ResponseItem::AgentMessage { .. }
-                | ResponseItem::CompactionTrigger { .. }
-                | ResponseItem::Other => continue,
+                ResponseItem::AgentMessage { .. } => "amsg",
+                ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => continue,
             };
             item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
         }
