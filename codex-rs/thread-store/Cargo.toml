@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
+codex-agent-graph-store = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-install-context = { workspace = true }
 codex-otel = { workspace = true }

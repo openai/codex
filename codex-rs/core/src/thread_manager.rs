@@ -17,7 +17,6 @@ use crate::session::resolve_multi_agent_version;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
-use codex_agent_graph_store::InMemoryAgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
@@ -302,7 +301,7 @@ pub fn agent_graph_store_from_config(
     match &config.experimental_thread_store {
         ThreadStoreConfig::Local => local_agent_graph_store_from_state_db(state_db),
         ThreadStoreConfig::InMemory { id } => {
-            Some(InMemoryAgentGraphStore::for_id(id) as Arc<dyn AgentGraphStore>)
+            Some(InMemoryThreadStore::for_id(id) as Arc<dyn AgentGraphStore>)
         }
     }
 }

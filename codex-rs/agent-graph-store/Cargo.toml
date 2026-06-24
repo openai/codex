@@ -17,7 +17,6 @@ codex-protocol = { workspace = true }
 codex-state = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

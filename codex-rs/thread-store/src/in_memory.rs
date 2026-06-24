@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -6,6 +7,9 @@ use std::sync::MutexGuard;
 use std::sync::OnceLock;
 
 use chrono::Utc;
+use codex_agent_graph_store::AgentGraphStore;
+use codex_agent_graph_store::AgentGraphStoreFuture;
+use codex_agent_graph_store::ThreadSpawnEdgeStatus;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -53,6 +57,12 @@ mod tests {
     use crate::ThreadSortKey;
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::protocol::SessionSource;
+    use pretty_assertions::assert_eq;
+
+    fn thread_id(suffix: u128) -> ThreadId {
+        ThreadId::from_string(&format!("00000000-0000-0000-0000-{suffix:012}"))
+            .expect("valid thread id")
+    }
 
     #[tokio::test]
     async fn default_turn_pagination_methods_return_unsupported() {
@@ -160,6 +170,137 @@ mod tests {
             vec![child_thread_id]
         );
     }
+
+    #[tokio::test]
+    async fn agent_graph_upserts_reparents_and_updates_status() {
+        let store_id = "thread-store-agent-graph-upsert-test";
+        InMemoryThreadStore::remove_id(store_id);
+        let store = InMemoryThreadStore::for_id(store_id);
+        let shared_store = InMemoryThreadStore::for_id(store_id);
+        assert!(Arc::ptr_eq(&store, &shared_store));
+
+        let first_parent = thread_id(/*suffix*/ 10);
+        let second_parent = thread_id(/*suffix*/ 11);
+        let child = thread_id(/*suffix*/ 12);
+        store
+            .upsert_thread_spawn_edge(first_parent, child, ThreadSpawnEdgeStatus::Open)
+            .await
+            .expect("edge should insert");
+        store
+            .upsert_thread_spawn_edge(second_parent, child, ThreadSpawnEdgeStatus::Closed)
+            .await
+            .expect("edge should reparent");
+
+        assert_eq!(
+            store
+                .list_thread_spawn_children(first_parent, /*status_filter*/ None)
+                .await
+                .expect("first parent children should load"),
+            Vec::<ThreadId>::new()
+        );
+        assert_eq!(
+            shared_store
+                .list_thread_spawn_children(second_parent, Some(ThreadSpawnEdgeStatus::Closed))
+                .await
+                .expect("second parent children should load"),
+            vec![child]
+        );
+
+        store
+            .set_thread_spawn_edge_status(child, ThreadSpawnEdgeStatus::Open)
+            .await
+            .expect("edge should reopen");
+        assert_eq!(
+            store
+                .list_thread_spawn_children(second_parent, Some(ThreadSpawnEdgeStatus::Open))
+                .await
+                .expect("open children should load"),
+            vec![child]
+        );
+
+        InMemoryThreadStore::remove_id(store_id);
+    }
+
+    #[tokio::test]
+    async fn agent_graph_descendants_are_sorted_filtered_cycle_safe_and_deleted_with_threads() {
+        let store = InMemoryThreadStore::default();
+        let root = thread_id(/*suffix*/ 20);
+        let first_child = thread_id(/*suffix*/ 21);
+        let second_child = thread_id(/*suffix*/ 22);
+        let closed_grandchild = thread_id(/*suffix*/ 23);
+        let open_grandchild = thread_id(/*suffix*/ 24);
+
+        for (parent, child, status) in [
+            (root, second_child, ThreadSpawnEdgeStatus::Open),
+            (root, first_child, ThreadSpawnEdgeStatus::Open),
+            (
+                first_child,
+                closed_grandchild,
+                ThreadSpawnEdgeStatus::Closed,
+            ),
+            (second_child, open_grandchild, ThreadSpawnEdgeStatus::Open),
+            (open_grandchild, root, ThreadSpawnEdgeStatus::Open),
+        ] {
+            store
+                .upsert_thread_spawn_edge(parent, child, status)
+                .await
+                .expect("edge should insert");
+        }
+
+        assert_eq!(
+            store
+                .list_thread_spawn_descendants(root, /*status_filter*/ None)
+                .await
+                .expect("all descendants should load"),
+            vec![
+                first_child,
+                second_child,
+                closed_grandchild,
+                open_grandchild,
+            ]
+        );
+        assert_eq!(
+            store
+                .list_thread_spawn_descendants(root, Some(ThreadSpawnEdgeStatus::Open))
+                .await
+                .expect("open descendants should load"),
+            vec![first_child, second_child, open_grandchild]
+        );
+
+        store
+            .create_thread(CreateThreadParams {
+                session_id: second_child.into(),
+                thread_id: second_child,
+                extra_config: None,
+                forked_from_id: None,
+                parent_thread_id: Some(root),
+                source: SessionSource::Exec,
+                thread_source: None,
+                base_instructions: BaseInstructions::default(),
+                dynamic_tools: Vec::new(),
+                multi_agent_version: None,
+                metadata: ThreadPersistenceMetadata {
+                    cwd: None,
+                    model_provider: "test-provider".to_string(),
+                    memory_mode: ThreadMemoryMode::Enabled,
+                },
+            })
+            .await
+            .expect("thread should insert");
+        store
+            .delete_thread(DeleteThreadParams {
+                thread_id: second_child,
+            })
+            .await
+            .expect("thread should delete");
+        assert_eq!(
+            store
+                .list_thread_spawn_descendants(root, /*status_filter*/ None)
+                .await
+                .expect("remaining descendants should load"),
+            vec![first_child, closed_grandchild]
+        );
+    }
 }
 
 fn stores_guard() -> MutexGuard<'static, HashMap<String, Arc<InMemoryThreadStore>>> {
@@ -208,6 +349,13 @@ struct InMemoryThreadStoreState {
     metadata_updates: HashMap<ThreadId, ThreadMetadataPatch>,
     names: HashMap<ThreadId, Option<String>>,
     rollout_paths: HashMap<PathBuf, ThreadId>,
+    edges_by_child: HashMap<ThreadId, ThreadSpawnEdge>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ThreadSpawnEdge {
+    parent_thread_id: ThreadId,
+    status: ThreadSpawnEdgeStatus,
 }
 
 impl InMemoryThreadStore {
@@ -385,6 +533,9 @@ impl InMemoryThreadStore {
         state
             .rollout_paths
             .retain(|_, thread_id| *thread_id != params.thread_id);
+        state.edges_by_child.retain(|child_thread_id, edge| {
+            *child_thread_id != params.thread_id && edge.parent_thread_id != params.thread_id
+        });
         if existed {
             Ok(())
         } else {
@@ -495,6 +646,99 @@ impl ThreadStore for InMemoryThreadStore {
 
     fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreFuture<'_, ()> {
         Box::pin(InMemoryThreadStore::delete_thread(self, params))
+    }
+}
+
+impl AgentGraphStore for InMemoryThreadStore {
+    fn upsert_thread_spawn_edge(
+        &self,
+        parent_thread_id: ThreadId,
+        child_thread_id: ThreadId,
+        status: ThreadSpawnEdgeStatus,
+    ) -> AgentGraphStoreFuture<'_, ()> {
+        Box::pin(async move {
+            self.state.lock().await.edges_by_child.insert(
+                child_thread_id,
+                ThreadSpawnEdge {
+                    parent_thread_id,
+                    status,
+                },
+            );
+            Ok(())
+        })
+    }
+
+    fn set_thread_spawn_edge_status(
+        &self,
+        child_thread_id: ThreadId,
+        status: ThreadSpawnEdgeStatus,
+    ) -> AgentGraphStoreFuture<'_, ()> {
+        Box::pin(async move {
+            if let Some(edge) = self
+                .state
+                .lock()
+                .await
+                .edges_by_child
+                .get_mut(&child_thread_id)
+            {
+                edge.status = status;
+            }
+            Ok(())
+        })
+    }
+
+    fn list_thread_spawn_children(
+        &self,
+        parent_thread_id: ThreadId,
+        status_filter: Option<ThreadSpawnEdgeStatus>,
+    ) -> AgentGraphStoreFuture<'_, Vec<ThreadId>> {
+        Box::pin(async move {
+            let state = self.state.lock().await;
+            let mut children = state
+                .edges_by_child
+                .iter()
+                .filter_map(|(child_thread_id, edge)| {
+                    (edge.parent_thread_id == parent_thread_id
+                        && status_filter.is_none_or(|status| edge.status == status))
+                    .then_some(*child_thread_id)
+                })
+                .collect::<Vec<_>>();
+            children.sort_unstable_by_key(ThreadId::to_string);
+            Ok(children)
+        })
+    }
+
+    fn list_thread_spawn_descendants(
+        &self,
+        root_thread_id: ThreadId,
+        status_filter: Option<ThreadSpawnEdgeStatus>,
+    ) -> AgentGraphStoreFuture<'_, Vec<ThreadId>> {
+        Box::pin(async move {
+            let state = self.state.lock().await;
+            let mut descendants = Vec::new();
+            let mut visited = HashSet::from([root_thread_id]);
+            let mut frontier = HashSet::from([root_thread_id]);
+
+            while !frontier.is_empty() {
+                let mut next_frontier = state
+                    .edges_by_child
+                    .iter()
+                    .filter_map(|(child_thread_id, edge)| {
+                        (frontier.contains(&edge.parent_thread_id)
+                            && status_filter.is_none_or(|status| edge.status == status)
+                            && !visited.contains(child_thread_id))
+                        .then_some(*child_thread_id)
+                    })
+                    .collect::<Vec<_>>();
+                next_frontier.sort_unstable_by_key(ThreadId::to_string);
+                next_frontier.dedup();
+                visited.extend(next_frontier.iter().copied());
+                descendants.extend(next_frontier.iter().copied());
+                frontier = next_frontier.into_iter().collect();
+            }
+
+            Ok(descendants)
+        })
     }
 }
 

@@ -30,8 +30,9 @@ impl AgentControl {
         let state = self.upgrade()?;
         let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
         match state.get_thread(agent_id).await {
-            Ok(_) => {
-                if let Some(agent_graph_store) = state.agent_graph_store()
+            Ok(thread) => {
+                if !thread.config_snapshot().await.ephemeral
+                    && let Some(agent_graph_store) = state.agent_graph_store()
                     && let Err(err) = agent_graph_store
                         .set_thread_spawn_edge_status(
                             agent_id,
