@@ -16,6 +16,9 @@ use crate::session::turn_context::TurnContext;
 use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
 use codex_login::CodexAuth;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
+use codex_utils_path_uri::PathUriParseError;
 use serde_json::Value as JsonValue;
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
@@ -97,6 +100,46 @@ async fn rewrite_argument_value_for_openai_files(
     }
 }
 
+fn resolve_environment_file_path(
+    cwd: &PathUri,
+    file_path: &str,
+) -> Result<PathUri, PathUriParseError> {
+    match cwd.join(file_path) {
+        Err(PathUriParseError::InvalidFileUriPath { path }) if path == cwd.to_string() => {
+            let native_cwd = cwd
+                .to_abs_path()
+                .map_err(|_| PathUriParseError::InvalidFileUriPath { path: path.clone() })?;
+            PathUri::from_host_native_path(native_cwd.as_path().join(file_path))
+                .map_err(|_| PathUriParseError::InvalidFileUriPath { path })
+        }
+        result => result,
+    }
+}
+
+fn upload_file_name(
+    path_uri: &PathUri,
+    file_path: &str,
+    convention: PathConvention,
+) -> Result<String, String> {
+    let unusable_name = || "the path does not end in a usable file name".to_string();
+    let source = path_uri.basename().unwrap_or_else(|| {
+        // Opaque path URIs intentionally have no lexical basename. The tool argument is the
+        // exact Unicode spelling that was interpreted with this convention, so its final native
+        // component is the only lossless name available for upload metadata.
+        file_path.to_string()
+    });
+    let file_name = convention
+        .path_segments(&source)
+        .rfind(|segment| !segment.is_empty())
+        .ok_or_else(unusable_name)?;
+
+    if matches!(file_name, "." | "..") || file_name.contains('\0') {
+        Err(unusable_name())
+    } else {
+        Ok(file_name.to_string())
+    }
+}
+
 async fn build_uploaded_argument_value(
     turn_context: &TurnContext,
     auth: Option<&CodexAuth>,
@@ -121,10 +164,19 @@ async fn build_uploaded_argument_value(
             "no primary turn environment is available".to_string(),
         ));
     };
-    let path_uri = turn_environment
-        .cwd()
-        .join(file_path)
+    let path_uri = resolve_environment_file_path(turn_environment.cwd(), file_path)
         .map_err(|error| contextualize_error(error.to_string()))?;
+    let path_convention = turn_environment
+        .cwd()
+        .infer_path_convention()
+        .or_else(|| path_uri.infer_path_convention())
+        .ok_or_else(|| {
+            contextualize_error(
+                "could not determine the selected environment's path convention".to_string(),
+            )
+        })?;
+    let file_name =
+        upload_file_name(&path_uri, file_path, path_convention).map_err(&contextualize_error)?;
     let display_path = path_uri.inferred_native_path_string();
     let fs = turn_environment.environment.get_filesystem();
     let metadata = fs
@@ -146,7 +198,6 @@ async fn build_uploaded_argument_value(
         .read_file_stream(&path_uri, /*sandbox*/ None)
         .await
         .map_err(|error| contextualize_error(error.to_string()))?;
-    let file_name = path_uri.basename().unwrap_or_else(|| "file".to_string());
     let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
     let uploaded = upload_openai_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
@@ -193,6 +244,113 @@ mod tests {
             PathUri::from_abs_path(&cwd),
             primary.shell.clone(),
         );
+    }
+
+    #[test]
+    fn upload_file_name_uses_exact_target_native_component_for_opaque_uri() {
+        let cwd = PathUri::parse("file:///C:/workspace").expect("valid Windows cwd URI");
+
+        for file_path in [r"\\?\C:\reports\report.pdf", "//?/C:/reports/report.pdf"] {
+            let path_uri = cwd.join(file_path).expect("valid Windows namespace path");
+
+            assert_eq!(
+                (
+                    path_uri.basename(),
+                    upload_file_name(&path_uri, file_path, PathConvention::Windows,)
+                ),
+                (None, Ok("report.pdf".to_string())),
+                "upload name for {file_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn upload_file_name_rejects_opaque_uri_without_a_usable_component() {
+        let path_uri =
+            PathUri::parse("file:///%00/bad/path/YQ").expect("structurally valid opaque path URI");
+
+        assert_eq!(
+            upload_file_name(&path_uri, "..", PathConvention::Posix),
+            Err("the path does not end in a usable file name".to_string())
+        );
+    }
+
+    #[test]
+    fn upload_file_name_applies_target_native_separators_to_uri_basename() {
+        for (uri, convention, expected) in [
+            ("file:///tmp/a%2Fb", PathConvention::Posix, "b"),
+            ("file:///C:/a%5Cb", PathConvention::Windows, "b"),
+            ("file:///tmp/a%252Fb", PathConvention::Posix, "a%2Fb"),
+        ] {
+            let path_uri = PathUri::parse(uri).expect("valid path URI");
+
+            assert_eq!(
+                upload_file_name(&path_uri, "unused", convention),
+                Ok(expected.to_string()),
+                "upload name for {uri}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn build_uploaded_argument_value_rejects_unusable_name_before_file_access() {
+        let (_, mut turn_context) = make_session_and_context().await;
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let primary = turn_context
+            .environments
+            .turn_environments
+            .first_mut()
+            .expect("primary environment");
+        *primary = TurnEnvironment::new(
+            primary.environment_id.clone(),
+            Arc::clone(&primary.environment),
+            PathUri::parse("file:///C:/workspace").expect("valid Windows cwd URI"),
+            primary.shell.clone(),
+        );
+        let file_path = r"\\?\C:\reports\..";
+
+        let error = build_uploaded_argument_value(
+            &turn_context,
+            Some(&auth),
+            "file",
+            /*index*/ None,
+            file_path,
+        )
+        .await
+        .expect_err("unusable upload name should fail before file access");
+
+        assert_eq!(
+            error,
+            format!(
+                "failed to upload `{file_path}` for `file`: \
+                 the path does not end in a usable file name"
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_environment_file_path_joins_opaque_native_cwd_without_expanding_tilde() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::path::PathBuf;
+
+        let native_cwd = AbsolutePathBuf::from_absolute_path_checked(PathBuf::from(
+            OsString::from_vec(b"/tmp/codex-non-utf8-\xff".to_vec()),
+        ))
+        .expect("absolute non-UTF-8 cwd");
+        let cwd = PathUri::from_abs_path(&native_cwd);
+        let file_paths = ["report.txt", "~/report.txt"];
+        let actual = file_paths.map(|file_path| {
+            resolve_environment_file_path(&cwd, file_path)
+                .expect("opaque native cwd should resolve relative paths")
+                .to_abs_path()
+                .expect("resolved URI should remain host-native")
+                .into_path_buf()
+        });
+        let expected = file_paths.map(|file_path| native_cwd.as_path().join(file_path));
+
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]
