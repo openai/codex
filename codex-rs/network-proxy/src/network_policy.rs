@@ -701,9 +701,9 @@ mod tests {
             network.set_allowed_domains(vec!["example.com".to_string()]);
             network
         });
-        state.register_execution("local", "execution-baseline-allow");
+        state.register_execution("token-baseline-allow", "local", "execution-baseline-allow");
         let state = state
-            .for_execution_token("execution-baseline-allow")
+            .for_execution_token("token-baseline-allow")
             .expect("expected registered execution");
         let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
             protocol: NetworkProtocol::Http,
@@ -731,6 +731,7 @@ mod tests {
             event.field("execution.id"),
             Some("execution-baseline-allow")
         );
+        assert_ne!(event.field("execution.id"), Some("token-baseline-allow"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -741,9 +742,9 @@ mod tests {
             network.set_denied_domains(vec!["blocked.com".to_string()]);
             network
         });
-        state.register_execution("local", "execution-baseline-deny");
+        state.register_execution("token-baseline-deny", "local", "execution-baseline-deny");
         let state = state
-            .for_execution_token("execution-baseline-deny")
+            .for_execution_token("token-baseline-deny")
             .expect("expected registered execution");
         let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
             protocol: NetworkProtocol::Http,
@@ -783,6 +784,7 @@ mod tests {
         assert_eq!(event.field("http.request.method"), Some("GET"));
         assert_eq!(event.field("client.address"), Some("127.0.0.1:1234"));
         assert_eq!(event.field("execution.id"), Some("execution-baseline-deny"));
+        assert_ne!(event.field("execution.id"), Some("token-baseline-deny"));
     }
 
     #[tokio::test(flavor = "current_thread")]

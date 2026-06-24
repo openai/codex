@@ -215,7 +215,7 @@ pub struct NetworkProxyState {
     blocked_request_observer: Arc<RwLock<Option<Arc<dyn BlockedRequestObserver>>>>,
     credential_broker: CredentialBroker,
     audit_metadata: NetworkProxyAuditMetadata,
-    execution_attributions: Arc<Mutex<HashMap<String, String>>>,
+    execution_attributions: Arc<Mutex<HashMap<String, ExecutionAttribution>>>,
     environment_id: Option<Arc<str>>,
     execution_id: Option<Arc<str>>,
 }
@@ -225,6 +225,12 @@ pub(crate) enum HostMitmRequirement {
     None,
     Tls,
     Always,
+}
+
+#[derive(Clone)]
+struct ExecutionAttribution {
+    environment_id: String,
+    execution_id: String,
 }
 
 impl std::fmt::Debug for NetworkProxyState {
@@ -303,31 +309,41 @@ impl NetworkProxyState {
         }
     }
 
-    #[cfg(any(target_os = "linux", test))]
-    pub(crate) fn register_execution(&self, environment_id: &str, execution_id: &str) {
+    pub(crate) fn register_execution(
+        &self,
+        attribution_token: &str,
+        environment_id: &str,
+        execution_id: &str,
+    ) {
         self.execution_attributions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(execution_id.to_string(), environment_id.to_string());
+            .insert(
+                attribution_token.to_string(),
+                ExecutionAttribution {
+                    environment_id: environment_id.to_string(),
+                    execution_id: execution_id.to_string(),
+                },
+            );
     }
 
-    pub(crate) fn unregister_execution(&self, execution_id: &str) {
+    pub(crate) fn unregister_execution(&self, attribution_token: &str) {
         self.execution_attributions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(execution_id);
+            .remove(attribution_token);
     }
 
     pub(crate) fn for_execution_token(&self, token: &str) -> Option<Self> {
-        let environment_id = self
+        let attribution = self
             .execution_attributions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(token)?
             .clone();
         Some(Self {
-            environment_id: Some(environment_id.into()),
-            execution_id: Some(token.to_string().into()),
+            environment_id: Some(attribution.environment_id.into()),
+            execution_id: Some(attribution.execution_id.into()),
             ..self.clone()
         })
     }

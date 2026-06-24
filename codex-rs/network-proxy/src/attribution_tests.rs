@@ -31,7 +31,7 @@ async fn framed_connection_receives_registered_execution_state() -> Result<(), B
     let state = Arc::new(network_proxy_state_for_policy(
         NetworkProxySettings::default(),
     ));
-    state.register_execution("local", "token-1");
+    state.register_execution("token-1", "local", "execution-1");
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
@@ -58,6 +58,6 @@ async fn framed_connection_receives_registered_execution_state() -> Result<(), B
     client.await??;
 
     assert_eq!(actual.environment_id(), Some("local"));
-    assert_eq!(actual.execution_id().as_deref(), Some("token-1"));
+    assert_eq!(actual.execution_id().as_deref(), Some("execution-1"));
     Ok(())
 }

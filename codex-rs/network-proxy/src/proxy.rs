@@ -708,7 +708,7 @@ impl NetworkProxy {
         if let Some(execution_scope) = self.execution_scope.as_ref() {
             env.insert(
                 PROXY_ATTRIBUTION_TOKEN_ENV_KEY.to_string(),
-                execution_scope.execution_id.clone(),
+                execution_scope.attribution_token.clone(),
             );
         }
         let mut loopback_ports = [
