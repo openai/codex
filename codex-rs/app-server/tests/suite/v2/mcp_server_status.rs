@@ -214,7 +214,7 @@ url = "{mcp_server_url}/mcp"
 }
 
 #[tokio::test]
-async fn mcp_server_status_list_never_advertises_uninstalled_codex_apps() -> Result<()> {
+async fn mcp_server_status_list_reflects_installed_manager_generation() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let (apps_server_url, apps_server_handle) = start_apps_mcp_server("calendar_lookup").await?;
     let codex_home = TempDir::new()?;

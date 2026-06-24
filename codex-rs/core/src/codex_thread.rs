@@ -593,7 +593,7 @@ impl CodexThread {
         self.codex.session.runtime_mcp_config(config).await
     }
 
-    /// Returns the MCP inventory installed for this thread.
+    /// Returns a point-in-time snapshot of the MCP inventory installed for this thread.
     pub async fn mcp_server_status_snapshot(
         &self,
         config: &crate::config::Config,

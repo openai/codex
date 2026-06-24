@@ -6,6 +6,10 @@ use std::time::Duration;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_protocol::mcp::CallToolResult;
+use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::process::process_is_alive;
 use core_test_support::process::wait_for_pid_file;
 use core_test_support::process::wait_for_process_exit;
@@ -14,6 +18,62 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_mcp_server;
+use pretty_assertions::assert_eq;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn elicitation_capability_refresh_preserves_host_owned_codex_apps() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let fixture = apps_enabled_builder(apps_server.chatgpt_base_url)
+        .build(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    fixture
+        .codex
+        .set_openai_form_elicitation_support(/*supported*/ true)
+        .await?;
+    fixture.submit_turn("refresh MCP servers").await?;
+
+    let result = fixture
+        .codex
+        .call_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_create_event",
+            Some(serde_json::json!({
+                "title": "Team sync",
+                "starts_at": "2026-06-24T17:00:00Z",
+            })),
+            /*meta*/ None,
+        )
+        .await?;
+    assert_eq!(
+        result,
+        CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "called calendar_create_event for Team sync at 2026-06-24T17:00:00Z with ",
+            })],
+            structured_content: Some(serde_json::json!({ "_codex_apps": null })),
+            is_error: Some(false),
+            meta: None,
+        }
+    );
+
+    fixture.codex.shutdown_and_wait().await?;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn refresh_shuts_down_superseded_mcp_stdio_server() -> anyhow::Result<()> {
