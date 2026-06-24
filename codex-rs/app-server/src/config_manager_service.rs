@@ -20,6 +20,7 @@ use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::merge_toml_values;
+use codex_config::validate_config_toml_layer;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -293,21 +294,25 @@ impl ConfigManager {
             parsed_segments.push(segments);
         }
 
-        validate_config(&user_config).map_err(|err| {
+        validate_config_toml_layer(user_config.clone(), self.codex_home()).map_err(|err| {
             ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
             )
         })?;
+
+        let mut user_config_without_mcp_servers = user_config.clone();
+        if let Some(table) = user_config_without_mcp_servers.as_table_mut() {
+            table.remove("mcp_servers");
+        }
         let user_config_toml =
-            deserialize_config_toml_with_base(user_config.clone(), self.codex_home()).map_err(
-                |err| {
-                    ConfigManagerError::write(
-                        ConfigWriteErrorCode::ConfigValidationError,
-                        format!("Invalid configuration: {err}"),
-                    )
-                },
-            )?;
+            deserialize_config_toml_with_base(user_config_without_mcp_servers, self.codex_home())
+                .map_err(|err| {
+                ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigValidationError,
+                    format!("Invalid configuration: {err}"),
+                )
+            })?;
         validate_feature_requirements_for_config_toml(
             &user_config_toml,
             layers.requirements().feature_requirements.as_ref(),

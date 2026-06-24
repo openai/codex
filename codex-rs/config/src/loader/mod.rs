@@ -27,7 +27,7 @@ use crate::state::ConfigLayerEntry;
 use crate::state::ConfigLayerStack;
 use crate::state::ConfigLoadOptions;
 use crate::state::LoaderOverrides;
-use crate::strict_config::config_error_from_ignored_toml_value_fields;
+use crate::strict_config::config_error_from_config_toml_layer;
 use crate::strict_config::ignored_toml_value_field;
 use crate::strict_config::unknown_feature_toml_value_field;
 use crate::thread_config::ThreadConfigContext;
@@ -525,11 +525,9 @@ fn validate_config_toml_strictly(
     base_dir: &Path,
 ) -> io::Result<()> {
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    if let Some(config_error) = config_error_from_ignored_toml_value_fields::<ConfigToml>(
-        toml_file,
-        contents,
-        value.clone(),
-    ) {
+    if let Some(config_error) =
+        config_error_from_config_toml_layer(toml_file, contents, value.clone())
+    {
         Err(io_error_from_config_error(
             io::ErrorKind::InvalidData,
             config_error,

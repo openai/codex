@@ -7,9 +7,8 @@
 use crate::ConfigLayerEntry;
 use crate::ConfigLayerSource;
 use crate::TomlValue;
-use crate::config_toml::ConfigToml;
 use crate::loader::resolve_relative_paths_in_config_toml;
-use crate::strict_config::config_error_from_ignored_toml_value_fields_for_source_name;
+use crate::strict_config::config_error_from_config_toml_layer_for_source_name;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
@@ -127,10 +126,11 @@ fn validate_fragment_strictly(
     base_dir: &AbsolutePathBuf,
 ) -> Result<(), CloudConfigLayerError> {
     let _guard = AbsolutePathBufGuard::new(base_dir.as_path());
-    if let Some(config_error) = config_error_from_ignored_toml_value_fields_for_source_name::<
-        ConfigToml,
-    >(&source_ref.to_string(), raw_toml, value.clone())
-    {
+    if let Some(config_error) = config_error_from_config_toml_layer_for_source_name(
+        &source_ref.to_string(),
+        raw_toml,
+        value.clone(),
+    ) {
         return Err(CloudConfigLayerError::Invalid {
             fragment: source_ref.clone(),
             message: config_error.message,

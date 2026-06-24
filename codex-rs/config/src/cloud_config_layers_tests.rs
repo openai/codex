@@ -80,6 +80,50 @@ fn strict_layers_reject_unknown_config_fields() {
 }
 
 #[test]
+fn strict_layers_allow_partial_mcp_server_fragments() {
+    let base_dir = base_dir();
+    let layers = cloud_config_layers_from_fragments_strict(
+        vec![
+            fragment(
+                "high",
+                "Enable docs",
+                r#"[mcp_servers.docs]
+enabled = true
+"#,
+            ),
+            fragment(
+                "low",
+                "Define docs",
+                r#"[mcp_servers.docs]
+command = "cloud-docs-server"
+enabled = false
+"#,
+            ),
+        ],
+        &base_dir,
+    )
+    .expect("partial cloud MCP fragments should be structurally valid");
+
+    let stack = ConfigLayerStack::new(
+        layers,
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("cloud config layers should compose");
+    let config: ConfigToml = stack
+        .effective_config()
+        .try_into()
+        .expect("merged MCP server should be complete");
+    let server = config.mcp_servers.get("docs").expect("merged MCP server");
+
+    assert!(server.enabled);
+    let crate::McpServerTransportConfig::Stdio { command, .. } = &server.transport else {
+        panic!("expected stdio MCP server");
+    };
+    assert_eq!(command, "cloud-docs-server");
+}
+
+#[test]
 fn enterprise_layers_precede_user_and_override_system() {
     let base_dir = base_dir();
     let mut layers = vec![ConfigLayerEntry::new(

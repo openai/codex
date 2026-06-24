@@ -342,6 +342,112 @@ async fn write_value_supports_custom_mcp_server_default_tool_approval_mode() -> 
 }
 
 #[tokio::test]
+async fn write_value_allows_partial_mcp_server_override_over_cloud_config() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, "")?;
+
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_config(
+            r#"[mcp_servers.docs]
+command = "cloud-docs-server-v1"
+enabled = false
+"#,
+        ),
+    );
+
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(config_path.display().to_string()),
+            key_path: "mcp_servers.docs.enabled".to_string(),
+            value: serde_json::json!(true),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("partial MCP override should be valid after config layers merge");
+
+    let persisted: TomlValue = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let expected: TomlValue = toml::from_str(
+        r#"[mcp_servers.docs]
+enabled = true
+"#,
+    )?;
+    assert_eq!(persisted, expected);
+
+    let config = service.load_latest_config(/*fallback_cwd*/ None).await?;
+    let server = config
+        .mcp_servers
+        .get()
+        .get("docs")
+        .expect("merged MCP server");
+    assert!(server.enabled);
+    let codex_config::McpServerTransportConfig::Stdio { command, .. } = &server.transport else {
+        panic!("expected stdio MCP server");
+    };
+    assert_eq!(command, "cloud-docs-server-v1");
+
+    let updated_service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_config(
+            r#"[mcp_servers.docs]
+command = "cloud-docs-server-v2"
+enabled = false
+"#,
+        ),
+    );
+    let updated_config = updated_service
+        .load_latest_config(/*fallback_cwd*/ None)
+        .await?;
+    let updated_server = updated_config
+        .mcp_servers
+        .get()
+        .get("docs")
+        .expect("updated merged MCP server");
+    assert!(updated_server.enabled);
+    let codex_config::McpServerTransportConfig::Stdio { command, .. } = &updated_server.transport
+    else {
+        panic!("expected stdio MCP server");
+    };
+    assert_eq!(command, "cloud-docs-server-v2");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_value_rejects_partial_mcp_server_without_effective_transport() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, "")?;
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(config_path.display().to_string()),
+            key_path: "mcp_servers.docs.enabled".to_string(),
+            value: serde_json::json!(true),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect_err("an effective MCP server still needs a transport");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert!(error.to_string().contains("invalid transport"), "{error}");
+    assert_eq!(std::fs::read_to_string(config_path)?, "");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn read_includes_origins_and_layers() {
     let tmp = tempdir().expect("tempdir");
     let user_path = tmp.path().join(CONFIG_TOML_FILE);

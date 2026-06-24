@@ -1,10 +1,9 @@
 use crate::RequirementsLayerEntry;
 use crate::config_requirements::RequirementSource;
-use crate::config_toml::ConfigToml;
 use crate::diagnostics::ConfigDiagnosticSource;
 use crate::diagnostics::config_error_from_toml_for_source;
 use crate::diagnostics::io_error_from_config_error;
-use crate::strict_config::config_error_from_ignored_toml_value_fields_for_source_name;
+use crate::strict_config::config_error_from_config_toml_layer_for_source_name;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -193,9 +192,8 @@ fn validate_managed_config_toml_strictly_if_requested(
     }
 
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    if let Some(config_error) = config_error_from_ignored_toml_value_fields_for_source_name::<
-        ConfigToml,
-    >(source_name, raw_toml, parsed.clone())
+    if let Some(config_error) =
+        config_error_from_config_toml_layer_for_source_name(source_name, raw_toml, parsed.clone())
     {
         Err(io_error_from_config_error(
             io::ErrorKind::InvalidData,
