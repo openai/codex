@@ -2000,25 +2000,33 @@ fn retry_delay_for_remote_plugin_catalog_get_error(
     retry_after: RetryAfterDelay,
 ) -> Option<Duration> {
     match err {
-        RemotePluginCatalogError::Request { source, .. } => (source.is_timeout()
-            || source.is_connect())
-        .then_some(REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY),
+        RemotePluginCatalogError::Request { source, .. } => {
+            (source.is_timeout() || source.is_connect() || source.is_body())
+                .then_some(REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY)
+        }
         RemotePluginCatalogError::UnexpectedStatus { status, .. }
             if *status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
         {
-            match retry_after {
-                RetryAfterDelay::Delay(delay) if delay <= REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY => {
-                    Some(delay)
-                }
-                RetryAfterDelay::Delay(_) | RetryAfterDelay::Unparsable => None,
-                RetryAfterDelay::None => Some(REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY),
-            }
+            bounded_retry_after_delay(retry_after)
         }
         RemotePluginCatalogError::UnexpectedStatus { status, .. } => {
-            (*status == reqwest::StatusCode::REQUEST_TIMEOUT || status.is_server_error())
-                .then_some(REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY)
+            if *status == reqwest::StatusCode::REQUEST_TIMEOUT || status.is_server_error() {
+                bounded_retry_after_delay(retry_after)
+            } else {
+                None
+            }
         }
         _ => None,
+    }
+}
+
+fn bounded_retry_after_delay(retry_after: RetryAfterDelay) -> Option<Duration> {
+    match retry_after {
+        RetryAfterDelay::Delay(delay) if delay <= REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY => {
+            Some(delay)
+        }
+        RetryAfterDelay::Delay(_) | RetryAfterDelay::Unparsable => None,
+        RetryAfterDelay::None => Some(REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY),
     }
 }
 
