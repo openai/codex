@@ -1070,19 +1070,33 @@ impl ThreadRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
-        let has_explicit_model = typesafe_overrides.model.is_some()
+        let current_cli_overrides = config_manager.current_cli_overrides();
+        let has_cli_override = |key: &str| {
+            current_cli_overrides
+                .iter()
+                .any(|(path, _value)| path == key)
+        };
+        let has_explicit_model = has_cli_override("model")
+            || typesafe_overrides.model.is_some()
             || config_overrides
                 .as_ref()
                 .is_some_and(|overrides| overrides.contains_key("model"));
-        let has_explicit_reasoning_effort = config_overrides
-            .as_ref()
-            .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"));
-        let has_explicit_service_tier = typesafe_overrides.service_tier.is_some()
+        let has_explicit_reasoning_effort = has_cli_override("model_reasoning_effort")
+            || config_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"));
+        let has_explicit_service_tier = has_cli_override("service_tier")
+            || typesafe_overrides.service_tier.is_some()
             || config_overrides
                 .as_ref()
                 .is_some_and(|overrides| overrides.contains_key("service_tier"));
         let mut config = config_manager
-            .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
+            .load_with_cli_overrides(
+                &current_cli_overrides,
+                config_overrides.clone(),
+                typesafe_overrides.clone(),
+                /*fallback_cwd*/ None,
+            )
             .await
             .map_err(|err| config_load_error(&err))?;
 
@@ -1105,7 +1119,6 @@ impl ThreadRequestProcessor {
             let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
                 .await
                 .unwrap_or_else(|| config.cwd.clone());
-            let current_cli_overrides = config_manager.current_cli_overrides();
             let cli_overrides_with_trust;
             let cli_overrides_for_reload = if let Err(err) =
                 codex_core::config::set_project_trust_level(
