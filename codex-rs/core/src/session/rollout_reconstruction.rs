@@ -85,15 +85,26 @@ fn finalize_active_segment<'a>(
         *window = active_segment.window;
     }
 
-    // `previous_turn_settings` come from the newest surviving user turn that established them.
-    if previous_turn_settings.is_none() && active_segment.counts_as_user_turn {
+    let compact_segment_reference_context_item = active_segment.base_replacement_history.is_some()
+        && matches!(
+            active_segment.reference_context_item,
+            TurnReferenceContextItem::Latest(_)
+        );
+
+    // `previous_turn_settings` come from the newest surviving user turn that established them, or
+    // from a compact replacement history that persisted the turn context used to build it.
+    if previous_turn_settings.is_none()
+        && (active_segment.counts_as_user_turn || compact_segment_reference_context_item)
+    {
         *previous_turn_settings = active_segment.previous_turn_settings;
     }
 
-    // `reference_context_item` comes from the newest surviving user turn baseline, or
-    // from a surviving compaction that explicitly cleared that baseline.
+    // `reference_context_item` comes from the newest surviving user turn baseline, a compact
+    // replacement history that persisted its new baseline, or a surviving compaction that
+    // explicitly cleared the previous baseline.
     if matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
         && (active_segment.counts_as_user_turn
+            || compact_segment_reference_context_item
             || matches!(
                 active_segment.reference_context_item,
                 TurnReferenceContextItem::Cleared

@@ -1112,6 +1112,66 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
 }
 
 #[tokio::test]
+async fn record_initial_history_resumed_standalone_compact_reestablishes_reference_context_item() {
+    let (session, turn_context) = make_session_and_context().await;
+    let compact_context_item = turn_context.to_turn_context_item();
+    let compact_turn_id = compact_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: compact_turn_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(vec![assistant_message("compacted baseline")]),
+            window_number: Some(1),
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+        }),
+        RolloutItem::TurnContext(compact_context_item.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: compact_turn_id,
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            },
+        )),
+    ];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: Arc::new(rollout_items),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
+        }))
+        .await;
+
+    assert_eq!(
+        session.previous_turn_settings().await,
+        Some(PreviousTurnSettings {
+            model: compact_context_item.model.clone(),
+            comp_hash: compact_context_item.comp_hash.clone(),
+            realtime_active: compact_context_item.realtime_active,
+        })
+    );
+    assert_eq!(
+        session.reference_context_item().await,
+        Some(compact_context_item)
+    );
+}
+
+#[tokio::test]
 async fn record_initial_history_resumed_turn_context_after_compaction_reestablishes_reference_context_item()
  {
     let (session, turn_context) = make_session_and_context().await;
