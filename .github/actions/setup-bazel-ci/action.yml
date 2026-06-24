@@ -34,6 +34,10 @@ runs:
 
     - name: Set up Bazel
       uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      # Without an explicit Bazelisk version, setup-bazel leaves PATH unchanged
+      # and Windows can use the runner's standalone Bazel, ignoring .bazelversion.
+      with:
+        bazelisk-version: 1.28.1
 
     - name: Configure Bazel repository cache
       id: configure_bazel_repository_cache
