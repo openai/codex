@@ -52,7 +52,11 @@ impl EnvironmentSkillMetadata {
         }
     }
 
-    async fn parse(file_system: &dyn ExecutorFileSystem, path: &PathUri) -> Result<Self, String> {
+    async fn parse(
+        file_system: &dyn ExecutorFileSystem,
+        path: &PathUri,
+        plugin_namespace: Option<&str>,
+    ) -> Result<Self, String> {
         let contents = file_system
             .read_file_text(path, /*sandbox*/ None)
             .await
@@ -63,8 +67,7 @@ impl EnvironmentSkillMetadata {
             short_description,
         } = parse_skill_frontmatter_metadata_inner(&contents, || default_skill_name(path))
             .map_err(|err| err.to_string())?;
-        let name = plugin_namespace_for_skill_uri(file_system, path)
-            .await
+        let name = plugin_namespace
             .map(|namespace| format!("{namespace}:{base_name}"))
             .unwrap_or(base_name);
         validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")
@@ -98,8 +101,18 @@ pub async fn load_environment_skills_from_root(
     let discovery =
         discover_skills_under_root(file_system, root, SymlinkPolicy::FollowDirectories).await;
     outcome.warnings.extend(discovery.warnings);
+    if discovery.skill_files.is_empty() {
+        return outcome;
+    }
+    let plugin_namespace = plugin_namespace_for_skill_uri(file_system, root).await;
     for path in discovery.skill_files {
-        match EnvironmentSkillMetadata::parse(file_system, &path).await {
+        match EnvironmentSkillMetadata::parse(
+            file_system,
+            &path,
+            /*plugin_namespace*/ plugin_namespace.as_deref(),
+        )
+        .await
+        {
             Ok(skill) if skill.matches_product_restriction(restriction_product) => {
                 outcome.skills.push(skill);
             }
