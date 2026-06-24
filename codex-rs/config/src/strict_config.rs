@@ -61,7 +61,7 @@ pub(crate) fn config_error_from_config_toml_layer_for_source_name(
 
 /// Strictly validate one config layer while allowing MCP server fragments to
 /// receive their transport from a lower-precedence layer.
-fn config_error_from_config_toml_layer_for_source(
+pub(crate) fn config_error_from_config_toml_layer_for_source(
     source: ConfigDiagnosticSource<'_>,
     contents: &str,
     mut value: TomlValue,
@@ -76,20 +76,15 @@ fn config_error_from_config_toml_layer_for_source(
         return Some(error);
     }
 
-    let mcp_servers = mcp_servers?;
-    let mcp_servers_layer = mcp_servers_layer(mcp_servers);
+    let mcp_servers_layer = TomlValue::Table(toml::map::Map::from_iter([(
+        "mcp_servers".to_string(),
+        mcp_servers?,
+    )]));
     config_error_from_ignored_toml_value_fields_for_source::<ConfigTomlMcpServersLayer>(
         source,
         contents,
         mcp_servers_layer,
     )
-}
-
-fn mcp_servers_layer(mcp_servers: TomlValue) -> TomlValue {
-    TomlValue::Table(toml::map::Map::from_iter([(
-        "mcp_servers".to_string(),
-        mcp_servers,
-    )]))
 }
 
 fn config_error_from_ignored_toml_value_fields_for_source<T: DeserializeOwned>(

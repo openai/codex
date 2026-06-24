@@ -15,9 +15,8 @@ use crate::config_requirements::RequirementSource;
 use crate::config_requirements::SandboxModeRequirement;
 use crate::config_toml::ConfigToml;
 use crate::config_toml::ProjectConfig;
-use crate::diagnostics::ConfigError;
 use crate::diagnostics::config_error_from_toml;
-use crate::diagnostics::first_layer_config_error_from_entries as typed_first_layer_config_error_from_entries;
+use crate::diagnostics::first_layer_config_error_from_entries;
 use crate::diagnostics::io_error_from_config_error;
 use crate::merge::merge_toml_values;
 use crate::overrides::build_cli_overrides_layer;
@@ -72,10 +71,6 @@ const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
     "experimental_realtime_ws_base_url",
     "otel",
 ];
-
-async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> Option<ConfigError> {
-    typed_first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE).await
-}
 
 /// To build up the set of admin-enforced constraints, requirements layers are
 /// collected in ascending precedence order, matching config layers, and then
@@ -301,7 +296,9 @@ pub async fn load_config_layers_state(
         let project_root_markers = match project_root_markers_from_config(&merged_so_far) {
             Ok(markers) => markers.unwrap_or_else(default_project_root_markers),
             Err(err) => {
-                if let Some(config_error) = first_layer_config_error_from_entries(&layers).await {
+                if let Some(config_error) =
+                    first_layer_config_error_from_entries(&layers, CONFIG_TOML_FILE).await
+                {
                     return Err(io_error_from_config_error(
                         io::ErrorKind::InvalidData,
                         config_error,
@@ -327,7 +324,9 @@ pub async fn load_config_layers_state(
                     .get_ref()
                     .and_then(|err| err.downcast_ref::<toml::de::Error>())
                     .cloned();
-                if let Some(config_error) = first_layer_config_error_from_entries(&layers).await {
+                if let Some(config_error) =
+                    first_layer_config_error_from_entries(&layers, CONFIG_TOML_FILE).await
+                {
                     return Err(io_error_from_config_error(
                         io::ErrorKind::InvalidData,
                         config_error,

@@ -252,16 +252,23 @@ fn home_relative_path_fields_are_allowed_and_resolved() {
 async fn raw_toml_diagnostics_use_enterprise_layer_name() {
     let base_dir = base_dir();
     let layers = cloud_config_layers_from_fragments(
-        vec![fragment(
-            "cfg_123",
-            "Base policy",
-            "model_instructions_file = \"instructions.md\"\nmodel = 1",
-        )],
+        vec![
+            fragment(
+                "cfg_123",
+                "Base policy",
+                "model_instructions_file = \"instructions.md\"\nmodel = 1",
+            ),
+            fragment(
+                "cfg_partial",
+                "Partial MCP",
+                "[mcp_servers.docs]\nenabled = true",
+            ),
+        ],
         &base_dir,
     )
     .expect("cloud config layers should parse");
 
-    let error = first_layer_config_error_from_entries::<ConfigToml>(&layers, CONFIG_TOML_FILE)
+    let error = first_layer_config_error_from_entries(&layers, CONFIG_TOML_FILE)
         .await
         .expect("invalid raw TOML should produce a layer diagnostic");
 
