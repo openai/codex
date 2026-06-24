@@ -549,6 +549,13 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     );
     let selected_root_init = |id: &str, environment_id: &str| {
         let mut init = codex_extension_api::ExtensionDataInit::new();
+        init.insert(codex_connectors::ConnectorSnapshot::from_plugin_sources([
+            codex_connectors::PluginConnectorSource::from_connector_ids(
+                id,
+                id,
+                [codex_plugin::AppConnectorId(format!("{id}-connector"))],
+            ),
+        ]));
         init.insert(vec![SelectedCapabilityRoot {
             id: id.to_string(),
             location: CapabilityRootLocation::Environment {
@@ -637,6 +644,18 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     assert_eq!(
         selected_servers(&second_resolved),
         std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
+    );
+    assert_eq!(
+        first_resolved.connector_snapshot.connector_ids(),
+        &[codex_plugin::AppConnectorId(
+            "selected-a-connector".to_string()
+        )]
+    );
+    assert_eq!(
+        second_resolved.connector_snapshot.connector_ids(),
+        &[codex_plugin::AppConnectorId(
+            "selected-b-connector".to_string()
+        )]
     );
 }
 

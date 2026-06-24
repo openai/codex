@@ -59,7 +59,7 @@ impl AppsRequestProcessor {
         };
         let mut config = self.load_latest_config(fallback_cwd).await?;
 
-        if let Some(thread) = thread {
+        if let Some(thread) = thread.as_ref() {
             let _ = config
                 .features
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
@@ -90,7 +90,10 @@ impl AppsRequestProcessor {
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
         let mcp_manager = self.thread_manager.mcp_manager();
-        let plugins_manager = self.thread_manager.plugins_manager();
+        let mcp_config = match thread.as_ref() {
+            Some(thread) => thread.runtime_mcp_config(&config).await,
+            None => mcp_manager.runtime_config(&config).await,
+        };
         let shutdown_token = self.shutdown_token.child_token();
         tokio::spawn(async move {
             tokio::select! {
@@ -101,8 +104,7 @@ impl AppsRequestProcessor {
                     params,
                     config,
                     environment_manager,
-                    mcp_manager,
-                    plugins_manager,
+                    mcp_config,
                 ) => {}
             }
         });
@@ -119,23 +121,15 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
-        mcp_manager: Arc<McpManager>,
-        plugins_manager: Arc<PluginsManager>,
+        mcp_config: codex_mcp::McpConfig,
     ) {
         let retry_params = params.clone();
         let retry_config = config.clone();
         let retry_environment_manager = Arc::clone(&environment_manager);
-        let retry_mcp_manager = Arc::clone(&mcp_manager);
-        let retry_plugins_manager = Arc::clone(&plugins_manager);
-        let result = Self::apps_list_response(
-            &outgoing,
-            params,
-            config,
-            environment_manager,
-            mcp_manager,
-            plugins_manager,
-        )
-        .await;
+        let retry_mcp_config = mcp_config.clone();
+        let result =
+            Self::apps_list_response(&outgoing, params, config, environment_manager, mcp_config)
+                .await;
         let should_retry = result
             .as_ref()
             .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
@@ -151,8 +145,7 @@ impl AppsRequestProcessor {
                 retry_params,
                 retry_config,
                 retry_environment_manager,
-                retry_mcp_manager,
-                retry_plugins_manager,
+                retry_mcp_config,
             )
             .await
             {
@@ -166,8 +159,7 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
-        mcp_manager: Arc<McpManager>,
-        plugins_manager: Arc<PluginsManager>,
+        mcp_config: codex_mcp::McpConfig,
     ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
         let AppsListParams {
             cursor,
@@ -183,13 +175,7 @@ impl AppsRequestProcessor {
             None => 0,
         };
 
-        let loaded_plugins = plugins_manager
-            .plugins_for_config(&config.plugins_config_input())
-            .await;
-        let connector_snapshot =
-            codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-                loaded_plugins.capability_summaries(),
-            );
+        let connector_snapshot = mcp_config.connector_snapshot.clone();
         let plugin_apps = connector_snapshot.connector_ids().to_vec();
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
             connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
@@ -202,11 +188,11 @@ impl AppsRequestProcessor {
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+            let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_config(
                 &accessible_config,
                 force_refetch,
                 Arc::clone(&environment_manager),
-                mcp_manager,
+                mcp_config,
             )
             .await
             .map_err(|err| format!("failed to load accessible apps: {err}"));
@@ -233,9 +219,12 @@ impl AppsRequestProcessor {
         let mut last_notified_apps = None;
 
         if accessible_connectors.is_some() || all_connectors.is_some() {
-            let merged = connectors::with_app_enabled_state(
-                merge_loaded_apps(all_connectors.as_deref(), accessible_connectors.as_deref()),
-                &config,
+            let merged = with_connector_plugin_sources(
+                connectors::with_app_enabled_state(
+                    merge_loaded_apps(all_connectors.as_deref(), accessible_connectors.as_deref()),
+                    &config,
+                ),
+                &connector_snapshot,
             );
             if should_send_app_list_updated_notification(
                 merged.as_slice(),
@@ -292,9 +281,12 @@ impl AppsRequestProcessor {
                 } else {
                     accessible_connectors.as_deref()
                 };
-            let merged = connectors::with_app_enabled_state(
-                merge_loaded_apps(all_connectors_for_update, accessible_connectors_for_update),
-                &config,
+            let merged = with_connector_plugin_sources(
+                connectors::with_app_enabled_state(
+                    merge_loaded_apps(all_connectors_for_update, accessible_connectors_for_update),
+                    &config,
+                ),
+                &connector_snapshot,
             );
             if should_send_app_list_updated_notification(
                 merged.as_slice(),
@@ -377,6 +369,18 @@ fn merge_loaded_apps(
     let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
     let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
     connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
+}
+
+fn with_connector_plugin_sources(
+    mut connectors: Vec<AppInfo>,
+    connector_snapshot: &codex_connectors::ConnectorSnapshot,
+) -> Vec<AppInfo> {
+    for connector in &mut connectors {
+        connector.plugin_display_names = connector_snapshot
+            .plugin_display_names_for_connector_id(&connector.id)
+            .to_vec();
+    }
+    connectors
 }
 
 fn should_send_app_list_updated_notification(

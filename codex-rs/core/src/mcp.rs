@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use codex_config::McpServerConfig;
+use codex_connectors::ConnectorSnapshot;
 use codex_core_plugins::PluginsManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
@@ -32,6 +33,17 @@ enum OrderedMcpOverlay {
         contribution_order: usize,
         name: String,
     },
+}
+
+pub(crate) fn connector_snapshot_for_thread(
+    local_snapshot: ConnectorSnapshot,
+    thread_init: Option<&ExtensionDataInit>,
+) -> ConnectorSnapshot {
+    let Some(selected_snapshot) = thread_init.and_then(ExtensionDataInit::get::<ConnectorSnapshot>)
+    else {
+        return local_snapshot;
+    };
+    local_snapshot.merged_with(selected_snapshot.as_ref())
 }
 
 #[derive(Clone)]
@@ -132,6 +144,8 @@ impl McpManager {
                 selected_plugin_registrations,
             )
             .await;
+        mcp_config.connector_snapshot =
+            connector_snapshot_for_thread(mcp_config.connector_snapshot, thread_init);
         let mut catalog = mcp_config.mcp_server_catalog.to_builder();
         if mcp_config.apps_enabled {
             catalog.register(McpServerRegistration::from_compatibility(

@@ -33,6 +33,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
+use codex_mcp::McpConfig;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
@@ -225,8 +226,53 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
             codex_apps_ready: true,
         });
     }
-    let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     let mcp_config = mcp_manager.runtime_config(config).await;
+    list_accessible_connectors_from_mcp_tools_with_resolved_config(
+        config,
+        force_refetch,
+        environment_manager,
+        auth,
+        mcp_config,
+    )
+    .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_config(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: Arc<EnvironmentManager>,
+    mcp_config: McpConfig,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
+    let auth = auth_manager.auth().await;
+    if !config
+        .features
+        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
+    {
+        return Ok(AccessibleConnectorsStatus {
+            connectors: Vec::new(),
+            codex_apps_ready: true,
+        });
+    }
+    list_accessible_connectors_from_mcp_tools_with_resolved_config(
+        config,
+        force_refetch,
+        environment_manager,
+        auth,
+        mcp_config,
+    )
+    .await
+}
+
+async fn list_accessible_connectors_from_mcp_tools_with_resolved_config(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: Arc<EnvironmentManager>,
+    auth: Option<CodexAuth>,
+    mcp_config: McpConfig,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
+    let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
@@ -395,7 +441,14 @@ fn write_cached_accessible_connectors(
     *cache_guard = Some(CachedAccessibleConnectors {
         key: cache_key,
         expires_at: Instant::now() + codex_connectors::CONNECTORS_CACHE_TTL,
-        connectors: connectors.to_vec(),
+        connectors: connectors
+            .iter()
+            .cloned()
+            .map(|mut connector| {
+                connector.plugin_display_names.clear();
+                connector
+            })
+            .collect(),
     });
 }
 

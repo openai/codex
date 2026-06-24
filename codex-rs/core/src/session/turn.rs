@@ -532,8 +532,11 @@ async fn build_skills_and_plugins(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
-    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-        loaded_plugins.capability_summaries(),
+    let connector_snapshot = crate::mcp::connector_snapshot_for_thread(
+        codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+            loaded_plugins.capability_summaries(),
+        ),
+        Some(&sess.services.mcp_thread_init),
     );
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
@@ -1180,8 +1183,11 @@ pub(crate) async fn built_tools(
         .plugins_for_config(&turn_context.config.plugins_config_input())
         .instrument(trace_span!("built_tools.load_plugins"))
         .await;
-    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-        loaded_plugins.capability_summaries(),
+    let connector_snapshot = crate::mcp::connector_snapshot_for_thread(
+        codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+            loaded_plugins.capability_summaries(),
+        ),
+        Some(&sess.services.mcp_thread_init),
     );
 
     let apps_enabled = turn_context.apps_enabled();

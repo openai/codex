@@ -1821,7 +1821,7 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
 } }
 ```
 
-When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot. When omitted, the latest global config is used.
+When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot, and plugin associations come from its frozen selected-capability snapshot. When omitted, the latest global config is used.
 
 `app/list` returns after both accessible apps and directory apps are loaded. Set `forceRefetch: true` to bypass app caches and fetch fresh data from sources. Cache entries are only replaced when those refetches succeed.
 

@@ -213,7 +213,7 @@ fn synthetic_links_are_exposed_to_the_agent_but_not_accessible_in_app_list() {
 }
 
 #[tokio::test]
-async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_installed_apps() {
+async fn refresh_accessible_connectors_cache_writes_apps_without_plugin_provenance() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -260,7 +260,7 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
                 labels: None,
                 is_accessible: true,
                 is_enabled: true,
-                plugin_display_names: plugin_names(&["calendar-plugin"]),
+                plugin_display_names: Vec::new(),
             },
             AppInfo {
                 id: "connector_openai_hidden".to_string(),

@@ -15,7 +15,7 @@ cursor?: string | null,
  */
 limit?: number | null,
 /**
- * Optional thread id used to evaluate app feature gating from that thread's config.
+ * Optional thread id used for feature gating and thread-selected plugin associations.
  */
 threadId?: string | null,
 /**

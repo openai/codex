@@ -16,7 +16,7 @@ pub struct AppsListParams {
     /// Optional page size; defaults to a reasonable server-side value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
-    /// Optional thread id used to evaluate app feature gating from that thread's config.
+    /// Optional thread id used for feature gating and thread-selected plugin associations.
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
     /// When true, bypass app caches and fetch the latest data from sources.
