@@ -3446,28 +3446,21 @@ impl Session {
             .build_initial_context_with_world_state(turn_context, world_state.as_ref())
             .await;
         let turn_context_item = turn_context.to_turn_context_item();
-        let replacement_history = context_items;
-        {
-            let mut state = self.state.lock().await;
-            state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
-            state.history.set_world_state_baseline(world_state);
-        };
-        self.persist_rollout_items(&[
-            RolloutItem::Compacted(CompactedItem {
+        self.replace_compacted_history(
+            turn_context,
+            context_items,
+            Some(turn_context_item),
+            Some(world_state),
+            CompactedItem {
                 message: String::new(),
-                replacement_history: Some(replacement_history),
+                replacement_history: None,
                 window_number: Some(window_number),
                 first_window_id: Some(window_ids.first_window_id.to_string()),
                 previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
                 window_id: Some(window_ids.window_id.to_string()),
-            }),
-            RolloutItem::TurnContext(turn_context_item),
-        ])
+            },
+        )
         .await;
-        {
-            let mut state = self.state.lock().await;
-            state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
-        }
         self.recompute_token_usage(turn_context).await;
         window_number
     }
