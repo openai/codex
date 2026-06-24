@@ -35,6 +35,49 @@ use wiremock::MockServer;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
+struct FakeAgentGraphStore {
+    root_thread_id: ThreadId,
+    descendant_thread_ids: Vec<ThreadId>,
+}
+
+impl codex_agent_graph_store::AgentGraphStore for FakeAgentGraphStore {
+    fn upsert_thread_spawn_edge(
+        &self,
+        _parent_thread_id: ThreadId,
+        _child_thread_id: ThreadId,
+        _status: codex_agent_graph_store::ThreadSpawnEdgeStatus,
+    ) -> codex_agent_graph_store::AgentGraphStoreFuture<'_, ()> {
+        Box::pin(async { panic!("unexpected graph upsert") })
+    }
+
+    fn set_thread_spawn_edge_status(
+        &self,
+        _child_thread_id: ThreadId,
+        _status: codex_agent_graph_store::ThreadSpawnEdgeStatus,
+    ) -> codex_agent_graph_store::AgentGraphStoreFuture<'_, ()> {
+        Box::pin(async { panic!("unexpected graph status update") })
+    }
+
+    fn list_thread_spawn_children(
+        &self,
+        _parent_thread_id: ThreadId,
+        _status_filter: Option<codex_agent_graph_store::ThreadSpawnEdgeStatus>,
+    ) -> codex_agent_graph_store::AgentGraphStoreFuture<'_, Vec<ThreadId>> {
+        Box::pin(async { panic!("unexpected direct-child listing") })
+    }
+
+    fn list_thread_spawn_descendants(
+        &self,
+        root_thread_id: ThreadId,
+        status_filter: Option<codex_agent_graph_store::ThreadSpawnEdgeStatus>,
+    ) -> codex_agent_graph_store::AgentGraphStoreFuture<'_, Vec<ThreadId>> {
+        assert_eq!(root_thread_id, self.root_thread_id);
+        assert_eq!(status_filter, None);
+        let descendant_thread_ids = self.descendant_thread_ids.clone();
+        Box::pin(async move { Ok(descendant_thread_ids) })
+    }
+}
+
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -955,7 +998,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
 }
 
 #[tokio::test]
-async fn in_memory_thread_store_uses_process_local_agent_graph() {
+async fn in_memory_thread_store_does_not_configure_an_agent_graph_store() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -967,32 +1010,48 @@ async fn in_memory_thread_store_uses_process_local_agent_graph() {
     let state_db = init_state_db(&config)
         .await
         .expect("state db should initialize");
-    let graph_store = agent_graph_store_from_config(&config, Some(&state_db))
-        .expect("in-memory graph store should be configured");
-    let parent_thread_id = ThreadId::new();
-    let child_thread_id = ThreadId::new();
-    graph_store
-        .upsert_thread_spawn_edge(
-            parent_thread_id,
-            child_thread_id,
-            codex_agent_graph_store::ThreadSpawnEdgeStatus::Open,
-        )
-        .await
-        .expect("in-memory edge should insert");
+    assert!(agent_graph_store_from_config(&config, Some(&state_db)).is_none());
+}
 
-    assert_eq!(
-        graph_store
-            .list_thread_spawn_children(parent_thread_id, /*status_filter*/ None)
-            .await
-            .expect("in-memory children should load"),
-        vec![child_thread_id]
+#[tokio::test]
+async fn subtree_listing_uses_injected_graph_store_without_state_db() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let root_thread_id = ThreadId::new();
+    let descendant_thread_ids = vec![ThreadId::new(), ThreadId::new()];
+    let agent_graph_store = Arc::new(FakeAgentGraphStore {
+        root_thread_id,
+        descendant_thread_ids: descendant_thread_ids.clone(),
+    });
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        Some(agent_graph_store),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
+
+    let mut expected_thread_ids = vec![root_thread_id];
+    expected_thread_ids.extend(descendant_thread_ids);
     assert_eq!(
-        state_db
-            .list_thread_spawn_children(parent_thread_id)
+        manager
+            .list_agent_subtree_thread_ids(root_thread_id)
             .await
-            .expect("sqlite children should load"),
-        Vec::<ThreadId>::new()
+            .expect("subtree should load from injected graph store"),
+        expected_thread_ids
     );
 }
 

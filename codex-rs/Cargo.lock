@@ -3998,7 +3998,6 @@ name = "codex-thread-store"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "codex-agent-graph-store",
  "codex-git-utils",
  "codex-install-context",
  "codex-otel",

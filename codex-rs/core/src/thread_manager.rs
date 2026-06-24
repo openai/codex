@@ -300,9 +300,7 @@ pub fn agent_graph_store_from_config(
 ) -> Option<Arc<dyn AgentGraphStore>> {
     match &config.experimental_thread_store {
         ThreadStoreConfig::Local => local_agent_graph_store_from_state_db(state_db),
-        ThreadStoreConfig::InMemory { id } => {
-            Some(InMemoryThreadStore::for_id(id) as Arc<dyn AgentGraphStore>)
-        }
+        ThreadStoreConfig::InMemory { .. } => None,
     }
 }
 
