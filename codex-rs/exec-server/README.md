@@ -115,6 +115,10 @@ Each connection follows this sequence:
 3. Send `initialized`.
 4. Call process or filesystem RPCs.
 
+After initialization, a client may issue requests concurrently. When it does, responses may arrive
+out of order, so it must match them by request id and await an earlier response before issuing any
+operation that depends on it.
+
 If the server receives any notification other than `initialized`, it replies
 with an error using request id `-1`.
 

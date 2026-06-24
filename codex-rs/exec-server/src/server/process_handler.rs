@@ -33,6 +33,10 @@ impl ProcessHandler {
         self.process.shutdown().await;
     }
 
+    pub(crate) async fn clear_incomplete_starts(&self) {
+        self.process.clear_incomplete_starts().await;
+    }
+
     pub(crate) fn set_notification_sender(&self, notifications: Option<RpcNotificationSender>) {
         self.process.set_notification_sender(notifications);
     }

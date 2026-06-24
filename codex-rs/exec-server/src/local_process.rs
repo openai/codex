@@ -205,6 +205,14 @@ impl LocalProcess {
         }
     }
 
+    pub(crate) async fn clear_incomplete_starts(&self) {
+        self.inner
+            .processes
+            .lock()
+            .await
+            .retain(|_, process| !matches!(process, ProcessEntry::Starting(_)));
+    }
+
     pub(crate) fn set_notification_sender(&self, notifications: Option<RpcNotificationSender>) {
         let mut notification_sender = self
             .inner
@@ -991,6 +999,27 @@ mod tests {
         };
 
         assert_eq!(error, expected);
+    }
+
+    #[tokio::test]
+    async fn clear_incomplete_starts_removes_starting_processes() {
+        let backend = LocalProcess::default();
+        let process_id = ProcessId::from("incomplete-start");
+        backend.inner.processes.lock().await.insert(
+            process_id.clone(),
+            ProcessEntry::Starting(Arc::new(ProcessStart)),
+        );
+
+        backend.clear_incomplete_starts().await;
+
+        assert!(
+            !backend
+                .inner
+                .processes
+                .lock()
+                .await
+                .contains_key(&process_id)
+        );
     }
 
     #[test]

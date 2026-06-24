@@ -42,6 +42,7 @@ use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HttpRequestParams;
+use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
@@ -98,7 +99,12 @@ impl ExecServerHandler {
         self.background_tasks.close();
         self.background_tasks.wait().await;
         self.file_system.shutdown().await;
-        if let Some(session) = self.session() {
+        if let Some(session) = self.session()
+            && session.is_session_attached()
+        {
+            // The connection processor cancels and joins request tasks before shutdown, so any
+            // remaining `Starting` entries are stale reservations left by cancelled start futures.
+            session.process().clear_incomplete_starts().await;
             session.detach().await;
         }
     }
@@ -106,6 +112,28 @@ impl ExecServerHandler {
     pub(crate) fn is_session_attached(&self) -> bool {
         self.session()
             .is_none_or(|session| session.is_session_attached())
+    }
+
+    /// Returns an ordering error for a request admitted before initialization is complete.
+    ///
+    /// Call this from the connection's receive loop before spawning the request handler. Latching
+    /// the error there prevents a later `initialized` notification from making an earlier request
+    /// appear valid when its task eventually starts polling. The `initialize` request is exempt.
+    pub(crate) fn request_initialization_error(&self, method: &str) -> Option<JSONRPCErrorError> {
+        if method == INITIALIZE_METHOD {
+            return None;
+        }
+        if !self.initialize_requested.load(Ordering::SeqCst) {
+            return Some(invalid_request(format!(
+                "client must call initialize before invoking `{method}`"
+            )));
+        }
+        if !self.initialized.load(Ordering::SeqCst) {
+            return Some(invalid_request(format!(
+                "client must send initialized before invoking `{method}`"
+            )));
+        }
+        None
     }
 
     pub(crate) async fn initialize(

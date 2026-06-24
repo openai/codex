@@ -1,6 +1,9 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::warn;
@@ -9,6 +12,7 @@ use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
+use crate::protocol::INITIALIZE_METHOD;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
@@ -17,6 +21,16 @@ use crate::rpc::method_not_found;
 use crate::server::ExecServerHandler;
 use crate::server::registry::build_router;
 use crate::server::session_registry::SessionRegistry;
+
+type RequestTaskResult = Result<(), mpsc::error::SendError<RpcServerOutboundMessage>>;
+type RequestTaskJoinResult = Result<RequestTaskResult, tokio::task::JoinError>;
+
+enum ConnectionActivity {
+    Incoming(Option<JsonRpcConnectionEvent>),
+    RequestTask(RequestTaskJoinResult),
+    RequestTasksDrained,
+    Disconnected,
+}
 
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
@@ -79,14 +93,39 @@ async fn run_connection(
         }
     });
 
-    // Process inbound events sequentially to preserve initialize/initialized ordering.
-    while let Some(event) = incoming_rx.recv().await {
-        if !handler.is_session_attached() {
-            debug!("exec-server connection evicted after session resume");
-            break;
-        }
+    // Run requests independently so one slow request does not block the connection, up to the
+    // transport channel capacity per connection.
+    let mut request_tasks = JoinSet::<RequestTaskResult>::new();
+    'connection: loop {
+        let event = match wait_for_connection_activity(
+            &mut incoming_rx,
+            &mut disconnected_rx,
+            &mut request_tasks,
+        )
+        .await
+        {
+            ConnectionActivity::Incoming(event) => event,
+            ConnectionActivity::RequestTask(Ok(Ok(())))
+            | ConnectionActivity::RequestTasksDrained => continue 'connection,
+            ConnectionActivity::RequestTask(Ok(Err(_))) => {
+                debug!("closing exec-server connection after response channel closed");
+                break 'connection;
+            }
+            ConnectionActivity::RequestTask(Err(err)) => {
+                warn!(error = %err, "exec-server request task failed");
+                break 'connection;
+            }
+            ConnectionActivity::Disconnected => {
+                debug!("exec-server transport disconnected");
+                break 'connection;
+            }
+        };
         match event {
-            JsonRpcConnectionEvent::MalformedMessage { reason } => {
+            Some(_) if !handler.is_session_attached() => {
+                warn!("exec-server connection evicted after session resume");
+                break 'connection;
+            }
+            Some(JsonRpcConnectionEvent::MalformedMessage { reason }) => {
                 warn!("ignoring malformed exec-server message: {reason}");
                 if outgoing_tx
                     .send(RpcServerOutboundMessage::Error {
@@ -96,69 +135,102 @@ async fn run_connection(
                     .await
                     .is_err()
                 {
-                    break;
+                    break 'connection;
                 }
             }
-            JsonRpcConnectionEvent::Message(message) => match message {
+            Some(JsonRpcConnectionEvent::Message(message)) => match message {
                 codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
-                    if let Some(route) = router.request_route(request.method.as_str()) {
-                        let request_span = request_span(request.method.as_str(), &request);
-                        let message = tokio::select! {
-                            message = route(Arc::clone(&handler), request).instrument(request_span.clone()) => message,
-                            _ = disconnected_rx.changed() => {
-                                request_span.record("result", "disconnected");
-                                debug!("exec-server transport disconnected while handling request");
-                                break;
-                            }
-                        };
-                        let result = request_result(&message);
-                        if let Some(message) = message
-                            && outgoing_tx.send(message).await.is_err()
-                        {
-                            request_span.record("result", "disconnected");
-                            break;
-                        }
-                        request_span.record("result", result);
+                    // Capture protocol-ordering violations before spawning. Otherwise a later
+                    // `initialized` notification could make an early request appear valid before
+                    // this task is first polled.
+                    let is_initialize = request.method == INITIALIZE_METHOD;
+                    let route = router.request_route(request.method.as_str());
+                    let initialization_error = route.and_then(|_| {
+                        handler.request_initialization_error(request.method.as_str())
+                    });
+                    let span_name = if route.is_some() {
+                        request.method.as_str()
                     } else {
-                        let request_span = request_span("unknown", &request);
-                        if outgoing_tx
-                            .send(RpcServerOutboundMessage::Error {
-                                request_id: request.id,
+                        "unknown"
+                    };
+                    let request_span = request_span(span_name, &request);
+                    let request_id = request.id.clone();
+                    let request_method = request.method.clone();
+                    let routed_response = if initialization_error.is_none() {
+                        route.map(|route| route(Arc::clone(&handler), request))
+                    } else {
+                        None
+                    };
+
+                    let outgoing_tx = outgoing_tx.clone();
+                    let task_span = request_span.clone();
+                    let request_task = async move {
+                        let message = if let Some(error) = initialization_error {
+                            Some(RpcServerOutboundMessage::Error { request_id, error })
+                        } else if let Some(response) = routed_response {
+                            response.await
+                        } else {
+                            Some(RpcServerOutboundMessage::Error {
+                                request_id,
                                 error: method_not_found(format!(
-                                    "exec-server stub does not implement `{}` yet",
-                                    request.method
+                                    "exec-server stub does not implement `{request_method}` yet"
                                 )),
                             })
-                            .await
-                            .is_err()
-                        {
-                            request_span.record("result", "disconnected");
-                            break;
+                        };
+                        let result = request_result(&message);
+                        if let Some(message) = message {
+                            // The sole receiver belongs to the outbound encoder task. A send error
+                            // means the connection cannot deliver any more responses.
+                            outgoing_tx.send(message).await?;
                         }
-                        request_span.record("result", "error");
+                        request_span.record("result", result);
+                        Ok(())
+                    }
+                    .instrument(task_span);
+
+                    if is_initialize {
+                        // `initialize` claims connection state inside its route. Await it before
+                        // admitting another frame so duplicate handshakes are ordered by the wire,
+                        // rather than by which spawned task the scheduler polls first.
+                        let Some(result) =
+                            await_or_disconnect(request_task, &mut disconnected_rx).await
+                        else {
+                            debug!("exec-server transport disconnected while handling initialize");
+                            break 'connection;
+                        };
+                        if result.is_err() {
+                            debug!("closing exec-server connection after response channel closed");
+                            break 'connection;
+                        }
+                    } else {
+                        request_tasks.spawn(request_task);
                     }
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
+                    // Notifications stay inline because `initialized` is an ordering barrier:
+                    // later requests must latch state after it runs, and an invalid notification
+                    // must close the connection before another frame is admitted. It is currently
+                    // the only notification route and performs no asynchronous work.
                     let Some(route) = router.notification_route(notification.method.as_str())
                     else {
                         warn!(
                             "closing exec-server connection after unexpected notification: {}",
                             notification.method
                         );
-                        break;
+                        break 'connection;
                     };
-                    let result = tokio::select! {
-                        result = route(Arc::clone(&handler), notification) => result,
-                        _ = disconnected_rx.changed() => {
-                            debug!(
-                                "exec-server transport disconnected while handling notification"
-                            );
-                            break;
-                        }
+                    let Some(result) = await_or_disconnect(
+                        route(Arc::clone(&handler), notification),
+                        &mut disconnected_rx,
+                    )
+                    .await
+                    else {
+                        debug!("exec-server transport disconnected while handling notification");
+                        break 'connection;
                     };
                     if let Err(err) = result {
                         warn!("closing exec-server connection after protocol error: {err}");
-                        break;
+                        break 'connection;
                     }
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Response(response) => {
@@ -166,25 +238,33 @@ async fn run_connection(
                         "closing exec-server connection after unexpected client response: {:?}",
                         response.id
                     );
-                    break;
+                    break 'connection;
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Error(error) => {
                     warn!(
                         "closing exec-server connection after unexpected client error: {:?}",
                         error.id
                     );
-                    break;
+                    break 'connection;
                 }
             },
-            JsonRpcConnectionEvent::Disconnected { reason } => {
+            Some(JsonRpcConnectionEvent::Disconnected { reason }) => {
                 if let Some(reason) = reason {
                     debug!("exec-server connection disconnected: {reason}");
                 }
-                break;
+                break 'connection;
+            }
+            None => {
+                debug!("exec-server incoming event channel closed");
+                break 'connection;
             }
         }
     }
 
+    // Abort and await requests before handler shutdown clears any incomplete process starts and
+    // detaches the session. Long polls therefore cannot delay resume, and no request can mutate the
+    // session after its `Starting` entries have been swept.
+    request_tasks.shutdown().await;
     handler.shutdown().await;
     drop(handler);
     drop(outgoing_tx);
@@ -205,7 +285,8 @@ fn request_span(
         otel.kind = "server",
         otel.name = span_name,
         method,
-        result = tracing::field::Empty,
+        // An aborted request drops the span with this fallback. Completed requests overwrite it.
+        result = "disconnected",
     );
     if let Some(trace) = &request.trace
         && !codex_otel::set_parent_from_w3c_trace_context(&span, trace)
@@ -225,12 +306,57 @@ fn request_result(message: &Option<RpcServerOutboundMessage>) -> &'static str {
     }
 }
 
+async fn wait_for_connection_activity(
+    incoming_rx: &mut mpsc::Receiver<JsonRpcConnectionEvent>,
+    disconnected_rx: &mut watch::Receiver<bool>,
+    request_tasks: &mut JoinSet<RequestTaskResult>,
+) -> ConnectionActivity {
+    let has_request_tasks = !request_tasks.is_empty();
+    let can_receive_event = request_tasks.len() < CHANNEL_CAPACITY;
+    // All three futures are cancellation safe, so the branches that lose this race retain their
+    // next event or task completion for the following iteration. At the request limit, stop
+    // draining the bounded incoming channel until a task completes, propagating backpressure to
+    // the transport. Ready task completions cannot starve input because no new request tasks are
+    // added while this wait reaps them.
+    tokio::select! {
+        biased;
+        _ = disconnected_rx.changed() => ConnectionActivity::Disconnected,
+        result = request_tasks.join_next(), if has_request_tasks => {
+            match result {
+                Some(result) => ConnectionActivity::RequestTask(result),
+                None => ConnectionActivity::RequestTasksDrained,
+            }
+        }
+        // Keep incoming events last so a disconnect or terminal task failure stops the connection
+        // before it admits another request.
+        event = incoming_rx.recv(), if can_receive_event => ConnectionActivity::Incoming(event),
+    }
+}
+
+async fn await_or_disconnect<F>(
+    future: F,
+    disconnected_rx: &mut watch::Receiver<bool>,
+) -> Option<F::Output>
+where
+    F: Future,
+{
+    // `watch::Receiver::changed` is cancellation safe. The notification future is intentionally
+    // dropped on disconnect because its result can no longer be delivered and connection teardown
+    // starts immediately.
+    tokio::select! {
+        output = future => Some(output),
+        _ = disconnected_rx.changed() => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
 
+    use codex_exec_server_protocol::JSONRPCError;
+    use codex_exec_server_protocol::JSONRPCErrorError;
     use codex_exec_server_protocol::JSONRPCMessage;
     use codex_exec_server_protocol::JSONRPCNotification;
     use codex_exec_server_protocol::JSONRPCRequest;
@@ -251,16 +377,26 @@ mod tests {
     use tokio::io::DuplexStream;
     use tokio::io::Lines;
     use tokio::io::duplex;
+    use tokio::sync::mpsc;
+    use tokio::sync::oneshot;
+    use tokio::sync::watch;
     use tokio::task::JoinHandle;
+    use tokio::task::JoinSet;
     use tokio::time::timeout;
     use tracing_subscriber::filter::filter_fn;
     use tracing_subscriber::prelude::*;
 
+    use super::ConnectionActivity;
+    use super::RequestTaskResult;
     use super::request_span;
     use super::run_connection;
+    use super::wait_for_connection_activity;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
+    use crate::connection::CHANNEL_CAPACITY;
     use crate::connection::JsonRpcConnection;
+    use crate::connection::JsonRpcConnectionEvent;
+    use crate::connection::JsonRpcTransport;
     use crate::protocol::ENVIRONMENT_INFO_METHOD;
     use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
@@ -349,7 +485,158 @@ mod tests {
         send_request(&mut writer, /*id*/ 2, ENVIRONMENT_INFO_METHOD, &()).await;
         send_request(&mut writer, /*id*/ 3, ENVIRONMENT_INFO_METHOD, &()).await;
 
-        let _: EnvironmentInfo = read_response(&mut lines, /*expected_id*/ 2).await;
+        let (first_id, _first_response) =
+            read_response_with_id::<EnvironmentInfo>(&mut lines).await;
+        let (second_id, _second_response) =
+            read_response_with_id::<EnvironmentInfo>(&mut lines).await;
+        let mut response_ids = [first_id, second_id];
+        response_ids.sort();
+        assert_eq!(response_ids, [RequestId::Integer(2), RequestId::Integer(3)]);
+
+        drop(writer);
+        drop(lines);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+    }
+
+    #[tokio::test]
+    async fn initialized_before_initialize_closes_connection() {
+        let registry = SessionRegistry::new();
+        let (mut writer, mut lines, task) =
+            spawn_test_connection(registry, "initialized-before-initialize");
+
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should reject initialized before initialize")
+            .expect("processor should join");
+        assert_eq!(lines.next_line().await.expect("read connection EOF"), None);
+        drop(writer);
+    }
+
+    #[tokio::test]
+    async fn duplicate_initialize_requests_use_wire_order() {
+        let registry = SessionRegistry::new();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (_disconnected_tx, disconnected_rx) = watch::channel(false);
+        for (id, resume_session_id) in [(1, None), (2, Some("must-not-be-used"))] {
+            incoming_tx
+                .send(JsonRpcConnectionEvent::Message(JSONRPCMessage::Request(
+                    JSONRPCRequest {
+                        id: RequestId::Integer(id),
+                        method: INITIALIZE_METHOD.to_string(),
+                        params: Some(
+                            serde_json::to_value(InitializeParams {
+                                client_name: format!("client-{id}"),
+                                resume_session_id: resume_session_id.map(str::to_string),
+                            })
+                            .expect("serialize initialize params"),
+                        ),
+                        trace: None,
+                    },
+                )))
+                .await
+                .expect("incoming channel should remain open");
+        }
+        let connection = JsonRpcConnection {
+            outgoing_tx,
+            incoming_rx,
+            disconnected_rx,
+            task_handles: Vec::new(),
+            transport: JsonRpcTransport::Plain,
+        };
+        let task = tokio::spawn(run_connection(connection, registry, test_runtime_paths()));
+
+        let mut first_response = None;
+        let mut second_error = None;
+        for _ in 0..2 {
+            let message = timeout(Duration::from_secs(1), outgoing_rx.recv())
+                .await
+                .expect("initialize request should complete")
+                .expect("outgoing channel should remain open");
+            match message {
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: RequestId::Integer(1),
+                    result,
+                }) => {
+                    first_response = Some(
+                        serde_json::from_value::<InitializeResponse>(result)
+                            .expect("decode initialize response"),
+                    );
+                }
+                JSONRPCMessage::Error(
+                    error @ JSONRPCError {
+                        id: RequestId::Integer(2),
+                        ..
+                    },
+                ) => {
+                    second_error = Some(error);
+                }
+                other => panic!("unexpected initialize result: {other:?}"),
+            }
+        }
+
+        assert!(first_response.is_some());
+        assert_eq!(
+            second_error,
+            Some(JSONRPCError {
+                id: RequestId::Integer(2),
+                error: JSONRPCErrorError {
+                    code: -32600,
+                    message: "initialize may only be sent once per connection".to_string(),
+                    data: None,
+                },
+            })
+        );
+
+        drop(incoming_tx);
+        drop(outgoing_rx);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+    }
+
+    #[tokio::test]
+    async fn request_before_initialized_returns_error_without_closing_connection() {
+        let registry = SessionRegistry::new();
+        let (mut writer, mut lines, task) =
+            spawn_test_connection(registry, "request-before-initialized");
+
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+
+        send_request(&mut writer, /*id*/ 2, ENVIRONMENT_INFO_METHOD, &()).await;
+        // Pipeline `initialized` behind the invalid request. The request must still fail based on
+        // its position in the incoming stream, even if its spawned task runs after the notification.
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+        assert_eq!(
+            read_error(&mut lines).await,
+            JSONRPCError {
+                id: RequestId::Integer(2),
+                error: JSONRPCErrorError {
+                    code: -32600,
+                    data: None,
+                    message: "client must send initialized before invoking `environment/info`"
+                        .to_string(),
+                },
+            }
+        );
+
+        send_request(&mut writer, /*id*/ 3, ENVIRONMENT_INFO_METHOD, &()).await;
         let _: EnvironmentInfo = read_response(&mut lines, /*expected_id*/ 3).await;
 
         drop(writer);
@@ -361,7 +648,178 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transport_disconnect_detaches_session_during_in_flight_read() {
+    async fn in_flight_read_does_not_block_independent_request() {
+        let registry = SessionRegistry::new();
+        let (mut writer, mut lines, task) =
+            spawn_test_connection(Arc::clone(&registry), "concurrent-read");
+
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        let process_id = ProcessId::from("proc-concurrent-read");
+        send_request(
+            &mut writer,
+            /*id*/ 2,
+            EXEC_METHOD,
+            &exec_params_with_argv(process_id.clone(), long_running_process_argv()),
+        )
+        .await;
+        let _: ExecResponse = read_response(&mut lines, /*expected_id*/ 2).await;
+
+        send_request(
+            &mut writer,
+            /*id*/ 3,
+            EXEC_READ_METHOD,
+            &ReadParams {
+                process_id: process_id.clone(),
+                after_seq: None,
+                max_bytes: None,
+                wait_ms: Some(600_000),
+            },
+        )
+        .await;
+        send_request(&mut writer, /*id*/ 4, ENVIRONMENT_INFO_METHOD, &()).await;
+
+        // The ordered transport admits request 3 first, but its process stays alive without output
+        // and its read deadline is ten minutes away. Receiving response 4 next therefore proves
+        // that the read did not block request handling without relying on a short wall-clock
+        // assertion.
+        let _: EnvironmentInfo = read_response(&mut lines, /*expected_id*/ 4).await;
+
+        timeout(
+            Duration::from_secs(2),
+            terminate_process(&mut writer, &mut lines, /*request_id*/ 5, process_id),
+        )
+        .await
+        .expect("process should terminate");
+
+        drop(writer);
+        drop(lines);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+    }
+
+    #[tokio::test]
+    async fn response_sink_failure_closes_connection() {
+        let registry = SessionRegistry::new();
+        let (mut writer, mut lines, task) = spawn_test_connection(registry, "closed-response-sink");
+
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        drop(lines);
+        send_request(&mut writer, /*id*/ 2, ENVIRONMENT_INFO_METHOD, &()).await;
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit after the response sink fails")
+            .expect("processor should join");
+        drop(writer);
+    }
+
+    #[tokio::test]
+    async fn request_task_failure_wakes_idle_connection_wait() {
+        let (_incoming_tx, mut incoming_rx) = mpsc::channel(1);
+        let (_disconnected_tx, mut disconnected_rx) = watch::channel(false);
+        let mut request_tasks = JoinSet::<RequestTaskResult>::new();
+        request_tasks.spawn(async { panic!("intentional request task panic") });
+
+        let activity = timeout(
+            Duration::from_secs(1),
+            wait_for_connection_activity(
+                &mut incoming_rx,
+                &mut disconnected_rx,
+                &mut request_tasks,
+            ),
+        )
+        .await
+        .expect("request task failure should wake the idle connection wait");
+        let ConnectionActivity::RequestTask(Err(err)) = activity else {
+            panic!("expected failed request task activity");
+        };
+        assert!(err.is_panic());
+    }
+
+    #[tokio::test]
+    async fn incoming_events_wait_for_request_capacity() {
+        let (incoming_tx, mut incoming_rx) = mpsc::channel(1);
+        let (_disconnected_tx, mut disconnected_rx) = watch::channel(false);
+        let mut request_tasks = JoinSet::<RequestTaskResult>::new();
+        incoming_tx
+            .send(JsonRpcConnectionEvent::MalformedMessage {
+                reason: "queued".to_string(),
+            })
+            .await
+            .expect("incoming channel should remain open");
+
+        for _ in 1..CHANNEL_CAPACITY {
+            request_tasks.spawn(std::future::pending::<RequestTaskResult>());
+        }
+        let (release_tx, release_rx) = oneshot::channel();
+        request_tasks.spawn(async move {
+            release_rx.await.expect("request task should be released");
+            Ok(())
+        });
+        assert_eq!(request_tasks.len(), CHANNEL_CAPACITY);
+
+        let mut activity = Box::pin(wait_for_connection_activity(
+            &mut incoming_rx,
+            &mut disconnected_rx,
+            &mut request_tasks,
+        ));
+        tokio::select! {
+            biased;
+            _ = &mut activity => panic!("incoming event bypassed request backpressure"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        release_tx
+            .send(())
+            .expect("request task should remain live");
+        let ConnectionActivity::RequestTask(Ok(Ok(()))) = activity.await else {
+            panic!("expected the released request task to complete");
+        };
+
+        let activity = wait_for_connection_activity(
+            &mut incoming_rx,
+            &mut disconnected_rx,
+            &mut request_tasks,
+        )
+        .await;
+        let ConnectionActivity::Incoming(Some(JsonRpcConnectionEvent::MalformedMessage { reason })) =
+            activity
+        else {
+            panic!("expected the queued incoming event after capacity opened");
+        };
+        assert_eq!(reason, "queued");
+
+        request_tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn transport_disconnect_with_in_flight_read_allows_session_resume() {
+        // Keep the test-only detached-session TTL from racing session resume on a loaded host.
         let registry = SessionRegistry::new();
         let (mut first_writer, mut first_lines, first_task) =
             spawn_test_connection(Arc::clone(&registry), "first");
@@ -380,12 +838,12 @@ mod tests {
             read_response(&mut first_lines, /*expected_id*/ 1).await;
         send_notification(&mut first_writer, INITIALIZED_METHOD, &()).await;
 
-        let process_id = ProcessId::from("proc-long-poll");
+        let process_id = ProcessId::from("proc-disconnect-read");
         send_request(
             &mut first_writer,
             /*id*/ 2,
             EXEC_METHOD,
-            &exec_params(process_id.clone()),
+            &exec_params_with_argv(process_id.clone(), long_running_process_argv()),
         )
         .await;
         let _: ExecResponse = read_response(&mut first_lines, /*expected_id*/ 2).await;
@@ -398,12 +856,21 @@ mod tests {
                 process_id: process_id.clone(),
                 after_seq: None,
                 max_bytes: None,
-                wait_ms: Some(5_000),
+                wait_ms: Some(600_000),
             },
         )
         .await;
+        // The malformed frame is processed inline after request 3. Its response is an ordered
+        // barrier proving the long read was admitted to the task set before disconnect.
+        send_malformed_message(&mut first_writer).await;
+        let _ = read_error(&mut first_lines).await;
+
         drop(first_writer);
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        drop(first_lines);
+        timeout(Duration::from_secs(1), first_task)
+            .await
+            .expect("first processor should exit")
+            .expect("first processor should join");
 
         let (mut second_writer, mut second_lines, second_task) =
             spawn_test_connection(Arc::clone(&registry), "second");
@@ -417,30 +884,20 @@ mod tests {
             },
         )
         .await;
-        let second_initialize_response = timeout(
-            Duration::from_secs(1),
-            read_response::<InitializeResponse>(&mut second_lines, /*expected_id*/ 1),
-        )
-        .await
-        .expect("resume initialize should not wait for the old read to finish");
+        let second_initialize_response: InitializeResponse =
+            read_response(&mut second_lines, /*expected_id*/ 1).await;
         assert_eq!(
             second_initialize_response.session_id,
             initialize_response.session_id
         );
-        timeout(Duration::from_secs(1), first_task)
-            .await
-            .expect("first processor should exit")
-            .expect("first processor should join");
         send_notification(&mut second_writer, INITIALIZED_METHOD, &()).await;
-
-        send_request(
+        terminate_process(
             &mut second_writer,
-            /*id*/ 2,
-            EXEC_TERMINATE_METHOD,
-            &TerminateParams { process_id },
+            &mut second_lines,
+            /*request_id*/ 2,
+            process_id,
         )
         .await;
-        let _: TerminateResponse = read_response(&mut second_lines, /*expected_id*/ 2).await;
 
         drop(second_writer);
         drop(second_lines);
@@ -499,6 +956,13 @@ mod tests {
         .await;
     }
 
+    async fn send_malformed_message(writer: &mut DuplexStream) {
+        writer
+            .write_all(b"not-json\n")
+            .await
+            .expect("write malformed message");
+    }
+
     async fn write_message(writer: &mut DuplexStream, message: &JSONRPCMessage) {
         let encoded = serde_json::to_vec(message).expect("serialize JSON-RPC message");
         writer.write_all(&encoded).await.expect("write request");
@@ -509,29 +973,80 @@ mod tests {
         lines: &mut Lines<BufReader<DuplexStream>>,
         expected_id: i64,
     ) -> T {
-        let line = lines
-            .next_line()
-            .await
-            .expect("read response")
-            .expect("response line");
-        match serde_json::from_str::<JSONRPCMessage>(&line).expect("decode JSON-RPC response") {
+        let (id, response) = read_response_with_id(lines).await;
+        assert_eq!(id, RequestId::Integer(expected_id));
+        response
+    }
+
+    async fn read_response_with_id<T: DeserializeOwned>(
+        lines: &mut Lines<BufReader<DuplexStream>>,
+    ) -> (RequestId, T) {
+        match read_message(lines).await {
             JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
-                assert_eq!(id, RequestId::Integer(expected_id));
-                serde_json::from_value(result).expect("decode response result")
+                let response = serde_json::from_value(result).expect("decode response result");
+                (id, response)
             }
             JSONRPCMessage::Error(error) => panic!("unexpected JSON-RPC error: {error:?}"),
             other => panic!("expected JSON-RPC response, got {other:?}"),
         }
     }
 
-    fn exec_params(process_id: ProcessId) -> ExecParams {
+    async fn read_error(lines: &mut Lines<BufReader<DuplexStream>>) -> JSONRPCError {
+        match read_message(lines).await {
+            JSONRPCMessage::Error(error) => error,
+            other => panic!("expected JSON-RPC error, got {other:?}"),
+        }
+    }
+
+    async fn terminate_process(
+        writer: &mut DuplexStream,
+        lines: &mut Lines<BufReader<DuplexStream>>,
+        request_id: i64,
+        process_id: ProcessId,
+    ) {
+        send_request(
+            writer,
+            request_id,
+            EXEC_TERMINATE_METHOD,
+            &TerminateParams { process_id },
+        )
+        .await;
+
+        loop {
+            match read_message(lines).await {
+                JSONRPCMessage::Response(JSONRPCResponse { id, result })
+                    if id == RequestId::Integer(request_id) =>
+                {
+                    let _: TerminateResponse =
+                        serde_json::from_value(result).expect("decode terminate response");
+                    return;
+                }
+                JSONRPCMessage::Response(_) | JSONRPCMessage::Notification(_) => {}
+                JSONRPCMessage::Error(error) => {
+                    panic!("unexpected JSON-RPC error: {error:?}")
+                }
+                other => panic!("expected JSON-RPC response or notification, got {other:?}"),
+            }
+        }
+    }
+
+    async fn read_message(lines: &mut Lines<BufReader<DuplexStream>>) -> JSONRPCMessage {
+        let line = lines
+            .next_line()
+            .await
+            .expect("read response")
+            .expect("response line");
+        serde_json::from_str(&line).expect("decode JSON-RPC message")
+    }
+
+    fn exec_params_with_argv(process_id: ProcessId, argv: Vec<String>) -> ExecParams {
         let mut env = HashMap::new();
         if let Some(path) = std::env::var_os("PATH") {
             env.insert("PATH".to_string(), path.to_string_lossy().into_owned());
         }
         ExecParams {
             process_id,
-            argv: sleep_then_print_argv(),
+            argv,
             cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
                 .expect("cwd URI"),
             env_policy: None,
@@ -545,18 +1060,18 @@ mod tests {
         }
     }
 
-    fn sleep_then_print_argv() -> Vec<String> {
+    fn long_running_process_argv() -> Vec<String> {
         if cfg!(windows) {
             vec![
                 std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()),
                 "/C".to_string(),
-                "ping -n 3 127.0.0.1 >NUL && echo late".to_string(),
+                "ping -n 3601 127.0.0.1 >NUL".to_string(),
             ]
         } else {
             vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
-                "sleep 1; printf late".to_string(),
+                "sleep 3600".to_string(),
             ]
         }
     }
