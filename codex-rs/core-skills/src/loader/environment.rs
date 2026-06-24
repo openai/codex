@@ -7,6 +7,7 @@ use codex_exec_server::WalkEntryKind;
 use codex_exec_server::WalkOptions;
 use codex_protocol::protocol::Product;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
 use codex_utils_plugins::plugin_namespace_for_root_uri;
 use codex_utils_plugins::plugin_namespace_for_skill_uri;
 use futures::future::join_all;
@@ -136,25 +137,43 @@ pub async fn load_environment_skills_from_root(
                     "skills scan reached its traversal limit (root: {root})"
                 ));
             }
+            let mut skill_files = Vec::new();
+            let mut plugin_roots = HashSet::new();
+            for entry in walk.entries {
+                match entry.kind {
+                    WalkEntryKind::Directory => {
+                        if DISCOVERABLE_PLUGIN_MANIFEST_PATHS
+                            .iter()
+                            .any(|path| path.split('/').next() == entry.path.basename().as_deref())
+                            && let Some(plugin_root) = entry.path.parent()
+                        {
+                            plugin_roots.insert(plugin_root);
+                        }
+                    }
+                    WalkEntryKind::File => {
+                        if entry.path.basename().as_deref() == Some(SKILLS_FILENAME) {
+                            skill_files.push(entry.path);
+                        }
+                    }
+                }
+            }
             SkillFileDiscovery {
-                skill_files: walk
-                    .entries
-                    .into_iter()
-                    .filter(|entry| {
-                        entry.kind == WalkEntryKind::File
-                            && entry.path.basename().as_deref() == Some(SKILLS_FILENAME)
-                    })
-                    .map(|entry| entry.path)
-                    .collect(),
+                skill_files,
+                plugin_roots,
+                namespace_roots: HashSet::from([root.clone()]),
                 warnings,
             }
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => SkillFileDiscovery {
             skill_files: Vec::new(),
+            plugin_roots: HashSet::new(),
+            namespace_roots: HashSet::new(),
             warnings: Vec::new(),
         },
         Err(error) => SkillFileDiscovery {
             skill_files: Vec::new(),
+            plugin_roots: HashSet::new(),
+            namespace_roots: HashSet::new(),
             warnings: vec![format!("failed to walk skills root {root}: {error:#}")],
         },
     };
