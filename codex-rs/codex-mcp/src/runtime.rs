@@ -13,7 +13,6 @@ use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_path_uri::PathUri;
-
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -223,6 +222,36 @@ mod tests {
             };
             assert!(resolved_runtime.is_some());
         }
+    }
+
+    #[tokio::test]
+    async fn remote_stdio_accepts_foreign_absolute_cwd() {
+        let runtime_context = McpRuntimeContext::new(
+            Arc::new(
+                EnvironmentManager::create_for_tests(
+                    Some("ws://127.0.0.1:8765".to_string()),
+                    /*local_runtime_paths*/ None,
+                )
+                .await,
+            ),
+            PathBuf::from("/tmp"),
+        );
+        let mut remote_stdio = stdio_server("remote");
+        let McpServerTransportConfig::Stdio { cwd, .. } = &mut remote_stdio.transport else {
+            unreachable!("stdio helper should build stdio transport");
+        };
+        *cwd = Some(
+            PathUri::parse("file:///C:/plugins/demo")
+                .expect("foreign cwd URI")
+                .into(),
+        );
+
+        let resolved_runtime =
+            match runtime_context.resolve_server_environment("stdio", &remote_stdio) {
+                Ok(resolved_runtime) => resolved_runtime,
+                Err(error) => panic!("foreign cwd should resolve: {error}"),
+            };
+        assert!(resolved_runtime.is_some());
     }
 
     #[tokio::test]

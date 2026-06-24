@@ -28,7 +28,6 @@ use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::LOCAL_FS;
-use codex_mcp::PluginMcpServerPlacement;
 use codex_mcp::parse_plugin_mcp_config;
 use codex_plugin::AppConnectorId;
 use codex_plugin::AppDeclaration;
@@ -1282,17 +1281,16 @@ async fn load_mcp_servers_from_file(
     let Ok(contents) = tokio::fs::read_to_string(mcp_config_path.as_path()).await else {
         return PluginMcpDiscovery::default();
     };
-    let parsed =
-        match parse_plugin_mcp_config(plugin_root, &contents, PluginMcpServerPlacement::Declared) {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                warn!(
-                    path = %mcp_config_path.display(),
-                    "failed to parse plugin MCP config: {err}"
-                );
-                return PluginMcpDiscovery::default();
-            }
-        };
+    let parsed = match parse_plugin_mcp_config(plugin_root, &contents) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            warn!(
+                path = %mcp_config_path.display(),
+                "failed to parse plugin MCP config: {err}"
+            );
+            return PluginMcpDiscovery::default();
+        }
+    };
     for error in parsed.errors {
         warn!(
             plugin = %plugin_root.display(),
@@ -1311,11 +1309,7 @@ fn load_mcp_servers_from_manifest_object(
     plugin_root: &Path,
     object_config: &str,
 ) -> PluginMcpDiscovery {
-    let parsed = match parse_plugin_mcp_config(
-        plugin_root,
-        object_config,
-        PluginMcpServerPlacement::Declared,
-    ) {
+    let parsed = match parse_plugin_mcp_config(plugin_root, object_config) {
         Ok(parsed) => parsed,
         Err(err) => {
             warn!(

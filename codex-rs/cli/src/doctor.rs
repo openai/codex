@@ -3457,6 +3457,26 @@ mod tests {
         }));
     }
 
+    #[tokio::test]
+    async fn mcp_check_does_not_probe_environment_stdio_on_the_host() {
+        let remote_server: McpServerConfig = toml::from_str(
+            r#"
+                command = "remote-only-command"
+                environment_id = "remote"
+                cwd = "C:\\plugins\\demo"
+                required = true
+                env_vars = [{ name = "REMOTE_ONLY_TOKEN", source = "remote" }]
+            "#,
+        )
+        .expect("remote MCP config");
+        let servers = HashMap::from([("remote".to_string(), remote_server)]);
+
+        let check = mcp_check_from_servers(&servers).await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(check.summary, "MCP configuration is locally consistent");
+    }
+
     #[test]
     fn provider_specific_auth_allows_non_openai_provider_without_env_key() {
         let check = provider_specific_auth_check(
