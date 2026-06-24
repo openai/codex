@@ -96,3 +96,35 @@ fn proxy_ensure_listener_rejects_a_non_default_socket() -> Result<()> {
     );
     Ok(())
 }
+
+
+#[cfg(unix)]
+#[test]
+fn proxy_ensure_listener_accepts_default_socket_through_symlinked_codex_home() -> Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let real_home = TempDir::new()?;
+    let link_parent = TempDir::new()?;
+    let linked_home = link_parent.path().join("linked-codex-home");
+    symlink(real_home.path(), &linked_home)?;
+
+    let socket_path = linked_home.join("app-server-control/app-server-control.sock");
+    let mut proxy = codex_command(&linked_home)?;
+    proxy
+        .args([
+            "app-server",
+            "proxy",
+            "--ensure-listener",
+            "--sock",
+            socket_path.to_str().expect("temp path should be UTF-8"),
+        ])
+        .assert()
+        .success();
+
+    let mut stop = codex_command(&linked_home)?;
+    stop.args(["app-server", "daemon", "stop"])
+        .assert()
+        .success();
+
+    Ok(())
+}
