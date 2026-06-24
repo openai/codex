@@ -3908,7 +3908,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         ParsedCommand::Read {
             name: "diff_render.rs".into(),
             cmd: "cat diff_render.rs".into(),
-            path: "diff_render.rs".into(),
+            path: PathBuf::from("diff_render.rs").into(),
         },
     ];
     let command_actions = parsed_cmd

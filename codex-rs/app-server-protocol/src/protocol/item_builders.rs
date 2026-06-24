@@ -132,24 +132,21 @@ fn command_actions_for_path_uri(parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> 
         .iter()
         .cloned()
         .filter_map(|parsed| match parsed {
-            ParsedCommand::Read { cmd, name, path } => {
-                let path = path.to_string_lossy();
-                match cwd.join(&path) {
-                    Ok(path) => Some(CommandAction::Read {
-                        command: cmd,
-                        name,
-                        path: path.into(),
-                    }),
-                    Err(error) => {
-                        warn!(
-                            command = cmd,
-                            path = %path,
-                            %cwd,
-                            %error,
-                            "omitting read command action whose path cannot be resolved against its cwd"
-                        );
-                        None
-                    }
+            ParsedCommand::Read { cmd, name, path } => match cwd.join(path.as_str()) {
+                Ok(path) => Some(CommandAction::Read {
+                    command: cmd,
+                    name,
+                    path: path.into(),
+                }),
+                Err(error) => {
+                    warn!(
+                        command = cmd,
+                        path = %path,
+                        %cwd,
+                        %error,
+                        "omitting read command action whose path cannot be resolved against its cwd"
+                    );
+                    None
                 }
             },
             ParsedCommand::ListFiles { cmd, path } => {

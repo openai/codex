@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde::Serializer;
 use std::fmt;
 use std::path::Path;
+use std::path::PathBuf;
 use thiserror::Error;
 use ts_rs::TS;
 
@@ -135,6 +136,12 @@ impl LegacyAppPathString {
 impl From<AbsolutePathBuf> for LegacyAppPathString {
     fn from(path: AbsolutePathBuf) -> Self {
         Self::from_abs_path(&path)
+    }
+}
+
+impl From<PathBuf> for LegacyAppPathString {
+    fn from(path: PathBuf) -> Self {
+        Self::from_path(&path)
     }
 }
 

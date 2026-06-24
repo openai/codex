@@ -304,7 +304,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("webview/README.md"),
+                path: PathBuf::from("webview/README.md").into(),
             }],
         );
     }
@@ -317,7 +317,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("README.md"),
+                path: PathBuf::from("README.md").into(),
             }],
         );
     }
@@ -330,7 +330,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("README.md"),
+                path: PathBuf::from("README.md").into(),
             }],
         );
     }
@@ -343,7 +343,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("README.md"),
+                path: PathBuf::from("README.md").into(),
             }],
         );
     }
@@ -356,7 +356,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("README.md"),
+                path: PathBuf::from("README.md").into(),
             }],
         );
     }
@@ -369,7 +369,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("README.md"),
+                path: PathBuf::from("README.md").into(),
             }],
         );
     }
@@ -381,7 +381,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("foo/foo.txt"),
+                path: PathBuf::from("foo/foo.txt").into(),
             }],
         );
     }
@@ -393,7 +393,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("-weird/foo.txt"),
+                path: PathBuf::from("-weird/foo.txt").into(),
             }],
         );
     }
@@ -405,7 +405,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("dir2/foo.txt"),
+                path: PathBuf::from("dir2/foo.txt").into(),
             }],
         );
     }
@@ -428,7 +428,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("foo/foo.txt"),
+                path: PathBuf::from("foo/foo.txt").into(),
             }],
         );
     }
@@ -485,7 +485,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "Cargo.toml".to_string(),
-                path: PathBuf::from("Cargo.toml"),
+                path: PathBuf::from("Cargo.toml").into(),
             }],
         );
     }
@@ -498,7 +498,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "Cargo.toml".to_string(),
-                path: PathBuf::from("Cargo.toml"),
+                path: PathBuf::from("Cargo.toml").into(),
             }],
         );
     }
@@ -511,7 +511,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "Cargo.toml".to_string(),
-                path: PathBuf::from("tui/Cargo.toml"),
+                path: PathBuf::from("tui/Cargo.toml").into(),
             }],
         );
     }
@@ -524,7 +524,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("README.md"),
+                path: PathBuf::from("README.md").into(),
             }],
         );
     }
@@ -538,7 +538,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("README.md"),
+                path: PathBuf::from("README.md").into(),
             }]
         );
     }
@@ -551,7 +551,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("README.md"),
+                path: PathBuf::from("README.md").into(),
             }],
         );
     }
@@ -846,7 +846,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "parse_command.rs".to_string(),
-                path: PathBuf::from("core/src/parse_command.rs"),
+                path: PathBuf::from("core/src/parse_command.rs").into(),
             }],
         );
     }
@@ -859,7 +859,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "history_cell.rs".to_string(),
-                path: PathBuf::from("tui/src/history_cell.rs"),
+                path: PathBuf::from("tui/src/history_cell.rs").into(),
             }],
         );
     }
@@ -872,7 +872,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "Cargo.toml".to_string(),
-                path: PathBuf::from("Cargo.toml"),
+                path: PathBuf::from("Cargo.toml").into(),
             }],
         );
     }
@@ -886,7 +886,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat -- ansi-escape/Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
-                path: PathBuf::from("ansi-escape/Cargo.toml"),
+                path: PathBuf::from("ansi-escape/Cargo.toml").into(),
             }],
         );
     }
@@ -915,7 +915,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "sed -n '260,640p' exec/src/event_processor_with_human_output.rs".to_string(),
                 name: "event_processor_with_human_output.rs".to_string(),
-                path: PathBuf::from("exec/src/event_processor_with_human_output.rs"),
+                path: PathBuf::from("exec/src/event_processor_with_human_output.rs").into(),
             }],
         );
     }
@@ -991,7 +991,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: r#"cat "pkg\\src\\main.rs""#.to_string(),
                 name: "main.rs".to_string(),
-                path: PathBuf::from(r#"pkg\src\main.rs"#),
+                path: PathBuf::from(r#"pkg\src\main.rs"#).into(),
             }],
         );
     }
@@ -1003,7 +1003,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "head -n50 Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
-                path: PathBuf::from("Cargo.toml"),
+                path: PathBuf::from("Cargo.toml").into(),
             }],
         );
     }
@@ -1028,7 +1028,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "tail -n+10 README.md".to_string(),
                 name: "README.md".to_string(),
-                path: PathBuf::from("README.md"),
+                path: PathBuf::from("README.md").into(),
             }],
         );
     }
@@ -1129,7 +1129,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat -- ./-strange-file-name".to_string(),
                 name: "-strange-file-name".to_string(),
-                path: PathBuf::from("./-strange-file-name"),
+                path: PathBuf::from("./-strange-file-name").into(),
             }],
         );
 
@@ -1139,7 +1139,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "sed -n '12,20p' Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
-                path: PathBuf::from("Cargo.toml"),
+                path: PathBuf::from("Cargo.toml").into(),
             }],
         );
     }
@@ -1219,7 +1219,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "sed -n '1,10p' Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
-                path: PathBuf::from("Cargo.toml"),
+                path: PathBuf::from("Cargo.toml").into(),
             }],
         );
     }
@@ -1230,7 +1230,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "sed -n '1,10p' Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
-                path: PathBuf::from("Cargo.toml"),
+                path: PathBuf::from("Cargo.toml").into(),
             }],
         );
     }
@@ -1313,11 +1313,11 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
         let parsed = match parsed {
             ParsedCommand::Read { cmd, name, path } => {
                 if let Some(base) = &cwd {
-                    let full = join_paths(base, &path.to_string_lossy());
+                    let full = join_paths(base, path.as_str());
                     ParsedCommand::Read {
                         cmd,
                         name,
-                        path: PathBuf::from(full),
+                        path: PathBuf::from(full).into(),
                     }
                 } else {
                     ParsedCommand::Read { cmd, name, path }
@@ -1858,11 +1858,11 @@ pub fn parse_shell_script(script: &str) -> Vec<ParsedCommand> {
             let parsed = match parsed {
                 ParsedCommand::Read { cmd, name, path } => {
                     if let Some(base) = &cwd {
-                        let full = join_paths(base, &path.to_string_lossy());
+                        let full = join_paths(base, path.as_str());
                         ParsedCommand::Read {
                             cmd,
                             name,
-                            path: PathBuf::from(full),
+                            path: PathBuf::from(full).into(),
                         }
                     } else {
                         ParsedCommand::Read { cmd, name, path }
@@ -2258,7 +2258,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
-                    path: PathBuf::from(path),
+                    path: PathBuf::from(path).into(),
                 }
             } else {
                 ParsedCommand::Unknown {
@@ -2283,7 +2283,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
-                    path: PathBuf::from(path),
+                    path: PathBuf::from(path).into(),
                 }
             } else {
                 ParsedCommand::Unknown {
@@ -2312,7 +2312,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
-                    path: PathBuf::from(path),
+                    path: PathBuf::from(path).into(),
                 }
             } else {
                 ParsedCommand::Unknown {
@@ -2326,7 +2326,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
-                    path: PathBuf::from(path),
+                    path: PathBuf::from(path).into(),
                 }
             } else {
                 ParsedCommand::Unknown {
@@ -2366,7 +2366,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                     return ParsedCommand::Read {
                         cmd: shlex_join(main_cmd),
                         name,
-                        path: PathBuf::from(path),
+                        path: PathBuf::from(path).into(),
                     };
                 }
             }
@@ -2377,7 +2377,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 return ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
-                    path: PathBuf::from(path),
+                    path: PathBuf::from(path).into(),
                 };
             }
             ParsedCommand::Unknown {
@@ -2420,7 +2420,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                     return ParsedCommand::Read {
                         cmd: shlex_join(main_cmd),
                         name,
-                        path: PathBuf::from(path),
+                        path: PathBuf::from(path).into(),
                     };
                 }
             }
@@ -2431,7 +2431,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 return ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
-                    path: PathBuf::from(path),
+                    path: PathBuf::from(path).into(),
                 };
             }
             ParsedCommand::Unknown {
@@ -2444,7 +2444,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
-                    path: PathBuf::from(path),
+                    path: PathBuf::from(path).into(),
                 }
             } else {
                 ParsedCommand::Unknown {
@@ -2461,7 +2461,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
-                    path: PathBuf::from(path),
+                    path: PathBuf::from(path).into(),
                 }
             } else {
                 ParsedCommand::Unknown {
@@ -2475,7 +2475,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
-                    path: PathBuf::from(path),
+                    path: PathBuf::from(path).into(),
                 }
             } else {
                 ParsedCommand::Unknown {

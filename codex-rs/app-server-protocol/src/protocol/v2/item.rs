@@ -171,11 +171,7 @@ impl CommandAction {
                 command: cmd,
                 name,
                 path,
-            } => CoreParsedCommand::Read {
-                cmd,
-                name,
-                path: PathBuf::from(path.into_string()),
-            },
+            } => CoreParsedCommand::Read { cmd, name, path },
             CommandAction::ListFiles { command: cmd, path } => {
                 CoreParsedCommand::ListFiles { cmd, path }
             }
@@ -193,7 +189,7 @@ impl CommandAction {
             CoreParsedCommand::Read { cmd, name, path } => CommandAction::Read {
                 command: cmd,
                 name,
-                path: cwd.join(path).into(),
+                path: cwd.join(path.as_str()).into(),
             },
             CoreParsedCommand::ListFiles { cmd, path } => {
                 CommandAction::ListFiles { command: cmd, path }

@@ -11,7 +11,7 @@ fn foreign_read_retains_target_native_path_without_dropping_other_command_action
         ParsedCommand::Read {
             cmd: "cat file.txt".to_string(),
             name: "file.txt".to_string(),
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
         },
         ParsedCommand::ListFiles {
             cmd: "ls".to_string(),

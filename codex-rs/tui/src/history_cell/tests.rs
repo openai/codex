@@ -1626,12 +1626,12 @@ fn coalesces_sequential_reads_within_one_call() {
                 ParsedCommand::Read {
                     name: "shimmer.rs".into(),
                     cmd: "cat shimmer.rs".into(),
-                    path: "shimmer.rs".into(),
+                    path: PathBuf::from("shimmer.rs").into(),
                 },
                 ParsedCommand::Read {
                     name: "status_indicator_widget.rs".into(),
                     cmd: "cat status_indicator_widget.rs".into(),
-                    path: "status_indicator_widget.rs".into(),
+                    path: PathBuf::from("status_indicator_widget.rs").into(),
                 },
             ],
             output: None,
@@ -1679,7 +1679,7 @@ fn coalesces_reads_across_multiple_calls() {
             vec![ParsedCommand::Read {
                 name: "shimmer.rs".into(),
                 cmd: "cat shimmer.rs".into(),
-                path: "shimmer.rs".into(),
+                path: PathBuf::from("shimmer.rs").into(),
             }],
             ExecCommandSource::Agent,
             /*interaction_input*/ None,
@@ -1694,7 +1694,7 @@ fn coalesces_reads_across_multiple_calls() {
             vec![ParsedCommand::Read {
                 name: "status_indicator_widget.rs".into(),
                 cmd: "cat status_indicator_widget.rs".into(),
-                path: "status_indicator_widget.rs".into(),
+                path: PathBuf::from("status_indicator_widget.rs").into(),
             }],
             ExecCommandSource::Agent,
             /*interaction_input*/ None,
@@ -1717,17 +1717,17 @@ fn coalesced_reads_dedupe_names() {
                 ParsedCommand::Read {
                     name: "auth.rs".into(),
                     cmd: "cat auth.rs".into(),
-                    path: "auth.rs".into(),
+                    path: PathBuf::from("auth.rs").into(),
                 },
                 ParsedCommand::Read {
                     name: "auth.rs".into(),
                     cmd: "cat auth.rs".into(),
-                    path: "auth.rs".into(),
+                    path: PathBuf::from("auth.rs").into(),
                 },
                 ParsedCommand::Read {
                     name: "shimmer.rs".into(),
                     cmd: "cat shimmer.rs".into(),
-                    path: "shimmer.rs".into(),
+                    path: PathBuf::from("shimmer.rs").into(),
                 },
             ],
             output: None,
