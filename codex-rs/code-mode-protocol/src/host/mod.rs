@@ -8,6 +8,7 @@
 mod codec;
 mod error;
 mod message;
+mod payload;
 mod types;
 
 pub use codec::FramedReader;
@@ -24,6 +25,17 @@ pub use message::HostRequest;
 pub use message::HostResponse;
 pub use message::HostToClient;
 pub use message::WireResult;
+pub use payload::WireCellId;
+pub use payload::WireContentItem;
+pub use payload::WireExecuteRequest;
+pub use payload::WireImageDetail;
+pub use payload::WireNestedToolCall;
+pub use payload::WireRuntimeResponse;
+pub use payload::WireToolDefinition;
+pub use payload::WireToolKind;
+pub use payload::WireToolName;
+pub use payload::WireWaitOutcome;
+pub use payload::WireWaitRequest;
 pub use types::Capability;
 pub use types::CapabilitySet;
 pub use types::DelegateRequestId;

@@ -9,7 +9,7 @@ use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
 /// Maximum JSON payload size accepted for one IPC frame.
-pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 /// Decodes JSON messages prefixed by a four-byte little-endian payload length.
 pub struct FramedReader<R> {

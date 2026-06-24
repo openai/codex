@@ -12,12 +12,12 @@ use super::ProtocolVersion;
 use super::RequestId;
 use super::SessionId;
 use super::SupportedProtocolVersions;
-use crate::CellId;
-use crate::CodeModeNestedToolCall;
-use crate::ExecuteRequest;
-use crate::RuntimeResponse;
-use crate::WaitOutcome;
-use crate::WaitRequest;
+use super::WireCellId;
+use super::WireExecuteRequest;
+use super::WireNestedToolCall;
+use super::WireRuntimeResponse;
+use super::WireWaitOutcome;
+use super::WireWaitRequest;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -155,7 +155,7 @@ pub enum HostToClient {
     #[serde(rename = "execute/initialResponse")]
     InitialResponse {
         id: RequestId,
-        result: WireResult<RuntimeResponse>,
+        result: WireResult<WireRuntimeResponse>,
     },
     #[serde(rename = "delegate/request")]
     DelegateRequest {
@@ -168,7 +168,7 @@ pub enum HostToClient {
     #[serde(rename = "cell/closed")]
     CellClosed {
         session_id: SessionId,
-        cell_id: CellId,
+        cell_id: WireCellId,
     },
 }
 
@@ -180,17 +180,17 @@ pub enum HostRequest {
     #[serde(rename = "session/execute")]
     Execute {
         session_id: SessionId,
-        request: ExecuteRequest,
+        request: WireExecuteRequest,
     },
     #[serde(rename = "session/wait")]
     Wait {
         session_id: SessionId,
-        request: WaitRequest,
+        request: WireWaitRequest,
     },
     #[serde(rename = "session/terminate")]
     Terminate {
         session_id: SessionId,
-        cell_id: CellId,
+        cell_id: WireCellId,
     },
     #[serde(rename = "session/shutdown")]
     ShutdownSession { session_id: SessionId },
@@ -202,9 +202,9 @@ pub enum HostResponse {
     #[serde(rename = "session/ready")]
     SessionReady { session_id: SessionId },
     #[serde(rename = "execution/started")]
-    ExecutionStarted { cell_id: CellId },
+    ExecutionStarted { cell_id: WireCellId },
     #[serde(rename = "wait/completed")]
-    WaitCompleted { outcome: WaitOutcome },
+    WaitCompleted { outcome: WireWaitOutcome },
     #[serde(rename = "session/closed")]
     SessionClosed { session_id: SessionId },
 }
@@ -213,11 +213,11 @@ pub enum HostResponse {
 #[serde(deny_unknown_fields, tag = "type", rename_all_fields = "camelCase")]
 pub enum DelegateRequest {
     #[serde(rename = "tool/invoke")]
-    InvokeTool { invocation: CodeModeNestedToolCall },
+    InvokeTool { invocation: WireNestedToolCall },
     #[serde(rename = "notification/send")]
     Notify {
         call_id: String,
-        cell_id: CellId,
+        cell_id: WireCellId,
         text: String,
     },
 }
