@@ -18,15 +18,13 @@ struct ActiveSafetyBuffering {
 
 #[derive(Debug, Default)]
 pub(super) struct SafetyBufferingState {
-    submitted_turn: Option<AppCommand>,
+    submitted_turn: Option<(String, AppCommand)>,
     active: Option<ActiveSafetyBuffering>,
 }
 
 impl ChatWidget {
-    pub(crate) fn record_safety_buffering_turn(&mut self, turn: &AppCommand) {
-        if matches!(turn, AppCommand::UserTurn { .. }) {
-            self.safety_buffering.submitted_turn = Some(turn.clone());
-        }
+    pub(crate) fn record_safety_buffering_turn(&mut self, turn_id: String, turn: &AppCommand) {
+        self.safety_buffering.submitted_turn = Some((turn_id, turn.clone()));
     }
 
     pub(super) fn reset_safety_buffering_for_turn_start(&mut self) {
@@ -71,7 +69,7 @@ impl ChatWidget {
     pub(super) fn on_model_safety_buffering_updated(
         &mut self,
         notification: ModelSafetyBufferingUpdatedNotification,
-        from_replay: bool,
+        replay_kind: Option<ReplayKind>,
     ) {
         let ModelSafetyBufferingUpdatedNotification {
             turn_id,
@@ -79,7 +77,7 @@ impl ChatWidget {
             faster_model,
             ..
         } = notification;
-        if from_replay
+        if matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages))
             || !self.turn_lifecycle.agent_turn_running
             || self.turn_lifecycle.last_turn_id.as_deref() != Some(turn_id.as_str())
         {
@@ -100,7 +98,12 @@ impl ChatWidget {
             return;
         }
 
-        let retry_turn = self.safety_buffering.submitted_turn.clone();
+        let retry_turn = self
+            .safety_buffering
+            .submitted_turn
+            .as_ref()
+            .filter(|(submitted_turn_id, _)| replay_kind.is_none() && submitted_turn_id == &turn_id)
+            .map(|(_, turn)| turn.clone());
         let thread_id = self.thread_id;
         let can_offer_retry = faster_model.is_some() && retry_turn.is_some() && thread_id.is_some();
         if !can_offer_retry {

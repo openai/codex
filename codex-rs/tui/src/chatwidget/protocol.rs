@@ -148,7 +148,7 @@ impl ChatWidget {
                 self.on_app_server_model_verification(&notification.verifications)
             }
             ServerNotification::ModelSafetyBufferingUpdated(notification) => {
-                self.on_model_safety_buffering_updated(notification, from_replay)
+                self.on_model_safety_buffering_updated(notification, replay_kind)
             }
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::GuardianWarning(notification) => {

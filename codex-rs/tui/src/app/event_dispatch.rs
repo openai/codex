@@ -404,7 +404,6 @@ impl App {
                 )
                 .await;
 
-                self.chat_widget.record_safety_buffering_turn(&turn);
                 if let Err(err) = self.submit_thread_op(app_server, thread_id, turn).await {
                     self.chat_widget.clear_safety_buffering();
                     self.chat_widget

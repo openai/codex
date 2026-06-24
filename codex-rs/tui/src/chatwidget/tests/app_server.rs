@@ -64,12 +64,14 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
 fn start_safety_buffering_test_turn(
     chat: &mut ChatWidget,
     op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
-) -> (ThreadId, &'static str) {
+) -> (ThreadId, &'static str, Op) {
     let thread_id = ThreadId::new();
     let turn_id = "turn-safety-buffering";
     chat.thread_id = Some(thread_id);
     chat.submit_user_message(UserMessage::from("Explain the request"));
-    assert_matches!(next_submit_op(op_rx), Op::UserTurn { .. });
+    let turn = next_submit_op(op_rx);
+    assert_matches!(&turn, Op::UserTurn { .. });
+    chat.record_safety_buffering_turn(turn_id.to_string(), &turn);
     chat.handle_server_notification(
         ServerNotification::TurnStarted(TurnStartedNotification {
             thread_id: thread_id.to_string(),
@@ -86,7 +88,7 @@ fn start_safety_buffering_test_turn(
         }),
         /*replay_kind*/ None,
     );
-    (thread_id, turn_id)
+    (thread_id, turn_id, turn)
 }
 
 fn safety_buffering_notification(
@@ -108,7 +110,7 @@ fn safety_buffering_notification(
 #[tokio::test]
 async fn safety_buffering_offers_one_retry_with_app_wording() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let (thread_id, turn_id) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+    let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
 
     let notification = safety_buffering_notification(thread_id, turn_id, Some("faster-model"));
     chat.handle_server_notification(
@@ -146,7 +148,7 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
 #[tokio::test]
 async fn safety_buffering_stops_retrying_after_agent_message_starts() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let (thread_id, turn_id) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+    let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
     chat.handle_server_notification(
         ServerNotification::ModelSafetyBufferingUpdated(safety_buffering_notification(
             thread_id,
@@ -165,7 +167,7 @@ async fn safety_buffering_stops_retrying_after_agent_message_starts() {
 #[tokio::test]
 async fn safety_buffering_without_retry_shows_short_app_message() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let (thread_id, turn_id) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+    let (thread_id, turn_id, turn) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
 
     chat.handle_server_notification(
         ServerNotification::ModelSafetyBufferingUpdated(safety_buffering_notification(
@@ -174,16 +176,29 @@ async fn safety_buffering_without_retry_shows_short_app_message() {
         /*replay_kind*/ None,
     );
 
-    assert_chatwidget_snapshot!(
-        "safety_buffering_status_without_retry",
-        render_bottom_popup(&chat, /*width*/ 80),
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("safety_buffering_status_without_retry", popup,);
+
+    let notification = safety_buffering_notification(thread_id, turn_id, Some("faster-model"));
+    chat.record_safety_buffering_turn("other-turn".to_string(), &turn);
+    chat.handle_server_notification(
+        ServerNotification::ModelSafetyBufferingUpdated(notification.clone()),
+        /*replay_kind*/ None,
     );
+    assert_eq!(render_bottom_popup(&chat, /*width*/ 80), popup);
+
+    chat.record_safety_buffering_turn(turn_id.to_string(), &turn);
+    chat.handle_server_notification(
+        ServerNotification::ModelSafetyBufferingUpdated(notification),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+    assert_eq!(render_bottom_popup(&chat, /*width*/ 80), popup);
 }
 
 #[tokio::test]
-async fn safety_buffering_ignores_hidden_stale_and_replayed_updates() {
+async fn safety_buffering_ignores_hidden_stale_and_historical_updates() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let (thread_id, turn_id) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+    let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
 
     let mut hidden = safety_buffering_notification(thread_id, turn_id, Some("faster-model"));
     hidden.show_buffering_ui = false;

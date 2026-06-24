@@ -355,7 +355,6 @@ impl ChatWidget {
             return (false, None);
         }
         if render_in_history {
-            self.record_safety_buffering_turn(&op);
             self.input_queue.user_turn_pending_start = true;
         }
 
