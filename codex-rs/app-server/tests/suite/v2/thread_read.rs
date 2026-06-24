@@ -567,6 +567,7 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
                 use_state_db_only: false,
                 search_term: None,
                 parent_thread_id: None,
+                ancestor_thread_id: None,
             },
         })
         .await?
@@ -962,6 +963,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
             use_state_db_only: false,
             search_term: None,
             parent_thread_id: None,
+            ancestor_thread_id: None,
         })
         .await?;
     let list_resp: JSONRPCResponse = timeout(

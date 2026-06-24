@@ -714,6 +714,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
             use_state_db_only: false,
             search_term: None,
             parent_thread_id: None,
+            ancestor_thread_id: None,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -892,6 +893,7 @@ required = true
             use_state_db_only: false,
             search_term: None,
             parent_thread_id: None,
+            ancestor_thread_id: None,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -983,6 +985,7 @@ async fn external_agent_config_import_accepts_detected_session_payload_after_res
             use_state_db_only: false,
             search_term: None,
             parent_thread_id: None,
+            ancestor_thread_id: None,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -1075,6 +1078,7 @@ async fn external_agent_config_import_skips_already_imported_session_versions() 
             use_state_db_only: false,
             search_term: None,
             parent_thread_id: None,
+            ancestor_thread_id: None,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -1214,6 +1218,7 @@ async fn external_agent_config_import_returns_before_background_session_import_f
             use_state_db_only: false,
             search_term: None,
             parent_thread_id: None,
+            ancestor_thread_id: None,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -1343,6 +1348,7 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
             use_state_db_only: false,
             search_term: None,
             parent_thread_id: None,
+            ancestor_thread_id: None,
         })
         .await?;
     let response: JSONRPCResponse = timeout(

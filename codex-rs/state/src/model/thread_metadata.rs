@@ -9,6 +9,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// The sort key to use when listing threads.
@@ -29,6 +30,15 @@ pub enum SortDirection {
     Desc,
 }
 
+/// Spawn-graph relationship used to filter thread listings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadRelationFilter {
+    /// Return only threads whose immediate parent is the given thread.
+    DirectChildrenOf(ThreadId),
+    /// Return every thread transitively descended from the given thread.
+    DescendantsOf(ThreadId),
+}
+
 /// A pagination anchor used for keyset pagination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
@@ -43,6 +53,8 @@ pub struct Anchor {
 pub struct ThreadsPage {
     /// The thread metadata items in this page.
     pub items: Vec<ThreadMetadata>,
+    /// Immediate parents for page items found through the persisted spawn graph.
+    pub parent_thread_ids: HashMap<ThreadId, ThreadId>,
     /// The next anchor to use for pagination, if any.
     pub next_anchor: Option<Anchor>,
     /// The number of rows scanned to produce this page.
@@ -475,7 +487,11 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
     }
 }
 
-pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Option<Anchor> {
+pub(crate) fn anchor_from_item(
+    item: &ThreadMetadata,
+    sort_key: SortKey,
+    include_thread_id_tiebreaker: bool,
+) -> Option<Anchor> {
     let ts = match sort_key {
         SortKey::CreatedAt => item.created_at,
         SortKey::UpdatedAt => item.updated_at,
@@ -483,7 +499,7 @@ pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Opti
     };
     Some(Anchor {
         ts,
-        id: (sort_key == SortKey::RecencyAt).then_some(item.id),
+        id: (include_thread_id_tiebreaker || sort_key == SortKey::RecencyAt).then_some(item.id),
     })
 }
 
