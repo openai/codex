@@ -592,6 +592,14 @@ impl AccountRequestProcessor {
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+        if self.auth_manager.auth_mode()
+            == Some(codex_protocol::auth::AuthMode::PersonalAccessToken)
+        {
+            return Err(invalid_request(
+                "External ChatGPT auth cannot replace an active personal access token. Remove the personal access token before using chatgptAuthTokens.",
+            ));
+        }
+
         if matches!(
             self.config.forced_login_method,
             Some(ForcedLoginMethod::Api)
