@@ -6,6 +6,10 @@ use codex_exec_server::FILE_READ_CHUNK_SIZE;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WalkEntry;
+use codex_exec_server::WalkEntryKind;
+use codex_exec_server::WalkOptions;
+use codex_exec_server::WalkOutcome;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -368,6 +372,184 @@ async fn file_system_read_directory_lists_entries(
                 is_file: true,
             },
         ]
+    );
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_walk_returns_a_bounded_tree(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let source_dir = tmp.path().join("source");
+    let nested_dir = source_dir.join("nested");
+    std::fs::create_dir_all(&nested_dir)?;
+    std::fs::write(source_dir.join("root.txt"), "root")?;
+    std::fs::write(nested_dir.join("note.txt"), "nested")?;
+
+    let source_uri = PathUri::from_host_native_path(&source_dir)?;
+    let outcome = file_system
+        .walk(
+            &source_uri,
+            WalkOptions {
+                max_depth: 4,
+                max_directories: 10,
+                max_entries: 10,
+                follow_directory_symlinks: false,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        outcome,
+        WalkOutcome {
+            entries: vec![
+                WalkEntry {
+                    path: PathUri::from_host_native_path(&nested_dir)?,
+                    kind: WalkEntryKind::Directory,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(source_dir.join("root.txt"))?,
+                    kind: WalkEntryKind::File,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(nested_dir.join("note.txt"))?,
+                    kind: WalkEntryKind::File,
+                },
+            ],
+            errors: Vec::new(),
+            truncated: false,
+        }
+    );
+
+    let root_entries = vec![
+        WalkEntry {
+            path: PathUri::from_host_native_path(&nested_dir)?,
+            kind: WalkEntryKind::Directory,
+        },
+        WalkEntry {
+            path: PathUri::from_host_native_path(source_dir.join("root.txt"))?,
+            kind: WalkEntryKind::File,
+        },
+    ];
+    let shallow = file_system
+        .walk(
+            &source_uri,
+            WalkOptions {
+                max_depth: 0,
+                max_directories: 10,
+                max_entries: 10,
+                follow_directory_symlinks: false,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        shallow,
+        WalkOutcome {
+            entries: root_entries.clone(),
+            errors: Vec::new(),
+            truncated: false,
+        }
+    );
+
+    let directory_bounded = file_system
+        .walk(
+            &source_uri,
+            WalkOptions {
+                max_depth: 4,
+                max_directories: 1,
+                max_entries: 10,
+                follow_directory_symlinks: false,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        directory_bounded,
+        WalkOutcome {
+            entries: root_entries,
+            errors: Vec::new(),
+            truncated: true,
+        }
+    );
+
+    let bounded = file_system
+        .walk(
+            &source_uri,
+            WalkOptions {
+                max_depth: 4,
+                max_directories: 10,
+                max_entries: 1,
+                follow_directory_symlinks: false,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        bounded,
+        WalkOutcome {
+            entries: vec![WalkEntry {
+                path: PathUri::from_host_native_path(&nested_dir)?,
+                kind: WalkEntryKind::Directory,
+            }],
+            errors: Vec::new(),
+            truncated: true,
+        }
+    );
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_walk_honors_read_sandbox(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let source_dir = tmp.path().join("source");
+    let file_path = source_dir.join("note.txt");
+    std::fs::create_dir_all(&source_dir)?;
+    std::fs::write(&file_path, "sandboxed")?;
+    let sandbox = read_only_sandbox(source_dir.clone());
+
+    let outcome = file_system
+        .walk(
+            &PathUri::from_host_native_path(&source_dir)?,
+            WalkOptions {
+                max_depth: 1,
+                max_directories: 2,
+                max_entries: 2,
+                follow_directory_symlinks: false,
+            },
+            Some(&sandbox),
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        outcome,
+        WalkOutcome {
+            entries: vec![WalkEntry {
+                path: PathUri::from_host_native_path(file_path)?,
+                kind: WalkEntryKind::File,
+            }],
+            errors: Vec::new(),
+            truncated: false,
+        }
     );
 
     Ok(())

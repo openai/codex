@@ -50,7 +50,6 @@ use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
-use codex_app_server_protocol::AuthMode as LoginAuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
@@ -80,6 +79,7 @@ use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
 use codex_login::auth::ExternalAuthTokens;
 use codex_protocol::ThreadId;
+use codex_protocol::auth::AuthMode as LoginAuthMode;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::StateDbHandle;
@@ -373,7 +373,7 @@ impl MessageProcessor {
                 )),
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
-                state_db.clone(),
+                codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
                 installation_id,
                 Some(app_server_attestation_provider(
                     outgoing.clone(),
@@ -1223,8 +1223,8 @@ impl MessageProcessor {
             ClientRequest::ThreadTurnsList { params, .. } => {
                 self.thread_processor.thread_turns_list(params).await
             }
-            ClientRequest::ThreadTurnsItemsList { params, .. } => {
-                self.thread_processor.thread_turns_items_list(params).await
+            ClientRequest::ThreadItemsList { params, .. } => {
+                self.thread_processor.thread_items_list(params).await
             }
             ClientRequest::ThreadShellCommand { params, .. } => {
                 self.thread_processor

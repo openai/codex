@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -30,6 +31,7 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -38,6 +40,8 @@ use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
+
+const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
 #[derive(Default)]
 struct ToolPlanInputs {
@@ -178,8 +182,10 @@ async fn probe_with(
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
     configure_turn(&mut turn);
-    let router = ToolRouter::from_turn_context(
-        &turn,
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let router = ToolRouter::from_context(
+        step_context.as_ref(),
         ToolRouterParams {
             tool_suggest_candidates: inputs.tool_suggest_candidates,
             mcp_tools: inputs.mcp_tools,
@@ -266,6 +272,29 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
         config.model_provider = provider_info.clone();
     });
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
+fn use_provider_auth(
+    turn: &mut TurnContext,
+    requires_openai_auth: bool,
+    actor_header: Option<(&str, &str)>,
+) {
+    let mut provider_info = turn.config.model_provider.clone();
+    provider_info.requires_openai_auth = requires_openai_auth;
+    provider_info.http_headers = actor_header.map(|(name, value)| {
+        HashMap::from([
+            (name.to_string(), value.to_string()),
+            (
+                "ChatGPT-Account-ID".to_string(),
+                "test-account-id".to_string(),
+            ),
+        ])
+    });
+    turn.auth_manager = None;
+    update_config(turn, |config| {
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
 }
 
 struct WebRunExtensionTool;
@@ -602,6 +631,7 @@ async fn environment_count_controls_environment_backed_tools() {
     let no_environment = probe(|turn| {
         turn.environments.turn_environments.clear();
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
+        set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     })
     .await;
@@ -610,22 +640,30 @@ async fn environment_count_controls_environment_backed_tools() {
         "exec_command",
         "apply_patch",
         "view_image",
+        "request_permissions",
     ]);
     no_environment.assert_registered_lacks(&[
         "shell_command",
         "exec_command",
         "apply_patch",
         "view_image",
+        "request_permissions",
     ]);
 
     let multiple_environments = probe(|turn| {
         duplicate_primary_environment(turn);
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
         set_feature(turn, Feature::UnifiedExec, /*enabled*/ true);
+        set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     })
     .await;
-    multiple_environments.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
+    multiple_environments.assert_visible_contains(&[
+        "exec_command",
+        "apply_patch",
+        "view_image",
+        "request_permissions",
+    ]);
     assert!(has_parameter(
         multiple_environments.visible_spec("exec_command"),
         "environment_id"
@@ -637,6 +675,31 @@ async fn environment_count_controls_environment_backed_tools() {
         multiple_environments.visible_spec("view_image"),
         "environment_id"
     ));
+}
+
+#[tokio::test]
+async fn environment_tools_follow_the_step_context() {
+    let (_session, mut turn) = make_session_and_context().await;
+    set_feature(&mut turn, Feature::UnifiedExec, /*enabled*/ true);
+    turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+
+    let environments = turn.environments.clone();
+    turn.environments.turn_environments.clear();
+    let step_context = Arc::new(StepContext::new(Arc::new(turn), environments));
+
+    let plan = ToolPlanProbe::from_router(ToolRouter::from_context(
+        step_context.as_ref(),
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            tool_suggest_candidates: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: &[],
+        },
+        &Default::default(),
+    ));
+
+    plan.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
 }
 
 #[tokio::test]
@@ -773,8 +836,10 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
 
     let (_session, mut first_turn) = make_session_and_context().await;
     first_turn.model_info.supports_search_tool = true;
-    let first_router = ToolRouter::from_turn_context(
-        &first_turn,
+    let first_turn = Arc::new(first_turn);
+    let first_step_context = StepContext::for_test(Arc::clone(&first_turn));
+    let first_router = ToolRouter::from_context(
+        first_step_context.as_ref(),
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: Some(vec![mcp_tool("first", "mcp__first", "lookup")]),
@@ -788,8 +853,10 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
 
     let (_session, mut second_turn) = make_session_and_context().await;
     second_turn.model_info.supports_search_tool = true;
-    let second_router = ToolRouter::from_turn_context(
-        &second_turn,
+    let second_turn = Arc::new(second_turn);
+    let second_step_context = StepContext::for_test(Arc::clone(&second_turn));
+    let second_router = ToolRouter::from_context(
+        second_step_context.as_ref(),
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: Some(vec![mcp_tool("second", "mcp__second", "lookup")]),
@@ -1151,19 +1218,48 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         });
     })
     .await;
-    v2.assert_visible_contains(&[
+    v2.assert_visible_contains(&[MULTI_AGENT_V2_NAMESPACE]);
+    v2.assert_visible_lacks(&[
         "spawn_agent",
         "send_message",
         "followup_task",
         "wait_agent",
         "interrupt_agent",
         "list_agents",
+        "send_input",
+        "resume_agent",
+        "assign_task",
+        "close_agent",
     ]);
-    v2.assert_visible_lacks(&["send_input", "resume_agent", "assign_task", "close_agent"]);
-    let spawn_agent_description = match v2.visible_spec("spawn_agent") {
-        ToolSpec::Function(tool) => tool.description.as_str(),
-        other => panic!("expected spawn_agent function spec, got {other:?}"),
+    for tool_name in [
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "interrupt_agent",
+        "list_agents",
+    ] {
+        assert!(
+            v2.namespace_function_names(MULTI_AGENT_V2_NAMESPACE)
+                .iter()
+                .any(|name| name == tool_name),
+            "expected {tool_name} in {MULTI_AGENT_V2_NAMESPACE} namespace"
+        );
+    }
+    let ToolSpec::Namespace(namespace) = v2.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {
+        panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
     };
+    let Some(ResponsesApiNamespaceTool::Function(spawn_agent)) =
+        namespace.tools.iter().find(|tool| {
+            matches!(
+                tool,
+                ResponsesApiNamespaceTool::Function(tool) if tool.name == "spawn_agent"
+            )
+        })
+    else {
+        panic!("expected spawn_agent in {MULTI_AGENT_V2_NAMESPACE} namespace");
+    };
+    let spawn_agent_description = spawn_agent.description.as_str();
     assert!(!spawn_agent_description.contains("max_concurrent_threads_per_session"));
     assert!(spawn_agent_description.contains(
         "Note that passing `fork_turns=\"none\"` will not pass any surrounding context to the spawned subagent"
@@ -1183,9 +1279,11 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         });
     })
     .await;
-    direct_model_only.assert_visible_contains(&["spawn_agent", "send_message", "wait_agent"]);
+    direct_model_only.assert_visible_contains(&[MULTI_AGENT_V2_NAMESPACE]);
+    direct_model_only.assert_visible_lacks(&["spawn_agent", "send_message", "wait_agent"]);
     assert_eq!(
-        direct_model_only.exposure("spawn_agent"),
+        direct_model_only
+            .exposure(&ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, "spawn_agent").to_string()),
         ToolExposure::DirectModelOnly
     );
 }
@@ -1196,9 +1294,17 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
     })
     .await;
+    let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {
+        panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
+    };
     for tool_name in ["spawn_agent", "send_message", "followup_task"] {
-        let ToolSpec::Function(tool) = plan.visible_spec(tool_name) else {
-            panic!("expected {tool_name} function spec");
+        let Some(ResponsesApiNamespaceTool::Function(tool)) = namespace.tools.iter().find(|tool| {
+            matches!(
+                tool,
+                ResponsesApiNamespaceTool::Function(tool) if tool.name == tool_name
+            )
+        }) else {
+            panic!("expected {tool_name} in {MULTI_AGENT_V2_NAMESPACE} namespace");
         };
         let properties = tool
             .parameters
@@ -1414,6 +1520,110 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     .await;
     api_key_auth.assert_visible_lacks(&["image_generation"]);
 
+    let unrelated_chatgpt_auth = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        let mut provider_info = turn.provider.info().clone();
+        provider_info.requires_openai_auth = false;
+        provider_info.http_headers = None;
+        update_config(turn, |config| {
+            config.model_provider = provider_info.clone();
+        });
+        turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    unrelated_chatgpt_auth.assert_visible_lacks(&["image_generation"]);
+
+    let provider_without_actor_auth = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn, /*requires_openai_auth*/ false, /*actor_header*/ None,
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    provider_without_actor_auth.assert_visible_lacks(&["image_generation"]);
+
+    let provider_authenticated = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("X-OpenAI-Actor-Authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    provider_authenticated.assert_visible_contains(&["image_generation"]);
+
+    let empty_actor_auth = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "  ")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    empty_actor_auth.assert_visible_lacks(&["image_generation"]);
+
+    let feature_disabled = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    feature_disabled.assert_visible_lacks(&["image_generation"]);
+
+    let text_only_model = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![];
+    })
+    .await;
+    text_only_model.assert_visible_lacks(&["image_generation"]);
+
+    let unsupported_image_generation_provider = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_bedrock_provider(turn);
+        let mut provider_info = turn.provider.info().clone();
+        provider_info.requires_openai_auth = false;
+        provider_info.http_headers = Some(HashMap::from([(
+            "x-openai-actor-authorization".to_string(),
+            "test-actor-authorization".to_string(),
+        )]));
+        turn.auth_manager = None;
+        update_config(turn, |config| {
+            config.model_provider = provider_info.clone();
+        });
+        turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    unsupported_image_generation_provider.assert_visible_lacks(&["image_generation"]);
+
+    let codex_managed_auth_provider = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ true,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    codex_managed_auth_provider.assert_visible_lacks(&["image_generation"]);
+
     let image_generation = probe(|turn| {
         use_chatgpt_auth(turn);
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
@@ -1464,12 +1674,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
             codex_code_mode::WAIT_TOOL_NAME,
             "request_user_input",
             // Multi-agent v2 tools.
-            "spawn_agent",
-            "send_message",
-            "followup_task",
-            "wait_agent",
-            "interrupt_agent",
-            "list_agents",
+            MULTI_AGENT_V2_NAMESPACE,
             // Hosted Responses tools.
             "web_search",
             "image_generation",

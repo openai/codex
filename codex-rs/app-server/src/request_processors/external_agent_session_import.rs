@@ -207,6 +207,7 @@ impl ExternalAgentSessionImporter {
             parent_thread_id: None,
             source: source.clone(),
             thread_source: None,
+            originator: codex_login::default_client::originator().value,
             base_instructions: BaseInstructions {
                 text: config
                     .base_instructions
@@ -215,6 +216,7 @@ impl ExternalAgentSessionImporter {
             },
             dynamic_tools: Vec::new(),
             multi_agent_version: Some(MultiAgentVersion::V1),
+            initial_window_id: uuid::Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(cwd.clone()),
                 model_provider: model_provider.clone(),

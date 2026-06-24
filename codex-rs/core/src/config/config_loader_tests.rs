@@ -3,12 +3,12 @@ use crate::config::ConfigOverrides;
 use crate::config::ConstraintError;
 use crate::config::PermissionProfileCatalogEntry;
 use crate::config::permission_profile_catalog;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::CloudConfigBundleLoadError;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigError;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
@@ -640,7 +640,7 @@ async fn selected_user_config_file_layers_over_base_user_config() {
         tmp.path().join(CONFIG_TOML_FILE),
         r#"
 model = "gpt-main"
-approval_policy = "on-failure"
+approval_policy = "on-request"
 "#,
     )
     .expect("write default user config");
@@ -697,7 +697,7 @@ approval_policy = "on-failure"
             .effective_config()
             .get("approval_policy")
             .and_then(TomlValue::as_str),
-        Some("on-failure")
+        Some("on-request")
     );
 }
 
@@ -1033,12 +1033,6 @@ personality = true
     config_requirements
         .approval_policy
         .can_set(&AskForApproval::Never)?;
-    assert!(
-        config_requirements
-            .approval_policy
-            .can_set(&AskForApproval::OnFailure)
-            .is_err()
-    );
     assert_eq!(
         config_requirements.web_search_mode.value(),
         WebSearchMode::Cached
@@ -3507,8 +3501,8 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 
 mod requirements_exec_policy_tests {
     use crate::exec_policy::load_exec_policy;
-    use codex_app_server_protocol::ConfigLayerSource;
     use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerSource;
     use codex_config::ConfigLayerStack;
     use codex_config::ConfigRequirements;
     use codex_config::ConfigRequirementsToml;

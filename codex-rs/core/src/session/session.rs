@@ -106,6 +106,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) parent_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
     pub(super) thread_source: Option<ThreadSource>,
+    /// Effective originator used for this thread's Responses requests and analytics events.
+    pub(super) originator: String,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
     pub(super) user_shell_override: Option<shell::Shell>,
 }
@@ -198,6 +200,7 @@ impl SessionConfiguration {
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source.clone(),
+            originator: self.originator.clone(),
         }
     }
 
@@ -473,6 +476,11 @@ impl Session {
         self.services.agent_control.session_id()
     }
 
+    pub(crate) async fn originator(&self) -> String {
+        let state = self.state.lock().await;
+        state.session_configuration.originator.clone()
+    }
+
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
@@ -546,6 +554,7 @@ impl Session {
                 SessionId::from(thread_id)
             }
         });
+        let initial_auto_compact_window_ids = AutoCompactWindowIds::new_initial();
         let agent_control = agent_control.with_session_id(
             session_id,
             config
@@ -580,11 +589,15 @@ impl Session {
                             parent_thread_id,
                             source: session_source,
                             thread_source: session_configuration.thread_source.clone(),
+                            originator: session_configuration.originator.clone(),
                             base_instructions: BaseInstructions {
                                 text: session_configuration.base_instructions.clone(),
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
                             multi_agent_version: initial_multi_agent_version,
+                            initial_window_id: initial_auto_compact_window_ids
+                                .window_id
+                                .to_string(),
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),
                                 model_provider: config.model_provider_id.clone(),
@@ -748,20 +761,11 @@ impl Session {
             ) {
                 post_session_configured_events.push(event);
             }
-            if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
-                post_session_configured_events.push(Event {
-                    id: "".to_owned(),
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: "`on-failure` approval policy is deprecated and will be removed in a future release. Use `on-request` for interactive approvals or `never` for non-interactive runs.".to_string(),
-                    }),
-                });
-            }
-
             let auth = auth.as_ref();
             let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
             let account_id = auth.and_then(CodexAuth::get_account_id);
             let account_email = auth.and_then(CodexAuth::get_account_email);
-            let originator = originator().value;
+            let originator = session_configuration.originator.clone();
             let terminal_type = user_agent();
             let session_model = session_configuration.collaboration_mode.model().to_string();
             let auth_env_telemetry = collect_auth_env_telemetry(
@@ -898,7 +902,10 @@ impl Session {
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
-            let state = SessionState::new(session_configuration.clone());
+            let state = SessionState::new_with_auto_compact_window_ids(
+                session_configuration.clone(),
+                initial_auto_compact_window_ids,
+            );
             let managed_network_requirements_configured = config
                 .config_layer_stack
                 .requirements_toml()
@@ -1059,6 +1066,7 @@ impl Session {
                     thread_id,
                     session_configuration.provider.clone(),
                     session_configuration.session_source.clone(),
+                    session_configuration.originator.clone(),
                     config.model_verbosity,
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
@@ -1138,9 +1146,6 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            let host_owned_codex_apps_enabled = config
-                .features
-                .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
             let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
                 ElicitationCapability {
                     form: Some(FormElicitationCapability::default()),
@@ -1183,7 +1188,6 @@ impl Session {
                 mcp_runtime_context,
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
-                host_owned_codex_apps_enabled,
                 config.prefix_mcp_tool_names(),
                 client_elicitation_capability,
                 sess.services

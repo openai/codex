@@ -26,6 +26,8 @@ use rama_core::extensions::ExtensionsRef;
 use rama_core::futures::stream::Stream as FuturesStream;
 use rama_core::rt::Executor;
 use rama_core::service::service_fn;
+use rama_core::stream::PeekStream;
+use rama_core::stream::StackReader;
 use rama_core::stream::Stream;
 use rama_http::Body;
 use rama_http::BodyDataStream;
@@ -39,21 +41,24 @@ use rama_http::header::HOST;
 use rama_http::layer::remove_header::RemoveRequestHeaderLayer;
 use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http_backend::server::HttpServer;
-use rama_http_backend::server::layer::upgrade::Upgraded;
 use rama_net::proxy::ProxyTarget;
 use rama_net::stream::SocketInfo;
+use rama_net::tls::server::TlsPeekStream;
 use rama_tls_rustls::server::TlsAcceptorData;
 use rama_tls_rustls::server::TlsAcceptorLayer;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context as TaskContext;
 use std::task::Poll;
+use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
 
 /// State needed to terminate a CONNECT tunnel and enforce policy on inner HTTPS requests.
 pub struct MitmState {
-    ca: ManagedMitmCa,
+    ca: Arc<ManagedMitmCa>,
     upstream: UpstreamClient,
     inspect: bool,
     max_body_bytes: usize,
@@ -87,6 +92,51 @@ enum MitmPolicyDecision {
 
 const MITM_INSPECT_BODIES: bool = false;
 const MITM_MAX_BODY_BYTES: usize = 4096;
+const TLS_PREFIX_LEN: usize = 5;
+const TLS_PREFIX_FIRST_BYTE_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Peeks enough bytes to distinguish a TLS handshake from an opaque CONNECT stream.
+///
+/// The first-byte timeout preserves server-first protocols. Once the client starts a possible TLS
+/// prefix, all five record-header bytes are accumulated so fragmented handshakes cannot bypass
+/// interception. Every byte read is replayed through `TlsPeekStream`.
+pub(crate) async fn peek_tls_prefix<S>(mut stream: S) -> Result<(bool, TlsPeekStream<S>)>
+where
+    S: Stream + Unpin + ExtensionsMut,
+{
+    let mut peek_buf = [0_u8; TLS_PREFIX_LEN];
+    let mut bytes_read =
+        match timeout(TLS_PREFIX_FIRST_BYTE_TIMEOUT, stream.read(&mut peek_buf)).await {
+            Ok(result) => result.context("read TLS prefix")?,
+            Err(_) => 0,
+        };
+    while bytes_read > 0 && bytes_read < TLS_PREFIX_LEN {
+        let possible_tls_prefix = matches!(
+            &peek_buf[..bytes_read],
+            [0x16] | [0x16, 0x03] | [0x16, 0x03, 0x00..=0x04, ..]
+        );
+        if !possible_tls_prefix {
+            break;
+        }
+        let read = stream
+            .read(&mut peek_buf[bytes_read..])
+            .await
+            .context("read TLS prefix")?;
+        if read == 0 {
+            break;
+        }
+        bytes_read += read;
+    }
+
+    let is_tls = bytes_read == TLS_PREFIX_LEN && matches!(peek_buf, [0x16, 0x03, 0x00..=0x04, ..]);
+    let offset = TLS_PREFIX_LEN - bytes_read;
+    if offset > 0 {
+        peek_buf.copy_within(0..bytes_read, offset);
+    }
+    let mut peek = StackReader::new(peek_buf);
+    peek.skip(offset);
+    Ok((is_tls, PeekStream::new(peek, stream)))
+}
 
 impl std::fmt::Debug for MitmState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -104,7 +154,7 @@ impl MitmState {
 
         // MITM exists when HTTPS policy depends on the inner request: limited-mode method clamps
         // and host-specific hooks both need visibility after CONNECT is established. We
-        // generate/load a local CA and issue per-host leaf certs so we can terminate TLS and
+        // generate a process-local CA and issue per-host leaf certs so we can terminate TLS and
         // apply policy.
         let ca = ManagedMitmCa::load_or_create()?;
         let upstream_tls_root_store =
@@ -141,11 +191,6 @@ impl MitmState {
     pub(crate) fn max_body_bytes(&self) -> usize {
         self.max_body_bytes
     }
-}
-
-/// Terminate the upgraded CONNECT stream with a generated leaf cert and proxy inner HTTPS traffic.
-pub(crate) async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
-    mitm_stream(upgraded).await
 }
 
 /// Terminate a raw client stream with a generated leaf cert and proxy inner HTTPS traffic.
@@ -247,6 +292,10 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
     let log_path = path_for_log(req.uri());
 
     let (mut parts, body) = req.into_parts();
+    request_ctx
+        .policy
+        .app_state
+        .inject_request_credentials(&target_host, &mut parts.headers);
     apply_mitm_hook_actions(&mut parts.headers, hook_actions.as_ref());
     let authority = authority_header_value(&target_host, target_port);
     parts.uri = build_https_uri(&authority, &path)?;

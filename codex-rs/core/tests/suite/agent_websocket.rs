@@ -1,6 +1,10 @@
 use anyhow::Result;
 use codex_features::Feature;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -10,11 +14,88 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::time::Duration;
 
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_model_switch_to_responses_lite_omits_top_level_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_model("gpt-5.3-codex");
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    test.submit_turn("non-lite turn").await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "lite turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                model: Some("gpt-5.4".to_string()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(server.handshakes().len(), 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 3);
+    let non_lite_turn = connection
+        .get(1)
+        .expect("missing non-lite turn request")
+        .body_json();
+    let lite_turn = connection
+        .get(2)
+        .expect("missing lite turn request")
+        .body_json();
+
+    assert_eq!(non_lite_turn["model"].as_str(), Some("gpt-5.3-codex"));
+    assert_eq!(lite_turn["model"].as_str(), Some("gpt-5.4"));
+    assert!(
+        non_lite_turn
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty())
+    );
+    assert_eq!(lite_turn.get("previous_response_id"), None);
+    assert_eq!(lite_turn.get("tools"), None);
+    assert_eq!(lite_turn.get("instructions"), None);
+    let additional_tools = lite_turn
+        .get("input")
+        .and_then(Value::as_array)
+        .and_then(|input| input.first())
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))
+        .and_then(|item| item.get("tools"))
+        .and_then(Value::as_array)
+        .expect("lite turn should start with an additional_tools item");
+    assert!(!additional_tools.is_empty());
+
+    server.shutdown().await;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_test_codex_shell_chain() -> Result<()> {

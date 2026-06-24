@@ -1,9 +1,11 @@
 use super::*;
+use crate::session::tests::build_world_state_from_turn_context;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 
 async fn process_compacted_history_with_test_session(
     compacted_history: Vec<ResponseItem>,
@@ -13,12 +15,16 @@ async fn process_compacted_history_with_test_session(
     session
         .set_previous_turn_settings(previous_turn_settings.cloned())
         .await;
-    let initial_context = session.build_initial_context(&turn_context).await;
-    let refreshed = crate::compact_remote::process_compacted_history(
+    let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
+    let initial_context = session
+        .build_initial_context_with_world_state(&turn_context, world_state.as_ref())
+        .await;
+    let initial_context_injection = InitialContextInjection::BeforeLastUserMessage(world_state);
+    let (refreshed, _) = crate::compact_remote::process_compacted_history(
         &session,
         &turn_context,
         compacted_history,
-        InitialContextInjection::BeforeLastUserMessage,
+        &initial_context_injection,
     )
     .await;
     (refreshed, initial_context)

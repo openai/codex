@@ -211,6 +211,7 @@ FROM threads
                 sort_direction: SortDirection::Desc,
                 search_term: None,
             },
+            /*include_thread_id_tiebreaker*/ false,
         );
         builder.push(" AND threads.memory_mode = 'enabled'");
         builder

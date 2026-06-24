@@ -19,13 +19,15 @@ use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::context::UserInstructions as ContextUserInstructions;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
 use codex_extension_api::UserInstructions;
+use codex_file_system::FindUpErrorPolicy;
+use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::io;
@@ -104,13 +106,6 @@ async fn read_agents_md(
             break;
         }
 
-        match fs.get_metadata(&p, /*sandbox*/ None).await {
-            Ok(metadata) if !metadata.is_file => continue,
-            Ok(_) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
-        }
-
         let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
             Ok(data) => data,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
@@ -177,30 +172,15 @@ async fn agents_md_paths(
             default_project_root_markers()
         }
     };
-    let mut project_root = None;
-    if !project_root_markers.is_empty() {
-        for current in dir.ancestors() {
-            for marker in &project_root_markers {
-                let marker_path = current
-                    .join(marker)
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-                let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await {
-                    Ok(_) => true,
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-                    Err(err) => return Err(err),
-                };
-                if marker_exists {
-                    project_root = Some(current.clone());
-                    break;
-                }
-            }
-            if project_root.is_some() {
-                break;
-            }
-        }
-    }
-
-    let search_dirs: Vec<PathUri> = if let Some(root) = project_root {
+    let project_root = find_nearest_ancestor_with_markers(
+        fs,
+        &dir,
+        project_root_markers,
+        FindUpErrorPolicy::Propagate,
+        /*sandbox*/ None,
+    )
+    .await?;
+    let search_dirs = if let Some(root) = project_root {
         let mut dirs = Vec::new();
         let mut cursor = dir.clone();
         loop {
@@ -219,25 +199,24 @@ async fn agents_md_paths(
         vec![dir]
     };
 
-    let mut found: Vec<PathUri> = Vec::new();
+    let mut found = Vec::new();
     let candidate_filenames = candidate_filenames(config);
-    for d in search_dirs {
+    for directory in search_dirs {
         for name in &candidate_filenames {
-            let candidate = d
+            let candidate = directory
                 .join(name)
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
             match fs.get_metadata(&candidate, /*sandbox*/ None).await {
-                Ok(md) if md.is_file => {
+                Ok(metadata) if metadata.is_file => {
                     found.push(candidate);
                     break;
                 }
                 Ok(_) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err),
             }
         }
     }
-
     Ok(found)
 }
 

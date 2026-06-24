@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -78,12 +79,16 @@ pub struct CreateThreadParams {
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
+    /// Effective originator used for this thread's Responses requests and analytics events.
+    pub originator: String,
     /// Base instructions persisted in session metadata.
     pub base_instructions: BaseInstructions,
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
     /// Multi-agent runtime selected when the thread was created.
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// Initial context-window identity captured when the thread was created.
+    pub initial_window_id: String,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
 }
@@ -96,7 +101,7 @@ pub struct ResumeThreadParams {
     /// Known local rollout path when the caller resumed from a specific file.
     pub rollout_path: Option<PathBuf>,
     /// Known replay history for the resumed thread, if already loaded by the caller.
-    pub history: Option<Vec<RolloutItem>>,
+    pub history: Option<Arc<Vec<RolloutItem>>>,
     /// Whether archived threads may be reopened.
     pub include_archived: bool,
     /// Metadata for future writes appended to the resumed live thread.
@@ -177,6 +182,15 @@ pub enum SortDirection {
     Desc,
 }
 
+/// Spawn-graph relationship used to filter thread listings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThreadRelationFilter {
+    /// Return only threads whose immediate parent is the given thread.
+    DirectChildrenOf(ThreadId),
+    /// Return every thread transitively descended from the given thread.
+    DescendantsOf(ThreadId),
+}
+
 /// Parameters for listing threads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListThreadsParams {
@@ -200,8 +214,8 @@ pub struct ListThreadsParams {
     pub archived: bool,
     /// Optional substring/full-text search term for thread title/preview.
     pub search_term: Option<String>,
-    /// Optional direct parent thread filter.
-    pub parent_thread_id: Option<ThreadId>,
+    /// Optional spawn-graph relationship filter.
+    pub relation_filter: Option<ThreadRelationFilter>,
     /// Return directly from the state DB without scanning JSONL rollouts to repair metadata.
     pub use_state_db_only: bool,
 }

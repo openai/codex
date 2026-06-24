@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::extract::ws::Message as AxumWebSocketMessage;
 use axum::extract::ws::WebSocket as AxumWebSocket;
-use codex_app_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCMessage;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -597,8 +597,8 @@ mod tests {
     use std::task::Context;
     use std::task::Poll;
 
-    use codex_app_server_protocol::JSONRPCRequest;
-    use codex_app_server_protocol::RequestId;
+    use codex_exec_server_protocol::JSONRPCRequest;
+    use codex_exec_server_protocol::RequestId;
     use futures::channel::mpsc as futures_mpsc;
     use futures::task::AtomicWaker;
     use tokio::net::TcpListener;

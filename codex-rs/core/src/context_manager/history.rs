@@ -86,18 +86,18 @@ impl ContextManager {
 
     pub(crate) fn update_world_state(
         &mut self,
-        world_state: WorldState,
+        world_state: Arc<WorldState>,
     ) -> Vec<Box<dyn ContextualUserFragment>> {
         let fragments = self.world_state_baseline.as_deref().map_or_else(
             || world_state.render_full(),
             |previous| world_state.render_diff(previous),
         );
-        self.world_state_baseline = Some(Arc::new(world_state));
+        self.world_state_baseline = Some(world_state);
         fragments
     }
 
-    pub(crate) fn set_world_state_baseline(&mut self, world_state: WorldState) {
-        self.world_state_baseline = Some(Arc::new(world_state));
+    pub(crate) fn set_world_state_baseline(&mut self, world_state: Arc<WorldState>) {
+        self.world_state_baseline = Some(world_state);
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -386,7 +386,8 @@ impl ContextManager {
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             },
-            ResponseItem::Message { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Message { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
@@ -476,7 +477,8 @@ pub(crate) fn truncate_function_output_payload(
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
-        ResponseItem::AgentMessage { .. }
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::AgentMessage { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::ToolSearchCall { .. }
@@ -722,7 +724,8 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::CompactionTrigger { .. } => false,
-        ResponseItem::FunctionCallOutput { .. }
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::AgentMessage { .. }

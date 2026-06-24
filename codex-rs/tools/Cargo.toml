@@ -8,8 +8,8 @@ version.workspace = true
 workspace = true
 
 [dependencies]
-codex-app-server-protocol = { workspace = true }
 codex-code-mode = { workspace = true }
+codex-connectors = { workspace = true }
 codex-features = { workspace = true }
 codex-file-system = { workspace = true }
 codex-protocol = { workspace = true }

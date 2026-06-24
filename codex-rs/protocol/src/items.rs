@@ -25,6 +25,7 @@ use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use quick_xml::de::from_str as from_xml_str;
 use quick_xml::se::to_string as to_xml_string;
 use schemars::JsonSchema;
@@ -138,7 +139,11 @@ pub struct WebSearchItem {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ImageViewItem {
     pub id: String,
-    pub path: AbsolutePathBuf,
+    /// Path resolved within the selected execution environment.
+    ///
+    /// This core protocol type is not exposed directly in the app-server API.
+    /// App-server converts the path to `LegacyAppPathString` at its boundary.
+    pub path: PathUri,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]

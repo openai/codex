@@ -24,6 +24,10 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WalkEntry;
+use codex_exec_server::WalkEntryKind;
+use codex_exec_server::WalkOptions;
+use codex_exec_server::WalkOutcome;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -260,6 +264,87 @@ async fn file_system_get_metadata_reports_symlink_targets(
             size: std::fs::metadata(&dir_path)?.len(),
             created_at_ms: dir_symlink_metadata.created_at_ms,
             modified_at_ms: dir_symlink_metadata.modified_at_ms,
+        }
+    );
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_walk_handles_directory_symlinks(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let root = tmp.path().join("root");
+    let target = tmp.path().join("target");
+    let target_file = target.join("note.txt");
+    let target_link = root.join("target-link");
+    let root_link = target.join("root-link");
+    std::fs::create_dir_all(&root)?;
+    std::fs::create_dir_all(&target)?;
+    std::fs::write(&target_file, "target")?;
+    symlink(&target, &target_link)?;
+    symlink(&root, &root_link)?;
+
+    let outcome = file_system
+        .walk(
+            &PathUri::from_host_native_path(&root)?,
+            WalkOptions {
+                max_depth: 2,
+                max_directories: 4,
+                max_entries: 8,
+                follow_directory_symlinks: false,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        outcome,
+        WalkOutcome {
+            entries: Vec::new(),
+            errors: Vec::new(),
+            truncated: false,
+        }
+    );
+
+    let outcome = file_system
+        .walk(
+            &PathUri::from_host_native_path(&root)?,
+            WalkOptions {
+                max_depth: 2,
+                max_directories: 4,
+                max_entries: 8,
+                follow_directory_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        outcome,
+        WalkOutcome {
+            entries: vec![
+                WalkEntry {
+                    path: PathUri::from_host_native_path(&target_link)?,
+                    kind: WalkEntryKind::Directory,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(target_link.join("note.txt"))?,
+                    kind: WalkEntryKind::File,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(target_link.join("root-link"))?,
+                    kind: WalkEntryKind::Directory,
+                },
+            ],
+            errors: Vec::new(),
+            truncated: false,
         }
     );
 

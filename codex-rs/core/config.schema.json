@@ -253,13 +253,6 @@
           "type": "string"
         },
         {
-          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
-          "enum": [
-            "on-failure"
-          ],
-          "type": "string"
-        },
-        {
           "description": "The model decides when to ask the user for approval.",
           "enum": [
             "on-request"
@@ -438,9 +431,6 @@
               ]
             },
             "auth_elicitation": {
-              "type": "boolean"
-            },
-            "auto_compaction": {
               "type": "boolean"
             },
             "browser_use": {
@@ -826,7 +816,7 @@
         "enabled": {
           "type": "boolean"
         },
-        "reminder_interval_model_requests": {
+        "reminder_interval_seconds": {
           "format": "uint64",
           "minimum": 1.0,
           "type": "integer"
@@ -1323,6 +1313,9 @@
         }
       ],
       "description": "One action binding value in config.\n\nThis accepts either:\n\n1. A single key spec string (`\"ctrl-a\"`). 2. A list of key spec strings (`[\"ctrl-a\", \"alt-a\"]`).\n\nAn empty list explicitly unbinds the action in that scope. Because an explicit empty list is still a configured value, runtime resolution must not fall through to global or built-in defaults for that action."
+    },
+    "LegacyAppPathString": {
+      "type": "string"
     },
     "MarketplaceConfig": {
       "additionalProperties": false,
@@ -2440,8 +2433,12 @@
           "type": "string"
         },
         "cwd": {
-          "default": null,
-          "type": "string"
+          "allOf": [
+            {
+              "$ref": "#/definitions/LegacyAppPathString"
+            }
+          ],
+          "default": null
         },
         "default_tools_approval_mode": {
           "allOf": [
@@ -4742,9 +4739,6 @@
           ]
         },
         "auth_elicitation": {
-          "type": "boolean"
-        },
-        "auto_compaction": {
           "type": "boolean"
         },
         "browser_use": {
