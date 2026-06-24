@@ -1346,6 +1346,7 @@ Because audio is intentionally separate from `ThreadItem`, clients can opt out o
 ### MCP server startup events
 
 - `mcpServer/startupStatus/updated` — `{ threadId, name, status, error }` when app-server observes an MCP server startup transition. `threadId` identifies the owning thread when startup is thread-scoped and is `null` when startup is app-scoped. `status` is one of `starting`, `ready`, `failed`, or `cancelled`. `error` is `null` except for `failed`.
+- `mcpServer/reauthenticationRequired` — `{ name }` when an MCP server cannot start because its stored OAuth credentials have expired and cannot be refreshed. Clients should prompt the user to reconnect the named server.
 
 ### Turn events
 
@@ -1935,6 +1936,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change. This is a sparse rolling update; merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot.
 - `account/sendAddCreditsNudgeEmail` — ask ChatGPT to email the workspace owner about depleted credits or a reached usage limit.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, threadId, success, error? }`.
+- `mcpServer/reauthenticationRequired` (notify) — emitted when a server cannot start because its stored OAuth credentials have expired and cannot be refreshed; payload includes `{ name }` so clients can prompt the user to reconnect it.
 - `mcpServer/startupStatus/updated` (notify) — emitted when a configured MCP server's startup status changes; payload includes `{ threadId, name, status, error }`, where `threadId` is the owning thread when startup is thread-scoped and `null` when it is app-scoped, and `status` is `starting`, `ready`, `failed`, or `cancelled`.
 
 ### 1) Check auth state
