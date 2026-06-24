@@ -148,10 +148,13 @@ pub async fn run_plugin_add(
         &plugin_name,
     )?;
     let outcome = manager
-        .install_plugin(PluginInstallRequest {
-            plugin_name,
-            marketplace_path: marketplace.path,
-        })
+        .install_plugin(
+            &plugins_input.config_layer_stack,
+            PluginInstallRequest {
+                plugin_name,
+                marketplace_path: marketplace.path,
+            },
+        )
         .await?;
 
     if json {

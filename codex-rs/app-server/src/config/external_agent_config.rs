@@ -877,6 +877,16 @@ impl ExternalAgentConfigService {
                 "plugins migration item is missing details".to_string(),
             ));
         };
+        let config = ConfigBuilder::default()
+            .codex_home(self.codex_home.clone())
+            .fallback_cwd(Some(
+                cwd.map(Path::to_path_buf)
+                    .unwrap_or_else(|| self.codex_home.clone()),
+            ))
+            .build()
+            .await
+            .map_err(|err| io::Error::other(format!("failed to load config: {err}")))?;
+        let requirements = config.config_layer_stack.requirements().clone();
         let mut outcome = PluginImportOutcome::default();
         let plugins_manager = PluginsManager::new(self.codex_home.clone());
         for plugin_group in plugins {
@@ -916,7 +926,8 @@ impl ExternalAgentConfigService {
                 ref_name: import_source.ref_name,
                 sparse_paths: Vec::new(),
             };
-            let add_marketplace_outcome = add_marketplace(self.codex_home.clone(), request).await;
+            let add_marketplace_outcome =
+                add_marketplace(self.codex_home.clone(), requirements.clone(), request).await;
             let marketplace_path = match add_marketplace_outcome {
                 Ok(add_marketplace_outcome) => {
                     let Some(marketplace_path) = find_marketplace_manifest_path(
@@ -954,12 +965,37 @@ impl ExternalAgentConfigService {
                     continue;
                 }
             };
+            let install_config = match ConfigBuilder::default()
+                .codex_home(self.codex_home.clone())
+                .fallback_cwd(Some(
+                    cwd.map(Path::to_path_buf)
+                        .unwrap_or_else(|| self.codex_home.clone()),
+                ))
+                .build()
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    record_plugin_import_errors(
+                        &mut outcome,
+                        cwd,
+                        &plugin_ids,
+                        "plugin_import",
+                        format!("failed to reload config after adding marketplace: {err}"),
+                    );
+                    outcome.failed_plugin_ids.extend(plugin_ids);
+                    continue;
+                }
+            };
             for plugin_name in plugin_names {
                 match plugins_manager
-                    .install_plugin(PluginInstallRequest {
-                        plugin_name: plugin_name.clone(),
-                        marketplace_path: marketplace_path.clone(),
-                    })
+                    .install_plugin(
+                        &install_config.config_layer_stack,
+                        PluginInstallRequest {
+                            plugin_name: plugin_name.clone(),
+                            marketplace_path: marketplace_path.clone(),
+                        },
+                    )
                     .await
                 {
                     Ok(_) => outcome
