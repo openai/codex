@@ -779,11 +779,13 @@ mod tests {
                 .as_deref()
                 .is_some_and(|remedy| remedy.starts_with("Restart Codex"))
         }));
+        let missing_file_name = missing_path.file_name().expect("rollout file name");
         assert!(
             check
                 .details
                 .iter()
-                .any(|detail| detail.contains(missing_path.to_string_lossy().as_ref()))
+                .filter_map(|detail| detail.strip_prefix("rollout DB missing active sample: "))
+                .any(|sample| Path::new(sample).file_name() == Some(missing_file_name))
         );
     }
 
