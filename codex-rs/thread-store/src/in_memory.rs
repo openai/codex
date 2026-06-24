@@ -17,6 +17,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::persisted_rollout_items;
+use tokio::sync::broadcast;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -29,6 +30,7 @@ use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::ThreadCatalogChange;
 use crate::ThreadMetadataPatch;
 use crate::ThreadPage;
 use crate::ThreadRelationFilter;
@@ -58,6 +60,7 @@ mod tests {
     use crate::ThreadSortKey;
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::protocol::SessionSource;
+    use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn default_turn_pagination_methods_return_unsupported() {
@@ -348,6 +351,87 @@ mod tests {
             }
         ));
     }
+
+    #[tokio::test]
+    async fn catalog_changes_follow_successful_mutations() {
+        let store = InMemoryThreadStore::default();
+        let mut changes = store.subscribe_catalog_changes();
+        let thread_id = ThreadId::default();
+
+        ThreadStore::create_thread(
+            &store,
+            create_thread_params(thread_id, ThreadHistoryMode::Legacy),
+        )
+        .await
+        .expect("create thread");
+        assert_eq!(
+            changes.recv().await.expect("create change"),
+            ThreadCatalogChange::Upsert { thread_id }
+        );
+
+        store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read thread");
+        ThreadStore::update_thread_metadata(
+            &store,
+            UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch::default(),
+                include_archived: false,
+            },
+        )
+        .await
+        .expect("apply empty metadata patch");
+        assert!(matches!(
+            changes.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        ThreadStore::update_thread_metadata(
+            &store,
+            UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    name: Some(Some("renamed".to_string())),
+                    ..Default::default()
+                },
+                include_archived: false,
+            },
+        )
+        .await
+        .expect("update metadata");
+        store
+            .archive_thread(ArchiveThreadParams { thread_id })
+            .await
+            .expect("archive thread");
+        store
+            .unarchive_thread(ArchiveThreadParams { thread_id })
+            .await
+            .expect("unarchive thread");
+        ThreadStore::delete_thread(&store, DeleteThreadParams { thread_id })
+            .await
+            .expect("delete thread");
+
+        assert_eq!(
+            [
+                ThreadCatalogChange::Upsert { thread_id },
+                ThreadCatalogChange::Upsert { thread_id },
+                ThreadCatalogChange::Upsert { thread_id },
+                ThreadCatalogChange::Delete { thread_id },
+            ],
+            [
+                changes.recv().await.expect("metadata change"),
+                changes.recv().await.expect("archive change"),
+                changes.recv().await.expect("unarchive change"),
+                changes.recv().await.expect("delete change"),
+            ]
+        );
+    }
 }
 
 fn stores_guard() -> MutexGuard<'static, HashMap<String, Arc<InMemoryThreadStore>>> {
@@ -383,9 +467,19 @@ pub struct InMemoryThreadStoreCalls {
 /// Test and debug configs can select this store by id, letting tests exercise
 /// config-driven non-local persistence without requiring the real remote gRPC
 /// service.
-#[derive(Default)]
 pub struct InMemoryThreadStore {
     state: tokio::sync::Mutex<InMemoryThreadStoreState>,
+    catalog_changes_tx: broadcast::Sender<ThreadCatalogChange>,
+}
+
+impl Default for InMemoryThreadStore {
+    fn default() -> Self {
+        let (catalog_changes_tx, _) = broadcast::channel(256);
+        Self {
+            state: tokio::sync::Mutex::new(InMemoryThreadStoreState::default()),
+            catalog_changes_tx,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -417,6 +511,10 @@ impl InMemoryThreadStore {
     /// Returns the calls observed by this store.
     pub async fn calls(&self) -> InMemoryThreadStoreCalls {
         self.state.lock().await.calls.clone()
+    }
+
+    fn publish_catalog_change(&self, change: ThreadCatalogChange) {
+        let _ = self.catalog_changes_tx.send(change);
     }
 
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
@@ -608,8 +706,17 @@ impl ThreadStore for InMemoryThreadStore {
         self
     }
 
+    fn subscribe_catalog_changes(&self) -> broadcast::Receiver<ThreadCatalogChange> {
+        self.catalog_changes_tx.subscribe()
+    }
+
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(InMemoryThreadStore::create_thread(self, params))
+        let thread_id = params.thread_id;
+        Box::pin(async move {
+            InMemoryThreadStore::create_thread(self, params).await?;
+            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+            Ok(())
+        })
     }
 
     fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreFuture<'_, ()> {
@@ -707,26 +814,46 @@ impl ThreadStore for InMemoryThreadStore {
         &self,
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreFuture<'_, StoredThread> {
-        Box::pin(InMemoryThreadStore::update_thread_metadata(self, params))
+        let thread_id = params.thread_id;
+        let changed = !params.patch.is_empty();
+        Box::pin(async move {
+            let thread = InMemoryThreadStore::update_thread_metadata(self, params).await?;
+            if changed {
+                self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+            }
+            Ok(thread)
+        })
     }
 
-    fn archive_thread(&self, _params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()> {
+    fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()> {
+        let thread_id = params.thread_id;
         Box::pin(async move {
             self.state.lock().await.calls.archive_thread += 1;
+            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
             Ok(())
         })
     }
 
     fn unarchive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, StoredThread> {
+        let thread_id = params.thread_id;
         Box::pin(async move {
             let mut state = self.state.lock().await;
             state.calls.unarchive_thread += 1;
-            stored_thread_from_state(&state, params.thread_id, /*include_history*/ false)
+            let thread =
+                stored_thread_from_state(&state, thread_id, /*include_history*/ false)?;
+            drop(state);
+            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+            Ok(thread)
         })
     }
 
     fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(InMemoryThreadStore::delete_thread(self, params))
+        let thread_id = params.thread_id;
+        Box::pin(async move {
+            InMemoryThreadStore::delete_thread(self, params).await?;
+            self.publish_catalog_change(ThreadCatalogChange::Delete { thread_id });
+            Ok(())
+        })
     }
 }
 

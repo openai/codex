@@ -19,6 +19,7 @@ use crate::ResumeThreadParams;
 use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::ThreadCatalogChange;
 use crate::ThreadPage;
 use crate::ThreadSearchPage;
 use crate::ThreadStoreError;
@@ -41,6 +42,13 @@ pub trait ThreadStore: Any + Send + Sync {
     fn default_history_mode(&self) -> ThreadHistoryMode {
         ThreadHistoryMode::Legacy
     }
+
+    /// Subscribes to future catalog-row invalidations.
+    ///
+    /// Events are not replayed and do not contain snapshots. Consumers should subscribe before
+    /// reading their initial catalog view, reread the affected thread after each event, and rebuild
+    /// that view if the receiver reports lag.
+    fn subscribe_catalog_changes(&self) -> tokio::sync::broadcast::Receiver<ThreadCatalogChange>;
 
     /// Creates a new live thread.
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()>;
