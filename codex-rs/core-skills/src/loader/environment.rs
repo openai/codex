@@ -1,6 +1,8 @@
 use std::io;
 
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::WalkEntryKind;
+use codex_exec_server::WalkOptions;
 use codex_protocol::protocol::Product;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::plugin_namespace_for_skill_uri;
@@ -9,17 +11,21 @@ use crate::model::SkillDependencies;
 use crate::model::SkillPolicy;
 
 use super::MAX_QUALIFIED_NAME_LEN;
+use super::MAX_SCAN_DEPTH;
+use super::MAX_SKILLS_DIRS_PER_ROOT;
 use super::ParsedSkillFrontmatter;
+use super::SKILLS_FILENAME;
 use super::SKILLS_METADATA_DIR;
 use super::SKILLS_METADATA_FILENAME;
+use super::SkillFileDiscovery;
 use super::SkillMetadataFile;
-use super::SymlinkPolicy;
-use super::discover_skills_under_root;
 use super::parse_skill_frontmatter_metadata_inner;
 use super::resolve_dependencies;
 use super::resolve_policy;
 use super::sanitize_single_line;
 use super::validate_len;
+
+const MAX_SKILLS_ENTRIES_PER_ROOT: usize = 20_000;
 
 /// URI-native metadata for one skill owned by an execution environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,8 +101,56 @@ pub async fn load_environment_skills_from_root(
     restriction_product: Option<Product>,
 ) -> EnvironmentSkillLoadOutcome {
     let mut outcome = EnvironmentSkillLoadOutcome::default();
-    let discovery =
-        discover_skills_under_root(file_system, root, SymlinkPolicy::FollowDirectories).await;
+    let discovery = match file_system
+        .walk(
+            root,
+            WalkOptions {
+                max_depth: MAX_SCAN_DEPTH,
+                max_directories: MAX_SKILLS_DIRS_PER_ROOT,
+                max_entries: MAX_SKILLS_ENTRIES_PER_ROOT,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+    {
+        Ok(walk) => {
+            let mut warnings = walk
+                .errors
+                .into_iter()
+                .map(|error| {
+                    format!(
+                        "failed to scan skill path {}: {}",
+                        error.path, error.message
+                    )
+                })
+                .collect::<Vec<_>>();
+            if walk.truncated {
+                warnings.push(format!(
+                    "skills scan reached its traversal limit (root: {root})"
+                ));
+            }
+            SkillFileDiscovery {
+                skill_files: walk
+                    .entries
+                    .into_iter()
+                    .filter(|entry| {
+                        entry.kind == WalkEntryKind::File
+                            && entry.path.basename().as_deref() == Some(SKILLS_FILENAME)
+                    })
+                    .map(|entry| entry.path)
+                    .collect(),
+                warnings,
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => SkillFileDiscovery {
+            skill_files: Vec::new(),
+            warnings: Vec::new(),
+        },
+        Err(error) => SkillFileDiscovery {
+            skill_files: Vec::new(),
+            warnings: vec![format!("failed to walk skills root {root}: {error:#}")],
+        },
+    };
     outcome.warnings.extend(discovery.warnings);
     for path in discovery.skill_files {
         match EnvironmentSkillMetadata::parse(file_system, &path).await {
