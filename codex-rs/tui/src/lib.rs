@@ -129,6 +129,7 @@ mod history_cell;
 mod hooks_rpc;
 mod ide_context;
 pub(crate) mod insert_history;
+mod managed_new_thread_defaults;
 pub use insert_history::insert_history_lines;
 mod key_hint;
 mod keymap;
@@ -1680,6 +1681,16 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
+    if matches!(
+        &session_selection,
+        resume_picker::SessionSelection::StartFresh
+    ) {
+        config = managed_new_thread_defaults::config_with_managed_new_thread_defaults(
+            config,
+            &cli_kv_overrides,
+            &overrides,
+        );
+    }
 
     // Configure syntax highlighting theme from the final config — onboarding
     // and resume/fork can both reload config with a different tui_theme, so

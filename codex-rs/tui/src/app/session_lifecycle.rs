@@ -724,7 +724,12 @@ impl App {
     }
 
     pub(super) fn fresh_session_config(&self) -> Config {
-        let mut config = self.config.clone();
+        let mut config =
+            crate::managed_new_thread_defaults::config_with_managed_new_thread_defaults(
+                self.config.clone(),
+                &self.cli_kv_overrides,
+                &self.harness_overrides,
+            );
         config.service_tier = self.chat_widget.configured_service_tier();
         config
     }

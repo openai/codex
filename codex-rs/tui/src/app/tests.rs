@@ -4980,6 +4980,30 @@ async fn fresh_session_config_uses_current_service_tier() {
 }
 
 #[tokio::test]
+async fn fresh_session_config_uses_managed_new_thread_model_default() {
+    let mut app = make_test_app().await;
+    app.config.model = Some("user-model".to_string());
+    app.config.config_layer_stack = codex_config::ConfigLayerStack::new(
+        Vec::new(),
+        codex_config::ConfigRequirements::default(),
+        codex_config::ConfigRequirementsToml {
+            models: Some(codex_config::ModelsRequirementsToml {
+                new_thread: Some(codex_config::NewThreadModelDefaultsToml {
+                    model: Some("managed-model".to_string()),
+                    ..codex_config::NewThreadModelDefaultsToml::default()
+                }),
+            }),
+            ..codex_config::ConfigRequirementsToml::default()
+        },
+    )
+    .expect("managed requirements stack");
+
+    let config = app.fresh_session_config();
+
+    assert_eq!(config.model.as_deref(), Some("managed-model"));
+}
+
+#[tokio::test]
 async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 

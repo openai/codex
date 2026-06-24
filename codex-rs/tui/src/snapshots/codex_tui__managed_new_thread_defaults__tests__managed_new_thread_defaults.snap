@@ -1,0 +1,15 @@
+---
+source: tui/src/managed_new_thread_defaults_tests.rs
+expression: "(actual.model, actual.model_reasoning_effort, actual.service_tier,)"
+---
+(
+    Some(
+        "managed-model",
+    ),
+    Some(
+        Medium,
+    ),
+    Some(
+        "priority",
+    ),
+)
