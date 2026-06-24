@@ -1,133 +1,92 @@
-use crate::policy::normalize_host;
+mod github;
+mod openai;
+
 use rama_http::HeaderMap;
 use rama_http::HeaderValue;
-use rama_http::header::AUTHORIZATION;
 use rand::Rng as _;
 use std::collections::HashMap;
 
-const GH_HOST_ENV_VAR: &str = "GH_HOST";
-const GITHUB_TOKEN_PREFIXES: &[&str] = &["github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_"];
-const GITHUB_TOKEN_MIN_LEN: usize = 40;
-const OPENAI_API_KEY_MIN_LEN: usize = 51;
 const DUMMY_ALPHANUMERIC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-const GITHUB_CLOUD_TOKEN_ENV_VARS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN"];
-const GITHUB_ENTERPRISE_TOKEN_ENV_VARS: &[&str] =
-    &["GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
-const OPENAI_API_KEY_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum CredentialKind {
-    GitHub,
-    OpenAiApiKey,
+type RequestHeader = for<'a> fn(&'a HeaderMap) -> Option<&'a HeaderValue>;
+
+/// Describes how one credential family is recognized and injected.
+///
+/// Providers must be declared as `static` values because the broker uses their addresses as stable
+/// identities when deduplicating credential records.
+pub(super) struct CredentialProvider {
+    context_env_vars: &'static [&'static str],
+    sources: &'static [CredentialSource],
+    dummy_value: fn(&str) -> String,
+    request_header: RequestHeader,
+    request_header_value: fn(&str) -> Option<HeaderValue>,
+    insert_request_header: fn(&mut HeaderMap, HeaderValue),
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum CredentialHostBinding {
-    GitHubCloud,
     ExactHost(String),
-    OpenAiApi,
+    HostPattern {
+        exact_hosts: &'static [&'static str],
+        suffixes: &'static [&'static str],
+    },
 }
 
 pub(super) struct CredentialSource {
     pub(super) env_vars: &'static [&'static str],
-    pub(super) kind: CredentialKind,
     pub(super) host_binding: fn(&HashMap<String, String>) -> Option<CredentialHostBinding>,
 }
 
-pub(super) const CREDENTIAL_SOURCES: &[CredentialSource] = &[
-    CredentialSource {
-        env_vars: GITHUB_CLOUD_TOKEN_ENV_VARS,
-        kind: CredentialKind::GitHub,
-        host_binding: github_cloud_binding,
-    },
-    CredentialSource {
-        env_vars: GITHUB_ENTERPRISE_TOKEN_ENV_VARS,
-        kind: CredentialKind::GitHub,
-        host_binding: github_enterprise_binding,
-    },
-    CredentialSource {
-        env_vars: OPENAI_API_KEY_ENV_VARS,
-        kind: CredentialKind::OpenAiApiKey,
-        host_binding: openai_api_binding,
-    },
-];
+const CREDENTIAL_PROVIDERS: &[&CredentialProvider] = &[&github::PROVIDER, &openai::PROVIDER];
 
-impl CredentialKind {
-    pub(super) fn dummy_value(self, real_value: &str) -> String {
-        match self {
-            Self::GitHub => shaped_dummy_value(
-                real_value,
-                github_token_prefix(real_value),
-                GITHUB_TOKEN_MIN_LEN,
-            ),
-            Self::OpenAiApiKey => shaped_dummy_value(
-                real_value,
-                openai_api_key_prefix(real_value),
-                OPENAI_API_KEY_MIN_LEN,
-            ),
-        }
+impl CredentialProvider {
+    pub(super) fn sources(&self) -> &[CredentialSource] {
+        self.sources
     }
 
-    pub(super) fn request_header(self, headers: &HeaderMap) -> Option<&HeaderValue> {
-        match self {
-            Self::GitHub | Self::OpenAiApiKey => headers.get(AUTHORIZATION),
-        }
+    pub(super) fn dummy_value(&self, real_value: &str) -> String {
+        (self.dummy_value)(real_value)
     }
 
-    pub(super) fn request_header_value(self, value: &str) -> Option<HeaderValue> {
-        match self {
-            Self::GitHub | Self::OpenAiApiKey => {
-                HeaderValue::from_str(&format!("Bearer {value}")).ok()
-            }
-        }
+    pub(super) fn request_header<'a>(&self, headers: &'a HeaderMap) -> Option<&'a HeaderValue> {
+        (self.request_header)(headers)
     }
 
-    pub(super) fn insert_request_header(self, headers: &mut HeaderMap, value: HeaderValue) {
-        match self {
-            Self::GitHub | Self::OpenAiApiKey => {
-                headers.insert(AUTHORIZATION, value);
-            }
-        }
+    pub(super) fn request_header_value(&self, value: &str) -> Option<HeaderValue> {
+        (self.request_header_value)(value)
+    }
+
+    pub(super) fn insert_request_header(&self, headers: &mut HeaderMap, value: HeaderValue) {
+        (self.insert_request_header)(headers, value);
     }
 }
 
 impl CredentialHostBinding {
     pub(super) fn matches_host(&self, host: &str) -> bool {
         match self {
-            Self::GitHubCloud => github_cloud_host(host),
             Self::ExactHost(expected_host) => host == expected_host,
-            Self::OpenAiApi => host == "api.openai.com",
+            Self::HostPattern {
+                exact_hosts,
+                suffixes,
+            } => {
+                exact_hosts.contains(&host) || suffixes.iter().any(|suffix| host.ends_with(suffix))
+            }
         }
     }
 }
 
 pub(super) fn credential_broker_env_keys() -> impl Iterator<Item = &'static str> {
-    std::iter::once(GH_HOST_ENV_VAR).chain(
-        CREDENTIAL_SOURCES
-            .iter()
-            .flat_map(|source| source.env_vars.iter().copied()),
-    )
+    credential_providers()
+        .flat_map(|provider| provider.context_env_vars.iter().copied())
+        .chain(
+            credential_providers()
+                .flat_map(CredentialProvider::sources)
+                .flat_map(|source| source.env_vars.iter().copied()),
+        )
 }
 
-fn github_cloud_host(host: &str) -> bool {
-    matches!(host, "api.github.com" | "github.com") || host.ends_with(".ghe.com")
-}
-
-fn github_token_prefix(value: &str) -> &str {
-    GITHUB_TOKEN_PREFIXES
-        .iter()
-        .copied()
-        .find(|prefix| value.starts_with(prefix))
-        .unwrap_or("ghp_")
-}
-
-fn openai_api_key_prefix(value: &str) -> &str {
-    let Some(suffix) = value.strip_prefix("sk-") else {
-        return "sk-";
-    };
-    suffix
-        .find('-')
-        .map_or("sk-", |separator| &value[..separator + 4])
+pub(super) fn credential_providers() -> impl Iterator<Item = &'static CredentialProvider> {
+    CREDENTIAL_PROVIDERS.iter().copied()
 }
 
 fn shaped_dummy_value(real_value: &str, prefix: &str, minimum_len: usize) -> String {
@@ -143,25 +102,4 @@ fn shaped_dummy_value(real_value: &str, prefix: &str, minimum_len: usize) -> Str
         dummy.push(char::from(character));
     }
     dummy
-}
-
-fn github_cloud_binding(_: &HashMap<String, String>) -> Option<CredentialHostBinding> {
-    Some(CredentialHostBinding::GitHubCloud)
-}
-
-fn github_enterprise_binding(env: &HashMap<String, String>) -> Option<CredentialHostBinding> {
-    github_host_hint(env)
-        .filter(|host| !github_cloud_host(host))
-        .map(CredentialHostBinding::ExactHost)
-}
-
-fn openai_api_binding(_: &HashMap<String, String>) -> Option<CredentialHostBinding> {
-    Some(CredentialHostBinding::OpenAiApi)
-}
-
-fn github_host_hint(env: &HashMap<String, String>) -> Option<String> {
-    env.get(GH_HOST_ENV_VAR)
-        .map(String::as_str)
-        .map(normalize_host)
-        .filter(|host| !host.is_empty())
 }

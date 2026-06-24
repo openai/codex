@@ -22,7 +22,7 @@ struct CredentialBrokerState {
 
 struct CredentialRecord {
     env_var: String,
-    kind: providers::CredentialKind,
+    provider: &'static providers::CredentialProvider,
     host_binding: providers::CredentialHostBinding,
     real_value: String,
     dummy_value: String,
@@ -54,10 +54,18 @@ impl CredentialBroker {
             "1".to_string(),
         );
 
-        for source in providers::CREDENTIAL_SOURCES {
-            if let Some(host_binding) = (source.host_binding)(env) {
-                for env_var in source.env_vars {
-                    virtualize_env_var(env, &mut state, env_var, source.kind, host_binding.clone());
+        for provider in providers::credential_providers() {
+            for source in provider.sources() {
+                if let Some(host_binding) = (source.host_binding)(env) {
+                    for env_var in source.env_vars {
+                        virtualize_env_var(
+                            env,
+                            &mut state,
+                            env_var,
+                            provider,
+                            host_binding.clone(),
+                        );
+                    }
                 }
             }
         }
@@ -89,11 +97,15 @@ impl CredentialBroker {
         let Some(credential) = select_credential(headers, &matching_credentials) else {
             return;
         };
-        let Some(header_value) = credential.kind.request_header_value(&credential.real_value)
+        let Some(header_value) = credential
+            .provider
+            .request_header_value(&credential.real_value)
         else {
             return;
         };
-        credential.kind.insert_request_header(headers, header_value);
+        credential
+            .provider
+            .insert_request_header(headers, header_value);
     }
 
     fn read_state(&self) -> std::sync::RwLockReadGuard<'_, CredentialBrokerState> {
@@ -113,14 +125,14 @@ fn virtualize_env_var(
     env: &mut HashMap<String, String>,
     state: &mut CredentialBrokerState,
     env_var: &str,
-    kind: providers::CredentialKind,
+    provider: &'static providers::CredentialProvider,
     host_binding: providers::CredentialHostBinding,
 ) {
-    let Some(real_value) = brokerable_credential_value(env, state, env_var, kind) else {
+    let Some(real_value) = brokerable_credential_value(env, state, env_var, provider) else {
         return;
     };
 
-    let dummy_value = state.register(env_var, kind, host_binding, real_value);
+    let dummy_value = state.register(env_var, provider, host_binding, real_value);
     env.insert(env_var.to_string(), dummy_value);
 }
 
@@ -128,12 +140,12 @@ fn brokerable_credential_value<'a>(
     env: &'a HashMap<String, String>,
     state: &CredentialBrokerState,
     env_var: &str,
-    kind: providers::CredentialKind,
+    provider: &providers::CredentialProvider,
 ) -> Option<&'a str> {
     let real_value = env.get(env_var)?.trim();
     (!real_value.is_empty()
         && !state.is_dummy_value(real_value)
-        && kind.request_header_value(real_value).is_some())
+        && provider.request_header_value(real_value).is_some())
     .then_some(real_value)
 }
 
@@ -141,13 +153,13 @@ impl CredentialBrokerState {
     fn register(
         &mut self,
         env_var: &str,
-        kind: providers::CredentialKind,
+        provider: &'static providers::CredentialProvider,
         host_binding: providers::CredentialHostBinding,
         real_value: &str,
     ) -> String {
         if let Some(existing) = self.credentials.iter().find(|credential| {
             credential.env_var == env_var
-                && credential.kind == kind
+                && std::ptr::eq(credential.provider, provider)
                 && credential.host_binding == host_binding
                 && credential.real_value == real_value
         }) {
@@ -155,14 +167,14 @@ impl CredentialBrokerState {
         }
 
         let dummy_value = loop {
-            let candidate = kind.dummy_value(real_value);
+            let candidate = provider.dummy_value(real_value);
             if candidate != real_value && !self.is_dummy_value(&candidate) {
                 break candidate;
             }
         };
         self.credentials.push(CredentialRecord {
             env_var: env_var.to_string(),
-            kind,
+            provider,
             host_binding,
             real_value: real_value.to_string(),
             dummy_value: dummy_value.clone(),
@@ -192,7 +204,7 @@ fn select_credential<'a>(
         .copied()
         .filter(|credential| {
             credential
-                .kind
+                .provider
                 .request_header(headers)
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|value| value.contains(&credential.dummy_value))
