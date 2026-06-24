@@ -12,7 +12,6 @@ use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -36,6 +35,7 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::TestTargetOs;
+use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -411,21 +411,14 @@ fn tool_names(body: &Value) -> Vec<String> {
         .collect()
 }
 
-async fn wait_for_raw_function_call(test: &TestCodex, call_id: &str) {
-    wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::RawResponseItem(raw)
-                if matches!(
-                    &raw.item,
-                    ResponseItem::FunctionCall {
-                        call_id: item_call_id,
-                        ..
-                    } if item_call_id == call_id
-                )
-        )
+async fn wait_for_response_request_count(response_mock: &ResponseMock, expected_count: usize) {
+    timeout(Duration::from_secs(5), async {
+        while response_mock.requests().len() < expected_count {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     })
-    .await;
+    .await
+    .expect("timed out waiting for Responses API request");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -502,7 +495,8 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
             thread_settings: Default::default(),
         })
         .await?;
-    wait_for_raw_function_call(&test, wait_call_id).await;
+    wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
+    assert_eq!(response_mock.requests().len(), 1);
     serve_environment_info(listener).await;
     let event = wait_for_event(&test.codex, |event| {
         matches!(
@@ -540,7 +534,7 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
     assert!(starting_tools.contains(&"wait_for_environment".to_string()));
     assert!(!starting_tools.contains(&"exec_command".to_string()));
     assert!(ready_tools.contains(&"exec_command".to_string()));
-    assert!(!ready_tools.contains(&"wait_for_environment".to_string()));
+    assert!(ready_tools.contains(&"wait_for_environment".to_string()));
     let (wait_output, _) = requests[1]
         .function_call_output_content_and_success(wait_call_id)
         .context("wait_for_environment output should be present")?;
@@ -635,7 +629,8 @@ async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
             thread_settings: Default::default(),
         })
         .await?;
-    wait_for_raw_function_call(&test, wait_call_id).await;
+    wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
+    assert_eq!(response_mock.requests().len(), 1);
     let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
         .await
         .context("exec-server connection should arrive")??;
@@ -651,18 +646,14 @@ async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
     let failed_tools = tool_names(&requests[1].body_json());
     assert!(starting_tools.contains(&"wait_for_environment".to_string()));
     assert!(!starting_tools.contains(&"exec_command".to_string()));
-    assert!(!failed_tools.contains(&"wait_for_environment".to_string()));
+    assert!(failed_tools.contains(&"wait_for_environment".to_string()));
     assert!(!failed_tools.contains(&"exec_command".to_string()));
     let (wait_output, _) = requests[1]
         .function_call_output_content_and_success(wait_call_id)
         .context("wait_for_environment output should be present")?;
     assert_eq!(
-        serde_json::from_str::<Value>(&wait_output.context("wait output should contain text")?)?,
-        json!({
-            "environment_id": REMOTE_ENVIRONMENT_ID,
-            "message": "The environment failed to start and is unavailable. Continue without it.",
-            "status": "failed",
-        })
+        wait_output.as_deref(),
+        Some("Environment `remote` failed to start and is unavailable. Continue without it.")
     );
     assert!(
         requests[1]

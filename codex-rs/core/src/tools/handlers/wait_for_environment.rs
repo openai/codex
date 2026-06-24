@@ -68,34 +68,36 @@ impl ToolExecutor<ToolInvocation> for WaitForEnvironmentHandler {
                 }
             };
             let args: WaitForEnvironmentArgs = parse_arguments(&arguments)?;
-            let Some(environment) = step_context
+            let environment_id = args.environment_id;
+            let already_ready = step_context
                 .environments
-                .starting
+                .turn_environments
                 .iter()
-                .find(|environment| environment.selection.environment_id == args.environment_id)
-                .cloned()
-            else {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "environment `{}` is not starting",
-                    args.environment_id
-                )));
-            };
+                .any(|environment| environment.environment_id == environment_id);
+            if !already_ready {
+                let Some(environment) = step_context
+                    .environments
+                    .starting
+                    .iter()
+                    .find(|environment| environment.selection.environment_id == environment_id)
+                    .cloned()
+                else {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "environment `{environment_id}` is neither ready nor starting"
+                    )));
+                };
 
-            let output = match environment.wait_until_ready().await {
-                Ok(()) => JsonToolOutput::new(json!({
-                    "environment_id": args.environment_id,
-                    "status": "ready",
-                })),
-                Err(_) => JsonToolOutput::with_success(
-                    json!({
-                        "environment_id": args.environment_id,
-                        "message": "The environment failed to start and is unavailable. Continue without it.",
-                        "status": "failed",
-                    }),
-                    /*success*/ Some(false),
-                ),
-            };
-            Ok(boxed_tool_output(output))
+                environment.wait_until_ready().await.map_err(|_| {
+                    FunctionCallError::RespondToModel(format!(
+                        "Environment `{environment_id}` failed to start and is unavailable. Continue without it."
+                    ))
+                })?;
+            }
+
+            Ok(boxed_tool_output(JsonToolOutput::new(json!({
+                "environment_id": environment_id,
+                "status": "ready",
+            }))))
         })
     }
 }
