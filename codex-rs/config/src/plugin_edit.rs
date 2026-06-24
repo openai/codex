@@ -3,7 +3,6 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_utils_path::resolve_symlink_write_paths;
 use codex_utils_path::write_atomically;
 use tokio::task;
@@ -13,6 +12,7 @@ use toml_edit::Table as TomlTable;
 use toml_edit::value;
 
 use crate::CONFIG_TOML_FILE;
+use crate::ConfigLayerSource;
 use crate::ConfigLayerStack;
 use crate::ConfigLayerStackOrdering;
 
