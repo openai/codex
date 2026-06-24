@@ -6,10 +6,11 @@ description: Testing against remote executors in integration tests.
 Remote executor tests exercise the app-server/exec-server split to ensure that agent features work
 in both local and remote execution environments.
 
-Remote executor tests currently require an x86_64 Linux host machine. There are two flavors:
+Remote executor tests currently require an x86_64 Linux host machine. There are three flavors:
 
-1. Docker (Linux exec-server)
-2. Wine (Windows exec-server)
+1. Docker (Linux exec-server nested inside a separate container)
+2. bwrap-exec (Linux exec-server nested inside bubblewrap)
+3. Wine (Windows exec-server)
 
 ## Test Fixtures
 
@@ -39,6 +40,7 @@ Choose the skip macro by what causes the test to fail:
 
 - `skip_if_target_windows!`: Windows target behavior.
 - `skip_if_wine_exec!`: Wine-exec runner constraints.
+- `skip_if_bwrap_exec!`: bwrap-exec runner constraints.
 - `skip_if_host_windows!`: Windows host constraints.
 - `skip_if_remote!`: Local-only test behavior.
 - `skip_if_no_remote_env!`: Remote-only test behavior.
@@ -95,6 +97,26 @@ For app-server integration tests:
 ```sh
 bazel test //codex-rs/app-server:app-server-all-wine-exec-test
 ```
+
+## bwrap-exec
+
+These tests build a Linux exec-server and run it inside an outer bubblewrap namespace. Running them
+requires one of the RBE configurations documented in `codex-rs/docs/bazel.md`.
+
+For core integration tests:
+
+```sh
+bazel test //codex-rs/core:core-all-bwrap-exec-test
+```
+
+For app-server integration tests:
+
+```sh
+bazel test //codex-rs/app-server:app-server-all-bwrap-exec-test
+```
+
+The production Linux sandbox runs inside the outer bubblewrap namespace. Namespace or procfs setup
+failures are test failures, not reasons to weaken or skip the production sandbox.
 
 ## Devboxes
 

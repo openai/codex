@@ -2,6 +2,13 @@
 
 This crate implements the business logic for Codex. It is designed to be used by the various Codex UIs written in Rust.
 
+## Bwrap-exec integration tests
+
+On Linux RBE, run the shared suites against the bubblewrap-backed Linux exec server with
+`bazel test --config=buildbuddy-openai-rbe
+//codex-rs/core:core-all-bwrap-exec-test
+//codex-rs/core:core-responses_headers-bwrap-exec-test`.
+
 ## Wine-exec integration tests
 
 On x86-64 Linux, run the shared suite against the Windows exec server with

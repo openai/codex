@@ -152,8 +152,8 @@ impl TestAppServer {
     /// Starts an app server with the standard test environment and retains it
     /// for the server's lifetime.
     ///
-    /// Local test runs explicitly remove `CODEX_EXEC_SERVER_URL`; Docker- and
-    /// Wine-backed runs set it to the remote fixture URL. Use
+    /// Local test runs explicitly remove `CODEX_EXEC_SERVER_URL`; remote-executor
+    /// runs set it to the fixture URL. Use
     /// [`Self::auto_env_params`] or
     /// [`Self::send_thread_start_request_with_auto_env`] to select the matching
     /// target-native cwd in a thread. Because `environments.toml` overrides the

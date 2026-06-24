@@ -55,6 +55,7 @@ use core_test_support::responses;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_bwrap_exec;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_wine_exec;
@@ -537,6 +538,8 @@ fn assert_cwd_tool_output(structured: &Value, expected_cwd: &Path) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_server_round_trip() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -869,6 +872,8 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -958,6 +963,8 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1078,6 +1085,8 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
 -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1180,6 +1189,8 @@ async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1274,6 +1285,8 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1418,6 +1431,8 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_image_responses_resize_large_image() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1520,6 +1535,8 @@ async fn stdio_image_responses_resize_large_image() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1611,6 +1628,8 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1769,6 +1788,8 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1891,6 +1912,8 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_env_source)]
 async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1987,6 +2010,8 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_env_source)]
 async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result<()> {
+    // TODO(anp): Make remote stdio MCP startup honor its fallback cwd under bwrap-exec.
+    skip_if_bwrap_exec!(Ok(()), "remote stdio MCP startup needs an explicit cwd");
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
