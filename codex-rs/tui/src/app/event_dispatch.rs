@@ -119,8 +119,8 @@ impl App {
                 )
                 .await
                 {
-                    Ok(ExternalAgentConfigMigrationFlowOutcome::Started(message)) => {
-                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    Ok(ExternalAgentConfigMigrationFlowOutcome::Started(lines)) => {
+                        self.chat_widget.add_plain_history_lines(lines);
                     }
                     Ok(ExternalAgentConfigMigrationFlowOutcome::NoItems) => {
                         self.chat_widget.add_info_message(

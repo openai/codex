@@ -1,7 +1,10 @@
+use std::collections::BTreeMap;
+use std::io::BufReader;
 use std::io::Read as _;
 use std::io::Write as _;
 use std::net::TcpListener;
 use std::path::Path;
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -74,32 +77,233 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
         ),
     )?;
 
-    let mut cmd = codex_command(codex_home.path())?;
-    cmd.args(["exec-server", "--listen", "stdio"])
-        .write_stdin(
-            r#"{"id":1,"method":"initialize","params":{"clientName":"otel-test","resumeSessionId":null}}"#,
-        )
-        .assert()
-        .success();
+    let cwd = url::Url::from_directory_path(std::env::current_dir()?)
+        .map_err(|()| anyhow::anyhow!("could not convert cwd to file URL"))?;
+    #[cfg(windows)]
+    let argv = vec!["cmd.exe", "/C", "exit", "0"];
+    #[cfg(not(windows))]
+    let argv = vec!["/usr/bin/true"];
+    let mut command = std::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?);
+    command
+        .env("CODEX_HOME", codex_home.path())
+        .args(["exec-server", "--listen", "stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    let mut child = command.spawn()?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("exec-server stdin was not piped"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("exec-server stdout was not piped"))?;
+    let mut stdout = BufReader::new(stdout);
+
+    send_json_line(
+        &mut stdin,
+        &serde_json::json!({
+            "id": 1,
+            "method": "initialize",
+            "params": {"clientName": "otel-test", "resumeSessionId": null}
+        }),
+    )?;
+    wait_for_response(&mut stdout, /*expected_id*/ 1)?;
+    send_json_line(
+        &mut stdin,
+        &serde_json::json!({"method": "initialized", "params": {}}),
+    )?;
+    send_json_line(
+        &mut stdin,
+        &serde_json::json!({
+            "id": 2,
+            "method": "process/start",
+            "params": {
+                "processId": "otel-process",
+                "argv": argv,
+                "cwd": cwd,
+                "env": {},
+                "tty": false,
+                "pipeStdin": false,
+                "arg0": null
+            }
+        }),
+    )?;
+    wait_for_response(&mut stdout, /*expected_id*/ 2)?;
+    send_json_line(
+        &mut stdin,
+        &serde_json::json!({
+            "id": 3,
+            "method": "process/read",
+            "params": {
+                "processId": "otel-process",
+                "afterSeq": null,
+                "maxBytes": null,
+                "waitMs": 5_000
+            }
+        }),
+    )?;
+    wait_for_response(&mut stdout, /*expected_id*/ 3)?;
+    drop(stdin);
+    let mut remaining_stdout = String::new();
+    stdout.read_to_string(&mut remaining_stdout)?;
+    let status = child.wait()?;
+    anyhow::ensure!(
+        status.success(),
+        "exec-server exited with {status}; remaining stdout: {remaining_stdout}"
+    );
 
     let requests = collector.finish_after_exec_server_metrics(Duration::from_secs(10))?;
-    let metrics = requests
-        .iter()
-        .filter(|request| request.path == "/v1/metrics")
-        .map(|request| request.body.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        metrics.contains("exec_server_connections_active"),
-        "{metrics}"
+    let metrics = parse_metric_exports(&requests)?;
+    assert_metric_point(
+        &metrics,
+        "exec_server_connections_active",
+        &[("transport", "stdio")],
+        Some(0),
     );
-    assert!(metrics.contains("exec_server_requests_total"), "{metrics}");
-    assert!(metrics.contains("initialize"), "{metrics}");
-    assert!(
-        metrics.contains("success") || metrics.contains("disconnected"),
-        "{metrics}"
+    assert_metric_point(
+        &metrics,
+        "exec_server_connections_total",
+        &[("transport", "stdio"), ("result", "accepted")],
+        Some(1),
+    );
+    assert_metric_point(
+        &metrics,
+        "exec_server_requests_total",
+        &[("method", "initialize"), ("result", "success")],
+        Some(1),
+    );
+    assert_metric_point(
+        &metrics,
+        "exec_server_requests_total",
+        &[("method", "process/start"), ("result", "success")],
+        Some(1),
+    );
+    assert_metric_point(&metrics, "exec_server_processes_active", &[], Some(0));
+    assert_metric_point(
+        &metrics,
+        "exec_server_processes_finished_total",
+        &[("result", "success")],
+        Some(1),
+    );
+    assert_metric_point(
+        &metrics,
+        "exec_server_request_duration_seconds",
+        &[("method", "process/start"), ("result", "success")],
+        None,
+    );
+    assert_metric_point(
+        &metrics,
+        "exec_server_process_duration_seconds",
+        &[("result", "success")],
+        None,
     );
     Ok(())
+}
+
+fn send_json_line(stdin: &mut impl std::io::Write, message: &serde_json::Value) -> Result<()> {
+    serde_json::to_writer(&mut *stdin, message)?;
+    stdin.write_all(b"\n")?;
+    stdin.flush()?;
+    Ok(())
+}
+
+fn wait_for_response(stdout: &mut impl std::io::BufRead, expected_id: i64) -> Result<()> {
+    loop {
+        let mut line = String::new();
+        if stdout.read_line(&mut line)? == 0 {
+            anyhow::bail!("exec-server stdout closed before response {expected_id}");
+        }
+        let message: serde_json::Value = serde_json::from_str(&line)?;
+        if message["id"].as_i64() == Some(expected_id) {
+            anyhow::ensure!(
+                message.get("error").is_none(),
+                "exec-server request {expected_id} failed: {message}"
+            );
+            return Ok(());
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MetricPoint {
+    name: String,
+    attributes: BTreeMap<String, String>,
+    value: Option<i64>,
+}
+
+fn parse_metric_exports(requests: &[CapturedRequest]) -> Result<Vec<MetricPoint>> {
+    let mut points = Vec::new();
+    for request in requests
+        .iter()
+        .filter(|request| request.path == "/v1/metrics")
+    {
+        let payload: serde_json::Value = serde_json::from_str(&request.body)?;
+        let Some(resource_metrics) = payload["resourceMetrics"].as_array() else {
+            continue;
+        };
+        for resource in resource_metrics {
+            let Some(scope_metrics) = resource["scopeMetrics"].as_array() else {
+                continue;
+            };
+            for scope in scope_metrics {
+                let Some(metrics) = scope["metrics"].as_array() else {
+                    continue;
+                };
+                for metric in metrics {
+                    let Some(name) = metric["name"].as_str() else {
+                        continue;
+                    };
+                    let data_points = ["gauge", "sum", "histogram"]
+                        .into_iter()
+                        .find_map(|kind| metric[kind]["dataPoints"].as_array());
+                    let Some(data_points) = data_points else {
+                        continue;
+                    };
+                    for point in data_points {
+                        let attributes = point["attributes"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|attribute| {
+                                Some((
+                                    attribute["key"].as_str()?.to_string(),
+                                    attribute["value"]["stringValue"].as_str()?.to_string(),
+                                ))
+                            })
+                            .collect();
+                        let value = point["asInt"]
+                            .as_i64()
+                            .or_else(|| point["asInt"].as_str()?.parse().ok());
+                        points.push(MetricPoint {
+                            name: name.to_string(),
+                            attributes,
+                            value,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(points)
+}
+
+fn assert_metric_point(
+    points: &[MetricPoint],
+    name: &str,
+    attributes: &[(&str, &str)],
+    value: Option<i64>,
+) {
+    assert!(
+        points.iter().any(|point| {
+            point.name == name
+                && point.value == value
+                && attributes.iter().all(|(key, value)| {
+                    point.attributes.get(*key).map(String::as_str) == Some(*value)
+                })
+        }),
+        "metric {name} with attributes {attributes:?} and value {value:?} missing from {points:#?}"
+    );
 }
 
 struct CapturedRequest {
@@ -158,13 +362,19 @@ impl TestCollector {
         while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
             match self.requests.recv_timeout(remaining) {
                 Ok(request) => {
-                    let found = request.path == "/v1/metrics"
-                        && request.body.contains("exec_server_connections_active")
-                        && request.body.contains("exec_server_requests_total")
-                        && request.body.contains("initialize")
-                        && (request.body.contains("success")
-                            || request.body.contains("disconnected"));
                     requests.push(request);
+                    let metrics = requests
+                        .iter()
+                        .filter(|request| request.path == "/v1/metrics")
+                        .map(|request| request.body.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let found = metrics.contains("exec_server_connections_active")
+                        && metrics.contains("exec_server_requests_total")
+                        && metrics.contains("exec_server_processes_active")
+                        && metrics.contains("exec_server_processes_finished_total")
+                        && metrics.contains("process/start")
+                        && metrics.contains("success");
                     if found {
                         break;
                     }

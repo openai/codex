@@ -8,8 +8,8 @@ use crate::setup::SetupMarker;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots_for_permissions;
 use crate::setup::offline_proxy_settings_from_env;
-use crate::setup::run_elevated_setup;
-use crate::setup::run_setup_refresh_with_overrides;
+use crate::setup::run_elevated_setup_with_proxy_settings;
+use crate::setup::run_setup_refresh_with_overrides_and_proxy_settings;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
 use anyhow::Context;
@@ -154,6 +154,7 @@ pub fn require_logon_sandbox_creds(
     deny_read_paths_override: &[PathBuf],
     deny_write_paths_override: &[PathBuf],
     proxy_enforced: bool,
+    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = read_roots_override
@@ -163,13 +164,19 @@ pub fn require_logon_sandbox_creds(
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_write_roots_for_permissions(permissions, command_cwd, env_map));
     let network_identity = SandboxNetworkIdentity::from_permissions(permissions, proxy_enforced);
-    let desired_offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
+    let marker = load_marker(codex_home)?;
+    let desired_offline_proxy_settings = desired_offline_proxy_settings(
+        marker.as_ref(),
+        proxy_settings_mode,
+        env_map,
+        network_identity,
+    );
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
 
-    let mut identity = match load_marker(codex_home)? {
+    let mut identity = match marker {
         Some(marker) if marker.version_matches() => {
             if let Some(reason) =
                 marker.request_mismatch_reason(network_identity, &desired_offline_proxy_settings)
@@ -201,7 +208,7 @@ pub fn require_logon_sandbox_creds(
         } else {
             crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
         }
-        run_elevated_setup(
+        run_elevated_setup_with_proxy_settings(
             crate::setup::SandboxSetupRequest {
                 permissions,
                 command_cwd,
@@ -216,11 +223,12 @@ pub fn require_logon_sandbox_creds(
                 deny_read_paths: Some(deny_read_paths_override.to_vec()),
                 deny_write_paths: Some(deny_write_paths_override.to_vec()),
             },
+            &desired_offline_proxy_settings,
         )?;
         identity = select_identity(network_identity, codex_home)?;
     }
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
-    run_setup_refresh_with_overrides(
+    run_setup_refresh_with_overrides_and_proxy_settings(
         crate::setup::SandboxSetupRequest {
             permissions,
             command_cwd,
@@ -235,6 +243,7 @@ pub fn require_logon_sandbox_creds(
             deny_read_paths: Some(deny_read_paths_override.to_vec()),
             deny_write_paths: Some(deny_write_paths_override.to_vec()),
         },
+        &desired_offline_proxy_settings,
     )?;
     let identity = identity.ok_or_else(|| {
         anyhow!(
@@ -245,6 +254,22 @@ pub fn require_logon_sandbox_creds(
         username: identity.username,
         password: identity.password,
     })
+}
+
+fn desired_offline_proxy_settings(
+    marker: Option<&SetupMarker>,
+    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
+    env_map: &HashMap<String, String>,
+    network_identity: SandboxNetworkIdentity,
+) -> crate::setup::OfflineProxySettings {
+    match (marker, proxy_settings_mode) {
+        (Some(marker), crate::WindowsSandboxProxySettingsMode::Preserve)
+            if marker.version_matches() =>
+        {
+            marker.offline_proxy_settings()
+        }
+        _ => offline_proxy_settings_from_env(env_map, network_identity),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -259,6 +284,7 @@ pub(crate) fn refresh_logon_sandbox_creds(
     deny_read_paths_override: &[PathBuf],
     deny_write_paths_override: &[PathBuf],
     proxy_enforced: bool,
+    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
 ) -> Result<SandboxCreds> {
     remove_sandbox_users_file(codex_home, "sandbox user login failed")?;
     require_logon_sandbox_creds(
@@ -272,13 +298,20 @@ pub(crate) fn refresh_logon_sandbox_creds(
         deny_read_paths_override,
         deny_write_paths_override,
         proxy_enforced,
+        proxy_settings_mode,
     )
 }
 
 #[cfg(test)]
 mod tests {
+    use super::desired_offline_proxy_settings;
     use super::remove_sandbox_users_file;
+    use crate::WindowsSandboxProxySettingsMode;
+    use crate::setup::SandboxNetworkIdentity;
+    use crate::setup::SetupMarker;
     use crate::setup::sandbox_users_path;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
 
@@ -301,5 +334,41 @@ mod tests {
 
         remove_sandbox_users_file(codex_home.path(), "stale creds").expect("remove users");
         assert!(!users_path.exists());
+    }
+
+    #[test]
+    fn preserving_proxy_settings_uses_the_existing_marker() {
+        let marker = SetupMarker {
+            version: crate::setup::SETUP_VERSION,
+            offline_username: "offline".to_string(),
+            online_username: "online".to_string(),
+            created_at: None,
+            proxy_ports: vec![7890],
+            allow_local_binding: true,
+        };
+        let env_map = HashMap::from([(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+        )]);
+
+        assert_eq!(
+            desired_offline_proxy_settings(
+                Some(&marker),
+                WindowsSandboxProxySettingsMode::Preserve,
+                &env_map,
+                SandboxNetworkIdentity::Offline,
+            ),
+            marker.offline_proxy_settings()
+        );
+        assert_eq!(
+            desired_offline_proxy_settings(
+                Some(&marker),
+                WindowsSandboxProxySettingsMode::Reconcile,
+                &env_map,
+                SandboxNetworkIdentity::Offline,
+            )
+            .proxy_ports,
+            vec![8080]
+        );
     }
 }

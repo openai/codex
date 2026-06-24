@@ -75,7 +75,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
         .start(ExecParams {
             process_id: ProcessId::from("proc-1"),
             argv: vec!["true".to_string()],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -83,6 +83,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
@@ -218,7 +219,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
                 "-c".to_string(),
                 "sleep 0.05; printf 'session output\\n'".to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -226,6 +227,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -251,7 +253,7 @@ async fn assert_exec_process_pushes_events(use_remote: bool) -> Result<()> {
                 "-c".to_string(),
                 "printf 'event output\\n'; sleep 0.1; printf 'event err\\n' >&2; sleep 0.1; exit 7".to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -259,6 +261,7 @@ async fn assert_exec_process_pushes_events(use_remote: bool) -> Result<()> {
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -300,7 +303,7 @@ async fn assert_exec_process_replays_events_after_close(use_remote: bool) -> Res
                 "-c".to_string(),
                 "printf 'late one\\n'; printf 'late two\\n'".to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -308,6 +311,7 @@ async fn assert_exec_process_replays_events_after_close(use_remote: bool) -> Res
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -350,7 +354,7 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
                 DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
                 release_path.to_string_lossy().into_owned(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -358,6 +362,7 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -425,7 +430,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
                 "-c".to_string(),
                 "IFS= read line; printf 'from-stdin:%s\\n' \"$line\"".to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: true,
@@ -433,6 +438,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -464,7 +470,7 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
                 "-c".to_string(),
                 "IFS= read line; printf 'from-stdin:%s\\n' \"$line\"".to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -472,6 +478,7 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -499,7 +506,7 @@ async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) 
                 "-c".to_string(),
                 "sleep 0.3; if IFS= read -r line; then printf 'read:%s\\n' \"$line\"; else printf 'eof\\n'; fi".to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -507,6 +514,7 @@ async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) 
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -535,7 +543,7 @@ async fn assert_exec_process_signal_interrupts_process(use_remote: bool) -> Resu
                 "-c".to_string(),
                 "trap 'printf \"signal:2\\n\"; exit 7' INT; printf 'ready\\n'; while :; do :; done".to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -543,6 +551,7 @@ async fn assert_exec_process_signal_interrupts_process(use_remote: bool) -> Resu
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -590,7 +599,7 @@ async fn assert_exec_process_signal_reports_unsupported_on_windows(use_remote: b
                 "/C".to_string(),
                 "echo ready && ping -n 30 127.0.0.1 >NUL".to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -598,6 +607,7 @@ async fn assert_exec_process_signal_reports_unsupported_on_windows(use_remote: b
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
 
@@ -632,7 +642,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
                 "-c".to_string(),
                 "printf 'queued output\\n'".to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
@@ -640,6 +650,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
 
@@ -683,7 +694,7 @@ async fn remote_exec_process_recovers_after_transport_disconnect() -> Result<()>
                 )
                 .to_string(),
             ],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: /*env_policy*/ None,
             env: HashMap::from([
                 (
@@ -700,6 +711,7 @@ async fn remote_exec_process_recovers_after_transport_disconnect() -> Result<()>
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
 

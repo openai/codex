@@ -99,8 +99,9 @@ impl Session {
     pub async fn request_mcp_server_elicitation(
         &self,
         turn_context: &TurnContext,
+        server_name: String,
         request_id: RequestId,
-        params: McpServerElicitationRequestParams,
+        request: ElicitationRequest,
     ) -> McpServerElicitationOutcome {
         if self
             .services
@@ -117,53 +118,6 @@ impl Session {
                 sent: false,
             };
         }
-
-        let server_name = params.server_name.clone();
-        let request = match params.request {
-            McpServerElicitationRequest::Form {
-                meta,
-                message,
-                requested_schema,
-            } => {
-                let requested_schema = match serde_json::to_value(requested_schema) {
-                    Ok(requested_schema) => requested_schema,
-                    Err(err) => {
-                        warn!(
-                            "failed to serialize MCP elicitation schema for server_name: {server_name}, request_id: {request_id}: {err:#}"
-                        );
-                        return McpServerElicitationOutcome {
-                            response: None,
-                            sent: false,
-                        };
-                    }
-                };
-                codex_protocol::approvals::ElicitationRequest::Form {
-                    meta,
-                    message,
-                    requested_schema,
-                }
-            }
-            McpServerElicitationRequest::OpenAiForm {
-                meta,
-                message,
-                requested_schema,
-            } => codex_protocol::approvals::ElicitationRequest::OpenAiForm {
-                meta,
-                message,
-                requested_schema,
-            },
-            McpServerElicitationRequest::Url {
-                meta,
-                message,
-                url,
-                elicitation_id,
-            } => codex_protocol::approvals::ElicitationRequest::Url {
-                meta,
-                message,
-                url,
-                elicitation_id,
-            },
-        };
 
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
@@ -194,7 +148,7 @@ impl Session {
             }
         };
         let event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
-            turn_id: params.turn_id,
+            turn_id: Some(turn_context.sub_id.clone()),
             server_name,
             id,
             request,
@@ -317,8 +271,6 @@ impl Session {
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
         let mcp_servers =
             effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
-        let host_owned_codex_apps_enabled =
-            host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
         let auth_statuses = compute_auth_statuses(
             mcp_servers.iter(),
             store_mode,
@@ -359,7 +311,6 @@ impl Session {
             mcp_runtime_context,
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
-            host_owned_codex_apps_enabled,
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
             self.services
@@ -374,9 +325,11 @@ impl Session {
             let current_manager = self.services.mcp_connection_manager.load_full();
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         }
-        self.services
+        let superseded_manager = self
+            .services
             .mcp_connection_manager
-            .store(Arc::new(refreshed_manager));
+            .swap(Arc::new(refreshed_manager));
+        superseded_manager.shutdown().await;
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(
@@ -622,6 +575,7 @@ fn guardian_elicitation_review_request(
                 meta,
                 MCP_ELICITATION_CONNECTOR_DESCRIPTION_KEY,
             ),
+            connected_account_email: None,
             tool_title: metadata_owned_string(meta, MCP_ELICITATION_TOOL_TITLE_KEY),
             tool_description: metadata_owned_string(meta, MCP_ELICITATION_TOOL_DESCRIPTION_KEY),
             annotations: None,

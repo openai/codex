@@ -36,6 +36,7 @@
     "brandColor": "#3B82F6",
     "composerIcon": "./assets/icon.png",
     "logo": "./assets/logo.png",
+    "logoDark": "./assets/logo-dark.png",
     "screenshots": [
       "./assets/screenshot1.png",
       "./assets/screenshot2.png",
@@ -105,6 +106,7 @@ Or as an object directly in `plugin.json`:
 - `brandColor` (`string`): Theme color for the plugin card.
 - `composerIcon` (`string`): Path to icon asset.
 - `logo` (`string`): Path to logo asset.
+- `logoDark` (`string`): Optional path to the logo asset used in dark mode.
 - `screenshots` (`array` of `string`): List of screenshot asset paths.
   - Screenshot entries must be PNG filenames and stored under `./assets/`.
   - Keep file paths relative to plugin root.
@@ -205,7 +207,7 @@ personal marketplace unless the caller explicitly requests a repo-local destinat
 - `version` must use strict semver.
 - `websiteURL`, `privacyPolicyURL`, and `termsOfServiceURL` must be absolute `https://` URLs when
   present.
-- `composerIcon`, `logo`, and `screenshots` must point to real files inside the plugin archive when
+- `composerIcon`, `logo`, `logoDark`, and `screenshots` must point to real files inside the plugin archive when
   present.
 - `apps` should appear in `plugin.json` only when `.app.json` actually exists.
 - `mcpServers` may point to `.mcp.json` or contain the MCP server object directly in

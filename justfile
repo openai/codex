@@ -1,5 +1,5 @@
 set working-directory := "codex-rs"
-set positional-arguments
+set positional-arguments := true
 
 export JUST_SHELL := justfile_directory() / "scripts/just-shell.py"
 
@@ -42,11 +42,11 @@ app-server-test-client *args:
 
 # Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts.
 fmt:
-    {{ python }} ../scripts/format.py
+    @{{ python }} ../scripts/format.py
 
 # Check formatting without modifying files.
 fmt-check:
-    {{ python }} ../scripts/format.py --check
+    @{{ python }} ../scripts/format.py --check
 
 fix *args:
     cargo clippy --fix --tests --allow-dirty {args}

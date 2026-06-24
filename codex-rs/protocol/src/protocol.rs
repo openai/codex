@@ -10,6 +10,7 @@ use std::ops::Mul;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use strum_macros::EnumIter;
@@ -38,6 +39,7 @@ use crate::models::AgentMessageInputContent;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::ImageDetail;
+use crate::models::InternalChatMessageMetadataPassthrough;
 use crate::models::MessagePhase;
 use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
@@ -92,8 +94,8 @@ use crate::permissions::default_read_only_subpaths_for_writable_root;
 pub use crate::request_permissions::RequestPermissionsArgs;
 pub use crate::request_user_input::RequestUserInputEvent;
 
-/// Open/close tags for special user-input blocks. Used across crates to avoid
-/// duplicated hardcoded strings.
+/// Open/close tags for special context blocks. Used across crates to avoid duplicated hardcoded
+/// strings.
 pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
 pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
@@ -110,6 +112,8 @@ pub const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
 pub const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
+pub const CONTEXT_WINDOW_OPEN_TAG: &str = "<context_window>";
+pub const CONTEXT_WINDOW_CLOSE_TAG: &str = "</context_window>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
 // TODO(anp): Replace `TurnEnvironmentSelection` with `PathUri` once path URIs carry environment
@@ -688,6 +692,9 @@ impl From<Vec<UserInput>> for Op {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct InterAgentCommunication {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
     pub author: AgentPath,
     pub recipient: AgentPath,
     #[serde(default)]
@@ -696,6 +703,9 @@ pub struct InterAgentCommunication {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub encrypted_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     pub trigger_turn: bool,
 }
 
@@ -708,11 +718,13 @@ impl InterAgentCommunication {
         trigger_turn: bool,
     ) -> Self {
         Self {
+            id: None,
             author,
             recipient,
             other_recipients,
             content,
             encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
             trigger_turn,
         }
     }
@@ -725,20 +737,32 @@ impl InterAgentCommunication {
         trigger_turn: bool,
     ) -> Self {
         Self {
+            id: None,
             author,
             recipient,
             other_recipients,
             content: String::new(),
             encrypted_content: Some(encrypted_content),
+            internal_chat_message_metadata_passthrough: None,
             trigger_turn,
         }
     }
 
+    pub fn set_turn_id_if_missing(&mut self, turn_id: &str) {
+        InternalChatMessageMetadataPassthrough::set_turn_id_if_missing(
+            &mut self.internal_chat_message_metadata_passthrough,
+            turn_id,
+        );
+    }
+
     pub fn to_response_input_item(&self) -> ResponseInputItem {
+        let mut communication = self.clone();
+        communication.id = None;
+        communication.internal_chat_message_metadata_passthrough = None;
         ResponseInputItem::Message {
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
-                text: serde_json::to_string(self).unwrap_or_default(),
+                text: serde_json::to_string(&communication).unwrap_or_default(),
             }],
             phase: Some(MessagePhase::Commentary),
         }
@@ -769,11 +793,13 @@ impl InterAgentCommunication {
             }],
         };
         ResponseItem::AgentMessage {
-            id: None,
+            id: self.id.clone(),
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
             content,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: self
+                .internal_chat_message_metadata_passthrough
+                .clone(),
         }
     }
 
@@ -850,15 +876,8 @@ pub enum AskForApproval {
     #[strum(serialize = "untrusted")]
     UnlessTrusted,
 
-    /// DEPRECATED: *All* commands are auto‑approved, but they are expected to
-    /// run inside a sandbox where network access is disabled and writes are
-    /// confined to a specific set of paths. If the command fails, it will be
-    /// escalated to the user to approve execution without a sandbox.
-    /// Prefer `OnRequest` for interactive runs or `Never` for non-interactive
-    /// runs.
-    OnFailure,
-
     /// The model decides when to ask the user for approval.
+    #[serde(alias = "on-failure")]
     #[default]
     OnRequest,
 
@@ -1677,6 +1696,7 @@ pub enum NonSteerableTurnKind {
 #[ts(rename_all = "snake_case")]
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
+    SessionBudgetExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
     CyberPolicy,
@@ -1714,6 +1734,7 @@ impl CodexErrorInfo {
         match self {
             Self::ThreadRollbackFailed | Self::ActiveTurnNotSteerable { .. } => false,
             Self::ContextWindowExceeded
+            | Self::SessionBudgetExceeded
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
             | Self::CyberPolicy
@@ -1933,6 +1954,8 @@ pub struct SafetyBufferingEvent {
     pub model: String,
     pub use_cases: Vec<String>,
     pub reasons: Vec<String>,
+    pub show_buffering_ui: bool,
+    pub faster_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2439,7 +2462,7 @@ pub struct ConversationPathResponseEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ResumedHistory {
     pub conversation_id: ThreadId,
-    pub history: Vec<RolloutItem>,
+    pub history: Arc<Vec<RolloutItem>>,
     pub rollout_path: Option<PathBuf>,
 }
 
@@ -2484,11 +2507,11 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
+    pub fn get_rollout_items(&self) -> &[RolloutItem] {
         match self {
-            InitialHistory::New | InitialHistory::Cleared => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed.history.clone(),
-            InitialHistory::Forked(items) => items.clone(),
+            InitialHistory::New | InitialHistory::Cleared => &[],
+            InitialHistory::Resumed(resumed) => &resumed.history,
+            InitialHistory::Forked(items) => items,
         }
     }
 
@@ -2576,6 +2599,7 @@ impl InitialHistory {
                 RolloutItem::SessionMeta(_)
                 | RolloutItem::ResponseItem(_)
                 | RolloutItem::InterAgentCommunication(_)
+                | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::Compacted(_)
                 | RolloutItem::EventMsg(_) => None,
             })
@@ -2592,9 +2616,31 @@ impl InitialHistory {
             .and_then(|meta| meta.thread_source.clone())
     }
 
+    pub fn get_session_originator(&self) -> Option<String> {
+        self.get_session_meta()
+            .map(|meta| meta.originator.clone())
+            .filter(|originator| !originator.is_empty())
+    }
+
     pub fn get_resumed_parent_thread_id(&self) -> Option<ThreadId> {
         self.get_resumed_session_meta()
             .and_then(|meta| meta.parent_thread_id)
+    }
+
+    fn get_session_meta(&self) -> Option<&SessionMeta> {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => Some(&meta_line.meta),
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => Some(&meta_line.meta),
+                _ => None,
+            }),
+        }
     }
 
     fn get_resumed_session_meta(&self) -> Option<&SessionMeta> {
@@ -2888,6 +2934,7 @@ fn multi_agent_version_from_items(
             RolloutItem::SessionMeta(_)
             | RolloutItem::ResponseItem(_)
             | RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::Compacted(_)
             | RolloutItem::EventMsg(_) => None,
         })
@@ -2901,6 +2948,18 @@ pub enum MultiAgentVersion {
     Disabled,
     V1,
     V2,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct SessionContextWindow {
+    /// UUIDv7 identity of this context window.
+    pub window_id: String,
+}
+
+impl SessionContextWindow {
+    pub fn new(window_id: String) -> Self {
+        Self { window_id }
+    }
 }
 
 /// SessionMeta contains session-level data that doesn't correspond to a specific turn.
@@ -2949,6 +3008,9 @@ pub struct SessionMeta {
     pub memory_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// Initial context-window identity for consumers that tail rollout JSONL before compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<SessionContextWindow>,
 }
 
 impl Default for SessionMeta {
@@ -2973,6 +3035,7 @@ impl Default for SessionMeta {
             dynamic_tools: None,
             memory_mode: None,
             multi_agent_version: None,
+            context_window: None,
         }
     }
 }
@@ -3019,8 +3082,12 @@ impl<'de> Deserialize<'de> for SessionMetaLine {
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
-    /// Durable delivery metadata reconstructed as a model-visible `agent_message`.
+    /// Legacy delivery item reconstructed as a model-visible `agent_message`.
     InterAgentCommunication(InterAgentCommunication),
+    /// Local delivery metadata that is not part of the Responses API item.
+    InterAgentCommunicationMetadata {
+        trigger_turn: bool,
+    },
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     EventMsg(EventMsg),
@@ -3384,8 +3451,11 @@ pub struct ExecCommandEndEvent {
 pub struct ViewImageToolCallEvent {
     /// Identifier for the originating tool call.
     pub call_id: String,
-    /// Local filesystem path provided to the tool.
-    pub path: AbsolutePathBuf,
+    /// Filesystem path resolved for the selected environment.
+    ///
+    /// This core event is not exposed directly in the app-server API. App-server
+    /// converts the path to `LegacyAppPathString` when building its public item.
+    pub path: PathUri,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4337,21 +4407,28 @@ mod tests {
 
     #[test]
     fn inter_agent_communication_response_input_item_preserves_commentary_phase() {
-        let communication = InterAgentCommunication {
+        let mut communication = InterAgentCommunication {
+            id: Some("amsg_1".to_string()),
             author: AgentPath::root(),
             recipient: AgentPath::root().join("reviewer").expect("recipient path"),
             other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],
             content: "review the diff".to_string(),
             encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
             trigger_turn: true,
         };
+        communication.set_turn_id_if_missing("turn-1");
+        let mut serialized_communication = communication.clone();
+        serialized_communication.id = None;
+        serialized_communication.internal_chat_message_metadata_passthrough = None;
 
         assert_eq!(
             communication.to_response_input_item(),
             ResponseInputItem::Message {
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
-                    text: serde_json::to_string(&communication).expect("serialize communication"),
+                    text: serde_json::to_string(&serialized_communication)
+                        .expect("serialize communication"),
                 }],
                 phase: Some(MessagePhase::Commentary),
             }
@@ -5409,6 +5486,20 @@ mod tests {
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_deserializes_legacy_on_failure_as_on_request() -> Result<()> {
+        let item: TurnContextItem = serde_json::from_value(json!({
+            "cwd": test_path_buf("/tmp"),
+            "approval_policy": "on-failure",
+            "sandbox_policy": { "type": "danger-full-access" },
+            "model": "gpt-5",
+            "summary": "auto",
+        }))?;
+
+        assert_eq!(item.approval_policy, AskForApproval::OnRequest);
         Ok(())
     }
 

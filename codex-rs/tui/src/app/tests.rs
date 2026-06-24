@@ -1,6 +1,7 @@
 //! App-level orchestration tests for the TUI.
 
 mod model_catalog;
+mod plugin_catalog;
 mod session_summary;
 mod startup;
 
@@ -2873,6 +2874,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         ServerNotification::ThreadStarted(ThreadStartedNotification {
             thread: Thread {
                 id: agent_thread_id.to_string(),
+                extra: None,
                 session_id: agent_thread_id.to_string(),
                 forked_from_id: None,
                 parent_thread_id: None,
@@ -2966,6 +2968,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
         ServerNotification::ThreadStarted(ThreadStartedNotification {
             thread: Thread {
                 id: agent_thread_id.to_string(),
+                extra: None,
                 session_id: agent_thread_id.to_string(),
                 forked_from_id: None,
                 parent_thread_id: None,
@@ -3026,6 +3029,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
 
     let thread = Thread {
         id: read_thread_id.to_string(),
+        extra: None,
         session_id: read_thread_id.to_string(),
         forked_from_id: None,
         parent_thread_id: None,
@@ -5639,6 +5643,7 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
         &ThreadRollbackResponse {
             thread: Thread {
                 id: thread_id.to_string(),
+                extra: None,
                 session_id: thread_id.to_string(),
                 forked_from_id: None,
                 parent_thread_id: None,

@@ -3,6 +3,7 @@
 mod certs;
 mod config;
 mod connect_policy;
+mod credential_broker;
 mod http_proxy;
 mod mitm;
 mod mitm_hook;
@@ -27,6 +28,9 @@ pub use config::NetworkProxyConfig;
 pub use config::NetworkUnixSocketPermission;
 pub use config::NetworkUnixSocketPermissions;
 pub use config::host_and_port_from_network_addr;
+pub use credential_broker::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
+pub use credential_broker::brokered_credential_dummy_env_keys;
+pub use credential_broker::brokered_credential_env_keys;
 pub use mitm_hook::InjectedHeaderConfig;
 pub use mitm_hook::MitmHookActionsConfig;
 pub use mitm_hook::MitmHookBodyConfig;
@@ -47,6 +51,7 @@ pub use proxy::Args;
 #[cfg(target_os = "macos")]
 pub use proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 pub use proxy::DEFAULT_NO_PROXY_VALUE;
+pub use proxy::ManagedNetworkSandboxContext;
 pub use proxy::NO_PROXY_ENV_KEYS;
 pub use proxy::NetworkProxy;
 pub use proxy::NetworkProxyBuilder;
@@ -56,6 +61,7 @@ pub use proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 pub use proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 pub use proxy::PROXY_URL_ENV_KEYS;
+pub use proxy::PreparedManagedNetwork;
 pub use proxy::has_proxy_url_env_vars;
 pub use proxy::proxy_url_env_value;
 pub use runtime::BlockedRequest;

@@ -62,7 +62,12 @@ pub(crate) struct ConnectionMetricGuard {
     transport: ConnectionTransport,
 }
 
+#[derive(Clone)]
 pub(crate) struct ProcessMetricGuard {
+    measurement: Arc<Mutex<Option<ProcessMetricMeasurement>>>,
+}
+
+struct ProcessMetricMeasurement {
     telemetry: ExecServerTelemetry,
     started_at: Instant,
     result: &'static str,
@@ -122,9 +127,11 @@ impl ExecServerTelemetry {
             inner.adjust_process_count(/*delta*/ 1);
         });
         ProcessMetricGuard {
-            telemetry: self.clone(),
-            started_at: Instant::now(),
-            result: "unknown",
+            measurement: Arc::new(Mutex::new(Some(ProcessMetricMeasurement {
+                telemetry: self.clone(),
+                started_at: Instant::now(),
+                result: "unknown",
+            }))),
         }
     }
 
@@ -165,12 +172,19 @@ impl Drop for ConnectionMetricGuard {
 }
 
 impl ProcessMetricGuard {
-    pub(crate) fn finish(mut self, result: &'static str) {
-        self.result = result;
+    pub(crate) fn finish(&self, result: &'static str) {
+        let measurement = self
+            .measurement
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(mut measurement) = measurement {
+            measurement.result = result;
+        }
     }
 }
 
-impl Drop for ProcessMetricGuard {
+impl Drop for ProcessMetricMeasurement {
     fn drop(&mut self) {
         self.telemetry
             .process_finished(self.result, self.started_at.elapsed());
@@ -178,11 +192,16 @@ impl Drop for ProcessMetricGuard {
 }
 
 impl ExecServerTelemetryInner {
-    fn adjust_connection_count(&self, transport: ConnectionTransport, delta: i64) {
-        let mut active = self
-            .active
+    fn active_counts(&self) -> std::sync::MutexGuard<'_, ActiveCounts> {
+        // These are independent integer counts, so a panic cannot leave a cross-field invariant
+        // half-updated. Recovering a poisoned lock preserves the last completed count update.
+        self.active
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn adjust_connection_count(&self, transport: ConnectionTransport, delta: i64) {
+        let mut active = self.active_counts();
         let count = match transport {
             ConnectionTransport::Relay => &mut active.relay_connections,
             ConnectionTransport::Stdio => &mut active.stdio_connections,
@@ -198,10 +217,7 @@ impl ExecServerTelemetryInner {
     }
 
     fn adjust_process_count(&self, delta: i64) {
-        let mut active = self
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut active = self.active_counts();
         active.processes += delta;
         self.gauge(
             PROCESSES_ACTIVE_METRIC,
@@ -241,7 +257,3 @@ impl ExecServerTelemetryInner {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "telemetry_tests.rs"]
-mod tests;

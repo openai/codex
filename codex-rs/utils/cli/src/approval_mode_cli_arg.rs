@@ -12,12 +12,6 @@ pub enum ApprovalModeCliArg {
     /// is not in the "trusted" set.
     Untrusted,
 
-    /// DEPRECATED: Run all commands without asking for user approval.
-    /// Only asks for approval if a command fails to execute, in which case it
-    /// will escalate to the user to ask for un-sandboxed execution.
-    /// Prefer `on-request` for interactive runs or `never` for non-interactive runs.
-    OnFailure,
-
     /// The model decides when to ask the user for approval.
     OnRequest,
 
@@ -30,7 +24,6 @@ impl From<ApprovalModeCliArg> for AskForApproval {
     fn from(value: ApprovalModeCliArg) -> Self {
         match value {
             ApprovalModeCliArg::Untrusted => AskForApproval::UnlessTrusted,
-            ApprovalModeCliArg::OnFailure => AskForApproval::OnFailure,
             ApprovalModeCliArg::OnRequest => AskForApproval::OnRequest,
             ApprovalModeCliArg::Never => AskForApproval::Never,
         }

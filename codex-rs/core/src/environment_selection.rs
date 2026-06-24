@@ -57,6 +57,12 @@ impl fmt::Debug for StartingTurnEnvironment {
     }
 }
 
+impl StartingTurnEnvironment {
+    pub(crate) async fn wait_until_ready(&self) -> Result<(), Arc<ExecServerError>> {
+        self.resolution.clone().await.map(|_| ())
+    }
+}
+
 pub(crate) struct ThreadEnvironments {
     environment_manager: Arc<EnvironmentManager>,
     local_shell: Shell,

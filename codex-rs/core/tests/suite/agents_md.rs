@@ -16,7 +16,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::create_directory_symlink;
-use core_test_support::get_remote_test_env;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -25,6 +24,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_no_remote_env;
 use core_test_support::test_codex::RecordingUserInstructionsProvider;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
@@ -57,7 +57,7 @@ async fn agents_instructions(mut builder: TestCodexBuilder) -> Result<String> {
     )
     .await;
 
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn("hello").await?;
 
     let request = resp_mock.single_request();
@@ -141,8 +141,8 @@ async fn agents_override_is_preferred_over_agents_md() -> Result<()> {
         agents_instructions(test_codex().with_workspace_setup(|cwd, fs| async move {
             let agents_md = cwd.join("AGENTS.md");
             let override_md = cwd.join("AGENTS.override.md");
-            let agents_md_uri = PathUri::from_path(&agents_md)?;
-            let override_md_uri = PathUri::from_path(&override_md)?;
+            let agents_md_uri = PathUri::from_host_native_path(&agents_md)?;
+            let override_md_uri = PathUri::from_host_native_path(&override_md)?;
             fs.write_file(&agents_md_uri, b"base doc".to_vec(), /*sandbox*/ None)
                 .await?;
             fs.write_file(
@@ -177,8 +177,8 @@ async fn configured_fallback_is_used_when_agents_candidate_is_directory() -> Res
             .with_workspace_setup(|cwd, fs| async move {
                 let agents_dir = cwd.join("AGENTS.md");
                 let fallback = cwd.join("WORKFLOW.md");
-                let agents_dir_uri = PathUri::from_path(&agents_dir)?;
-                let fallback_uri = PathUri::from_path(&fallback)?;
+                let agents_dir_uri = PathUri::from_host_native_path(&agents_dir)?;
+                let fallback_uri = PathUri::from_host_native_path(&fallback)?;
                 fs.create_directory(
                     &agents_dir_uri,
                     CreateDirectoryOptions { recursive: true },
@@ -220,10 +220,10 @@ async fn agents_docs_are_concatenated_from_project_root_to_cwd() -> Result<()> {
                 let root_agents = root.join("AGENTS.md");
                 let git_marker = root.join(".git");
                 let nested_agents = nested.join("AGENTS.md");
-                let nested_uri = PathUri::from_path(&nested)?;
-                let root_agents_uri = PathUri::from_path(&root_agents)?;
-                let git_marker_uri = PathUri::from_path(&git_marker)?;
-                let nested_agents_uri = PathUri::from_path(&nested_agents)?;
+                let nested_uri = PathUri::from_host_native_path(&nested)?;
+                let root_agents_uri = PathUri::from_host_native_path(&root_agents)?;
+                let git_marker_uri = PathUri::from_host_native_path(&git_marker)?;
+                let nested_agents_uri = PathUri::from_host_native_path(&nested_agents)?;
 
                 fs.create_directory(
                     &nested_uri,
@@ -363,7 +363,7 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
     let mut builder = test_codex()
         .with_home(home)
         .with_workspace_setup(|cwd, fs| async move {
-            let agents_md_uri = PathUri::from_path(cwd.join("AGENTS.md"))?;
+            let agents_md_uri = PathUri::from_host_native_path(cwd.join("AGENTS.md"))?;
             fs.write_file(
                 &agents_md_uri,
                 b"project doc".to_vec(),
@@ -372,7 +372,7 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
             .await?;
             Ok::<(), anyhow::Error>(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let project_agents = test.config.cwd.join("AGENTS.md");
     let global_agents = global_agents.abs();
 
@@ -420,7 +420,8 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
         .with_home(Arc::clone(&home))
         .with_user_instructions_provider(provider.clone())
         .with_workspace_setup(|cwd, fs| async move {
-            let project_agents_uri = PathUri::from_path(cwd.join(GLOBAL_AGENTS_FILENAME))?;
+            let project_agents_uri =
+                PathUri::from_host_native_path(cwd.join(GLOBAL_AGENTS_FILENAME))?;
             fs.write_file(
                 &project_agents_uri,
                 PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
@@ -429,7 +430,7 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
             .await?;
             Ok(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     assert_eq!(provider.load_count(), 1);
 
     let no_environment_thread = test
@@ -505,7 +506,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
         .with_workspace_setup(|cwd, fs| async move {
-            let agents_md_uri = PathUri::from_path(cwd.join("AGENTS.md"))?;
+            let agents_md_uri = PathUri::from_host_native_path(cwd.join("AGENTS.md"))?;
             fs.write_file(
                 &agents_md_uri,
                 PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
@@ -514,7 +515,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
             .await?;
             Ok(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let project_source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
     let creation_sources = vec![
         PathUri::from_abs_path(&global_source),
@@ -534,7 +535,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
     )?;
     test.fs()
         .write_file(
-            &PathUri::from_path(&project_source)?,
+            &PathUri::from_host_native_path(&project_source)?,
             NEW_PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
             /*sandbox*/ None,
         )
@@ -596,9 +597,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapshot() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -631,7 +630,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
         .with_user_instructions_provider(provider.clone())
         .with_workspace_setup(|cwd, fs| async move {
             fs.write_file(
-                &PathUri::from_path(cwd.join(GLOBAL_AGENTS_FILENAME))?,
+                &PathUri::from_host_native_path(cwd.join(GLOBAL_AGENTS_FILENAME))?,
                 b"remote project instructions".to_vec(),
                 /*sandbox*/ None,
             )
@@ -658,7 +657,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
                 },
                 TurnEnvironmentSelection {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: PathUri::from_path(local_root.path())?,
+                    cwd: PathUri::from_host_native_path(local_root.path())?,
                 },
             ],
             thread_extension_init: Default::default(),
@@ -671,7 +670,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
         vec![
             PathUri::from_abs_path(&global_source),
             PathUri::from_abs_path(&remote_source),
-            PathUri::from_path(&local_source)?,
+            PathUri::from_host_native_path(&local_source)?,
         ]
     );
 
@@ -684,7 +683,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
     )?;
     test.fs()
         .write_file(
-            &PathUri::from_path(test.config.cwd.join(GLOBAL_AGENTS_OVERRIDE_FILENAME))?,
+            &PathUri::from_host_native_path(test.config.cwd.join(GLOBAL_AGENTS_OVERRIDE_FILENAME))?,
             b"new remote project instructions".to_vec(),
             /*sandbox*/ None,
         )
@@ -712,7 +711,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
         vec![
             PathUri::from_abs_path(&global_source),
             PathUri::from_abs_path(&remote_source),
-            PathUri::from_path(&local_source)?,
+            PathUri::from_host_native_path(&local_source)?,
         ]
     );
 

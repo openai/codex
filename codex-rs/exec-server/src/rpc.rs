@@ -6,13 +6,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
+use codex_exec_server_protocol::JSONRPCError;
+use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCNotification;
+use codex_exec_server_protocol::JSONRPCRequest;
+use codex_exec_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::RequestId;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -554,8 +554,8 @@ async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
 mod tests {
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCResponse;
+    use codex_exec_server_protocol::JSONRPCMessage;
+    use codex_exec_server_protocol::JSONRPCResponse;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::InMemorySpanExporter;
     use opentelemetry_sdk::trace::SdkTracerProvider;
@@ -688,6 +688,8 @@ mod tests {
         let _subscriber_guard = tracing::subscriber::set_default(subscriber);
         tracing::callsite::rebuild_interest_cache();
         let parent_span = tracing::info_span!("outbound-parent");
+        let expected_trace = codex_otel::span_w3c_trace_context(&parent_span)
+            .expect("parent span should have trace context");
 
         let (client_stdin, server_reader) = tokio::io::duplex(4096);
         let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
@@ -719,6 +721,6 @@ mod tests {
             .expect("RPC response");
         assert_eq!(response, serde_json::json!({}));
         let trace = server.await.expect("server task").expect("trace context");
-        assert!(trace.traceparent.is_some());
+        assert_eq!(trace, expected_trace);
     }
 }

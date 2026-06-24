@@ -16,6 +16,8 @@ use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginInstallFailedInput;
+use crate::facts::PluginInstallRequested;
+use crate::facts::PluginInstallRequestedInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -38,6 +40,7 @@ use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
+use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use std::collections::HashSet;
@@ -173,7 +176,15 @@ impl AnalyticsEventsQueue {
         if emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
             emitted.clear();
         }
-        emitted.insert((tracking.turn_id.clone(), plugin.plugin_id.as_key()))
+        let Some(plugin_id) = plugin
+            .plugin_id
+            .as_ref()
+            .map(PluginId::as_key)
+            .or_else(|| plugin.remote_plugin_id.clone())
+        else {
+            return true;
+        };
+        emitted.insert((tracking.turn_id.clone(), plugin_id))
     }
 }
 
@@ -299,6 +310,19 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(
             crate::facts::PluginUsedInput { tracking, plugin },
         )));
+    }
+
+    pub fn track_plugin_install_requested(
+        &self,
+        tracking: TrackEventsContext,
+        request: PluginInstallRequested,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginInstallRequested(PluginInstallRequestedInput {
+                tracking,
+                request,
+            }),
+        ));
     }
 
     pub fn track_compaction(&self, event: crate::facts::CodexCompactionEvent) {

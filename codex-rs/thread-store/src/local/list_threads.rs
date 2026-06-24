@@ -14,6 +14,7 @@ use super::helpers::stored_thread_from_rollout_item;
 use crate::ListThreadsParams;
 use crate::SortDirection;
 use crate::ThreadPage;
+use crate::ThreadRelationFilter;
 use crate::ThreadSortKey;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -117,7 +118,15 @@ pub(super) async fn list_rollout_threads(
     sort_key: codex_rollout::ThreadSortKey,
     sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
-    if let Some(parent_thread_id) = params.parent_thread_id {
+    if let Some(relation_filter) = params.relation_filter {
+        let relation_filter = match relation_filter {
+            ThreadRelationFilter::DirectChildrenOf(parent_thread_id) => {
+                codex_state::ThreadRelationFilter::DirectChildrenOf(parent_thread_id)
+            }
+            ThreadRelationFilter::DescendantsOf(ancestor_thread_id) => {
+                codex_state::ThreadRelationFilter::DescendantsOf(ancestor_thread_id)
+            }
+        };
         let page = codex_rollout::state_db::list_threads_db(
             state_db.as_deref(),
             config.codex_home.as_path(),
@@ -128,19 +137,15 @@ pub(super) async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            Some(parent_thread_id),
+            Some(relation_filter),
             params.archived,
             params.search_term.as_deref(),
         )
         .await
         .ok_or_else(|| ThreadStoreError::Internal {
-            message: "state DB unavailable for parent-filtered thread listing".to_string(),
+            message: "state DB unavailable for relationship-filtered thread listing".to_string(),
         })?;
-        let mut page: codex_rollout::ThreadsPage = page.into();
-        for item in &mut page.items {
-            item.parent_thread_id = Some(parent_thread_id);
-        }
-        return Ok(page);
+        return Ok(page.into());
     }
 
     let page = if params.use_state_db_only && params.archived {
@@ -252,7 +257,7 @@ mod tests {
                 cwd_filters: None,
                 archived: false,
                 search_term: None,
-                parent_thread_id: None,
+                relation_filter: None,
                 use_state_db_only: false,
             })
             .await
@@ -312,7 +317,7 @@ mod tests {
                 cwd_filters: None,
                 archived: false,
                 search_term: Some("needle".to_string()),
-                parent_thread_id: None,
+                relation_filter: None,
                 use_state_db_only: true,
             })
             .await
@@ -352,7 +357,7 @@ mod tests {
                 cwd_filters: None,
                 archived: false,
                 search_term: None,
-                parent_thread_id: None,
+                relation_filter: None,
                 use_state_db_only: false,
             })
             .await
@@ -368,7 +373,7 @@ mod tests {
                 cwd_filters: None,
                 archived: true,
                 search_term: None,
-                parent_thread_id: None,
+                relation_filter: None,
                 use_state_db_only: false,
             })
             .await
@@ -420,7 +425,7 @@ mod tests {
                 cwd_filters: None,
                 archived: false,
                 search_term: None,
-                parent_thread_id: None,
+                relation_filter: None,
                 use_state_db_only: false,
             })
             .await
@@ -457,7 +462,7 @@ mod tests {
                 cwd_filters: None,
                 archived: false,
                 search_term: None,
-                parent_thread_id: None,
+                relation_filter: None,
                 use_state_db_only: false,
             })
             .await

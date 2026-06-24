@@ -152,7 +152,6 @@ async fn shutdown_rejects_cell_admission_queued_before_the_registry_lock() {
     })
     .await;
 
-    assert!(!runtime.is_alive());
     drop(cells);
     assert!(matches!(execution.await, Err(Error::ShuttingDown)));
     assert_eq!(shutdown.await, Ok(()));

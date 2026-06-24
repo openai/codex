@@ -116,3 +116,30 @@ fn rejects_invalid_or_incomplete_configuration() {
         ))
     );
 }
+
+#[test]
+fn derives_target_operating_system_and_placement() {
+    #[cfg(target_os = "linux")]
+    let expected_local_target_os = TestTargetOs::Linux;
+    #[cfg(target_os = "macos")]
+    let expected_local_target_os = TestTargetOs::MacOs;
+    #[cfg(target_os = "windows")]
+    let expected_local_target_os = TestTargetOs::Windows;
+
+    let environments = [
+        TestEnvironment::Local,
+        TestEnvironment::Docker {
+            container_name: "container-1".to_string(),
+        },
+        TestEnvironment::WineExec,
+    ];
+
+    assert_eq!(
+        environments.map(|environment| (environment.target_os(), environment.is_remote())),
+        [
+            (expected_local_target_os, false),
+            (TestTargetOs::Linux, true),
+            (TestTargetOs::Windows, true),
+        ]
+    );
+}

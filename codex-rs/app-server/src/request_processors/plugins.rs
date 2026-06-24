@@ -23,6 +23,8 @@ use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::oauth_login_support;
 use codex_mcp::should_retry_without_scopes;
 use codex_plugin::PluginId;
+use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::auth::AuthMode as DomainAuthMode;
 use codex_rmcp_client::perform_oauth_login_silent;
 
 #[derive(Clone)]
@@ -77,7 +79,9 @@ fn local_plugin_interface_to_info(interface: PluginManifestInterface) -> PluginI
         composer_icon: interface.composer_icon,
         composer_icon_url: None,
         logo: interface.logo,
+        logo_dark: interface.logo_dark,
         logo_url: None,
+        logo_url_dark: None,
         screenshots: interface.screenshots,
         screenshot_urls: Vec::new(),
     }
@@ -564,7 +568,7 @@ impl PluginRequestProcessor {
         let include_global_remote =
             !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin);
         let use_remote_global_catalog =
-            include_global_remote && auth_mode.is_some_and(AuthMode::uses_codex_backend);
+            include_global_remote && auth_mode.is_some_and(DomainAuthMode::uses_codex_backend);
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
@@ -745,11 +749,10 @@ impl PluginRequestProcessor {
             );
         }
 
-        let featured_plugin_ids = if !plugins_input.remote_plugin_enabled
-            && data
-                .iter()
-                .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
-        {
+        let featured_plugin_ids = if data.iter().any(|marketplace| {
+            marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME
+                || marketplace.name == REMOTE_GLOBAL_MARKETPLACE_NAME
+        }) {
             match plugins_manager
                 .featured_plugin_ids_for_config(&plugins_input, auth.as_ref())
                 .await
@@ -1446,7 +1449,10 @@ impl PluginRequestProcessor {
             marketplace_path,
         };
 
-        let result = match plugins_manager.install_plugin(request).await {
+        let result = match plugins_manager
+            .install_plugin(&config.config_layer_stack, request)
+            .await
+        {
             Ok(result) => result,
             Err(err) => {
                 warn!(
@@ -1527,6 +1533,7 @@ impl PluginRequestProcessor {
                 self.track_plugin_install_failed_for_remote_plugin(
                     &remote_plugin_id,
                     &remote_marketplace_name,
+                    /*plugin_id*/ None,
                     error_type,
                     err.to_string(),
                 );
@@ -1537,6 +1544,12 @@ impl PluginRequestProcessor {
             })?;
         let actual_remote_marketplace_name = remote_detail.marketplace_name.clone();
         let remote_plugin_name = remote_detail.summary.name.clone();
+        let resolved_plugin_id = PluginId::parse(&remote_detail.summary.id).map_err(|err| {
+            internal_error(format!(
+                "invalid resolved plugin id `{}`: {err}",
+                remote_detail.summary.id
+            ))
+        })?;
         if remote_detail.summary.availability == PluginAvailability::DisabledByAdmin {
             return Err(invalid_request(format!(
                 "remote plugin {remote_plugin_id} is disabled by admin"
@@ -1568,6 +1581,7 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
+                Some(&resolved_plugin_id),
                 error_type,
                 err.to_string(),
             );
@@ -1584,6 +1598,7 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
+                Some(&resolved_plugin_id),
                 error_type,
                 err.to_string(),
             );
@@ -1605,6 +1620,7 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
+                Some(&result.plugin_id),
                 error_type,
                 err.to_string(),
             );
@@ -1701,6 +1717,7 @@ impl PluginRequestProcessor {
         &self,
         remote_plugin_id: &str,
         marketplace_name: &str,
+        plugin_id: Option<&PluginId>,
         error_type: &'static str,
         error_message: String,
     ) {
@@ -1711,16 +1728,17 @@ impl PluginRequestProcessor {
             error = %error_message,
             "remote plugin install failed"
         );
-        // The remote id is reported separately; this local name only satisfies
-        // PluginId validation before remote details are available.
-        let Ok(plugin_id) = PluginId::new("unknown".to_string(), marketplace_name.to_string())
-        else {
-            return;
+        let plugin = if let Some(plugin_id) = plugin_id {
+            self.thread_manager
+                .plugins_manager()
+                .telemetry_metadata_for_plugin_id_with_remote_id(plugin_id, remote_plugin_id)
+        } else {
+            PluginTelemetryMetadata {
+                plugin_id: None,
+                remote_plugin_id: Some(remote_plugin_id.to_string()),
+                capability_summary: None,
+            }
         };
-        let plugin = self
-            .thread_manager
-            .plugins_manager()
-            .telemetry_metadata_for_plugin_id_with_remote_id(&plugin_id, remote_plugin_id);
         self.analytics_events_client
             .track_plugin_install_failed(plugin, error_type.to_string());
     }
@@ -1979,11 +1997,31 @@ impl PluginRequestProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
+        let uninstall_target = codex_core_plugins::remote::resolve_remote_plugin_uninstall_target(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &plugin_id,
+        )
+        .await
+        .map_err(|err| {
+            remote_plugin_catalog_error_to_jsonrpc(err, "resolve remote plugin before uninstall")
+        })?;
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let mut plugin_telemetry = plugins_manager
+            .telemetry_metadata_for_installed_plugin_with_remote_id(
+                &uninstall_target.plugin_id,
+                &uninstall_target.remote_plugin_id,
+            )
+            .await;
+        if plugin_telemetry.capability_summary.is_none() {
+            plugin_telemetry.capability_summary =
+                Some(uninstall_target.fallback_capability_summary.clone());
+        }
         let uninstall_result = codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
             config.codex_home.to_path_buf(),
-            &plugin_id,
+            uninstall_target,
         )
         .await;
 
@@ -1991,7 +2029,8 @@ impl PluginRequestProcessor {
             &uninstall_result,
             Ok(()) | Err(RemotePluginCatalogError::CacheRemove(_))
         ) {
-            let plugins_manager = self.thread_manager.plugins_manager();
+            self.analytics_events_client
+                .track_plugin_uninstalled(plugin_telemetry);
             if plugins_manager.clear_remote_installed_plugins_cache() {
                 self.on_effective_plugins_changed();
             }

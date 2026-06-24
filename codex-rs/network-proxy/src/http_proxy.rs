@@ -23,6 +23,7 @@ use crate::responses::blocked_header_value;
 use crate::responses::blocked_message_with_policy;
 use crate::responses::blocked_text_response_with_policy;
 use crate::responses::json_response;
+use crate::runtime::HostMitmRequirement;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::state::BlockedRequest;
 use crate::state::BlockedRequestArgs;
@@ -34,13 +35,13 @@ use anyhow::Result;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rama_core::Layer;
 use rama_core::Service;
-use rama_core::error::BoxError;
 use rama_core::error::ErrorExt as _;
 use rama_core::error::OpaqueError;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
 use rama_core::layer::AddInputExtensionLayer;
 use rama_core::service::service_fn;
+use rama_core::stream::Stream;
 use rama_http::Body;
 use rama_http::HeaderMap;
 use rama_http::HeaderName;
@@ -58,7 +59,6 @@ use rama_http_backend::server::HttpServer;
 use rama_http_backend::server::layer::upgrade::UpgradeLayer;
 use rama_http_backend::server::layer::upgrade::Upgraded;
 use rama_net::Protocol;
-use rama_net::address::ProxyAddress;
 use rama_net::client::ConnectorService;
 use rama_net::client::EstablishedClientConnection;
 use rama_net::http::RequestContext;
@@ -80,8 +80,12 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-#[derive(Clone, Copy, Debug)]
-struct ConnectMitmEnabled(bool);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnectMitmMode {
+    Disabled,
+    Enabled,
+    DetectTls,
+}
 
 pub async fn run_http_proxy(
     state: Arc<NetworkProxyState>,
@@ -268,18 +272,26 @@ async fn http_connect_accept(
             return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
         }
     };
-    let host_has_mitm_hooks = match app_state.host_has_mitm_hooks(&host).await {
-        Ok(has_hooks) => has_hooks,
+    let host_mitm_requirement = match app_state.host_mitm_requirement(&host).await {
+        Ok(requirement) => requirement,
         Err(err) => {
-            error!("failed to inspect MITM hooks for {host}: {err}");
+            error!("failed to inspect MITM requirements for {host}: {err}");
             return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
         }
     };
-    let connect_needs_mitm = mode == NetworkMode::Limited || host_has_mitm_hooks;
+    let connect_mitm_mode = if mode == NetworkMode::Limited {
+        ConnectMitmMode::Enabled
+    } else {
+        match host_mitm_requirement {
+            HostMitmRequirement::None => ConnectMitmMode::Disabled,
+            HostMitmRequirement::Tls => ConnectMitmMode::DetectTls,
+            HostMitmRequirement::Always => ConnectMitmMode::Enabled,
+        }
+    };
 
-    if connect_needs_mitm && mitm_state.is_none() {
-        // CONNECT needs MITM whenever HTTPS policy depends on inner-request inspection, either for
-        // limited-mode method enforcement or for host-specific MITM hooks.
+    if connect_mitm_mode == ConnectMitmMode::Enabled && mitm_state.is_none() {
+        // Limited-mode enforcement and host-specific hooks require interception. Credential-only
+        // interception is deferred until the upgraded stream presents a TLS ClientHello.
         emit_http_block_decision_audit_event(
             &app_state,
             BlockDecisionAuditEventArgs {
@@ -315,16 +327,17 @@ async fn http_connect_accept(
             .await;
         let client = client.as_deref().unwrap_or_default();
         warn!(
-            "CONNECT blocked; MITM required to enforce HTTPS policy (client={client}, host={host}, mode={mode:?}, hooked_host={host_has_mitm_hooks})"
+            "CONNECT blocked; MITM required to enforce HTTPS policy (client={client}, host={host}, mode={mode:?}, host_mitm_requirement={host_mitm_requirement:?})"
         );
         return Err(blocked_text_with_details(REASON_MITM_REQUIRED, &details));
     }
 
     req.extensions_mut().insert(ProxyTarget(authority));
-    req.extensions_mut()
-        .insert(ConnectMitmEnabled(connect_needs_mitm));
+    req.extensions_mut().insert(connect_mitm_mode);
     req.extensions_mut().insert(mode);
-    if connect_needs_mitm && let Some(mitm_state) = mitm_state {
+    if connect_mitm_mode != ConnectMitmMode::Disabled
+        && let Some(mitm_state) = mitm_state
+    {
         req.extensions_mut().insert(mitm_state);
     }
 
@@ -338,51 +351,68 @@ async fn http_connect_accept(
 }
 
 async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
-    let mode = upgraded
+    let connect_mitm_mode = upgraded
+        .extensions()
+        .get::<ConnectMitmMode>()
+        .copied()
+        .unwrap_or(ConnectMitmMode::Disabled);
+    let result: Result<(), OpaqueError> = match connect_mitm_mode {
+        ConnectMitmMode::Disabled => forward_connect_tunnel(upgraded).await,
+        ConnectMitmMode::Enabled => mitm_connect_tunnel(upgraded).await,
+        ConnectMitmMode::DetectTls => match mitm::peek_tls_prefix(upgraded).await {
+            Ok((true, stream)) => mitm_connect_tunnel(stream).await,
+            Ok((false, stream)) => forward_connect_tunnel(stream).await,
+            Err(err) => Err(OpaqueError::from_display(format!("detect TLS: {err:#}"))),
+        },
+    };
+    if let Err(err) = result {
+        warn!("CONNECT tunnel error: {err}");
+    }
+    Ok(())
+}
+
+async fn mitm_connect_tunnel<S>(stream: S) -> Result<(), OpaqueError>
+where
+    S: Stream + Unpin + ExtensionsMut,
+{
+    let target = stream
+        .extensions()
+        .get::<ProxyTarget>()
+        .map(|target| target.0.clone())
+        .ok_or_else(|| OpaqueError::from_display("missing MITM authority"))?;
+    let host = normalize_host(&target.host.to_string());
+    let port = target.port;
+    let mode = stream
         .extensions()
         .get::<NetworkMode>()
         .copied()
         .unwrap_or(NetworkMode::Full);
-
-    let Some(target) = upgraded
-        .extensions()
-        .get::<ProxyTarget>()
-        .map(|t| t.0.clone())
-    else {
-        warn!("CONNECT missing proxy target");
-        return Ok(());
-    };
-
-    if upgraded
-        .extensions()
-        .get::<ConnectMitmEnabled>()
-        .is_some_and(|enabled| enabled.0)
-        && upgraded
-            .extensions()
-            .get::<Arc<mitm::MitmState>>()
-            .is_some()
-    {
-        let host = normalize_host(&target.host.to_string());
-        let port = target.port;
-        info!("CONNECT MITM enabled (host={host}, port={port}, mode={mode:?})");
-        if let Err(err) = mitm::mitm_tunnel(upgraded).await {
-            warn!("MITM tunnel error: {err}");
-        }
-        return Ok(());
+    if stream.extensions().get::<Arc<mitm::MitmState>>().is_none() {
+        return Err(OpaqueError::from_display(format!(
+            "cannot enable MITM without state (host={host}, port={port})"
+        )));
     }
 
-    let app_state = match upgraded
+    info!("CONNECT MITM enabled (host={host}, port={port}, mode={mode:?})");
+    mitm::mitm_stream(stream)
+        .await
+        .map_err(|err| OpaqueError::from_display(format!("MITM tunnel error: {err}")))
+}
+
+async fn forward_connect_tunnel<S>(upgraded: S) -> Result<(), OpaqueError>
+where
+    S: Stream + Unpin + ExtensionsMut,
+{
+    let authority = upgraded
+        .extensions()
+        .get::<ProxyTarget>()
+        .map(|target| target.0.clone())
+        .ok_or_else(|| OpaqueError::from_display("missing forward authority"))?;
+    let app_state = upgraded
         .extensions()
         .get::<Arc<NetworkProxyState>>()
         .cloned()
-    {
-        Some(state) => state,
-        None => {
-            error!("missing app state");
-            return Ok(());
-        }
-    };
-
+        .ok_or_else(|| OpaqueError::from_display("missing app state"))?;
     let allow_upstream_proxy = match app_state.allow_upstream_proxy().await {
         Ok(allowed) => allowed,
         Err(err) => {
@@ -390,7 +420,6 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
             false
         }
     };
-
     let proxy = if allow_upstream_proxy {
         proxy_for_connect()
     } else {
@@ -399,30 +428,13 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
     match proxy.as_ref() {
         Some(proxy) => info!(
             "CONNECT route selected (host={}, port={}, route=upstream_proxy, proxy={})",
-            target.host, target.port, proxy.address
+            authority.host, authority.port, proxy.address
         ),
         None => info!(
             "CONNECT route selected (host={}, port={}, route=direct)",
-            target.host, target.port
+            authority.host, authority.port
         ),
     }
-
-    if let Err(err) = forward_connect_tunnel(upgraded, proxy, app_state).await {
-        warn!("tunnel error: {err}");
-    }
-    Ok(())
-}
-
-async fn forward_connect_tunnel(
-    upgraded: Upgraded,
-    proxy: Option<ProxyAddress>,
-    app_state: Arc<NetworkProxyState>,
-) -> Result<(), BoxError> {
-    let authority = upgraded
-        .extensions()
-        .get::<ProxyTarget>()
-        .map(|target| target.0.clone())
-        .ok_or_else(|| OpaqueError::from_display("missing forward authority").into_boxed())?;
 
     let mut extensions = upgraded.extensions().clone();
     if let Some(proxy) = proxy {
@@ -454,8 +466,7 @@ async fn forward_connect_tunnel(
                 connect_started_at.elapsed().as_millis()
             );
             return Err(OpaqueError::from_boxed(err)
-                .with_context(|| format!("establish CONNECT tunnel to {authority}"))
-                .into_boxed());
+                .with_context(|| format!("establish CONNECT tunnel to {authority}")));
         }
     };
 
@@ -481,7 +492,6 @@ async fn forward_connect_tunnel(
             );
             OpaqueError::from_boxed(err.into())
                 .with_context(|| format!("forward CONNECT tunnel to {authority}"))
-                .into_boxed()
         })
 }
 
@@ -784,6 +794,15 @@ async fn http_plain_proxy(
         ));
     }
 
+    if let Err(err) =
+        inject_plaintext_credentials_if_enabled(app_state.as_ref(), &host, req.headers_mut()).await
+    {
+        return Ok(internal_error(
+            "failed to read plaintext credential injection config",
+            err,
+        ));
+    }
+
     let client = client.as_deref().unwrap_or_default();
     let method = req.method();
     info!("request allowed (client={client}, host={host}, method={method})");
@@ -811,6 +830,17 @@ async fn http_plain_proxy(
             Ok(text_response(StatusCode::BAD_GATEWAY, "upstream failure"))
         }
     }
+}
+
+async fn inject_plaintext_credentials_if_enabled(
+    app_state: &NetworkProxyState,
+    host: &str,
+    headers: &mut HeaderMap,
+) -> Result<()> {
+    if app_state.plaintext_credential_injection_enabled().await? {
+        app_state.inject_request_credentials(host, headers);
+    }
+    Ok(())
 }
 
 async fn proxy_via_unix_socket(req: Request, socket_path: &str) -> Result<Response> {
@@ -1058,6 +1088,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rama_http::Method;
     use rama_http::Request;
+    use std::collections::HashMap;
     use std::net::Ipv4Addr;
     use std::net::TcpListener as StdTcpListener;
     use std::sync::Arc;
@@ -1166,6 +1197,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_connect_accept_defers_brokered_host_mitm_until_protocol_detection() {
+        let mut policy = NetworkProxySettings {
+            credential_broker: true,
+            mitm: true,
+            ..NetworkProxySettings::default()
+        };
+        policy.set_allowed_domains(vec!["github.com".to_string()]);
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+        let mut env = HashMap::from([("GH_TOKEN".to_string(), "ghp-real".to_string())]);
+        state.virtualize_child_credentials(&mut env);
+
+        let mut req = Request::builder()
+            .method(Method::CONNECT)
+            .uri("https://github.com:22")
+            .header("host", "github.com:22")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let (response, request) = http_connect_accept(
+            /*policy_decider*/ None, /*environment_id*/ None, req,
+        )
+        .await
+        .expect("brokered credentials should defer MITM until protocol detection");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            request.extensions().get::<ConnectMitmMode>().copied(),
+            Some(ConnectMitmMode::DetectTls)
+        );
+    }
+
+    #[tokio::test]
+    async fn plaintext_credential_injection_requires_explicit_opt_in() {
+        let real_token = "ghp-real";
+        let mut disabled_network = NetworkProxySettings {
+            credential_broker: true,
+            mitm: true,
+            ..NetworkProxySettings::default()
+        };
+        disabled_network.set_allowed_domains(vec!["api.github.com".to_string()]);
+        let disabled_state = Arc::new(network_proxy_state_for_policy(disabled_network));
+        let mut disabled_env = HashMap::from([("GH_TOKEN".to_string(), real_token.to_string())]);
+        disabled_state.virtualize_child_credentials(&mut disabled_env);
+        let dummy_token = disabled_env.get("GH_TOKEN").expect("dummy GitHub token");
+        let mut disabled_headers = HeaderMap::from_iter([(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {dummy_token}"))
+                .expect("valid authorization header"),
+        )]);
+
+        inject_plaintext_credentials_if_enabled(
+            disabled_state.as_ref(),
+            "api.github.com",
+            &mut disabled_headers,
+        )
+        .await
+        .expect("disabled plaintext injection check should succeed");
+        assert_eq!(
+            disabled_headers.get(header::AUTHORIZATION),
+            Some(&HeaderValue::from_str(&format!("Bearer {dummy_token}")).unwrap())
+        );
+
+        let mut enabled_network = NetworkProxySettings {
+            credential_broker: true,
+            dangerously_allow_plaintext_credential_injection: true,
+            mitm: true,
+            ..NetworkProxySettings::default()
+        };
+        enabled_network.set_allowed_domains(vec!["api.github.com".to_string()]);
+        let enabled_state = Arc::new(network_proxy_state_for_policy(enabled_network));
+        let mut enabled_env = HashMap::from([("GH_TOKEN".to_string(), real_token.to_string())]);
+        enabled_state.virtualize_child_credentials(&mut enabled_env);
+        let enabled_dummy = enabled_env.get("GH_TOKEN").expect("dummy GitHub token");
+        let mut enabled_headers = HeaderMap::from_iter([(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {enabled_dummy}"))
+                .expect("valid authorization header"),
+        )]);
+
+        inject_plaintext_credentials_if_enabled(
+            enabled_state.as_ref(),
+            "api.github.com",
+            &mut enabled_headers,
+        )
+        .await
+        .expect("enabled plaintext injection check should succeed");
+        assert_eq!(
+            enabled_headers.get(header::AUTHORIZATION),
+            Some(&HeaderValue::from_str(&format!("Bearer {real_token}")).unwrap())
+        );
+    }
+
+    #[tokio::test]
     async fn http_connect_accept_blocks_hooked_host_in_full_mode_without_mitm_state() {
         let mut policy = NetworkProxySettings {
             mitm: true,
@@ -1185,8 +1309,8 @@ mod tests {
 
         let mut req = Request::builder()
             .method(Method::CONNECT)
-            .uri("https://api.github.com:443")
-            .header("host", "api.github.com:443")
+            .uri("https://api.github.com:8443")
+            .header("host", "api.github.com:8443")
             .body(Body::empty())
             .unwrap();
         req.extensions_mut().insert(state);
@@ -1204,7 +1328,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_proxy_listener_accepts_plain_http1_connect_requests() {
+    async fn brokered_connect_forwards_server_first_opaque_protocol_without_mitm() {
+        let server_banner = b"SSH-2.0-server\r\n";
         let target_listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("target listener should bind");
@@ -1216,16 +1341,30 @@ mod tests {
                 .accept()
                 .await
                 .expect("target listener should accept");
-            let mut buf = [0_u8; 1];
-            let _ = timeout(Duration::from_secs(1), stream.read(&mut buf)).await;
+            stream
+                .write_all(server_banner)
+                .await
+                .expect("target should write opaque server bytes");
         });
 
         let state = Arc::new(network_proxy_state_for_policy({
-            let mut network = NetworkProxySettings::default();
+            let mut network = NetworkProxySettings {
+                credential_broker: true,
+                mitm: true,
+                ..NetworkProxySettings::default()
+            };
             network.set_allowed_domains(vec!["127.0.0.1".to_string()]);
             network.allow_local_binding = true;
             network
         }));
+        let mut env = HashMap::from([
+            ("GH_HOST".to_string(), "127.0.0.1".to_string()),
+            (
+                "GH_ENTERPRISE_TOKEN".to_string(),
+                "ghp-enterprise-real".to_string(),
+            ),
+        ]);
+        state.virtualize_child_credentials(&mut env);
         let listener =
             StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("proxy listener should bind");
         let proxy_addr = listener
@@ -1258,11 +1397,17 @@ mod tests {
             "unexpected proxy response: {response:?}"
         );
 
+        let mut buf = vec![0_u8; server_banner.len()];
+        timeout(Duration::from_secs(2), stream.read_exact(&mut buf))
+            .await
+            .expect("opaque server bytes should arrive before timeout")
+            .expect("client should read opaque server bytes");
+        assert_eq!(buf, server_banner);
+
         drop(stream);
         proxy_task.abort();
         let _ = proxy_task.await;
-        target_task.abort();
-        let _ = target_task.await;
+        target_task.await.expect("target task should finish");
     }
 
     #[tokio::test(flavor = "current_thread")]

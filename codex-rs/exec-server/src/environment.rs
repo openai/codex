@@ -23,11 +23,9 @@ use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
 use crate::protocol::EnvironmentInfo;
-use crate::protocol::ShellInfo;
 use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
-use codex_shell_command::shell_detect::DetectedShell;
 use tokio_util::task::AbortOnDropHandle;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
@@ -604,23 +602,6 @@ impl Environment {
     }
 }
 
-impl EnvironmentInfo {
-    pub(crate) fn local() -> Self {
-        Self {
-            shell: codex_shell_command::shell_detect::default_user_shell().into(),
-        }
-    }
-}
-
-impl From<DetectedShell> for ShellInfo {
-    fn from(shell: DetectedShell) -> Self {
-        Self {
-            name: shell.name().to_string(),
-            path: shell.shell_path.to_string_lossy().into_owned(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -653,6 +634,19 @@ mod tests {
 
     fn assert_local_environment_unavailable(manager: &EnvironmentManager) {
         assert!(manager.try_local_environment().is_none());
+    }
+
+    #[test]
+    fn local_environment_info_includes_current_directory() {
+        let info = super::EnvironmentInfo::local();
+
+        assert_eq!(
+            info.cwd,
+            Some(
+                PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                    .expect("cwd URI")
+            )
+        );
     }
 
     #[tokio::test]
@@ -1151,8 +1145,10 @@ mod tests {
             .start(crate::ExecParams {
                 process_id: ProcessId::from("default-env-proc"),
                 argv: vec!["true".to_string()],
-                cwd: PathUri::from_path(std::env::current_dir().expect("read current dir"))
-                    .expect("cwd URI"),
+                cwd: PathUri::from_host_native_path(
+                    std::env::current_dir().expect("read current dir"),
+                )
+                .expect("cwd URI"),
                 env_policy: None,
                 env: Default::default(),
                 tty: false,
@@ -1160,6 +1156,7 @@ mod tests {
                 arg0: None,
                 sandbox: None,
                 enforce_managed_network: false,
+                managed_network: None,
             })
             .await
             .expect("start process");
@@ -1188,8 +1185,10 @@ mod tests {
             .start(crate::ExecParams {
                 process_id: ProcessId::from("local-sandbox-proc"),
                 argv: vec!["true".to_string()],
-                cwd: PathUri::from_path(std::env::current_dir().expect("read current dir"))
-                    .expect("cwd URI"),
+                cwd: PathUri::from_host_native_path(
+                    std::env::current_dir().expect("read current dir"),
+                )
+                .expect("cwd URI"),
                 env_policy: None,
                 env: Default::default(),
                 tty: false,
@@ -1197,6 +1196,7 @@ mod tests {
                 arg0: None,
                 sandbox: Some(sandbox),
                 enforce_managed_network: false,
+                managed_network: None,
             })
             .await;
         let Err(err) = result else {

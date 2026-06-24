@@ -925,6 +925,7 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
         connector_id: None,
         connector_name: Some("Playwright".to_string()),
         connector_description: None,
+        connected_account_email: Some("owner@example.com".to_string()),
         tool_title: Some("Navigate".to_string()),
         tool_description: None,
         annotations: Some(GuardianMcpAnnotations {
@@ -944,6 +945,7 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
                 "url": "https://example.com",
             },
             "connector_name": "Playwright",
+            "connected_account_email": "owner@example.com",
             "tool_title": "Navigate",
             "annotations": {
                 "destructive_hint": true,

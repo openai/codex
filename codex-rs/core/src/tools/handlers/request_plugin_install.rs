@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use codex_app_server_protocol::AppInfo;
+use codex_analytics::PluginInstallRequestSource;
+use codex_analytics::PluginInstallRequested;
+use codex_analytics::PluginInstallRequestedPlugin;
+use codex_analytics::build_track_events_context;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -29,6 +32,7 @@ use tracing::warn;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
+use crate::connectors::AppInfo;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -172,16 +176,46 @@ impl RequestPluginInstallHandler {
             })?;
         let tool_type = tool.tool_type();
 
-        let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
-        let params = build_request_plugin_install_elicitation_request(
-            CODEX_APPS_MCP_SERVER_NAME,
-            session.thread_id.to_string(),
-            turn.sub_id.clone(),
-            suggest_reason,
-            &tool,
-        );
+        let suggestion_id = format!("request_plugin_install_{call_id}");
+        if let DiscoverableTool::Plugin(plugin) = &tool {
+            let source = match self.presentation {
+                ToolSuggestPresentation::ListTool => PluginInstallRequestSource::LegacyDiscovery,
+                ToolSuggestPresentation::RecommendationContext => {
+                    PluginInstallRequestSource::EndpointRecommendation
+                }
+            };
+            session
+                .services
+                .analytics_events_client
+                .track_plugin_install_requested(
+                    build_track_events_context(
+                        turn.model_info.slug.clone(),
+                        session.thread_id.to_string(),
+                        turn.sub_id.clone(),
+                        turn.originator.clone(),
+                    ),
+                    PluginInstallRequested {
+                        suggestion_id: suggestion_id.clone(),
+                        plugins: vec![PluginInstallRequestedPlugin {
+                            plugin_id: plugin.id.clone(),
+                            remote_plugin_id: plugin.remote_plugin_id.clone(),
+                            plugin_name: plugin.name.clone(),
+                            connector_ids: plugin.app_connector_ids.clone(),
+                        }],
+                        source,
+                    },
+                );
+        }
+
+        let request_id = RequestId::String(suggestion_id.into());
+        let request = build_request_plugin_install_elicitation_request(suggest_reason, &tool);
         let elicitation = session
-            .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
+            .request_mcp_server_elicitation(
+                turn.as_ref(),
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                request_id,
+                request,
+            )
             .await;
         let response = elicitation.response;
         if let Some(response) = response.as_ref() {

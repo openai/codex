@@ -402,6 +402,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-config",
  "codex-core",
+ "codex-exec-server",
  "codex-features",
  "codex-login",
  "codex-models-manager",
@@ -1975,6 +1976,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-config",
  "codex-config",
+ "codex-connectors",
  "codex-core",
  "codex-core-plugins",
  "codex-exec-server",
@@ -2162,6 +2164,7 @@ dependencies = [
  "codex-core",
  "codex-login",
  "codex-model-provider",
+ "codex-protocol",
  "codex-state",
  "codex-uds",
  "codex-utils-absolute-path",
@@ -2291,7 +2294,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
- "codex-app-server-protocol",
  "codex-connectors",
  "codex-core",
  "codex-git-utils",
@@ -2405,6 +2407,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "system-configuration",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2534,7 +2537,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "codex-app-server-protocol",
  "codex-execpolicy",
  "codex-features",
  "codex-file-system",
@@ -2581,8 +2583,9 @@ name = "codex-connectors"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "codex-app-server-protocol",
  "codex-config",
+ "codex-plugin",
+ "indexmap 2.14.0",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -2591,6 +2594,18 @@ dependencies = [
  "tokio",
  "tracing",
  "urlencoding",
+]
+
+[[package]]
+name = "codex-connectors-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-connectors",
+ "codex-core-plugins",
+ "codex-plugin",
+ "codex-utils-path-uri",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2614,6 +2629,7 @@ dependencies = [
  "bm25",
  "chrono",
  "clap",
+ "codex-agent-graph-store",
  "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
@@ -2754,6 +2770,7 @@ dependencies = [
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-config",
+ "codex-connectors",
  "codex-core-skills",
  "codex-exec-server",
  "codex-git-utils",
@@ -2766,13 +2783,14 @@ dependencies = [
  "codex-protocol",
  "codex-tools",
  "codex-utils-absolute-path",
+ "codex-utils-path",
  "codex-utils-path-uri",
  "codex-utils-plugins",
  "dirs",
  "flate2",
- "indexmap 2.14.0",
  "libc",
  "pretty_assertions",
+ "regex",
  "reqwest 0.12.28",
  "semver",
  "serde",
@@ -2796,7 +2814,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-analytics",
- "codex-app-server-protocol",
  "codex-config",
  "codex-context-fragments",
  "codex-exec-server",
@@ -2882,13 +2899,13 @@ dependencies = [
  "bytes",
  "clatter",
  "codex-api",
- "codex-app-server-protocol",
  "codex-client",
+ "codex-exec-server-protocol",
  "codex-file-system",
+ "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
  "codex-sandboxing",
- "codex-shell-command",
  "codex-test-binary-support",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
@@ -2919,6 +2936,21 @@ dependencies = [
  "uuid",
  "windows-sys 0.52.0",
  "wiremock",
+]
+
+[[package]]
+name = "codex-exec-server-protocol"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "codex-file-system",
+ "codex-network-proxy",
+ "codex-protocol",
+ "codex-shell-command",
+ "codex-utils-path-uri",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3165,8 +3197,10 @@ dependencies = [
 name = "codex-image-generation-extension"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "codex-api",
  "codex-core",
+ "codex-exec-server",
  "codex-extension-api",
  "codex-login",
  "codex-model-provider",
@@ -3182,6 +3216,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3248,7 +3283,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "codex-agent-identity",
- "codex-app-server-protocol",
  "codex-client",
  "codex-config",
  "codex-keyring-store",
@@ -3292,6 +3326,7 @@ dependencies = [
  "codex-api",
  "codex-async-utils",
  "codex-config",
+ "codex-connectors",
  "codex-exec-server",
  "codex-login",
  "codex-model-provider",
@@ -3483,7 +3518,6 @@ name = "codex-model-provider-info"
 version = "0.0.0"
 dependencies = [
  "codex-api",
- "codex-app-server-protocol",
  "codex-protocol",
  "codex-utils-absolute-path",
  "http 1.4.0",
@@ -3500,7 +3534,6 @@ name = "codex-models-manager"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "codex-app-server-protocol",
  "codex-collaboration-mode-templates",
  "codex-login",
  "codex-otel",
@@ -3536,6 +3569,7 @@ dependencies = [
  "rama-tcp",
  "rama-tls-rustls",
  "rama-unix",
+ "rand 0.9.3",
  "rustls-native-certs",
  "schannel",
  "security-framework 3.5.1",
@@ -3576,7 +3610,6 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "codex-api",
- "codex-app-server-protocol",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-string",
@@ -3609,6 +3642,7 @@ dependencies = [
  "codex-config",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "codex-utils-plugins",
  "pretty_assertions",
  "thiserror 2.0.18",
@@ -3764,7 +3798,6 @@ dependencies = [
  "chrono",
  "codex-file-search",
  "codex-git-utils",
- "codex-login",
  "codex-otel",
  "codex-protocol",
  "codex-state",
@@ -3983,6 +4016,7 @@ dependencies = [
  "chrono",
  "codex-git-utils",
  "codex-install-context",
+ "codex-otel",
  "codex-protocol",
  "codex-rollout",
  "codex-state",
@@ -4001,8 +4035,8 @@ dependencies = [
 name = "codex-tools"
 version = "0.0.0"
 dependencies = [
- "codex-app-server-protocol",
  "codex-code-mode",
+ "codex-connectors",
  "codex-features",
  "codex-file-system",
  "codex-protocol",
@@ -9453,7 +9487,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
@@ -9740,9 +9774,9 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "openssl-src"
-version = "300.5.5+3.5.5"
+version = "300.6.1+3.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f1787d533e03597a7934fd0a765f0d28e94ecc5fb7789f8053b1e699a56f709"
+checksum = "46eb8fb9fb3b61ce1c0f8a026c4c1a0714d3a9e138e7fbde78753ce2babc3846"
 dependencies = [
  "cc",
 ]
@@ -10539,7 +10573,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -11459,9 +11493,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0810a9f717d9828f475fe1f629f4c305c8464b7f496c3a854b58d29e65f4058e"
+checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11494,9 +11528,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aefac48c364756e97f04c0401ba3231e8607882c7c1d92da0437dc16307904d"
+checksum = "1aad0035b69380782d78ea95b508327e6deaa2235909053e596eea8f27b5e1d5"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",

@@ -1,4 +1,4 @@
-use codex_app_server_protocol::ConfigLayerMetadata;
+use crate::ConfigLayerMetadata;
 use serde_json::Value as JsonValue;
 use sha2::Digest;
 use sha2::Sha256;

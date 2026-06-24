@@ -20,8 +20,7 @@ use tokio::sync::watch;
 use tracing::instrument;
 
 use codex_agent_identity::ChatGptEnvironment;
-use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::AuthMode as ApiAuthMode;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
@@ -242,13 +241,13 @@ impl CodexAuth {
         auth_route_config: Option<&AuthRouteConfig>,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
-        if auth_mode == ApiAuthMode::ApiKey {
+        if auth_mode == AuthMode::ApiKey {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
             };
             return Ok(Self::from_api_key(api_key));
         }
-        if auth_mode == ApiAuthMode::AgentIdentity {
+        if auth_mode == AuthMode::AgentIdentity {
             let Some(agent_identity) = auth_dot_json.agent_identity.clone() else {
                 return Err(std::io::Error::other(
                     "agent identity auth is missing agent identity auth material.",
@@ -282,7 +281,7 @@ impl CodexAuth {
                 }
             }
         }
-        if auth_mode == ApiAuthMode::PersonalAccessToken {
+        if auth_mode == AuthMode::PersonalAccessToken {
             let Some(personal_access_token) = auth_dot_json.personal_access_token.as_deref() else {
                 return Err(std::io::Error::other(
                     "personal access token auth is missing a personal access token.",
@@ -291,7 +290,7 @@ impl CodexAuth {
             return Self::from_personal_access_token(personal_access_token, auth_route_config)
                 .await;
         }
-        if auth_mode == ApiAuthMode::BedrockApiKey {
+        if auth_mode == AuthMode::BedrockApiKey {
             let Some(auth) = auth_dot_json.bedrock_api_key else {
                 return Err(std::io::Error::other(
                     "Bedrock API key auth is missing a Bedrock API key.",
@@ -308,7 +307,7 @@ impl CodexAuth {
         };
 
         match auth_mode {
-            ApiAuthMode::Chatgpt => {
+            AuthMode::Chatgpt => {
                 let storage = create_auth_storage(
                     codex_home.to_path_buf(),
                     storage_mode,
@@ -316,15 +315,13 @@ impl CodexAuth {
                 );
                 Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
             }
-            ApiAuthMode::ChatgptAuthTokens => {
-                Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
-            }
-            ApiAuthMode::ApiKey => unreachable!("api key mode is handled above"),
-            ApiAuthMode::AgentIdentity => unreachable!("agent identity mode is handled above"),
-            ApiAuthMode::PersonalAccessToken => {
+            AuthMode::ChatgptAuthTokens => Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state })),
+            AuthMode::ApiKey => unreachable!("api key mode is handled above"),
+            AuthMode::AgentIdentity => unreachable!("agent identity mode is handled above"),
+            AuthMode::PersonalAccessToken => {
                 unreachable!("personal access token mode is handled above")
             }
-            ApiAuthMode::BedrockApiKey => unreachable!("bedrock api key mode is handled above"),
+            AuthMode::BedrockApiKey => unreachable!("bedrock api key mode is handled above"),
         }
     }
 
@@ -395,6 +392,9 @@ impl CodexAuth {
         ))
     }
 
+    /// Returns the effective backend auth mode.
+    ///
+    /// Externally managed ChatGPT tokens are normalized to [`AuthMode::Chatgpt`].
     pub fn auth_mode(&self) -> AuthMode {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
@@ -405,14 +405,15 @@ impl CodexAuth {
         }
     }
 
-    pub fn api_auth_mode(&self) -> ApiAuthMode {
+    /// Returns the precise kind of credentials backing this authentication.
+    pub fn api_auth_mode(&self) -> AuthMode {
         match self {
-            Self::ApiKey(_) => ApiAuthMode::ApiKey,
-            Self::Chatgpt(_) => ApiAuthMode::Chatgpt,
-            Self::ChatgptAuthTokens(_) => ApiAuthMode::ChatgptAuthTokens,
-            Self::AgentIdentity(_) => ApiAuthMode::AgentIdentity,
-            Self::PersonalAccessToken(_) => ApiAuthMode::PersonalAccessToken,
-            Self::BedrockApiKey(_) => ApiAuthMode::BedrockApiKey,
+            Self::ApiKey(_) => AuthMode::ApiKey,
+            Self::Chatgpt(_) => AuthMode::Chatgpt,
+            Self::ChatgptAuthTokens(_) => AuthMode::ChatgptAuthTokens,
+            Self::AgentIdentity(_) => AuthMode::AgentIdentity,
+            Self::PersonalAccessToken(_) => AuthMode::PersonalAccessToken,
+            Self::BedrockApiKey(_) => AuthMode::BedrockApiKey,
         }
     }
 
@@ -660,7 +661,7 @@ impl CodexAuth {
     /// Consider this private to integration tests.
     pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
         let auth_dot_json = AuthDotJson {
-            auth_mode: Some(ApiAuthMode::Chatgpt),
+            auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),
@@ -851,7 +852,7 @@ pub fn login_with_api_key(
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
-        auth_mode: Some(ApiAuthMode::ApiKey),
+        auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
         tokens: None,
         last_refresh: None,
@@ -900,7 +901,7 @@ pub async fn login_with_access_token(
                 .to_string();
             verified_record_from_jwt(jwt, &base_url, auth_route_config).await?;
             AuthDotJson {
-                auth_mode: Some(ApiAuthMode::AgentIdentity),
+                auth_mode: Some(AuthMode::AgentIdentity),
                 openai_api_key: None,
                 tokens: None,
                 last_refresh: None,
@@ -1419,7 +1420,7 @@ impl AuthDotJson {
         };
 
         Ok(Self {
-            auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
+            auth_mode: Some(AuthMode::ChatgptAuthTokens),
             openai_api_key: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
@@ -1442,27 +1443,27 @@ impl AuthDotJson {
         Self::from_external_tokens(&external)
     }
 
-    pub(super) fn resolved_mode(&self) -> ApiAuthMode {
+    pub(super) fn resolved_mode(&self) -> AuthMode {
         if let Some(mode) = self.auth_mode {
             return mode;
         }
         if self.personal_access_token.is_some() {
-            return ApiAuthMode::PersonalAccessToken;
+            return AuthMode::PersonalAccessToken;
         }
         if self.bedrock_api_key.is_some() {
-            return ApiAuthMode::BedrockApiKey;
+            return AuthMode::BedrockApiKey;
         }
         if self.openai_api_key.is_some() {
-            return ApiAuthMode::ApiKey;
+            return AuthMode::ApiKey;
         }
-        ApiAuthMode::Chatgpt
+        AuthMode::Chatgpt
     }
 
     fn storage_mode(
         &self,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> AuthCredentialsStoreMode {
-        if self.resolved_mode() == ApiAuthMode::ChatgptAuthTokens {
+        if self.resolved_mode() == AuthMode::ChatgptAuthTokens {
             AuthCredentialsStoreMode::Ephemeral
         } else {
             auth_credentials_store_mode
@@ -2072,19 +2073,19 @@ impl AuthManager {
         match (a, b) {
             (None, None) => true,
             (Some(a), Some(b)) => match (a.api_auth_mode(), b.api_auth_mode()) {
-                (ApiAuthMode::ApiKey, ApiAuthMode::ApiKey) => a.api_key() == b.api_key(),
-                (ApiAuthMode::Chatgpt, ApiAuthMode::Chatgpt)
-                | (ApiAuthMode::ChatgptAuthTokens, ApiAuthMode::ChatgptAuthTokens) => {
+                (AuthMode::ApiKey, AuthMode::ApiKey) => a.api_key() == b.api_key(),
+                (AuthMode::Chatgpt, AuthMode::Chatgpt)
+                | (AuthMode::ChatgptAuthTokens, AuthMode::ChatgptAuthTokens) => {
                     a.get_current_auth_json() == b.get_current_auth_json()
                 }
-                (ApiAuthMode::AgentIdentity, ApiAuthMode::AgentIdentity) => match (a, b) {
+                (AuthMode::AgentIdentity, AuthMode::AgentIdentity) => match (a, b) {
                     (CodexAuth::AgentIdentity(a), CodexAuth::AgentIdentity(b)) => {
                         a.record() == b.record()
                     }
                     _ => false,
                 },
-                (ApiAuthMode::PersonalAccessToken, ApiAuthMode::PersonalAccessToken) => a == b,
-                (ApiAuthMode::BedrockApiKey, ApiAuthMode::BedrockApiKey) => a == b,
+                (AuthMode::PersonalAccessToken, AuthMode::PersonalAccessToken) => a == b,
+                (AuthMode::BedrockApiKey, AuthMode::BedrockApiKey) => a == b,
                 _ => false,
             },
             _ => false,
@@ -2401,13 +2402,15 @@ impl AuthManager {
         Ok(result)
     }
 
-    pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {
+    /// Returns the precise kind of credentials backing the current authentication.
+    pub fn get_api_auth_mode(&self) -> Option<AuthMode> {
         if self.has_external_api_key_auth() {
-            return Some(ApiAuthMode::ApiKey);
+            return Some(AuthMode::ApiKey);
         }
         self.auth_cached().as_ref().map(CodexAuth::api_auth_mode)
     }
 
+    /// Returns the effective backend auth mode for the current authentication.
     pub fn auth_mode(&self) -> Option<AuthMode> {
         if self.has_external_api_key_auth() {
             return Some(AuthMode::ApiKey);

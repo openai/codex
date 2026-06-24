@@ -1,5 +1,6 @@
 use super::*;
-use crate::context::EnvironmentContext;
+use crate::context::world_state::EnvironmentsState;
+use crate::context::world_state::WorldState;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::AgentPath;
@@ -31,6 +32,7 @@ use image::Luma;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use std::sync::Arc;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -75,17 +77,22 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
 }
 
 #[test]
-fn environment_context_baseline_deduplicates_until_history_is_replaced() {
-    let context =
-        EnvironmentContext::from_turn_context_item(&reference_context_item(), "bash".to_string());
+fn world_state_baseline_deduplicates_until_history_is_replaced() {
+    let world_state = || {
+        let mut state = WorldState::default();
+        state.add_section(EnvironmentsState::from_turn_context_item(
+            &reference_context_item(),
+        ));
+        Arc::new(state)
+    };
     let mut history = ContextManager::new();
 
-    assert!(history.update_environment_context_baseline(&context));
-    assert!(!history.update_environment_context_baseline(&context));
+    assert_eq!(1, history.update_world_state(world_state()).len());
+    assert!(history.update_world_state(world_state()).is_empty());
 
     history.replace(Vec::new());
 
-    assert!(history.update_environment_context_baseline(&context));
+    assert_eq!(1, history.update_world_state(world_state()).len());
 }
 
 fn user_msg(text: &str) -> ResponseItem {

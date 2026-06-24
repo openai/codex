@@ -1,8 +1,8 @@
+use crate::config_layer::config_layer_metadata_to_api;
+use crate::config_layer::config_layer_to_api;
 use crate::config_manager::ConfigManager;
 use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigLayerMetadata;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
@@ -13,6 +13,8 @@ use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerMetadata;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
@@ -136,7 +138,11 @@ impl ConfigManager {
 
         Ok(ConfigReadResponse {
             config,
-            origins: layers.origins(),
+            origins: layers
+                .origins()
+                .into_iter()
+                .map(|(path, metadata)| (path, config_layer_metadata_to_api(metadata)))
+                .collect(),
             layers: params.include_layers.then(|| {
                 layers
                     .get_layers(
@@ -144,7 +150,7 @@ impl ConfigManager {
                         /*include_disabled*/ true,
                     )
                     .iter()
-                    .map(|layer| layer.as_layer())
+                    .map(|layer| config_layer_to_api(layer.as_layer()))
                     .collect()
             }),
         })
@@ -671,7 +677,7 @@ fn compute_override_metadata(
 
     Some(OverriddenMetadata {
         message,
-        overriding_layer,
+        overriding_layer: config_layer_metadata_to_api(overriding_layer),
         effective_value: effective_value
             .and_then(|value| serde_json::to_value(value).ok())
             .unwrap_or(JsonValue::Null),

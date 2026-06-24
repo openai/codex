@@ -112,7 +112,7 @@ async fn run_connection(
                 warn!("ignoring malformed exec-server message: {reason}");
                 if outgoing_tx
                     .send(RpcServerOutboundMessage::Error {
-                        request_id: codex_app_server_protocol::RequestId::Integer(-1),
+                        request_id: codex_exec_server_protocol::RequestId::Integer(-1),
                         error: invalid_request(reason),
                     })
                     .await
@@ -122,7 +122,7 @@ async fn run_connection(
                 }
             }
             JsonRpcConnectionEvent::Message(message) => match message {
-                codex_app_server_protocol::JSONRPCMessage::Request(request) => {
+                codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
                     let request_started_at = Instant::now();
                     if let Some((method, route)) = router.request_route(request.method.as_str()) {
                         let request_span = request_span(method, &request);
@@ -141,20 +141,24 @@ async fn run_connection(
                             }
                         };
                         let result = request_result(&message);
-                        request_span.record("result", result);
-                        telemetry.request_completed(method, result, request_started_at.elapsed());
-                        drop(request_span);
                         if let Some(message) = message
                             && outgoing_tx.send(message).await.is_err()
                         {
+                            request_span.record("result", "disconnected");
+                            telemetry.request_completed(
+                                method,
+                                "disconnected",
+                                request_started_at.elapsed(),
+                            );
+                            drop(request_span);
                             break;
                         }
+                        request_span.record("result", result);
+                        telemetry.request_completed(method, result, request_started_at.elapsed());
+                        drop(request_span);
                     } else {
                         let method = "unknown";
                         let request_span = request_span(method, &request);
-                        request_span.record("result", "error");
-                        telemetry.request_completed(method, "error", request_started_at.elapsed());
-                        drop(request_span);
                         if outgoing_tx
                             .send(RpcServerOutboundMessage::Error {
                                 request_id: request.id,
@@ -166,11 +170,21 @@ async fn run_connection(
                             .await
                             .is_err()
                         {
+                            request_span.record("result", "disconnected");
+                            telemetry.request_completed(
+                                method,
+                                "disconnected",
+                                request_started_at.elapsed(),
+                            );
+                            drop(request_span);
                             break;
                         }
+                        request_span.record("result", "error");
+                        telemetry.request_completed(method, "error", request_started_at.elapsed());
+                        drop(request_span);
                     }
                 }
-                codex_app_server_protocol::JSONRPCMessage::Notification(notification) => {
+                codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
                     let Some(route) = router.notification_route(notification.method.as_str())
                     else {
                         warn!(
@@ -193,14 +207,14 @@ async fn run_connection(
                         break;
                     }
                 }
-                codex_app_server_protocol::JSONRPCMessage::Response(response) => {
+                codex_exec_server_protocol::JSONRPCMessage::Response(response) => {
                     warn!(
                         "closing exec-server connection after unexpected client response: {:?}",
                         response.id
                     );
                     break;
                 }
-                codex_app_server_protocol::JSONRPCMessage::Error(error) => {
+                codex_exec_server_protocol::JSONRPCMessage::Error(error) => {
                     warn!(
                         "closing exec-server connection after unexpected client error: {:?}",
                         error.id
@@ -228,13 +242,14 @@ async fn run_connection(
 }
 
 fn request_span(
-    method: &'static str,
-    request: &codex_app_server_protocol::JSONRPCRequest,
+    span_name: &str,
+    request: &codex_exec_server_protocol::JSONRPCRequest,
 ) -> tracing::Span {
+    let method = request.method.as_str();
     let span = tracing::info_span!(
         "codex.exec_server.request",
         otel.kind = "server",
-        otel.name = method,
+        otel.name = span_name,
         method,
         result = tracing::field::Empty,
     );
@@ -262,11 +277,11 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCNotification;
-    use codex_app_server_protocol::JSONRPCRequest;
-    use codex_app_server_protocol::JSONRPCResponse;
-    use codex_app_server_protocol::RequestId;
+    use codex_exec_server_protocol::JSONRPCMessage;
+    use codex_exec_server_protocol::JSONRPCNotification;
+    use codex_exec_server_protocol::JSONRPCRequest;
+    use codex_exec_server_protocol::JSONRPCResponse;
+    use codex_exec_server_protocol::RequestId;
     use codex_utils_path_uri::PathUri;
     use opentelemetry::trace::SpanId;
     use opentelemetry::trace::TraceId;
@@ -321,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn request_span_uses_inbound_trace_parent() {
+    fn request_span_uses_bounded_name_wire_method_and_inbound_trace_parent() {
         let span_exporter = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()
             .with_simple_exporter(span_exporter.clone())
@@ -339,9 +354,16 @@ mod tests {
             tracestate: None,
         };
 
+        let method = "custom/method";
         tracing::subscriber::with_default(subscriber, || {
             tracing::callsite::rebuild_interest_cache();
-            let request_span = request_span(INITIALIZE_METHOD, &test_request(Some(trace)));
+            let request = JSONRPCRequest {
+                id: RequestId::Integer(1),
+                method: method.to_string(),
+                params: None,
+                trace: Some(trace),
+            };
+            let request_span = request_span("unknown", &request);
             request_span.in_scope(|| {});
             drop(request_span);
         });
@@ -350,19 +372,18 @@ mod tests {
         let spans = span_exporter.get_finished_spans().expect("span export");
         let request_span = spans
             .iter()
-            .find(|span| span.name.as_ref() == INITIALIZE_METHOD)
-            .expect("initialize span");
+            .find(|span| span.name.as_ref() == "unknown")
+            .expect("unknown method span");
+        assert_eq!(
+            request_span
+                .attributes
+                .iter()
+                .find(|attribute| attribute.key.as_str() == "method")
+                .map(|attribute| attribute.value.clone()),
+            Some(opentelemetry::Value::String(method.into()))
+        );
         assert_eq!(request_span.span_context.trace_id(), trace_id);
         assert_eq!(request_span.parent_span_id, parent_span_id);
-    }
-
-    fn test_request(trace: Option<codex_protocol::protocol::W3cTraceContext>) -> JSONRPCRequest {
-        JSONRPCRequest {
-            id: RequestId::Integer(1),
-            method: INITIALIZE_METHOD.to_string(),
-            params: None,
-            trace,
-        }
     }
 
     #[tokio::test]
@@ -575,7 +596,8 @@ mod tests {
         ExecParams {
             process_id,
             argv: sleep_then_print_argv(),
-            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
+            cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
+                .expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,
@@ -583,6 +605,7 @@ mod tests {
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         }
     }
 

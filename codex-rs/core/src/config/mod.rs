@@ -246,7 +246,8 @@ Payload:
 ```
 You may also see them addressed as to=/root/..., which indicates your identity is /root/...
 "#;
-const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.spawn_agent` without a configured namespace or `to=functions.agents.spawn_agent` with `tool_namespace = "agents"`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
+const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
+const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.collaboration.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
 
 All agents share the same directory. In detail:
 - All agents have access to the same container and filesystem as you.
@@ -1114,14 +1115,14 @@ pub struct RolloutBudgetConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct CurrentTimeReminderConfig {
-    pub reminder_interval_model_requests: u64,
+    pub reminder_interval_seconds: u64,
     pub clock_source: CurrentTimeSource,
 }
 
 impl Default for CurrentTimeReminderConfig {
     fn default() -> Self {
         Self {
-            reminder_interval_model_requests: 1,
+            reminder_interval_seconds: 1,
             clock_source: CurrentTimeSource::System,
         }
     }
@@ -1157,7 +1158,7 @@ impl MultiAgentV2Config {
                 DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
             )),
-            tool_namespace: None,
+            tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
             hide_spawn_agent_metadata: true,
             non_code_mode_only: true,
         }
@@ -1577,7 +1578,10 @@ impl Config {
                 ElicitationCapability::default()
             },
             mcp_server_catalog: catalog.build(),
-            plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
+            connector_snapshot:
+                codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+                    loaded_plugins.capability_summaries(),
+                ),
         }
     }
 
@@ -2656,18 +2660,18 @@ fn resolve_current_time_reminder_config(
 
     let base = current_time_reminder_toml_config(config_toml.features.as_ref());
     let default = CurrentTimeReminderConfig::default();
-    let reminder_interval_model_requests = base
-        .and_then(|config| config.reminder_interval_model_requests)
-        .unwrap_or(default.reminder_interval_model_requests);
-    if reminder_interval_model_requests == 0 {
+    let reminder_interval_seconds = base
+        .and_then(|config| config.reminder_interval_seconds)
+        .unwrap_or(default.reminder_interval_seconds);
+    if reminder_interval_seconds == 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "features.current_time_reminder.reminder_interval_model_requests must be positive",
+            "features.current_time_reminder.reminder_interval_seconds must be positive",
         ));
     }
 
     Ok(Some(CurrentTimeReminderConfig {
-        reminder_interval_model_requests,
+        reminder_interval_seconds,
         clock_source: base
             .and_then(|config| config.clock_source)
             .unwrap_or(default.clock_source),
@@ -2939,6 +2943,7 @@ impl Config {
             managed_hooks: _,
             mcp_servers,
             plugins: _,
+            marketplaces: _,
             exec_policy: _,
             enforce_residency,
             network: network_requirements,

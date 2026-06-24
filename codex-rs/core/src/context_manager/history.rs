@@ -1,4 +1,5 @@
-use crate::context::EnvironmentContext;
+use crate::context::ContextualUserFragment;
+use crate::context::world_state::WorldState;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
@@ -28,6 +29,7 @@ use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 use codex_utils_output_truncation::truncate_text;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 /// Transcript of thread history
@@ -49,8 +51,8 @@ pub(crate) struct ContextManager {
     /// also clear this when it trims a mixed initial-context developer bundle
     /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
-    /// Environment state most recently appended to model-visible history.
-    environment_context_baseline: Option<EnvironmentContext>,
+    /// World state most recently appended to model-visible history.
+    world_state_baseline: Option<Arc<WorldState>>,
 }
 
 impl ContextManager {
@@ -62,7 +64,7 @@ impl ContextManager {
                 &None, &None, /*model_context_window*/ None,
             ),
             reference_context_item: None,
-            environment_context_baseline: None,
+            world_state_baseline: None,
         }
     }
 
@@ -82,15 +84,20 @@ impl ContextManager {
         self.reference_context_item.clone()
     }
 
-    pub(crate) fn update_environment_context_baseline(
+    pub(crate) fn update_world_state(
         &mut self,
-        context: &EnvironmentContext,
-    ) -> bool {
-        if self.environment_context_baseline.as_ref() == Some(context) {
-            return false;
-        }
-        self.environment_context_baseline = Some(context.clone());
-        true
+        world_state: Arc<WorldState>,
+    ) -> Vec<Box<dyn ContextualUserFragment>> {
+        let fragments = self.world_state_baseline.as_deref().map_or_else(
+            || world_state.render_full(),
+            |previous| world_state.render_diff(previous),
+        );
+        self.world_state_baseline = Some(world_state);
+        fragments
+    }
+
+    pub(crate) fn set_world_state_baseline(&mut self, world_state: Arc<WorldState>) {
+        self.world_state_baseline = Some(world_state);
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -178,14 +185,14 @@ impl ContextManager {
             // its corresponding counterpart to keep the invariants intact without
             // running a full normalization pass.
             normalize::remove_corresponding_for(&mut self.items, &removed);
-            self.environment_context_baseline = None;
+            self.world_state_baseline = None;
         }
     }
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
         self.history_version = self.history_version.saturating_add(1);
-        self.environment_context_baseline = None;
+        self.world_state_baseline = None;
     }
 
     /// Replace image content in the last turn if it originated from a tool output.
@@ -379,7 +386,8 @@ impl ContextManager {
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             },
-            ResponseItem::Message { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Message { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
@@ -469,7 +477,8 @@ pub(crate) fn truncate_function_output_payload(
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
-        ResponseItem::AgentMessage { .. }
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::AgentMessage { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::ToolSearchCall { .. }
@@ -715,7 +724,8 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::CompactionTrigger { .. } => false,
-        ResponseItem::FunctionCallOutput { .. }
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::AgentMessage { .. }
