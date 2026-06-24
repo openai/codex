@@ -250,6 +250,11 @@ enum ActiveNetworkApprovalAttribution {
     Ambiguous,
 }
 
+struct NetworkRequestAttribution {
+    owner_call: Option<Arc<ActiveNetworkApprovalCall>>,
+    environment_id: Option<String>,
+}
+
 #[derive(Default)]
 struct NetworkApprovalCallState {
     active_calls: IndexMap<String, Arc<ActiveNetworkApprovalCall>>,
@@ -344,6 +349,54 @@ impl NetworkApprovalService {
                 ActiveNetworkApprovalAttribution::Single,
             ),
             _ => ActiveNetworkApprovalAttribution::Ambiguous,
+        }
+    }
+
+    async fn resolve_request_attribution(
+        &self,
+        request: &NetworkPolicyRequest,
+    ) -> Option<NetworkRequestAttribution> {
+        if let Some(execution_id) = request.execution_id.as_deref() {
+            let call = self
+                .resolve_active_call_by_execution_id(execution_id)
+                .await?;
+            let environment_id = request
+                .environment_id
+                .clone()
+                .unwrap_or_else(|| call.environment_id.clone());
+            return (call.environment_id == environment_id).then_some(NetworkRequestAttribution {
+                owner_call: Some(call),
+                environment_id: Some(environment_id),
+            });
+        }
+
+        if let Some(environment_id) = request.environment_id.clone() {
+            let owner_call = match self.resolve_active_call_attribution().await {
+                ActiveNetworkApprovalAttribution::Single(call) => {
+                    (call.environment_id == environment_id).then_some(call)
+                }
+                ActiveNetworkApprovalAttribution::None
+                | ActiveNetworkApprovalAttribution::Ambiguous => None,
+            };
+            return Some(NetworkRequestAttribution {
+                owner_call,
+                environment_id: Some(environment_id),
+            });
+        }
+
+        match self.resolve_active_call_attribution().await {
+            ActiveNetworkApprovalAttribution::None => Some(NetworkRequestAttribution {
+                owner_call: None,
+                environment_id: None,
+            }),
+            ActiveNetworkApprovalAttribution::Single(call) => {
+                let environment_id = call.environment_id.clone();
+                Some(NetworkRequestAttribution {
+                    owner_call: Some(call),
+                    environment_id: Some(environment_id),
+                })
+            }
+            ActiveNetworkApprovalAttribution::Ambiguous => None,
         }
     }
 
@@ -455,45 +508,13 @@ impl NetworkApprovalService {
             NetworkProtocol::Socks5Tcp => NetworkApprovalProtocol::Socks5Tcp,
             NetworkProtocol::Socks5Udp => NetworkApprovalProtocol::Socks5Udp,
         };
-        let attributed_call = if let Some(execution_id) = request.execution_id.as_deref() {
-            let Some(call) = self.resolve_active_call_by_execution_id(execution_id).await else {
-                return NetworkDecision::deny(REASON_NOT_ALLOWED);
-            };
-            Some(call)
-        } else {
-            None
-        };
-        let (owner_call, active_environment_id) = if let Some(call) = attributed_call {
-            let environment_id = request
-                .environment_id
-                .clone()
-                .unwrap_or_else(|| call.environment_id.clone());
-            let owner_call = (call.environment_id == environment_id).then_some(call);
-            (owner_call, Some(environment_id))
-        } else if let Some(environment_id) = request.environment_id.clone() {
-            let owner_call = match self.resolve_active_call_attribution().await {
-                ActiveNetworkApprovalAttribution::Single(call) => {
-                    (call.environment_id == environment_id).then_some(call)
-                }
-                ActiveNetworkApprovalAttribution::None
-                | ActiveNetworkApprovalAttribution::Ambiguous => None,
-            };
-            (owner_call, Some(environment_id))
-        } else {
-            match self.resolve_active_call_attribution().await {
-                ActiveNetworkApprovalAttribution::None => (None, None),
-                ActiveNetworkApprovalAttribution::Single(call) => {
-                    let environment_id = call.environment_id.clone();
-                    (Some(call), Some(environment_id))
-                }
-                ActiveNetworkApprovalAttribution::Ambiguous => {
-                    return NetworkDecision::deny(REASON_NOT_ALLOWED);
-                }
-            }
-        };
-        if request.execution_id.is_some() && owner_call.is_none() {
+        let Some(NetworkRequestAttribution {
+            owner_call,
+            environment_id: active_environment_id,
+        }) = self.resolve_request_attribution(&request).await
+        else {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
-        }
+        };
         let turn_context = Self::active_turn_context(session.as_ref()).await;
         let Some(environment_id) = active_environment_id.or_else(|| {
             turn_context

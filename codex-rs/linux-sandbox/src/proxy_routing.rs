@@ -73,14 +73,12 @@ struct ProxyRoutePlan {
 }
 
 pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
-    let mut env: HashMap<String, String> = std::env::vars().collect();
-    let attribution_token = env.remove(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
+    let (attribution_token, plan) = extract_attribution_token_and_plan(std::env::vars().collect());
     // SAFETY: the sandbox helper is single-threaded here, before it forks bridge workers or
     // executes the user command.
     unsafe {
         std::env::remove_var(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
     }
-    let plan = plan_proxy_routes(&env);
 
     if plan.routes.is_empty() {
         let message = if plan.has_proxy_config {
@@ -131,6 +129,14 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
     }
 
     serde_json::to_string(&ProxyRouteSpec { routes }).map_err(io::Error::other)
+}
+
+fn extract_attribution_token_and_plan(
+    mut env: HashMap<String, String>,
+) -> (Option<String>, ProxyRoutePlan) {
+    let attribution_token = env.remove(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
+    let plan = plan_proxy_routes(&env);
+    (attribution_token, plan)
 }
 
 pub(crate) fn activate_proxy_routes_in_netns(serialized_spec: &str) -> io::Result<()> {
@@ -515,6 +521,8 @@ fn run_host_bridge(
             if let Some(attribution_token) = attribution_token
                 && write_attribution_frame(&mut tcp_stream, &attribution_token).is_err()
             {
+                // The shared ingress must reject unauthenticated connections; do not forward
+                // application bytes if this bridge cannot prove the exec attribution first.
                 return;
             }
             let _ = proxy_bidirectional(tcp_stream, unix_stream);
@@ -701,12 +709,14 @@ fn close_fd(fd: libc::c_int) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
     use super::PROXY_SOCKET_DIR_PREFIX;
     use super::ProxyRouteEntry;
     use super::ProxyRouteSpec;
     use super::cleanup_proxy_socket_dir;
     use super::cleanup_stale_proxy_socket_dirs_in;
     use super::default_proxy_port;
+    use super::extract_attribution_token_and_plan;
     use super::is_proxy_env_key;
     use super::parse_loopback_proxy_endpoint;
     use super::parse_proxy_socket_dir_owner_pid;
@@ -768,6 +778,35 @@ mod tests {
             "127.0.0.1:43128"
                 .parse::<SocketAddr>()
                 .expect("valid socket")
+        );
+    }
+
+    #[test]
+    fn attribution_token_is_extracted_before_proxy_route_planning() {
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:43128".to_string(),
+        );
+        env.insert(
+            PROXY_ATTRIBUTION_TOKEN_ENV_KEY.to_string(),
+            "exec-token".to_string(),
+        );
+
+        let (attribution_token, plan) = extract_attribution_token_and_plan(env);
+
+        assert_eq!(attribution_token.as_deref(), Some("exec-token"));
+        assert_eq!(
+            plan,
+            super::ProxyRoutePlan {
+                routes: vec![super::PlannedProxyRoute {
+                    env_key: "HTTP_PROXY".to_string(),
+                    endpoint: "127.0.0.1:43128"
+                        .parse::<SocketAddr>()
+                        .expect("valid socket"),
+                }],
+                has_proxy_config: true,
+            }
         );
     }
 

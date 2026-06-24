@@ -127,35 +127,7 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
     .await?;
     wait_for_turn_complete(&test).await;
 
-    let mut actual_triggers = responses
-        .requests()
-        .into_iter()
-        .filter(|request| {
-            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
-        })
-        .map(|request| {
-            let user_texts = request.message_input_texts("user");
-            let action: Value = serde_json::from_str(
-                user_texts
-                    .iter()
-                    .find(|text| text.contains("\"tool\": \"network_access\""))
-                    .context("expected network access JSON in Guardian request")?
-                    .trim(),
-            )?;
-            Ok((
-                action
-                    .pointer("/trigger/callId")
-                    .and_then(Value::as_str)
-                    .context("expected exact trigger call id")?
-                    .to_string(),
-                action
-                    .pointer("/trigger/command/2")
-                    .and_then(Value::as_str)
-                    .context("expected exact trigger command")?
-                    .to_string(),
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut actual_triggers = guardian_network_triggers(&responses)?;
     actual_triggers.sort_unstable();
     assert_eq!(
         actual_triggers,
@@ -163,6 +135,64 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
             ("exec-network-first".to_string(), first_command),
             ("exec-network-second".to_string(), second_command),
         ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "requires the trusted Linux proxy bridge"
+)]
+async fn guardian_receives_exact_trigger_for_single_network_request() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = managed_network_unified_exec_test(&server).await?;
+    let command = network_python_fetch_command("1.1.1.1", /*timeout_secs*/ 10);
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-network-single"),
+                ev_function_call(
+                    "exec-network-single",
+                    "exec_command",
+                    &serde_json::to_string(&network_exec_args(&command))?,
+                ),
+                ev_completed("resp-network-single"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-network-guardian"),
+                ev_assistant_message("msg-network-guardian", r#"{"outcome":"deny"}"#),
+                ev_completed("resp-network-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-network-done"),
+                ev_assistant_message("msg-network-done", "done"),
+                ev_completed("resp-network-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_managed_network_turn(
+        &test,
+        "run one network request",
+        vec![local(test.config.cwd.clone())],
+        ApprovalsReviewer::AutoReview,
+        AskForApproval::OnRequest,
+    )
+    .await?;
+    wait_for_turn_complete(&test).await;
+
+    assert_eq!(
+        guardian_network_triggers(&responses)?,
+        vec![("exec-network-single".to_string(), command)]
     );
 
     Ok(())
@@ -341,12 +371,16 @@ async fn mount_exec_network_turn(
 }
 
 fn network_fetch_args(environment_id: &str) -> Value {
-    let command = format!(
-        "python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://{NETWORK_TEST_HOST}', timeout=2).read().decode(errors='replace'))\""
-    );
+    let command = network_python_fetch_command(NETWORK_TEST_HOST, /*timeout_secs*/ 2);
     let mut args = network_exec_args(&command);
     args["environment_id"] = json!(environment_id);
     args
+}
+
+fn network_python_fetch_command(host: &str, timeout_secs: u64) -> String {
+    format!(
+        "python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://{host}', timeout={timeout_secs}).read().decode(errors='replace'))\""
+    )
 }
 
 fn network_exec_args(command: &str) -> Value {
@@ -405,6 +439,38 @@ async fn submit_managed_network_turn(
         .await?;
 
     Ok(())
+}
+
+fn guardian_network_triggers(responses: &ResponseMock) -> Result<Vec<(String, String)>> {
+    responses
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .map(|request| {
+            let user_texts = request.message_input_texts("user");
+            let action: Value = serde_json::from_str(
+                user_texts
+                    .iter()
+                    .find(|text| text.contains("\"tool\": \"network_access\""))
+                    .context("expected network access JSON in Guardian request")?
+                    .trim(),
+            )?;
+            Ok((
+                action
+                    .pointer("/trigger/callId")
+                    .and_then(Value::as_str)
+                    .context("expected exact trigger call id")?
+                    .to_string(),
+                action
+                    .pointer("/trigger/command/2")
+                    .and_then(Value::as_str)
+                    .context("expected exact trigger command")?
+                    .to_string(),
+            ))
+        })
+        .collect()
 }
 
 async fn expect_network_approval(
