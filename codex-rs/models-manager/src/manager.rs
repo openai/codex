@@ -457,21 +457,18 @@ impl ModelsManager for StaticModelsManager {
     ) -> ModelsManagerFuture<'a, String> {
         Box::pin(
             async move {
-                let Some(requested_model) = model.as_ref() else {
-                    return default_model_from_available(self.list_models(refresh_strategy).await);
-                };
-                let Some(fallback_model) = self.unsupported_model_fallback.as_ref() else {
-                    return requested_model.clone();
-                };
-                if self
-                    .remote_models
-                    .iter()
-                    .any(|candidate| candidate.slug == *requested_model)
-                {
-                    requested_model.clone()
-                } else {
-                    fallback_model.clone()
+                if let Some(model) = model.as_ref() {
+                    if let Some(fallback_model) = self.unsupported_model_fallback.as_ref()
+                        && !self
+                            .remote_models
+                            .iter()
+                            .any(|candidate| candidate.slug == *model)
+                    {
+                        return fallback_model.clone();
+                    }
+                    return model.to_string();
                 }
+                default_model_from_available(self.list_models(refresh_strategy).await)
             }
             .instrument(tracing::info_span!(
                 "get_default_model",
