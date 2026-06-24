@@ -1,4 +1,6 @@
 use crate::config;
+use crate::credential_broker::BROKERED_CREDENTIALS_ENV_KEY;
+use crate::credential_broker::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequestObserver;
@@ -419,6 +421,8 @@ const NODE_USE_ENV_PROXY_ENV_KEY: &str = "NODE_USE_ENV_PROXY";
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
 pub const PROXY_ENV_KEYS: &[&str] = &[
     PROXY_ACTIVE_ENV_KEY,
+    CREDENTIAL_BROKER_ACTIVE_ENV_KEY,
+    BROKERED_CREDENTIALS_ENV_KEY,
     ALLOW_LOCAL_BINDING_ENV_KEY,
     ELECTRON_GET_USE_PROXY_ENV_KEY,
     NODE_USE_ENV_PROXY_ENV_KEY,
@@ -692,6 +696,7 @@ impl NetworkProxy {
             runtime_settings.allow_local_binding,
             runtime_settings.mitm_ca_trust_bundle.as_ref(),
         );
+        self.state.virtualize_child_credentials(&mut env);
         let mut loopback_ports = [
             Some(addrs.http_addr),
             self.socks_enabled.then_some(addrs.socks_addr),

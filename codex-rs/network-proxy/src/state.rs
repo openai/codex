@@ -57,6 +57,8 @@ pub struct PartialNetworkConfig {
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: Option<bool>,
     pub mitm: Option<bool>,
+    pub credential_broker: Option<bool>,
+    pub dangerously_allow_plaintext_credential_injection: Option<bool>,
     #[serde(default)]
     pub mitm_hooks: Option<Vec<MitmHookConfig>>,
 }
@@ -66,6 +68,10 @@ pub fn build_config_state(
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
     crate::config::validate_unix_socket_allowlist_paths(&config)?;
+    anyhow::ensure!(
+        !config.network.credential_broker || config.network.mitm,
+        "network.credential_broker requires network.mitm = true"
+    );
     let allowed_domains = config.network.allowed_domains().unwrap_or_default();
     let denied_domains = config.network.denied_domains().unwrap_or_default();
     validate_non_global_wildcard_domain_patterns("network.denied_domains", &denied_domains)
