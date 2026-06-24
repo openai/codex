@@ -665,10 +665,9 @@ async fn plugin_detail_popup_snapshot_labels_personal_marketplace_as_local() {
 }
 
 #[tokio::test]
-async fn plugin_detail_popup_installed_by_admin_hides_disclosure_and_uninstall() {
+async fn plugin_detail_popup_distinguishes_admin_installed_from_enabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-
     let summary = plugins_test_summary(
         "plugin-figma",
         "figma",
@@ -684,20 +683,21 @@ async fn plugin_detail_popup_installed_by_admin_hides_disclosure_and_uninstall()
     let cwd = chat.config.cwd.clone();
     chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
+    let mut plugin = plugins_test_detail(
+        summary,
+        Some("Turn Figma files into implementation context."),
+        &["design-review", "extract-copy"],
+        &[
+            (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+            (codex_app_server_protocol::HookEventName::Stop, 2),
+        ],
+        &["Figma", "Slack"],
+        &["figma-mcp", "docs-mcp"],
+    );
     chat.on_plugin_detail_loaded(
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
-            plugin: plugins_test_detail(
-                summary,
-                Some("Turn Figma files into implementation context."),
-                &["design-review", "extract-copy"],
-                &[
-                    (codex_app_server_protocol::HookEventName::PreToolUse, 1),
-                    (codex_app_server_protocol::HookEventName::Stop, 2),
-                ],
-                &["Figma", "Slack"],
-                &["figma-mcp", "docs-mcp"],
-            ),
+            plugin: plugin.clone(),
         }),
     );
 
@@ -711,6 +711,25 @@ async fn plugin_detail_popup_installed_by_admin_hides_disclosure_and_uninstall()
     assert_chatwidget_snapshot!(
         "plugin_detail_popup_installed",
         strip_osc8_for_snapshot(&popup)
+    );
+
+    plugin.summary.installed = false;
+    plugin.summary.enabled = false;
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin }));
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Enabled by Admin")
+            && popup.contains("Install plugin")
+            && !popup.contains("Installed by admin"),
+        "expected an unmaterialized default plugin to show its admin assignment and remain installable, got:\n{popup}"
+    );
+    insta::assert_snapshot!(
+        popup
+            .lines()
+            .find(|line| line.contains("Figma ·"))
+            .expect("expected plugin detail header")
+            .trim(),
+        @"Figma · Enabled by Admin · ChatGPT Marketplace"
     );
 }
 
@@ -1178,6 +1197,8 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
     let curated_loading_popup =
         select_tab_containing(&mut chat, "Loading OpenAI Curated plugins...");
     let workspace_loading_popup = select_tab_containing(&mut chat, "Loading Workspace plugins.");
+    let shared_loading_popup = select_tab_containing(&mut chat, "Loading Shared with me plugins.");
+    let _ = select_tab_containing(&mut chat, "Loading Workspace plugins.");
 
     chat.on_plugin_remote_sections_loaded(cwd.to_path_buf(), Vec::new(), Vec::new());
     let loaded_popup = render_bottom_popup(&chat, /*width*/ 100);
@@ -1216,16 +1237,20 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
         [
             remote_section_state(&curated_loading_popup),
             remote_section_state(&workspace_loading_popup),
+            remote_section_state(&shared_loading_popup),
             remote_section_state(&workspace_error_popup),
             remote_section_state(&remote_curated_empty_popup),
         ]
         .join("\n\n"),
         @r###"
         OpenAI Curated marketplace.
-        Loading OpenAI Curated plugins...  This updates when shared plugins finish loading.
+        Loading OpenAI Curated plugins...  This updates when OpenAI Curated plugins finish loading.
 
         Loading Workspace plugins.
-        Loading Workspace plugins...  This updates when shared plugins finish loading.
+        Loading Workspace plugins...  This updates when workspace plugins finish loading.
+
+        Loading Shared with me plugins.
+        Loading Shared with me plugins...  This updates when shared plugins finish loading.
 
         Workspace unavailable.
         Workspace unavailable  Sign in to ChatGPT to load workspace plugins.
@@ -1237,13 +1262,13 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
 }
 
 #[tokio::test]
-async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share_is_uninstalled() {
+async fn plugins_popup_remote_detail_tracks_physical_and_policy_install_state() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let remote_plugin_id = "plugins~Plugin_docs";
     let remote_marketplace_name = "workspace-shared-with-me-private";
-    let local_summary = PluginSummary {
+    let mut local_summary = PluginSummary {
         share_context: Some(PluginShareContext {
             remote_plugin_id: remote_plugin_id.to_string(),
             remote_version: None,
@@ -1260,13 +1285,13 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
             Some("Local editable docs plugin."),
             /*installed*/ false,
             /*enabled*/ true,
-            PluginInstallPolicy::Available,
+            PluginInstallPolicy::InstalledByDefault,
         )
     };
     let popup = render_loaded_plugins_popup(
         &mut chat,
         plugins_test_response(vec![
-            plugins_test_curated_marketplace(vec![local_summary]),
+            plugins_test_curated_marketplace(vec![local_summary.clone()]),
             PluginMarketplaceEntry {
                 name: remote_marketplace_name.to_string(),
                 path: None,
@@ -1313,6 +1338,52 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
         }
         other => panic!("expected OpenPluginDetailLoading event, got {other:?}"),
     }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginDetail { params, .. }) => {
+            assert_eq!(params.marketplace_path, None);
+            assert_eq!(
+                params.remote_marketplace_name,
+                Some(remote_marketplace_name.to_string())
+            );
+            assert_eq!(params.plugin_name, remote_plugin_id);
+        }
+        other => panic!("expected FetchPluginDetail event, got {other:?}"),
+    }
+
+    local_summary.install_policy = PluginInstallPolicy::Available;
+    let mut remote_summary = plugins_test_remote_summary(
+        remote_plugin_id,
+        "docs",
+        Some("Docs"),
+        Some("Shared docs plugin."),
+        /*installed*/ false,
+    );
+    remote_summary.install_policy = PluginInstallPolicy::InstalledByDefault;
+    let popup = render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(vec![local_summary]),
+            PluginMarketplaceEntry {
+                name: remote_marketplace_name.to_string(),
+                path: None,
+                interface: Some(MarketplaceInterface {
+                    display_name: Some("Shared with me".to_string()),
+                }),
+                plugins: vec![remote_summary],
+            },
+        ]),
+    );
+    assert!(
+        popup.contains("Admin assigned"),
+        "expected the admin-assigned remote duplicate to win, got:\n{popup}"
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenPluginDetailLoading { .. })
+    ));
     match rx.try_recv() {
         Ok(AppEvent::FetchPluginDetail { params, .. }) => {
             assert_eq!(params.marketplace_path, None);

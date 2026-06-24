@@ -69,6 +69,8 @@ const PERSONAL_MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.js
 const REMOTE_LOADING_TAB_ID_PREFIX: &str = "remote-loading:";
 const REMOTE_EMPTY_TAB_ID_PREFIX: &str = "remote-empty:";
 const REMOTE_ERROR_TAB_ID_PREFIX: &str = "remote-error:";
+const OPENAI_CURATED_LOADING_DESCRIPTION: &str =
+    "This updates when OpenAI Curated plugins finish loading.";
 const WORKSPACE_SECTION_TAB_ORDER: u8 = 0;
 const SHARED_WITH_ME_SECTION_TAB_ORDER: u8 = 1;
 const SHARED_WITH_ME_LINK_SECTION_TAB_ORDER: u8 = 2;
@@ -80,6 +82,7 @@ struct PreferredLocalPluginSource {
     marketplace_path: AbsolutePathBuf,
     plugin_name: String,
     installed: bool,
+    shows_as_installed: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -155,6 +158,7 @@ struct RemoteMarketplaceSection {
     id: &'static str,
     label: &'static str,
     loading_tab_id: &'static str,
+    loading_item_description: &'static str,
     marketplace_names: &'static [&'static str],
     show_empty_tab: bool,
     empty_item_name: &'static str,
@@ -167,6 +171,7 @@ const REMOTE_MARKETPLACE_SECTIONS: [RemoteMarketplaceSection; 2] = [
         id: "workspace",
         label: "Workspace",
         loading_tab_id: "workspace-loading",
+        loading_item_description: "This updates when workspace plugins finish loading.",
         marketplace_names: &[REMOTE_WORKSPACE_MARKETPLACE_NAME],
         show_empty_tab: true,
         empty_item_name: "No workspace plugins available",
@@ -177,6 +182,7 @@ const REMOTE_MARKETPLACE_SECTIONS: [RemoteMarketplaceSection; 2] = [
         id: "shared-with-me",
         label: "Shared with me",
         loading_tab_id: "shared-with-me-loading",
+        loading_item_description: "This updates when shared plugins finish loading.",
         marketplace_names: &[
             REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
             REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
@@ -205,7 +211,11 @@ impl RemoteMarketplaceSection {
         }
 
         let tab = if remote_sections_loading {
-            remote_section_loading_tab(self.loading_tab_id, self.label)
+            remote_section_loading_tab(
+                self.loading_tab_id,
+                self.label,
+                self.loading_item_description,
+            )
         } else if remote_sections_loaded {
             if let Some(section_error) = plugin_remote_section_error(section_errors, self.id) {
                 remote_section_error_tab(section_error)
@@ -806,7 +816,7 @@ impl ChatWidget {
             if curated_loading && !curated_has_entries {
                 (
                     "Loading OpenAI Curated plugins...",
-                    "This updates when shared plugins finish loading.",
+                    OPENAI_CURATED_LOADING_DESCRIPTION,
                 )
             } else if let Some(section_error) = by_openai_section_error
                 && !curated_has_entries
@@ -826,7 +836,10 @@ impl ChatWidget {
             curated_empty_description,
         );
         if curated_loading && curated_has_entries {
-            curated_items.push(remote_section_loading_item("OpenAI Curated"));
+            curated_items.push(remote_section_loading_item(
+                "OpenAI Curated",
+                OPENAI_CURATED_LOADING_DESCRIPTION,
+            ));
         }
         if let Some(section_error) = by_openai_section_error
             && curated_has_entries
@@ -1344,6 +1357,10 @@ fn plugin_entry_preferred(
     candidate: &(&PluginMarketplaceEntry, &PluginSummary, String),
     existing: &(&PluginMarketplaceEntry, &PluginSummary, String),
 ) -> bool {
+    if candidate.1.installed != existing.1.installed {
+        return candidate.1.installed;
+    }
+
     let candidate_shows_as_installed = plugin_shows_as_installed(candidate.1);
     let existing_shows_as_installed = plugin_shows_as_installed(existing.1);
     if candidate_shows_as_installed != existing_shows_as_installed {
@@ -1383,6 +1400,7 @@ fn preferred_local_plugin_sources(
                     marketplace_path: marketplace_path.clone(),
                     plugin_name: plugin.name.clone(),
                     installed: plugin.installed,
+                    shows_as_installed: plugin_shows_as_installed(plugin),
                 });
         }
     }
@@ -1394,7 +1412,11 @@ fn plugin_detail_status_label(plugin: &PluginSummary) -> &'static str {
         return "Disabled by admin";
     }
     if plugin.install_policy == PluginInstallPolicy::InstalledByDefault {
-        return "Installed by admin";
+        return if plugin.installed {
+            "Installed by admin"
+        } else {
+            "Enabled by Admin"
+        };
     }
     if plugin.installed {
         if plugin.enabled {
@@ -1681,10 +1703,10 @@ fn is_personal_marketplace_path(marketplace_path: &AbsolutePathBuf) -> bool {
         .is_some_and(|personal_path| personal_path.as_path() == marketplace_path.as_path())
 }
 
-fn remote_section_loading_item(label: &str) -> SelectionItem {
+fn remote_section_loading_item(label: &str, description: &str) -> SelectionItem {
     SelectionItem {
         name: format!("Loading {label} plugins..."),
-        description: Some("This updates when shared plugins finish loading.".to_string()),
+        description: Some(description.to_string()),
         is_disabled: true,
         ..Default::default()
     }
@@ -1708,7 +1730,7 @@ fn plugin_remote_section_error<'a>(
         .find(|section_error| section_error.section_id == section_id)
 }
 
-fn remote_section_loading_tab(id: &str, label: &str) -> SelectionTab {
+fn remote_section_loading_tab(id: &str, label: &str, item_description: &str) -> SelectionTab {
     SelectionTab {
         id: format!("{REMOTE_LOADING_TAB_ID_PREFIX}{id}"),
         label: label.to_string(),
@@ -1716,7 +1738,7 @@ fn remote_section_loading_tab(id: &str, label: &str) -> SelectionTab {
             format!("Loading {label} plugins."),
             "Local plugin functionality is already available.".to_string(),
         ),
-        items: vec![remote_section_loading_item(label)],
+        items: vec![remote_section_loading_item(label, item_description)],
     }
 }
 
@@ -1904,6 +1926,7 @@ fn plugin_detail_request_for_entry(
         && let Some(remote_plugin_id) = plugin_remote_identity(plugin)
         && let Some(preferred_source) = preferred_local_sources.get(remote_plugin_id)
         && preferred_source.installed == plugin.installed
+        && preferred_source.shows_as_installed == plugin_shows_as_installed(plugin)
     {
         return Some((
             PluginLocation::Local {
