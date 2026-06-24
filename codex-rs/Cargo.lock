@@ -2520,8 +2520,10 @@ dependencies = [
  "codex-code-mode-protocol",
  "codex-protocol",
  "codex-utils-cargo-bin",
+ "libc",
  "pretty_assertions",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]

@@ -7,7 +7,6 @@ use codex_code_mode_protocol::NotificationFuture;
 use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_code_mode_protocol::host::DelegateRequest;
 use codex_code_mode_protocol::host::DelegateResponse;
-use codex_code_mode_protocol::host::HostToClient;
 use codex_code_mode_protocol::host::SessionId;
 use tokio_util::sync::CancellationToken;
 
@@ -80,9 +79,7 @@ impl CodeModeSessionDelegate for RemoteDelegate {
     }
 
     fn cell_closed(&self, cell_id: &CellId) {
-        self.peer.send(HostToClient::CellClosed {
-            session_id: self.session_id.clone(),
-            cell_id: cell_id.into(),
-        });
+        self.peer
+            .close_cell(self.session_id.clone(), cell_id.clone());
     }
 }

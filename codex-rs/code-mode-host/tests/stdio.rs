@@ -1,7 +1,9 @@
 #![allow(clippy::expect_used)]
 
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
@@ -18,9 +20,26 @@ use codex_code_mode::ToolDefinition;
 use codex_code_mode::ToolInvocationFuture;
 use codex_code_mode::WaitOutcome;
 use codex_code_mode::WaitRequest;
+use codex_code_mode::host::CapabilitySet;
+use codex_code_mode::host::ClientHello;
+use codex_code_mode::host::ClientToHost;
+use codex_code_mode::host::DelegateRequest;
+use codex_code_mode::host::DelegateResponse;
+use codex_code_mode::host::FramedReader;
+use codex_code_mode::host::FramedWriter;
+use codex_code_mode::host::HostHello;
+use codex_code_mode::host::HostRequest;
+use codex_code_mode::host::HostResponse;
+use codex_code_mode::host::HostToClient;
+use codex_code_mode::host::ProtocolVersion;
+use codex_code_mode::host::RequestId;
+use codex_code_mode::host::SessionId;
+use codex_code_mode::host::SupportedProtocolVersions;
+use codex_code_mode::host::WireResult;
 use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
@@ -67,6 +86,10 @@ impl CodeModeSessionDelegate for RecordingDelegate {
 
 fn cell_id(value: &str) -> CellId {
     CellId::new(value.to_string())
+}
+
+fn request_id(value: i64) -> RequestId {
+    RequestId::new(value)
 }
 
 fn execute_request(source: &str) -> ExecuteRequest {
@@ -189,4 +212,367 @@ text(result.value);
         *delegate.closed_cells.lock().expect("closed cells lock"),
         vec![cell_id("1"), cell_id("2"), cell_id("3")]
     );
+}
+
+#[tokio::test]
+async fn cpu_bound_output_loop_can_be_terminated() {
+    let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(
+        codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").expect("host binary"),
+    );
+    let session = provider
+        .create_session(Arc::new(RecordingDelegate::default()))
+        .await
+        .expect("create remote session");
+    let mut request = execute_request(
+        r#"
+for (;;) {
+    text("lots of output");
+}
+"#,
+    );
+    request.yield_time_ms = Some(1);
+    let started = session.execute(request).await.expect("start output loop");
+    let running_cell_id = started.cell_id.clone();
+    let initial_response = tokio::time::timeout(Duration::from_secs(5), async {
+        started.initial_response().await
+    })
+    .await
+    .expect("initial response timeout")
+    .expect("initial response");
+    let RuntimeResponse::Yielded {
+        cell_id: yielded_cell_id,
+        content_items,
+    } = initial_response
+    else {
+        panic!("expected the output loop to yield");
+    };
+    assert_eq!(yielded_cell_id, running_cell_id);
+    assert!(!content_items.is_empty());
+    assert!(content_items.iter().all(|item| {
+        item == &FunctionCallOutputContentItem::InputText {
+            text: "lots of output".to_string(),
+        }
+    }));
+
+    let termination = tokio::time::timeout(
+        Duration::from_secs(5),
+        session.terminate(running_cell_id.clone()),
+    )
+    .await
+    .expect("termination timeout")
+    .expect("terminate output loop");
+    let WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+        cell_id: terminated_cell_id,
+        content_items,
+    }) = termination
+    else {
+        panic!("expected the output loop to terminate");
+    };
+    assert_eq!(terminated_cell_id, running_cell_id);
+    assert!(content_items.iter().all(|item| {
+        item == &FunctionCallOutputContentItem::InputText {
+            text: "lots of output".to_string(),
+        }
+    }));
+    session.shutdown().await.expect("shutdown remote session");
+}
+
+#[tokio::test]
+async fn explicit_yield_frame_precedes_notification_and_terminal_output_drops_timers() {
+    let mut child = Command::new(
+        codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").expect("host binary"),
+    )
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::inherit())
+    .kill_on_drop(true)
+    .spawn()
+    .expect("spawn host");
+    let mut writer = FramedWriter::new(child.stdin.take().expect("host stdin"));
+    let mut reader = FramedReader::new(child.stdout.take().expect("host stdout"));
+    writer
+        .write(&ClientToHost::ClientHello(
+            ClientHello::new(
+                SupportedProtocolVersions::try_new([ProtocolVersion::V1])
+                    .expect("supported versions"),
+                CapabilitySet::empty(),
+                CapabilitySet::empty(),
+            )
+            .expect("client hello"),
+        ))
+        .await
+        .expect("write client hello");
+    assert_eq!(
+        reader.read::<HostToClient>().await.expect("host hello"),
+        Some(HostToClient::HostHello(HostHello::new(
+            ProtocolVersion::V1,
+            CapabilitySet::empty(),
+        )))
+    );
+
+    let session_id = SessionId::new("session-1").expect("session ID");
+    writer
+        .write(&ClientToHost::Request {
+            id: request_id(1),
+            request: HostRequest::OpenSession {
+                session_id: session_id.clone(),
+            },
+        })
+        .await
+        .expect("open session");
+    assert_eq!(
+        reader.read::<HostToClient>().await.expect("session ready"),
+        Some(HostToClient::Response {
+            id: request_id(1),
+            result: WireResult::Ok {
+                value: HostResponse::SessionReady {
+                    session_id: session_id.clone(),
+                },
+            },
+        })
+    );
+
+    writer
+        .write(&ClientToHost::Request {
+            id: request_id(2),
+            request: HostRequest::Execute {
+                session_id: session_id.clone(),
+                request: execute_request(
+                    r#"
+text("hello");
+yield_control();
+text("world");
+notify("this is important");
+setTimeout(() => { text("should never emit"); }, 60000);
+"#,
+                )
+                .try_into()
+                .expect("wire execute request"),
+            },
+        })
+        .await
+        .expect("execute request");
+    assert_eq!(
+        reader
+            .read::<HostToClient>()
+            .await
+            .expect("execution started"),
+        Some(HostToClient::Response {
+            id: request_id(2),
+            result: WireResult::Ok {
+                value: HostResponse::ExecutionStarted {
+                    cell_id: cell_id("1").into(),
+                },
+            },
+        })
+    );
+    assert_eq!(
+        reader
+            .read::<HostToClient>()
+            .await
+            .expect("initial response"),
+        Some(HostToClient::InitialResponse {
+            id: request_id(2),
+            result: WireResult::Ok {
+                value: RuntimeResponse::Yielded {
+                    cell_id: cell_id("1"),
+                    content_items: vec![FunctionCallOutputContentItem::InputText {
+                        text: "hello".to_string(),
+                    }],
+                }
+                .into(),
+            },
+        })
+    );
+
+    let delegate_request_id = match reader
+        .read::<HostToClient>()
+        .await
+        .expect("notification request")
+    {
+        Some(HostToClient::DelegateRequest {
+            id,
+            session_id: callback_session_id,
+            request:
+                DelegateRequest::Notify {
+                    call_id,
+                    cell_id: callback_cell_id,
+                    text,
+                },
+        }) => {
+            assert_eq!(callback_session_id, session_id);
+            assert_eq!(call_id, "call-1");
+            assert_eq!(callback_cell_id, cell_id("1").into());
+            assert_eq!(text, "this is important");
+            id
+        }
+        message => panic!("unexpected notification frame: {message:?}"),
+    };
+    writer
+        .write(&ClientToHost::DelegateResponse {
+            id: delegate_request_id,
+            result: WireResult::Ok {
+                value: DelegateResponse::NotificationDelivered,
+            },
+        })
+        .await
+        .expect("notification response");
+    writer
+        .write(&ClientToHost::Request {
+            id: request_id(3),
+            request: HostRequest::Wait {
+                session_id: session_id.clone(),
+                request: WaitRequest {
+                    cell_id: cell_id("1"),
+                    yield_time_ms: 60_000,
+                }
+                .into(),
+            },
+        })
+        .await
+        .expect("wait request");
+
+    let terminal = loop {
+        match reader
+            .read::<HostToClient>()
+            .await
+            .expect("terminal response")
+        {
+            Some(HostToClient::Response { id, result }) if id == request_id(3) => break result,
+            Some(HostToClient::CellClosed {
+                session_id: closed_session_id,
+                cell_id: closed_cell_id,
+            }) => {
+                assert_eq!(closed_session_id, session_id);
+                assert_eq!(closed_cell_id, cell_id("1").into());
+            }
+            message => panic!("unexpected terminal frame: {message:?}"),
+        }
+    };
+    assert_eq!(
+        terminal,
+        WireResult::Ok {
+            value: HostResponse::WaitCompleted {
+                outcome: WaitOutcome::LiveCell(RuntimeResponse::Result {
+                    cell_id: cell_id("1"),
+                    content_items: vec![FunctionCallOutputContentItem::InputText {
+                        text: "world".to_string(),
+                    }],
+                    error_text: None,
+                })
+                .into(),
+            },
+        }
+    );
+
+    writer
+        .write(&ClientToHost::Request {
+            id: request_id(4),
+            request: HostRequest::ShutdownSession {
+                session_id: session_id.clone(),
+            },
+        })
+        .await
+        .expect("shutdown request");
+    loop {
+        match reader
+            .read::<HostToClient>()
+            .await
+            .expect("shutdown response")
+        {
+            Some(HostToClient::Response { id, result }) if id == request_id(4) => {
+                assert_eq!(
+                    result,
+                    WireResult::Ok {
+                        value: HostResponse::SessionClosed {
+                            session_id: session_id.clone(),
+                        },
+                    }
+                );
+                break;
+            }
+            Some(HostToClient::CellClosed { .. }) => {}
+            message => panic!("unexpected shutdown frame: {message:?}"),
+        }
+    }
+    drop(writer);
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .expect("host exit timeout")
+        .expect("wait for host");
+    assert!(status.success(), "host exited with {status}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn crashed_host_fails_in_flight_exec_and_next_exec_respawns() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let host_binary =
+        codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").expect("host binary");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let pid_log = temp_dir.path().join("host-pids");
+    let wrapper = temp_dir.path().join("code-mode-host-wrapper");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$$\" >> {}\nexec {}\n",
+        shell_quote(&pid_log),
+        shell_quote(&host_binary),
+    );
+    std::fs::write(&wrapper, script).expect("write host wrapper");
+    let mut permissions = std::fs::metadata(&wrapper)
+        .expect("host wrapper metadata")
+        .permissions();
+    permissions.set_mode(/*mode*/ 0o755);
+    std::fs::set_permissions(&wrapper, permissions).expect("make host wrapper executable");
+
+    let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(wrapper);
+    let session = provider
+        .create_session(Arc::new(RecordingDelegate::default()))
+        .await
+        .expect("create remote session");
+    let mut request = execute_request("await new Promise(() => {});");
+    request.yield_time_ms = Some(60_000);
+    let started = session.execute(request).await.expect("start execution");
+    let first_pid = recorded_pids(&pid_log)[0];
+
+    // SAFETY: `first_pid` was written by the wrapper immediately before it
+    // replaced itself with the host process owned by this test.
+    assert_eq!(unsafe { libc::kill(first_pid, libc::SIGKILL) }, 0);
+    let error = tokio::time::timeout(Duration::from_secs(5), started.initial_response())
+        .await
+        .expect("host crash propagation timeout")
+        .expect_err("crashed host should fail the in-flight execution");
+    assert!(
+        error.contains("code-mode host"),
+        "unexpected error: {error}"
+    );
+
+    assert_eq!(
+        execute(&session, execute_request(r#"text("recovered");"#)).await,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "recovered".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+    let pids = recorded_pids(&pid_log);
+    assert_eq!(pids.len(), 2);
+    assert_ne!(pids[0], pids[1]);
+    session.shutdown().await.expect("shutdown remote session");
+}
+
+#[cfg(unix)]
+fn shell_quote(path: &std::path::Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
+#[cfg(unix)]
+fn recorded_pids(path: &std::path::Path) -> Vec<libc::pid_t> {
+    std::fs::read_to_string(path)
+        .expect("read host pid log")
+        .lines()
+        .map(|line| line.parse().expect("parse host pid"))
+        .collect()
 }

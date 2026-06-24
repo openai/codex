@@ -227,12 +227,7 @@ impl HostState {
                                 cell_id: cell_id.into(),
                             }),
                         );
-                        self.peer.send(HostToClient::InitialResponse {
-                            id: request_id,
-                            result: WireResult::from_result(
-                                started.initial_response().await.map(Into::into),
-                            ),
-                        });
+                        self.peer.start_cell(session_id, request_id, started);
                     }
                     Err(err) => self.respond(request_id, Err(err)),
                 }
