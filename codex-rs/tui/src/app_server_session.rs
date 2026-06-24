@@ -782,6 +782,7 @@ impl AppServerSession {
                     approvals_reviewer: Some(approvals_reviewer.into()),
                     sandbox_policy,
                     permissions,
+                    permission_preset_id: None,
                     model: Some(model),
                     service_tier,
                     effort,
@@ -2384,6 +2385,7 @@ mod tests {
                 .expect("read-only profile must be legacy-compatible")
                 .into(),
             active_permission_profile: None,
+            active_permission_preset_id: None,
             reasoning_effort: None,
             multi_agent_mode: Default::default(),
             initial_turns_page: None,

@@ -875,6 +875,12 @@ client_request_definitions! {
         serialization: global_shared_read("config"),
         response: v2::PermissionProfileListResponse,
     },
+    #[experimental("permissionPreset/list")]
+    PermissionPresetList => "permissionPreset/list" {
+        params: v2::PermissionPresetListParams,
+        serialization: global_shared_read("config"),
+        response: v2::PermissionPresetListResponse,
+    },
     ExperimentalFeatureEnablementSet => "experimentalFeature/enablement/set" {
         params: v2::ExperimentalFeatureEnablementSetParams,
         serialization: global("config"),
@@ -2609,6 +2615,7 @@ mod tests {
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
                 active_permission_profile: None,
+                active_permission_preset_id: None,
                 reasoning_effort: None,
                 multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
             },
@@ -2659,6 +2666,7 @@ mod tests {
                         "type": "dangerFullAccess"
                     },
                     "activePermissionProfile": null,
+                    "activePermissionPresetId": null,
                     "reasoningEffort": null,
                     "multiAgentMode": "explicitRequestOnly"
                 }
@@ -3606,6 +3614,7 @@ mod tests {
                     approvals_reviewer: v2::ApprovalsReviewer::User,
                     sandbox_policy: v2::SandboxPolicy::DangerFullAccess,
                     active_permission_profile: None,
+                    active_permission_preset_id: None,
                     model: "gpt-5.4".to_string(),
                     model_provider: "openai".to_string(),
                     service_tier: None,

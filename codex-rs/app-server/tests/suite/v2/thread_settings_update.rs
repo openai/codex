@@ -6,6 +6,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use app_test_support::write_models_cache;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -398,6 +399,74 @@ async fn thread_settings_update_rejects_sandbox_policy_with_permissions() -> Res
 }
 
 #[tokio::test]
+async fn thread_settings_update_applies_permission_preset() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id,
+            permission_preset_id: Some("full-access".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let updated = read_thread_settings_updated(&mut mcp).await?;
+
+    assert_eq!(
+        updated
+            .thread_settings
+            .active_permission_preset_id
+            .as_deref(),
+        Some("full-access")
+    );
+    assert_eq!(
+        updated.thread_settings.approval_policy,
+        AskForApproval::Never
+    );
+    assert_eq!(
+        updated.thread_settings.sandbox_policy,
+        SandboxPolicy::DangerFullAccess
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_rejects_permission_preset_with_raw_overrides() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    let request_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread.id,
+            permission_preset_id: Some("full-access".to_string()),
+            approval_policy: Some(AskForApproval::Never),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        error.error.message,
+        "`permissionPresetId` cannot be combined with raw permission overrides"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
         create_final_assistant_message_sse_response("done")?,
@@ -444,6 +513,91 @@ async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_applies_permission_preset() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("done")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/started"),
+    )
+    .await??;
+
+    let request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            permission_preset_id: Some("full-access".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse = to_response(
+        timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+    let updated = read_thread_settings_updated(&mut mcp).await?;
+
+    assert_eq!(
+        updated
+            .thread_settings
+            .active_permission_preset_id
+            .as_deref(),
+        Some("full-access")
+    );
+    assert_eq!(
+        updated.thread_settings.approval_policy,
+        AskForApproval::Never
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_rejects_permission_preset_with_raw_overrides() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    let request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            permission_preset_id: Some("full-access".to_string()),
+            approval_policy: Some(AskForApproval::Never),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        error.error.message,
+        "`permissionPresetId` cannot be combined with raw permission overrides"
+    );
     Ok(())
 }
 

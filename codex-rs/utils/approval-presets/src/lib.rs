@@ -4,6 +4,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use std::path::Path;
 
 /// A simple preset pairing an approval policy with a permission profile.
 #[derive(Debug, Clone)]
@@ -20,6 +21,44 @@ pub struct ApprovalPreset {
     pub active_permission_profile: ActivePermissionProfile,
     /// Permission profile to apply.
     pub permission_profile: PermissionProfile,
+}
+
+impl ApprovalPreset {
+    /// Whether the current permission profile has the same user-visible access as this preset.
+    pub fn matches_permission_profile(
+        &self,
+        current_permission_profile: &PermissionProfile,
+        cwd: &Path,
+    ) -> bool {
+        match self.active_permission_profile.id.as_str() {
+            BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS => {
+                matches!(current_permission_profile, PermissionProfile::Disabled)
+            }
+            BUILT_IN_PERMISSION_PROFILE_READ_ONLY => {
+                let file_system_policy = current_permission_profile.file_system_sandbox_policy();
+                matches!(
+                    current_permission_profile,
+                    PermissionProfile::Managed { .. }
+                ) && !file_system_policy.has_full_disk_write_access()
+                    && file_system_policy
+                        .get_writable_roots_with_cwd(cwd)
+                        .is_empty()
+                    && current_permission_profile.network_sandbox_policy()
+                        == self.permission_profile.network_sandbox_policy()
+            }
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE => {
+                let file_system_policy = current_permission_profile.file_system_sandbox_policy();
+                matches!(
+                    current_permission_profile,
+                    PermissionProfile::Managed { .. }
+                ) && file_system_policy.can_write_path_with_cwd(cwd, cwd)
+                    && !file_system_policy.has_full_disk_write_access()
+                    && current_permission_profile.network_sandbox_policy()
+                        == self.permission_profile.network_sandbox_policy()
+            }
+            _ => current_permission_profile == &self.permission_profile,
+        }
+    }
 }
 
 /// Built-in list of approval presets that pair approval and permissions.

@@ -428,6 +428,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         sandbox_mode,
         permission_profile: None,
         default_permissions: None,
+        active_permission_preset_id: None,
         cwd: resolved_cwd,
         workspace_roots: None,
         model_provider: model_provider.clone(),
@@ -896,6 +897,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         approvals_reviewer: None,
                         sandbox_policy: None,
                         permissions: None,
+                        permission_preset_id: None,
                         model: None,
                         service_tier: None,
                         effort: default_effort,
@@ -1182,6 +1184,7 @@ fn session_configured_from_thread_start_response(
         response.approvals_reviewer.to_core(),
         config.permissions.effective_permission_profile(),
         response.active_permission_profile.clone().map(Into::into),
+        response.active_permission_preset_id.clone(),
         response.cwd.clone(),
         response.reasoning_effort.clone(),
     )
@@ -1205,6 +1208,7 @@ fn session_configured_from_thread_resume_response(
         response.approvals_reviewer.to_core(),
         config.permissions.effective_permission_profile(),
         response.active_permission_profile.clone().map(Into::into),
+        response.active_permission_preset_id.clone(),
         response.cwd.clone(),
         response.reasoning_effort.clone(),
     )
@@ -1237,6 +1241,7 @@ fn session_configured_from_thread_response(
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     permission_profile: PermissionProfile,
     active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
+    active_permission_preset_id: Option<String>,
     cwd: AbsolutePathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
@@ -1263,6 +1268,7 @@ fn session_configured_from_thread_response(
         approvals_reviewer,
         permission_profile,
         active_permission_profile,
+        active_permission_preset_id,
         cwd,
         reasoning_effort,
         initial_messages: None,

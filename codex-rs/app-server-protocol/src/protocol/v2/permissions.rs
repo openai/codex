@@ -1,3 +1,5 @@
+use super::ApprovalsReviewer;
+use super::AskForApproval;
 use super::shared::v2_enum_from_core;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
@@ -390,6 +392,78 @@ pub struct PermissionProfileListResponse {
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// If None, there are no more items to return.
     pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetListParams {
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum PermissionPresetKind {
+    ReadOnly,
+    Auto,
+    Granular,
+    GuardianApprovals,
+    FullAccess,
+    PermissionProfile,
+    LegacyConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum PermissionPresetUnavailabilityReason {
+    PermissionProfile {
+        #[serde(rename = "permissionProfileId")]
+        #[ts(rename = "permissionProfileId")]
+        permission_profile_id: String,
+    },
+    ApprovalPolicy,
+    ApprovalsReviewer,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum PermissionPresetDefaultSource {
+    Implicit,
+    Config,
+    Requirements,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPreset {
+    pub id: String,
+    pub kind: PermissionPresetKind,
+    pub permission_profile_id: Option<String>,
+    pub description: Option<String>,
+    pub sandbox_policy: SandboxPolicy,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub allowed: bool,
+    pub unavailability_reason: Option<PermissionPresetUnavailabilityReason>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetListResponse {
+    pub data: Vec<PermissionPreset>,
+    pub next_cursor: Option<String>,
+    pub default_preset_id: String,
+    pub default_source: PermissionPresetDefaultSource,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

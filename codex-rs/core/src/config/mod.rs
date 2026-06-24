@@ -654,6 +654,9 @@ pub struct Config {
     /// User-defined permission profiles available from effective config.
     pub custom_permission_profiles: Vec<PermissionProfileCatalogEntry>,
 
+    /// App-server permission preset identity applied to this session, when known.
+    pub active_permission_preset_id: Option<String>,
+
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
@@ -2391,6 +2394,7 @@ pub struct ConfigOverrides {
     pub sandbox_mode: Option<SandboxMode>,
     pub permission_profile: Option<PermissionProfile>,
     pub default_permissions: Option<String>,
+    pub active_permission_preset_id: Option<String>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<String>>,
     pub codex_self_exe: Option<PathBuf>,
@@ -2963,6 +2967,7 @@ impl Config {
             sandbox_mode,
             permission_profile,
             default_permissions: default_permissions_override,
+            active_permission_preset_id,
             model_provider,
             service_tier: service_tier_override,
             codex_self_exe,
@@ -3774,6 +3779,7 @@ impl Config {
             },
             explicit_permission_profile_mode,
             custom_permission_profiles,
+            active_permission_preset_id,
             approvals_reviewer: constrained_approvals_reviewer.value(),
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,

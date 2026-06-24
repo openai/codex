@@ -43,6 +43,10 @@ pub(crate) const GENERATED_TS_HEADER: &str = "// GENERATED CODE! DO NOT MODIFY B
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
 const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] = &[
+    "PermissionPreset",
+    "PermissionPresetDefaultSource",
+    "PermissionPresetKind",
+    "PermissionPresetUnavailabilityReason",
     "RemoteControlClient",
     "RemoteControlClientsListOrder",
     "ThreadBackgroundTerminal",
@@ -2127,6 +2131,7 @@ mod tests {
             client_request_ts.contains("MockExperimentalMethodParams"),
             false
         );
+        assert_eq!(client_request_ts.contains("permissionPreset/list"), false);
         let server_request_ts = std::str::from_utf8(
             fixture_tree
                 .get(Path::new("ServerRequest.ts"))
@@ -2154,6 +2159,16 @@ mod tests {
             fixture_tree.contains_key(Path::new("v2/MockExperimentalMethodResponse.ts")),
             false
         );
+        for path in [
+            "v2/PermissionPreset.ts",
+            "v2/PermissionPresetDefaultSource.ts",
+            "v2/PermissionPresetKind.ts",
+            "v2/PermissionPresetListParams.ts",
+            "v2/PermissionPresetListResponse.ts",
+            "v2/PermissionPresetUnavailabilityReason.ts",
+        ] {
+            assert_eq!(fixture_tree.contains_key(Path::new(path)), false);
+        }
         assert_eq!(
             fixture_tree.contains_key(Path::new("v2/CurrentTimeReadParams.ts")),
             false
@@ -2377,6 +2392,15 @@ mod tests {
         assert_eq!(
             v2::MockExperimentalMethodResponse::export_to_string()?
                 .contains("MockExperimentalMethodResponse"),
+            true
+        );
+        assert_eq!(client_request_ts.contains("permissionPreset/list"), true);
+        assert_eq!(
+            client_request_ts.contains("PermissionPresetListParams"),
+            true
+        );
+        assert_eq!(
+            v2::PermissionPresetListResponse::export_to_string()?.contains("PermissionPreset"),
             true
         );
 
@@ -2862,6 +2886,7 @@ permissionProfile?: string | null};
             client_request_json.contains("mock/experimentalMethod"),
             false
         );
+        assert_eq!(client_request_json.contains("permissionPreset/list"), false);
         assert_eq!(output_dir.join("EventMsg.json").exists(), false);
 
         let bundle_json =
@@ -2977,6 +3002,12 @@ permissionProfile?: string | null};
                 .exists(),
             false
         );
+        for schema in [
+            "PermissionPresetListParams.json",
+            "PermissionPresetListResponse.json",
+        ] {
+            assert_eq!(output_dir.join("v2").join(schema).exists(), false);
+        }
 
         let _cleanup = fs::remove_dir_all(&output_dir);
         Ok(())
@@ -2993,6 +3024,7 @@ permissionProfile?: string | null};
         assert!(client_request_json.contains("remoteControl/pairing/status"));
         assert!(client_request_json.contains("remoteControl/client/list"));
         assert!(client_request_json.contains("remoteControl/client/revoke"));
+        assert!(client_request_json.contains("permissionPreset/list"));
         for schema in [
             "RemoteControlPairingStartParams.json",
             "RemoteControlPairingStartResponse.json",
@@ -3002,6 +3034,8 @@ permissionProfile?: string | null};
             "RemoteControlClientsListResponse.json",
             "RemoteControlClientsRevokeParams.json",
             "RemoteControlClientsRevokeResponse.json",
+            "PermissionPresetListParams.json",
+            "PermissionPresetListResponse.json",
         ] {
             assert!(output_dir.join("v2").join(schema).exists());
         }

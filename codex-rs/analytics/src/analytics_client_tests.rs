@@ -235,6 +235,7 @@ fn sample_thread_start_response(
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
+        active_permission_preset_id: None,
         reasoning_effort: None,
         multi_agent_mode: Default::default(),
     })
@@ -300,6 +301,7 @@ fn sample_thread_resume_response_with_source(
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
+        active_permission_preset_id: None,
         reasoning_effort: None,
         multi_agent_mode: Default::default(),
         initial_turns_page: None,

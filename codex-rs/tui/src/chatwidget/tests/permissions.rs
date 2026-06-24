@@ -2,6 +2,7 @@ use super::*;
 use crate::legacy_core::config::PermissionProfileCatalogEntry;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -9,6 +10,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 
 fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> PermissionProfile {
     PermissionProfile::Managed {
@@ -52,13 +54,12 @@ fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> Permission
 fn windows_sandbox_requirements_stack(
     allowed_sandbox_implementations: Vec<WindowsSandboxModeToml>,
 ) -> ConfigLayerStack {
-    let requirements_toml = codex_config::ConfigRequirementsToml {
+    requirements_stack(codex_config::ConfigRequirementsToml {
         windows: Some(codex_config::WindowsRequirementsToml {
             allowed_sandbox_implementations: Some(allowed_sandbox_implementations),
         }),
         ..Default::default()
-    };
-    requirements_stack(requirements_toml)
+    })
 }
 
 fn requirements_stack(requirements_toml: codex_config::ConfigRequirementsToml) -> ConfigLayerStack {
@@ -138,11 +139,13 @@ async fn profile_permissions_selection_popup_with_custom_profiles_snapshot() {
             id: "locked-down".to_string(),
             description: Some("Inspect and patch only approved workspace files.".to_string()),
             allowed: true,
+            permission_profile: Some(PermissionProfile::workspace_write()),
         },
         PermissionProfileCatalogEntry {
             id: "web-enabled".to_string(),
             description: Some("Workspace profile with network access.".to_string()),
             allowed: false,
+            permission_profile: Some(PermissionProfile::workspace_write()),
         },
     ];
     chat.config
@@ -157,6 +160,26 @@ async fn profile_permissions_selection_popup_with_custom_profiles_snapshot() {
 
     assert_chatwidget_snapshot!(
         "profile_permissions_selection_popup_with_custom_profiles",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
+async fn profile_permissions_selection_popup_with_managed_profiles_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.explicit_permission_profile_mode = true;
+    chat.config.config_layer_stack = requirements_stack(codex_config::ConfigRequirementsToml {
+        allowed_permission_profiles: Some(BTreeMap::from([(
+            BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
+            true,
+        )])),
+        ..Default::default()
+    });
+
+    chat.open_permissions_popup();
+
+    assert_chatwidget_snapshot!(
+        "profile_permissions_selection_popup_with_managed_profiles",
         render_bottom_popup(&chat, /*width*/ 80)
     );
 }
@@ -201,6 +224,7 @@ async fn profile_permissions_selection_emits_active_custom_profile() {
         id: "locked-down".to_string(),
         description: None,
         allowed: true,
+        permission_profile: Some(PermissionProfile::workspace_write()),
     }];
     chat.config
         .permissions
@@ -326,22 +350,8 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
     let cwd = test_path_buf("/tmp/project").abs();
 
     assert!(
-        ChatWidget::preset_matches_current(
-            AskForApproval::OnRequest,
-            &current_profile,
-            cwd.as_path(),
-            &preset
-        ),
+        preset.matches_permission_profile(&current_profile, cwd.as_path()),
         "WorkspaceWrite with extra roots should still match the Ask for approval preset"
-    );
-    assert!(
-        !ChatWidget::preset_matches_current(
-            AskForApproval::Never,
-            &current_profile,
-            cwd.as_path(),
-            &preset
-        ),
-        "approval mismatch should prevent matching the preset"
     );
 }
 
@@ -374,12 +384,7 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
     let cwd = test_path_buf("/tmp/project").abs();
 
     assert!(
-        !ChatWidget::preset_matches_current(
-            AskForApproval::OnRequest,
-            &current_profile,
-            cwd.as_path(),
-            &preset
-        ),
+        !preset.matches_permission_profile(&current_profile, cwd.as_path()),
         "profiles with any writable root should not be classified as Read Only"
     );
 }

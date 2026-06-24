@@ -47,6 +47,7 @@ use std::path::PathBuf;
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "auth_elicitation",
+    "guardian_approval",
     "memories",
     "mentions_v2",
     "remote_control",

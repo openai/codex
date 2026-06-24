@@ -1309,6 +1309,9 @@ impl MessageProcessor {
             ClientRequest::PermissionProfileList { params, .. } => {
                 self.catalog_processor.permission_profile_list(params).await
             }
+            ClientRequest::PermissionPresetList { params, .. } => {
+                self.catalog_processor.permission_preset_list(params).await
+            }
             ClientRequest::CollaborationModeList { params, .. } => {
                 self.catalog_processor.collaboration_mode_list(params).await
             }

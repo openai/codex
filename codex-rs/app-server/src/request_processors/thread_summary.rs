@@ -199,6 +199,7 @@ pub(crate) fn thread_settings_from_config_snapshot(
         active_permission_profile: thread_response_active_permission_profile(
             config_snapshot.active_permission_profile.clone(),
         ),
+        active_permission_preset_id: config_snapshot.active_permission_preset_id.clone(),
         model: config_snapshot.model.clone(),
         model_provider: config_snapshot.model_provider_id.clone(),
         service_tier: config_snapshot.service_tier.clone(),
@@ -221,6 +222,7 @@ pub(crate) fn thread_settings_from_core_snapshot(
         approvals_reviewer,
         permission_profile,
         active_permission_profile,
+        active_permission_preset_id,
         cwd,
         reasoning_effort,
         reasoning_summary,
@@ -237,6 +239,7 @@ pub(crate) fn thread_settings_from_core_snapshot(
         active_permission_profile: thread_response_active_permission_profile(
             active_permission_profile,
         ),
+        active_permission_preset_id,
         model,
         model_provider: model_provider_id,
         service_tier,

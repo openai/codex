@@ -462,6 +462,9 @@ pub struct ThreadSettingsOverrides {
     /// update selected a profile rather than supplying raw permissions.
     pub active_permission_profile: Option<ActivePermissionProfile>,
 
+    /// App-server permission preset identity applied by this update.
+    pub active_permission_preset_id: Option<Option<String>>,
+
     /// Updated Windows sandbox mode for tool execution.
     pub windows_sandbox_level: Option<WindowsSandboxLevel>,
 
@@ -2013,6 +2016,11 @@ pub struct ThreadSettingsSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
+
+    /// App-server permission preset identity that produced the active settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_permission_preset_id: Option<String>,
     pub cwd: AbsolutePathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffortConfig>,
@@ -3783,6 +3791,11 @@ pub struct SessionConfiguredEvent {
     #[ts(optional)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
 
+    /// App-server permission preset identity that produced the active settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_permission_preset_id: Option<String>,
+
     /// Working directory that should be treated as the *root* of the
     /// session.
     pub cwd: AbsolutePathBuf,
@@ -3835,6 +3848,8 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             permission_profile: Option<PermissionProfile>,
             #[serde(default)]
             active_permission_profile: Option<ActivePermissionProfile>,
+            #[serde(default)]
+            active_permission_preset_id: Option<String>,
             cwd: AbsolutePathBuf,
             reasoning_effort: Option<ReasoningEffortConfig>,
             initial_messages: Option<Vec<EventMsg>>,
@@ -3868,6 +3883,7 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             approvals_reviewer: wire.approvals_reviewer,
             permission_profile,
             active_permission_profile: wire.active_permission_profile,
+            active_permission_preset_id: wire.active_permission_preset_id,
             cwd: wire.cwd,
             reasoning_effort: wire.reasoning_effort,
             initial_messages: wire.initial_messages,
@@ -5640,6 +5656,7 @@ mod tests {
                 approvals_reviewer: ApprovalsReviewer::User,
                 permission_profile: permission_profile.clone(),
                 active_permission_profile: None,
+                active_permission_preset_id: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 initial_messages: None,

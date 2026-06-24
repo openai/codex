@@ -10,6 +10,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadForkParams;
@@ -57,6 +58,86 @@ use super::analytics::wait_for_analytics_payload;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tokio::test]
+async fn thread_fork_applies_permission_preset() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id,
+            permission_preset_id: Some("full-access".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: ThreadForkResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+
+    assert_eq!(
+        response.active_permission_preset_id.as_deref(),
+        Some("full-access")
+    );
+    assert_eq!(
+        response.approval_policy,
+        codex_app_server_protocol::AskForApproval::Never
+    );
+    assert_eq!(response.sandbox, SandboxPolicy::DangerFullAccess);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_rejects_permission_preset_with_raw_overrides() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id,
+            permission_preset_id: Some("full-access".to_string()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        error.error.message,
+        "`permissionPresetId` cannot be combined with raw permission overrides"
+    );
+    Ok(())
+}
 
 async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
     let list_id = mcp

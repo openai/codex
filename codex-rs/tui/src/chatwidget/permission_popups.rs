@@ -25,6 +25,13 @@ impl ChatWidget {
         let current_permission_profile = self.config.permissions.permission_profile().clone();
         let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
         let current_review_policy = self.config.approvals_reviewer;
+        let preset_is_current = |preset: &ApprovalPreset| {
+            current_approval == AskForApproval::from(preset.approval)
+                && preset.matches_permission_profile(
+                    &current_permission_profile,
+                    self.config.cwd.as_path(),
+                )
+        };
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
@@ -86,12 +93,7 @@ impl ChatWidget {
                     name: base_name.clone(),
                     description: base_description.clone(),
                     is_current: current_review_policy == ApprovalsReviewer::User
-                        && Self::preset_matches_current(
-                            current_approval,
-                            &current_permission_profile,
-                            self.config.cwd.as_path(),
-                            &preset,
-                        ),
+                        && preset_is_current(&preset),
                     actions: default_actions,
                     dismiss_on_select: true,
                     disabled_reason: default_disabled_reason,
@@ -103,12 +105,7 @@ impl ChatWidget {
                         name: APPROVE_FOR_ME_LABEL.to_string(),
                         description: Some(AUTO_REVIEW_DESCRIPTION.to_string()),
                         is_current: current_review_policy == ApprovalsReviewer::AutoReview
-                            && Self::preset_matches_current(
-                                current_approval,
-                                &current_permission_profile,
-                                self.config.cwd.as_path(),
-                                &preset,
-                            ),
+                            && preset_is_current(&preset),
                         actions: self.permission_mode_actions(
                             &preset,
                             APPROVE_FOR_ME_LABEL.to_string(),
@@ -126,12 +123,7 @@ impl ChatWidget {
                 items.push(SelectionItem {
                     name: base_name,
                     description: base_description,
-                    is_current: Self::preset_matches_current(
-                        current_approval,
-                        &current_permission_profile,
-                        self.config.cwd.as_path(),
-                        &preset,
-                    ),
+                    is_current: preset_is_current(&preset),
                     actions: default_actions,
                     dismiss_on_select: true,
                     disabled_reason: default_disabled_reason,
@@ -363,45 +355,6 @@ impl ChatWidget {
             }
         }
         apply_actions()
-    }
-
-    pub(super) fn preset_matches_current(
-        current_approval: AskForApproval,
-        current_permission_profile: &PermissionProfile,
-        cwd: &std::path::Path,
-        preset: &ApprovalPreset,
-    ) -> bool {
-        let preset_approval = AskForApproval::from(preset.approval);
-        if current_approval != preset_approval {
-            return false;
-        }
-
-        match preset.id {
-            "full-access" => matches!(current_permission_profile, PermissionProfile::Disabled),
-            "read-only" => {
-                let file_system_policy = current_permission_profile.file_system_sandbox_policy();
-                matches!(
-                    current_permission_profile,
-                    PermissionProfile::Managed { .. }
-                ) && !file_system_policy.has_full_disk_write_access()
-                    && file_system_policy
-                        .get_writable_roots_with_cwd(cwd)
-                        .is_empty()
-                    && current_permission_profile.network_sandbox_policy()
-                        == preset.permission_profile.network_sandbox_policy()
-            }
-            "auto" => {
-                let file_system_policy = current_permission_profile.file_system_sandbox_policy();
-                matches!(
-                    current_permission_profile,
-                    PermissionProfile::Managed { .. }
-                ) && file_system_policy.can_write_path_with_cwd(cwd, cwd)
-                    && !file_system_policy.has_full_disk_write_access()
-                    && current_permission_profile.network_sandbox_policy()
-                        == preset.permission_profile.network_sandbox_policy()
-            }
-            _ => current_permission_profile == &preset.permission_profile,
-        }
     }
 
     pub(crate) fn open_full_access_confirmation(

@@ -1,4 +1,5 @@
 use super::*;
+use crate::permission_presets::permission_preset_catalog;
 use codex_core::config::permission_profile_catalog;
 use futures::StreamExt;
 
@@ -14,6 +15,37 @@ pub(crate) struct CatalogRequestProcessor {
 }
 
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
+
+fn paginate_catalog_items<T>(
+    items: Vec<T>,
+    cursor: Option<String>,
+    limit: Option<u32>,
+    resource_name: &str,
+) -> Result<(Vec<T>, Option<String>), JSONRPCErrorError> {
+    let total = items.len();
+    let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+    let effective_limit = effective_limit.min(total);
+    let start = match cursor {
+        Some(cursor) => cursor
+            .parse::<usize>()
+            .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
+        None => 0,
+    };
+    if start > total {
+        return Err(invalid_request(format!(
+            "cursor {start} exceeds total {resource_name} {total}"
+        )));
+    }
+
+    let end = start.saturating_add(effective_limit).min(total);
+    let data = items
+        .into_iter()
+        .skip(start)
+        .take(effective_limit)
+        .collect();
+    let next_cursor = (end < total).then_some(end.to_string());
+    Ok((data, next_cursor))
+}
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
@@ -176,6 +208,15 @@ impl CatalogRequestProcessor {
         params: PermissionProfileListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.permission_profile_list_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn permission_preset_list(
+        &self,
+        params: PermissionPresetListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.permission_preset_list_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -443,27 +484,32 @@ impl CatalogRequestProcessor {
                 allowed: profile.allowed,
             })
             .collect::<Vec<_>>();
-        let total = profiles.len();
-        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
-        let effective_limit = effective_limit.min(total);
-        let start = match cursor {
-            Some(cursor) => cursor
-                .parse::<usize>()
-                .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
-            None => 0,
-        };
-
-        if start > total {
-            return Err(invalid_request(format!(
-                "cursor {start} exceeds total permission profiles {total}"
-            )));
-        }
-
-        let end = start.saturating_add(effective_limit).min(total);
-        let data = profiles[start..end].to_vec();
-        let next_cursor = (end < total).then_some(end.to_string());
+        let (data, next_cursor) =
+            paginate_catalog_items(profiles, cursor, limit, "permission profiles")?;
 
         Ok(PermissionProfileListResponse { data, next_cursor })
+    }
+
+    async fn permission_preset_list_response(
+        &self,
+        params: PermissionPresetListParams,
+    ) -> Result<PermissionPresetListResponse, JSONRPCErrorError> {
+        let PermissionPresetListParams { cursor, limit, cwd } = params;
+        let catalog = permission_preset_catalog(&self.config_manager, cwd.map(PathBuf::from))
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to resolve permission presets: {err}"))
+            })?;
+        let presets = catalog.presets().cloned().collect();
+        let (data, next_cursor) =
+            paginate_catalog_items(presets, cursor, limit, "permission presets")?;
+
+        Ok(PermissionPresetListResponse {
+            data,
+            next_cursor,
+            default_preset_id: catalog.default_preset_id,
+            default_source: catalog.default_source,
+        })
     }
 
     async fn mock_experimental_method_inner(

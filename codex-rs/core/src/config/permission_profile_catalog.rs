@@ -22,6 +22,7 @@ use super::validate_required_permission_profile_catalog;
 pub struct PermissionProfileCatalogEntry {
     pub id: String,
     pub description: Option<String>,
+    pub permission_profile: Option<PermissionProfile>,
     pub allowed: bool,
 }
 
@@ -66,13 +67,14 @@ pub(super) fn permission_profile_catalog_from_permissions(
         id: id.to_string(),
         description: None,
         allowed: permission_profile_is_allowed(config_layer_stack, id, &permission_profile),
+        permission_profile: Some(permission_profile),
     })
     .collect::<Vec<_>>();
 
     if let Some(permissions) = permissions {
         catalog.extend(permissions.entries.iter().map(|(id, profile)| {
             let mut warnings = Vec::new();
-            let allowed = compile_permission_profile_selection(
+            let permission_profile = compile_permission_profile_selection(
                 Some(permissions),
                 id,
                 /*workspace_write*/ None,
@@ -81,12 +83,16 @@ pub(super) fn permission_profile_catalog_from_permissions(
             .map(|(file_system, network)| {
                 PermissionProfile::from_runtime_permissions(&file_system, network)
             })
-            .is_ok_and(|permission_profile| {
-                permission_profile_is_allowed(config_layer_stack, id, &permission_profile)
-            });
+            .ok();
+            let allowed = permission_profile
+                .as_ref()
+                .is_some_and(|permission_profile| {
+                    permission_profile_is_allowed(config_layer_stack, id, permission_profile)
+                });
             PermissionProfileCatalogEntry {
                 id: id.clone(),
                 description: profile.description.clone(),
+                permission_profile,
                 allowed,
             }
         }));

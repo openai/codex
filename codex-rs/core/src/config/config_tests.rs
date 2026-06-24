@@ -2419,7 +2419,6 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
     .await?;
 
     assert!(config.explicit_permission_profile_mode);
-    assert!(config.custom_permission_profiles.is_empty());
     let policy = config.permissions.file_system_sandbox_policy();
     assert_eq!(
         config
@@ -3197,6 +3196,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
         vec![PermissionProfileCatalogEntry {
             id: "dev".to_string(),
             description: Some("Workspace access.".to_string()),
+            permission_profile: Some(config.permissions.permission_profile().clone()),
             allowed: true,
         }]
     );
