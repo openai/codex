@@ -692,6 +692,9 @@ impl From<Vec<UserInput>> for Op {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct InterAgentCommunication {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
     pub author: AgentPath,
     pub recipient: AgentPath,
     #[serde(default)]
@@ -715,6 +718,7 @@ impl InterAgentCommunication {
         trigger_turn: bool,
     ) -> Self {
         Self {
+            id: None,
             author,
             recipient,
             other_recipients,
@@ -733,6 +737,7 @@ impl InterAgentCommunication {
         trigger_turn: bool,
     ) -> Self {
         Self {
+            id: None,
             author,
             recipient,
             other_recipients,
@@ -752,6 +757,7 @@ impl InterAgentCommunication {
 
     pub fn to_response_input_item(&self) -> ResponseInputItem {
         let mut communication = self.clone();
+        communication.id = None;
         communication.internal_chat_message_metadata_passthrough = None;
         ResponseInputItem::Message {
             role: "assistant".to_string(),
@@ -787,7 +793,7 @@ impl InterAgentCommunication {
             }],
         };
         ResponseItem::AgentMessage {
-            id: None,
+            id: self.id.clone(),
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
             content,
@@ -4396,6 +4402,7 @@ mod tests {
     #[test]
     fn inter_agent_communication_response_input_item_preserves_commentary_phase() {
         let mut communication = InterAgentCommunication {
+            id: Some("amsg_1".to_string()),
             author: AgentPath::root(),
             recipient: AgentPath::root().join("reviewer").expect("recipient path"),
             other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],
@@ -4406,6 +4413,7 @@ mod tests {
         };
         communication.set_turn_id_if_missing("turn-1");
         let mut serialized_communication = communication.clone();
+        serialized_communication.id = None;
         serialized_communication.internal_chat_message_metadata_passthrough = None;
 
         assert_eq!(

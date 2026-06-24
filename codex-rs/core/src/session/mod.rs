@@ -2740,9 +2740,8 @@ impl Session {
                 ResponseItem::WebSearchCall { .. } => "ws",
                 ResponseItem::ImageGenerationCall { .. } => "ig",
                 ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
-                ResponseItem::AgentMessage { .. }
-                | ResponseItem::CompactionTrigger { .. }
-                | ResponseItem::Other => continue,
+                ResponseItem::AgentMessage { .. } => "amsg",
+                ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => continue,
             };
             item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
         }
@@ -2831,6 +2830,7 @@ impl Session {
             std::slice::from_ref(&response_item),
         );
         let items = items.as_ref();
+        communication.id = items.first().and_then(ResponseItem::id).map(str::to_string);
         {
             let mut state = self.state.lock().await;
             state.record_items(
