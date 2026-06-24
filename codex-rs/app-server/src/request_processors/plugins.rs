@@ -738,11 +738,8 @@ impl PluginRequestProcessor {
                 }
             }
         }
-        if include_local
-            || include_created_by_me_remote
-            || include_shared_with_me
-            || include_global_remote
-        {
+        let include_remote_sources = !remote_sources.is_empty();
+        if include_local || include_remote_sources {
             let on_effective_plugins_changed = Some(self.effective_plugins_changed_callback());
             plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
                 &plugins_input,
