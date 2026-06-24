@@ -171,7 +171,7 @@ async fn thread_start_rejects_hidden_dynamic_tools_without_namespace() -> Result
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec::Function(DynamicToolFunctionSpec {
@@ -186,7 +186,7 @@ async fn thread_start_rejects_hidden_dynamic_tools_without_namespace() -> Result
     });
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             dynamic_tools: Some(vec![dynamic_tool]),
             ..Default::default()
         })
@@ -352,7 +352,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let input_schema = json!({
@@ -392,7 +392,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     });
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             dynamic_tools: Some(vec![dynamic_tool]),
             ..Default::default()
         })
@@ -579,7 +579,7 @@ async fn start_function_dynamic_tool_call(call_id: &str) -> Result<PendingDynami
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec::Function(DynamicToolFunctionSpec {
@@ -597,7 +597,7 @@ async fn start_function_dynamic_tool_call(call_id: &str) -> Result<PendingDynami
     });
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             dynamic_tools: Some(vec![dynamic_tool]),
             ..Default::default()
         })
