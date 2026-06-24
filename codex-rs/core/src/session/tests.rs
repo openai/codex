@@ -84,7 +84,6 @@ use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_app_server_protocol::McpElicitationSchema;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::permissions_toml::FilesystemPermissionToml;
@@ -377,24 +376,18 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
         .load_full()
         .set_elicitations_auto_deny(/*auto_deny*/ true);
 
-    let requested_schema: McpElicitationSchema = serde_json::from_value(json!({
-        "type": "object",
-        "properties": {},
-    }))
-    .expect("schema should deserialize");
     let response = session
         .request_mcp_server_elicitation(
             turn_context.as_ref(),
+            "codex_apps".to_string(),
             RequestId::String("request-1".into()),
-            McpServerElicitationRequestParams {
-                thread_id: session.thread_id.to_string(),
-                turn_id: Some(turn_context.sub_id.clone()),
-                server_name: "codex_apps".to_string(),
-                request: McpServerElicitationRequest::Form {
-                    meta: None,
-                    message: "Allow this request?".to_string(),
-                    requested_schema,
-                },
+            ElicitationRequest::Form {
+                meta: None,
+                message: "Allow this request?".to_string(),
+                requested_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                }),
             },
         )
         .await;
@@ -640,6 +633,8 @@ fn make_connector(id: &str, name: &str) -> AppInfo {
         description: None,
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -1766,6 +1761,29 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
     else {
         panic!("expected resumed rollout history");
     };
+    let persisted_items = resumed
+        .history
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                RolloutItem::ResponseItem(_)
+                    | RolloutItem::InterAgentCommunication(_)
+                    | RolloutItem::InterAgentCommunicationMetadata { .. }
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let expected_persisted_items = vec![
+        RolloutItem::InterAgentCommunicationMetadata {
+            trigger_turn: false,
+        },
+        RolloutItem::ResponseItem(expected_item.clone()),
+    ];
+    assert_eq!(
+        serde_json::to_value(persisted_items).unwrap(),
+        serde_json::to_value(expected_persisted_items).unwrap()
+    );
 
     let (resumed_session, _resumed_turn_context) = make_session_and_context().await;
     resumed_session
@@ -1818,14 +1836,11 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
     else {
         panic!("expected resumed rollout history");
     };
-    let persisted_communication = resumed.history.iter().find_map(|item| match item {
-        RolloutItem::InterAgentCommunication(communication) => Some(communication),
+    let persisted_item_id = resumed.history.iter().find_map(|item| match item {
+        RolloutItem::ResponseItem(item @ ResponseItem::AgentMessage { .. }) => item.id(),
         _ => None,
     });
-    assert_eq!(
-        persisted_communication.and_then(|communication| communication.id.as_deref()),
-        Some(live_item_id.as_str())
-    );
+    assert_eq!(persisted_item_id, Some(live_item_id.as_str()));
 
     let (resumed_session, _resumed_turn_context, _rx) =
         make_session_and_context_with_auth_and_config_and_rx(
@@ -2727,6 +2742,7 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
         RolloutItem::SessionMeta(_)
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
     });
@@ -2783,6 +2799,7 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         RolloutItem::ResponseItem(response_item) => response_item.id(),
         RolloutItem::SessionMeta(_)
         | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,

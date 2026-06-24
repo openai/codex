@@ -12,7 +12,9 @@ use crate::init_state_db;
 use crate::thread_manager::StartThreadOptions;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
@@ -33,6 +35,7 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_thread_store::ArchiveThreadParams;
+use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ThreadStore;
@@ -163,6 +166,7 @@ async fn persisted_originator(thread: &CodexThread) -> String {
             RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.originator.clone()),
             RolloutItem::ResponseItem(_)
             | RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::EventMsg(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::TurnContext(_) => None,
@@ -846,6 +850,42 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
         .into_iter()
         .find(|entry| *entry == expected);
     assert_eq!(captured, Some(expected));
+}
+
+#[tokio::test]
+async fn ephemeral_spawn_does_not_persist_agent_graph_edge() {
+    let (home, mut config) = test_config().await;
+    config.ephemeral = true;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("spawned"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+        )
+        .await
+        .expect("ephemeral agent spawn should succeed");
+
+    let persisted_children = harness
+        .state_db
+        .as_ref()
+        .expect("manager should retain state db")
+        .list_thread_spawn_children(parent_thread_id)
+        .await
+        .expect("persisted child list should load");
+    assert_eq!(persisted_children, Vec::<ThreadId>::new());
+    assert!(
+        harness.manager.get_thread(child_thread_id).await.is_ok(),
+        "ephemeral child should remain live"
+    );
 }
 
 #[tokio::test]
@@ -2353,24 +2393,27 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
 
 #[tokio::test]
 async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_agent_mode() {
-    let (home, mut config) = test_config().await;
-    config
-        .features
-        .enable(Feature::Sqlite)
-        .expect("test config should allow sqlite");
-    let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        state_db.clone(),
+    let (home, config) = test_config().await;
+    let thread_store = Arc::new(InMemoryThreadStore::default());
+    let manager = ThreadManager::new(
+        &config,
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store.clone(),
+        /*agent_graph_store*/ None,
+        uuid::Uuid::new_v4().to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let control = manager.agent_control();
     let harness = AgentControlHarness {
         _home: home,
         config,
-        state_db,
+        state_db: None,
         manager,
         control,
     };
@@ -2456,14 +2499,18 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
         .session_source
         .get_nickname()
         .expect("spawned sub-agent should have a nickname");
-    let state_db = child_thread
-        .state_db()
-        .expect("sqlite state db should be available for nickname resume test");
     timeout(Duration::from_secs(5), async {
         loop {
-            if let Ok(Some(metadata)) = state_db.get_thread(child_thread_id).await
-                && metadata.agent_nickname.is_some()
-                && metadata.agent_role.as_deref() == Some("explorer")
+            if let Ok(stored_thread) = thread_store
+                .read_thread(ReadThreadParams {
+                    thread_id: child_thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
+                && stored_thread.agent_nickname.is_some()
+                && stored_thread.agent_role.as_deref() == Some("explorer")
+                && stored_thread.agent_path.as_deref() == Some(agent_path.as_str())
             {
                 break;
             }
@@ -2487,7 +2534,7 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
-                agent_path: Some(agent_path.clone()),
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
             }),

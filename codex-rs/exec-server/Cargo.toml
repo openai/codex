@@ -21,6 +21,7 @@ codex-client = { workspace = true }
 codex-exec-server-protocol = { workspace = true }
 codex-file-system = { workspace = true }
 codex-network-proxy = { workspace = true }
+codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -65,8 +66,12 @@ anyhow = { workspace = true }
 codex-test-binary-support = { workspace = true }
 ctor = { workspace = true }
 http = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
 wiremock = { workspace = true }

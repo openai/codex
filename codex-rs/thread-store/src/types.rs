@@ -182,6 +182,15 @@ pub enum SortDirection {
     Desc,
 }
 
+/// Spawn-graph relationship used to filter thread listings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThreadRelationFilter {
+    /// Return only threads whose immediate parent is the given thread.
+    DirectChildrenOf(ThreadId),
+    /// Return every thread transitively descended from the given thread.
+    DescendantsOf(ThreadId),
+}
+
 /// Parameters for listing threads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListThreadsParams {
@@ -205,8 +214,8 @@ pub struct ListThreadsParams {
     pub archived: bool,
     /// Optional substring/full-text search term for thread title/preview.
     pub search_term: Option<String>,
-    /// Optional direct parent thread filter.
-    pub parent_thread_id: Option<ThreadId>,
+    /// Optional spawn-graph relationship filter.
+    pub relation_filter: Option<ThreadRelationFilter>,
     /// Return directly from the state DB without scanning JSONL rollouts to repair metadata.
     pub use_state_db_only: bool,
 }

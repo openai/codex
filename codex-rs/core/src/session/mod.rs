@@ -54,8 +54,6 @@ use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnCodexErrorFact;
-use codex_app_server_protocol::McpServerElicitationRequest;
-use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
@@ -87,6 +85,7 @@ use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -2841,7 +2840,7 @@ impl Session {
             std::slice::from_ref(&response_item),
         );
         let items = items.as_ref();
-        communication.id = items.first().and_then(ResponseItem::id).map(str::to_string);
+        let response_item = items[0].clone();
         {
             let mut state = self.state.lock().await;
             state.record_items(
@@ -2849,8 +2848,13 @@ impl Session {
                 turn_context.model_info.truncation_policy.into(),
             );
         }
-        self.persist_rollout_items(&[RolloutItem::InterAgentCommunication(communication)])
-            .await;
+        self.persist_rollout_items(&[
+            RolloutItem::InterAgentCommunicationMetadata {
+                trigger_turn: communication.trigger_turn,
+            },
+            RolloutItem::ResponseItem(response_item),
+        ])
+        .await;
         self.send_raw_response_items(turn_context, items).await;
     }
 

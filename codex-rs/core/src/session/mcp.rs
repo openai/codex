@@ -99,8 +99,9 @@ impl Session {
     pub async fn request_mcp_server_elicitation(
         &self,
         turn_context: &TurnContext,
+        server_name: String,
         request_id: RequestId,
-        params: McpServerElicitationRequestParams,
+        request: ElicitationRequest,
     ) -> McpServerElicitationOutcome {
         if self
             .services
@@ -117,53 +118,6 @@ impl Session {
                 sent: false,
             };
         }
-
-        let server_name = params.server_name.clone();
-        let request = match params.request {
-            McpServerElicitationRequest::Form {
-                meta,
-                message,
-                requested_schema,
-            } => {
-                let requested_schema = match serde_json::to_value(requested_schema) {
-                    Ok(requested_schema) => requested_schema,
-                    Err(err) => {
-                        warn!(
-                            "failed to serialize MCP elicitation schema for server_name: {server_name}, request_id: {request_id}: {err:#}"
-                        );
-                        return McpServerElicitationOutcome {
-                            response: None,
-                            sent: false,
-                        };
-                    }
-                };
-                codex_protocol::approvals::ElicitationRequest::Form {
-                    meta,
-                    message,
-                    requested_schema,
-                }
-            }
-            McpServerElicitationRequest::OpenAiForm {
-                meta,
-                message,
-                requested_schema,
-            } => codex_protocol::approvals::ElicitationRequest::OpenAiForm {
-                meta,
-                message,
-                requested_schema,
-            },
-            McpServerElicitationRequest::Url {
-                meta,
-                message,
-                url,
-                elicitation_id,
-            } => codex_protocol::approvals::ElicitationRequest::Url {
-                meta,
-                message,
-                url,
-                elicitation_id,
-            },
-        };
 
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
@@ -194,7 +148,7 @@ impl Session {
             }
         };
         let event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
-            turn_id: params.turn_id,
+            turn_id: Some(turn_context.sub_id.clone()),
             server_name,
             id,
             request,

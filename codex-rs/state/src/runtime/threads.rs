@@ -375,6 +375,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 sort_direction: SortDirection::Desc,
                 search_term: None,
             },
+            /*include_thread_id_tiebreaker*/ false,
         );
         builder.push(" AND threads.title = ");
         builder.push_bind(title);
@@ -387,6 +388,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
             crate::SortKey::UpdatedAt,
             SortDirection::Desc,
             OrderByIndex::Enabled,
+            /*include_thread_id_tiebreaker*/ false,
             /*limit*/ 1,
         );
 
@@ -401,7 +403,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
         page_size: usize,
         filters: ThreadFilterOptions<'_>,
     ) -> anyhow::Result<crate::ThreadsPage> {
-        self.list_threads_matching(page_size, filters, /*parent_thread_id*/ None)
+        self.list_threads_matching(page_size, filters, /*relation_filter*/ None)
             .await
     }
 
@@ -412,7 +414,22 @@ ON CONFLICT(child_thread_id) DO NOTHING
         parent_thread_id: ThreadId,
         filters: ThreadFilterOptions<'_>,
     ) -> anyhow::Result<crate::ThreadsPage> {
-        self.list_threads_matching(page_size, filters, Some(parent_thread_id))
+        self.list_threads_by_relation(
+            page_size,
+            crate::ThreadRelationFilter::DirectChildrenOf(parent_thread_id),
+            filters,
+        )
+        .await
+    }
+
+    /// List threads matching a persisted spawn-graph relationship.
+    pub async fn list_threads_by_relation(
+        &self,
+        page_size: usize,
+        relation_filter: crate::ThreadRelationFilter,
+        filters: ThreadFilterOptions<'_>,
+    ) -> anyhow::Result<crate::ThreadsPage> {
+        self.list_threads_matching(page_size, filters, Some(relation_filter))
             .await
     }
 
@@ -420,29 +437,40 @@ ON CONFLICT(child_thread_id) DO NOTHING
         &self,
         page_size: usize,
         filters: ThreadFilterOptions<'_>,
-        parent_thread_id: Option<ThreadId>,
+        relation_filter: Option<crate::ThreadRelationFilter>,
     ) -> anyhow::Result<crate::ThreadsPage> {
         let limit = page_size.saturating_add(1);
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
-        push_list_threads_query(&mut builder, filters, parent_thread_id, limit);
+        push_list_threads_query(&mut builder, filters, relation_filter, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
-        let mut items = rows
-            .into_iter()
-            .map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut items = Vec::with_capacity(rows.len());
+        let mut parent_thread_ids = std::collections::HashMap::new();
+        for row in rows {
+            let item = ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from)?;
+            if relation_filter.is_some()
+                && let Some(parent_thread_id) =
+                    row.try_get::<Option<String>, _>("parent_thread_id")?
+            {
+                parent_thread_ids.insert(item.id, ThreadId::try_from(parent_thread_id)?);
+            }
+            items.push(item);
+        }
         let num_scanned_rows = items.len();
         let next_anchor = if items.len() > page_size {
-            items.pop();
-            items
-                .last()
-                .and_then(|item| anchor_from_item(item, filters.sort_key))
+            if let Some(overflow_item) = items.pop() {
+                parent_thread_ids.remove(&overflow_item.id);
+            }
+            items.last().and_then(|item| {
+                anchor_from_item(item, filters.sort_key, relation_filter.is_some())
+            })
         } else {
             None
         };
         Ok(ThreadsPage {
             items,
+            parent_thread_ids,
             next_anchor,
             num_scanned_rows,
         })
@@ -471,12 +499,14 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 sort_direction: SortDirection::Desc,
                 search_term: None,
             },
+            sort_key == crate::SortKey::RecencyAt,
         );
         push_thread_order_and_limit(
             &mut builder,
             sort_key,
             SortDirection::Desc,
             OrderByIndex::Enabled,
+            sort_key == crate::SortKey::RecencyAt,
             limit,
         );
 
@@ -1097,30 +1127,71 @@ fn one_thread_id_from_rows(
 fn push_list_threads_query(
     builder: &mut QueryBuilder<Sqlite>,
     filters: ThreadFilterOptions<'_>,
-    parent_thread_id: Option<ThreadId>,
+    relation_filter: Option<crate::ThreadRelationFilter>,
     limit: usize,
 ) {
-    push_thread_select_columns(builder);
-    builder.push(" FROM threads");
-    push_thread_filters(builder, filters);
-    if let Some(parent_thread_id) = parent_thread_id {
+    if let Some(crate::ThreadRelationFilter::DescendantsOf(ancestor_thread_id)) = relation_filter {
         builder.push(
-            " AND threads.id IN (SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ",
+            r#"
+WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
+    SELECT child_thread_id, parent_thread_id
+    FROM thread_spawn_edges
+    WHERE parent_thread_id =
+"#,
         );
-        builder.push_bind(parent_thread_id.to_string());
-        builder.push(")");
+        builder.push_bind(ancestor_thread_id.to_string());
+        builder.push(
+            r#"
+    UNION
+    SELECT edge.child_thread_id, edge.parent_thread_id
+    FROM thread_spawn_edges AS edge
+    JOIN subtree ON edge.parent_thread_id = subtree.child_thread_id
+)
+"#,
+        );
     }
-    let order_by_index = match filters.cwd_filters {
+    push_thread_select_columns(builder);
+    // SQLite may otherwise reorder these joins and scan the global timestamp index before
+    // checking the relationship. CROSS JOIN keeps the selective edge/subtree traversal first.
+    match relation_filter {
+        Some(crate::ThreadRelationFilter::DirectChildrenOf(_)) => builder.push(
+            ", listed_edge.parent_thread_id AS parent_thread_id\nFROM thread_spawn_edges AS listed_edge\nCROSS JOIN threads ON threads.id = listed_edge.child_thread_id",
+        ),
+        Some(crate::ThreadRelationFilter::DescendantsOf(_)) => builder.push(
+            ", subtree.parent_thread_id AS parent_thread_id\nFROM subtree\nCROSS JOIN threads ON threads.id = subtree.child_thread_id",
+        ),
+        None => builder.push(" FROM threads"),
+    };
+    let include_thread_id_tiebreaker =
+        relation_filter.is_some() || filters.sort_key == SortKey::RecencyAt;
+    push_thread_filters(builder, filters, include_thread_id_tiebreaker);
+    match relation_filter {
+        Some(crate::ThreadRelationFilter::DirectChildrenOf(parent_thread_id)) => {
+            builder.push(" AND listed_edge.parent_thread_id = ");
+            builder.push_bind(parent_thread_id.to_string());
+        }
+        Some(crate::ThreadRelationFilter::DescendantsOf(ancestor_thread_id)) => {
+            builder.push(" AND subtree.child_thread_id != ");
+            builder.push_bind(ancestor_thread_id.to_string());
+        }
+        None => {}
+    }
+    let order_by_index = match (relation_filter, filters.cwd_filters) {
+        // Relationship listings are expected to be much smaller than the global thread table.
+        // Prefer the spawn-edge index and sort the matching subtree instead of scanning the
+        // timestamp index until enough related threads happen to be found.
+        (Some(_), _) => OrderByIndex::Disabled,
         // Multi-cwd listing is supported but at the time of writing has no current use in production.
         // Preserve its query plan so the global timestamp index does not regress cwd filtering into a scan.
-        Some(cwd_filters) if cwd_filters.len() > 1 => OrderByIndex::Disabled,
-        Some(_) | None => OrderByIndex::Enabled,
+        (None, Some(cwd_filters)) if cwd_filters.len() > 1 => OrderByIndex::Disabled,
+        (None, Some(_) | None) => OrderByIndex::Enabled,
     };
     push_thread_order_and_limit(
         builder,
         filters.sort_key,
         filters.sort_direction,
         order_by_index,
+        include_thread_id_tiebreaker,
         limit,
     );
 }
@@ -1163,6 +1234,7 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
         RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
@@ -1190,6 +1262,7 @@ pub struct ThreadFilterOptions<'a> {
 pub(super) fn push_thread_filters<'a>(
     builder: &mut QueryBuilder<Sqlite>,
     options: ThreadFilterOptions<'a>,
+    include_thread_id_tiebreaker: bool,
 ) {
     let ThreadFilterOptions {
         archived_only,
@@ -1264,9 +1337,7 @@ pub(super) fn push_thread_filters<'a>(
         builder.push(operator);
         builder.push(" ");
         builder.push_bind(anchor_ts);
-        if sort_key == SortKey::RecencyAt
-            && let Some(anchor_id) = anchor.id
-        {
+        if include_thread_id_tiebreaker && let Some(anchor_id) = anchor.id {
             builder.push(" OR (");
             builder.push(column);
             builder.push(" = ");
@@ -1296,6 +1367,7 @@ pub(super) fn push_thread_order_and_limit(
     sort_key: SortKey,
     sort_direction: SortDirection,
     order_by_index: OrderByIndex,
+    include_thread_id_tiebreaker: bool,
     limit: usize,
 ) {
     let order_column = match sort_key {
@@ -1317,7 +1389,7 @@ pub(super) fn push_thread_order_and_limit(
     builder.push(order_column);
     builder.push(" ");
     builder.push(order_direction);
-    if sort_key == SortKey::RecencyAt {
+    if include_thread_id_tiebreaker {
         builder.push(", threads.id ");
         builder.push(order_direction);
     }
@@ -1813,7 +1885,7 @@ mod tests {
                         sort_direction: SortDirection::Desc,
                         search_term: None,
                     },
-                    /*parent_thread_id*/ None,
+                    /*relation_filter*/ None,
                     /*limit*/ 201,
                 );
                 let plan_details = builder
@@ -1843,7 +1915,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_threads_by_parent_filters_direct_children_with_keyset_pagination() {
+    async fn list_threads_by_relation_filters_spawn_graph_with_keyset_pagination() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -1856,7 +1928,8 @@ mod tests {
         let grandchild_id = ThreadId::new();
 
         for (thread_id, created_at) in [
-            (first_child_id, 1_700_000_100),
+            (parent_id, 1_700_000_000),
+            (first_child_id, 1_700_000_200),
             (second_child_id, 1_700_000_200),
             (grandchild_id, 1_700_000_300),
         ] {
@@ -1891,6 +1964,37 @@ mod tests {
                 .await
                 .expect("spawn edge insert should succeed");
         }
+
+        let mut builder = QueryBuilder::<Sqlite>::new("EXPLAIN QUERY PLAN ");
+        push_list_threads_query(
+            &mut builder,
+            ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources: &[],
+                model_providers: None,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: SortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
+            Some(crate::ThreadRelationFilter::DescendantsOf(parent_id)),
+            /*limit*/ 10,
+        );
+        let plan_details = builder
+            .build()
+            .fetch_all(runtime.pool.as_ref())
+            .await
+            .expect("relationship query plan should load")
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect::<Vec<_>>();
+        assert!(
+            plan_details
+                .iter()
+                .any(|detail| detail.contains("idx_thread_spawn_edges_parent_status")),
+            "spawn relationship query did not use the parent index: {plan_details:?}"
+        );
 
         let filters = |anchor| ThreadFilterOptions {
             archived_only: false,
@@ -1932,6 +2036,76 @@ mod tests {
             vec![first_child_id]
         );
         assert_eq!(second_page.next_anchor, None);
+
+        let first_descendant_page = runtime
+            .list_threads_by_relation(
+                /*page_size*/ 2,
+                crate::ThreadRelationFilter::DescendantsOf(parent_id),
+                filters(None),
+            )
+            .await
+            .expect("first descendant page should succeed");
+        let second_descendant_page = runtime
+            .list_threads_by_relation(
+                /*page_size*/ 2,
+                crate::ThreadRelationFilter::DescendantsOf(parent_id),
+                filters(first_descendant_page.next_anchor.as_ref()),
+            )
+            .await
+            .expect("second descendant page should succeed");
+        assert_eq!(
+            (
+                first_descendant_page
+                    .items
+                    .iter()
+                    .map(|item| item.id)
+                    .collect::<Vec<_>>(),
+                second_descendant_page
+                    .items
+                    .iter()
+                    .map(|item| item.id)
+                    .collect::<Vec<_>>(),
+                first_descendant_page.parent_thread_ids,
+                second_descendant_page.parent_thread_ids,
+                second_descendant_page.next_anchor,
+            ),
+            (
+                vec![grandchild_id, second_child_id],
+                vec![first_child_id],
+                [
+                    (grandchild_id, first_child_id),
+                    (second_child_id, parent_id)
+                ]
+                .into(),
+                [(first_child_id, parent_id)].into(),
+                None,
+            )
+        );
+
+        runtime
+            .upsert_thread_spawn_edge(
+                grandchild_id,
+                parent_id,
+                DirectionalThreadSpawnEdgeStatus::Open,
+            )
+            .await
+            .expect("cycle-closing spawn edge insert should succeed");
+        let cyclic_descendants = runtime
+            .list_threads_by_relation(
+                /*page_size*/ 10,
+                crate::ThreadRelationFilter::DescendantsOf(parent_id),
+                filters(None),
+            )
+            .await
+            .expect("cyclic descendant graph should terminate");
+        assert_eq!(
+            cyclic_descendants
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![grandchild_id, second_child_id, first_child_id]
+        );
     }
 
     #[tokio::test]
