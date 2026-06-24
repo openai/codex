@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use std::io;
 
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::plugin_namespace_for_root_uri;
 use codex_utils_plugins::plugin_namespace_for_skill_uri;
+use futures::future::join_all;
 
 use crate::model::SkillDependencies;
 use crate::model::SkillPolicy;
@@ -104,12 +107,49 @@ pub async fn load_environment_skills_from_root(
     if discovery.skill_files.is_empty() {
         return outcome;
     }
-    let plugin_namespace = plugin_namespace_for_skill_uri(file_system, root).await;
+
+    let namespace_roots = discovery.namespace_roots;
+    let namespace_lookups = join_all(namespace_roots.iter().map(|namespace_root| async {
+        (
+            namespace_root.clone(),
+            plugin_namespace_for_skill_uri(file_system, namespace_root).await,
+        )
+    }))
+    .await;
+    let plugin_lookups = join_all(
+        discovery
+            .plugin_roots
+            .iter()
+            .filter(|plugin_root| !namespace_roots.contains(*plugin_root))
+            .map(|plugin_root| async {
+                (
+                    plugin_root.clone(),
+                    plugin_namespace_for_root_uri(file_system, plugin_root).await,
+                )
+            }),
+    )
+    .await;
+    let plugin_namespaces = namespace_lookups
+        .into_iter()
+        .chain(plugin_lookups)
+        .filter_map(|(plugin_root, namespace)| namespace.map(|namespace| (plugin_root, namespace)))
+        .collect::<HashMap<_, _>>();
+
     for path in discovery.skill_files {
+        let mut ancestor = path.parent();
+        let plugin_namespace = loop {
+            let Some(current) = ancestor else {
+                break None;
+            };
+            if let Some(namespace) = plugin_namespaces.get(&current) {
+                break Some(namespace.as_str());
+            }
+            ancestor = current.parent();
+        };
         match EnvironmentSkillMetadata::parse(
             file_system,
             &path,
-            /*plugin_namespace*/ plugin_namespace.as_deref(),
+            /*plugin_namespace*/ plugin_namespace,
         )
         .await
         {
