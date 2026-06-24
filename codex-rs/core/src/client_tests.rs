@@ -14,8 +14,8 @@ use crate::responses_metadata::CodexResponsesMetadata;
 use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
 use codex_api::ApiError;
+use codex_api::ReasoningSummaryDelivery;
 use codex_api::ResponseEvent;
-use codex_api::SummaryDelivery;
 use codex_api::TransportError;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -143,18 +143,18 @@ fn test_model_info() -> ModelInfo {
 }
 
 #[test]
-fn parallel_summary_delivery_requires_summary_generation() {
+fn concurrent_summary_delivery_requires_summary_generation() {
     let openai_provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     let other_provider =
         create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     let mut model_info = test_model_info();
     model_info.supports_reasoning_summaries = true;
-    let delivery = Some(SummaryDelivery::ParallelTruncated);
+    let delivery = Some(ReasoningSummaryDelivery::ConcurrentCutoff);
     let should_use = |provider: &ModelProviderInfo,
                       model: &ModelInfo,
                       effort: Option<&ReasoningEffort>,
                       summary: ReasoningSummary,
-                      delivery: Option<SummaryDelivery>| {
+                      delivery: Option<ReasoningSummaryDelivery>| {
         ModelClient::should_use_parallel_reasoning_summaries(
             provider, model, effort, summary, delivery,
         )

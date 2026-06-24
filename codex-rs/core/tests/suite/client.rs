@@ -1,4 +1,4 @@
-use codex_api::SummaryDelivery;
+use codex_api::ReasoningSummaryDelivery;
 use codex_config::ConfigLayerStack;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ModelClient;
@@ -1252,7 +1252,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
-            /*summary_delivery*/ None,
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2307,9 +2307,9 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     pretty_assertions::assert_eq!(
         request_body
             .get("stream_options")
-            .and_then(|options| options.get("summary_delivery"))
+            .and_then(|options| options.get("reasoning_summary_delivery"))
             .and_then(|value| value.as_str()),
-        Some("parallel_truncated")
+        Some("concurrent_cutoff")
     );
     pretty_assertions::assert_eq!(
         request_body
@@ -2939,7 +2939,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
-            Some(SummaryDelivery::ParallelTruncated),
+            Some(ReasoningSummaryDelivery::ConcurrentCutoff),
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),

@@ -1146,7 +1146,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parallel_truncated_routes_items_and_preserves_history() -> anyhow::Result<()> {
+async fn concurrent_cutoff_routes_items_and_preserves_history() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

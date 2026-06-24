@@ -75,7 +75,7 @@ use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
-use codex_api::SummaryDelivery;
+use codex_api::ReasoningSummaryDelivery;
 use codex_async_utils::OrCancelExt;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
@@ -1895,11 +1895,11 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
-    let requested_summary_delivery = turn_context
+    let requested_reasoning_summary_delivery = turn_context
         .config
         .features
         .enabled(Feature::ParallelReasoningSummaries)
-        .then_some(SummaryDelivery::ParallelTruncated);
+        .then_some(ReasoningSummaryDelivery::ConcurrentCutoff);
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut stream = client_session
         .stream(
@@ -1908,7 +1908,7 @@ async fn try_run_sampling_request(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
-            requested_summary_delivery,
+            requested_reasoning_summary_delivery,
             turn_context.config.service_tier.clone(),
             responses_metadata,
             &inference_trace,
@@ -1921,7 +1921,7 @@ async fn try_run_sampling_request(
         &turn_context.model_info,
         turn_context.reasoning_effort.as_ref(),
         turn_context.reasoning_summary,
-        requested_summary_delivery,
+        requested_reasoning_summary_delivery,
     );
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();

@@ -170,13 +170,13 @@ pub struct Reasoning {
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SummaryDelivery {
-    ParallelTruncated,
+pub enum ReasoningSummaryDelivery {
+    ConcurrentCutoff,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct StreamOptions {
-    pub summary_delivery: SummaryDelivery,
+    pub reasoning_summary_delivery: ReasoningSummaryDelivery,
 }
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]
