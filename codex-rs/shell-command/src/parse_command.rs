@@ -381,7 +381,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("foo/foo.txt").into(),
+                path: PathBuf::from("foo").join("foo.txt").into(),
             }],
         );
     }
@@ -393,7 +393,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("-weird/foo.txt").into(),
+                path: PathBuf::from("-weird").join("foo.txt").into(),
             }],
         );
     }
@@ -405,7 +405,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("dir2/foo.txt").into(),
+                path: PathBuf::from("dir2").join("foo.txt").into(),
             }],
         );
     }
@@ -428,7 +428,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("foo/foo.txt").into(),
+                path: PathBuf::from("foo").join("foo.txt").into(),
             }],
         );
     }
