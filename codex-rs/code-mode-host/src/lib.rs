@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -18,6 +19,7 @@ use codex_code_mode_protocol::host::HostHello;
 use codex_code_mode_protocol::host::HostRequest;
 use codex_code_mode_protocol::host::HostResponse;
 use codex_code_mode_protocol::host::HostToClient;
+use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
 use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
@@ -26,6 +28,7 @@ use codex_code_mode_protocol::host::WireResult;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_util::task::TaskTracker;
 
 use self::delegate::RemoteDelegate;
@@ -60,22 +63,75 @@ where
         closing: AtomicBool::new(false),
         peer: Arc::clone(&peer),
     });
+    let (writer_finished_tx, mut writer_finished_rx) = oneshot::channel();
     let writer_task = tokio::spawn(async move {
-        while let Some(message) = outgoing_rx.recv().await {
-            writer
-                .write(&message)
-                .await
-                .context("failed to write code-mode host message")?;
+        let result = async {
+            while let Some(message) = outgoing_rx.recv().await {
+                let write_result = match writer.write(&message).await {
+                    Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+                        let error_message = format!(
+                            "code-mode host response exceeded the {MAX_FRAME_BYTES}-byte IPC frame limit: {error}"
+                        );
+                        let fallback = match &message {
+                            HostToClient::Response { id, .. } => Some(HostToClient::Response {
+                                id: *id,
+                                result: WireResult::Err {
+                                    message: error_message,
+                                },
+                            }),
+                            HostToClient::InitialResponse { id, .. } => {
+                                Some(HostToClient::InitialResponse {
+                                    id: *id,
+                                    result: WireResult::Err {
+                                        message: error_message,
+                                    },
+                                })
+                            }
+                            HostToClient::HostHello(_)
+                            | HostToClient::HandshakeRejected { .. }
+                            | HostToClient::DelegateRequest { .. }
+                            | HostToClient::CancelDelegateRequest { .. }
+                            | HostToClient::CellClosed { .. } => None,
+                        };
+                        match fallback {
+                            Some(fallback) => writer.write(&fallback).await,
+                            None => Err(error),
+                        }
+                    }
+                    result => result,
+                };
+                write_result.context("failed to write code-mode host message")?;
+            }
+            Ok::<(), anyhow::Error>(())
         }
-        Ok::<(), anyhow::Error>(())
+        .await;
+        let status = match &result {
+            Ok(()) => "code-mode host writer stopped unexpectedly".to_string(),
+            Err(error) => format!("{error:#}"),
+        };
+        let _ = writer_finished_tx.send(status);
+        result
     });
 
     let input_result = async {
-        while let Some(message) = reader
-            .read::<ClientToHost>()
-            .await
-            .context("failed to read code-mode client message")?
-        {
+        loop {
+            let message = tokio::select! {
+                biased;
+                writer_status = &mut writer_finished_rx => {
+                    let message = writer_status.unwrap_or_else(|_| {
+                        "code-mode host writer task stopped without reporting status".to_string()
+                    });
+                    anyhow::bail!(message);
+                }
+                message = reader.read::<ClientToHost>() => {
+                    let Some(message) = message
+                        .context("failed to read code-mode client message")?
+                    else {
+                        break;
+                    };
+                    message
+                }
+            };
             match message {
                 ClientToHost::ClientHello(_) => {
                     anyhow::bail!("received a second code-mode client hello");

@@ -80,7 +80,7 @@ where
         })?;
         if payload.len() > MAX_FRAME_BYTES {
             return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
+                io::ErrorKind::InvalidInput,
                 format!(
                     "code-mode IPC frame length {} exceeds {MAX_FRAME_BYTES} bytes",
                     payload.len()

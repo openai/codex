@@ -15,6 +15,59 @@ use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
 use codex_code_mode_protocol::host::WireResult;
 use pretty_assertions::assert_eq;
+use std::io;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+use std::time::Duration;
+use tokio::io::AsyncWrite;
+
+struct FailWritesAfterFirstFlush<W> {
+    inner: W,
+    fail_writes: bool,
+}
+
+impl<W> FailWritesAfterFirstFlush<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            fail_writes: false,
+        }
+    }
+}
+
+impl<W> AsyncWrite for FailWritesAfterFirstFlush<W>
+where
+    W: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.fail_writes {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "injected writer failure",
+            )));
+        }
+        Pin::new(&mut self.inner).poll_write(context, buffer)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match Pin::new(&mut self.inner).poll_flush(context) {
+            Poll::Ready(Ok(())) => {
+                self.fail_writes = true;
+                Poll::Ready(Ok(()))
+            }
+            result => result,
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(context)
+    }
+}
 
 use super::run;
 
@@ -260,4 +313,46 @@ async fn session_id_cannot_be_reused_after_shutdown() {
     drop(writer);
     drop(reader);
     host.await.expect("host task").expect("host connection");
+}
+
+#[tokio::test]
+async fn writer_failure_terminates_the_connection() {
+    let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 1024);
+    let (host_reader, host_writer) = tokio::io::split(host_stream);
+    let (client_reader, client_writer) = tokio::io::split(client_stream);
+    let host = tokio::spawn(run(
+        host_reader,
+        FailWritesAfterFirstFlush::new(host_writer),
+    ));
+    let mut reader = FramedReader::new(client_reader);
+    let mut writer = FramedWriter::new(client_writer);
+
+    writer
+        .write(&client_hello([ProtocolVersion::V1], CapabilitySet::empty()))
+        .await
+        .expect("write hello");
+    reader
+        .read::<HostToClient>()
+        .await
+        .expect("read hello")
+        .expect("host hello");
+
+    writer
+        .write(&ClientToHost::Request {
+            id: 1,
+            request: HostRequest::OpenSession {
+                session_id: session_id("session-1"),
+            },
+        })
+        .await
+        .expect("open session");
+    let error = tokio::time::timeout(Duration::from_secs(5), host)
+        .await
+        .expect("host exit timeout")
+        .expect("host task")
+        .expect_err("writer failure should fail the connection");
+    assert!(
+        format!("{error:#}").contains("failed to write code-mode host message"),
+        "unexpected error: {error:#}"
+    );
 }

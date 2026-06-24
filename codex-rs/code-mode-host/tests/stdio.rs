@@ -31,6 +31,7 @@ use codex_code_mode::host::HostHello;
 use codex_code_mode::host::HostRequest;
 use codex_code_mode::host::HostResponse;
 use codex_code_mode::host::HostToClient;
+use codex_code_mode::host::MAX_FRAME_BYTES;
 use codex_code_mode::host::ProtocolVersion;
 use codex_code_mode::host::RequestId;
 use codex_code_mode::host::SessionId;
@@ -212,6 +213,66 @@ text(result.value);
         *delegate.closed_cells.lock().expect("closed cells lock"),
         vec![cell_id("1"), cell_id("2"), cell_id("3")]
     );
+}
+
+#[tokio::test]
+async fn oversized_output_errors_the_cell_without_wedging_the_host() {
+    let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(
+        codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").expect("host binary"),
+    );
+    let session = provider
+        .create_session(Arc::new(RecordingDelegate::default()))
+        .await
+        .expect("create remote session");
+
+    let accepted_output_bytes = 9 * 1024 * 1024;
+    let accepted = execute(
+        &session,
+        execute_request(&format!(r#"text("x".repeat({accepted_output_bytes}));"#)),
+    )
+    .await;
+    let RuntimeResponse::Result {
+        cell_id: accepted_cell_id,
+        content_items,
+        error_text,
+    } = accepted
+    else {
+        panic!("expected accepted output to complete");
+    };
+    assert_eq!(accepted_cell_id, cell_id("1"));
+    assert_eq!(error_text, None);
+    let [FunctionCallOutputContentItem::InputText { text }] = content_items.as_slice() else {
+        panic!("expected one text output item");
+    };
+    assert_eq!(text.len(), accepted_output_bytes);
+
+    let oversized_output_bytes = MAX_FRAME_BYTES + 1024;
+    let started = session
+        .execute(execute_request(&format!(
+            r#"text("x".repeat({oversized_output_bytes}));"#
+        )))
+        .await
+        .expect("start oversized output");
+    let error = tokio::time::timeout(Duration::from_secs(15), started.initial_response())
+        .await
+        .expect("oversized response timeout")
+        .expect_err("oversized response should error the cell");
+    assert!(
+        error.contains(&format!("{MAX_FRAME_BYTES}-byte IPC frame limit")),
+        "unexpected error: {error}"
+    );
+
+    assert_eq!(
+        execute(&session, execute_request(r#"text("recovered");"#)).await,
+        RuntimeResponse::Result {
+            cell_id: cell_id("3"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "recovered".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+    session.shutdown().await.expect("shutdown remote session");
 }
 
 #[tokio::test]
@@ -528,6 +589,80 @@ setTimeout(() => { text("should never emit"); }, 60000);
         .expect("host exit timeout")
         .expect("wait for host");
     assert!(status.success(), "host exited with {status}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn closed_host_stdout_terminates_the_spawned_process() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let pid_log = temp_dir.path().join("host-pids");
+    let wrapper = temp_dir.path().join("stdout-closing-host");
+    let payload = serde_json::to_vec(&HostToClient::HostHello(HostHello::new(
+        ProtocolVersion::V1,
+        CapabilitySet::empty(),
+    )))
+    .expect("serialize host hello");
+    let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+    frame.extend(payload);
+    let escaped_frame = frame
+        .iter()
+        .map(|byte| format!("\\{byte:03o}"))
+        .collect::<String>();
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$$\" >> {}\nprintf '%b' '{escaped_frame}'\nexec 1>&-\nwhile :; do :; done\n",
+        shell_quote(&pid_log),
+    );
+    std::fs::write(&wrapper, script).expect("write host wrapper");
+    let mut permissions = std::fs::metadata(&wrapper)
+        .expect("host wrapper metadata")
+        .permissions();
+    permissions.set_mode(/*mode*/ 0o755);
+    std::fs::set_permissions(&wrapper, permissions).expect("make host wrapper executable");
+
+    let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(wrapper);
+    let session_result = tokio::time::timeout(
+        Duration::from_secs(5),
+        provider.create_session(Arc::new(RecordingDelegate::default())),
+    )
+    .await;
+    let pid = recorded_pids(&pid_log)[0];
+    let error = match session_result {
+        Ok(result) => result
+            .err()
+            .expect("closed stdout should fail session creation"),
+        Err(error) => {
+            // SAFETY: `pid` was written by the wrapper process owned by this test.
+            let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
+            panic!("session creation timeout: {error}");
+        }
+    };
+    assert!(
+        error.contains("closed its stdout"),
+        "unexpected error: {error}"
+    );
+
+    let exited = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            // SAFETY: signal zero only checks whether the process recorded by
+            // this test still exists.
+            if unsafe {
+                libc::kill(pid, /*sig*/ 0)
+            } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    if let Err(error) = exited {
+        // SAFETY: `pid` was written by the wrapper process owned by this test.
+        let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
+        panic!("host process was not terminated: {error}");
+    }
 }
 
 #[cfg(unix)]

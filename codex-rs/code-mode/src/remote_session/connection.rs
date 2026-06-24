@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
+use self::reader::drive_reader;
 use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
 use codex_code_mode_protocol::ExecuteRequest;
@@ -26,19 +27,14 @@ use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
-use tracing::warn;
-
-use self::reader::drive_reader;
 
 mod reader;
+mod stderr;
 
 const IPC_CHANNEL_CAPACITY: usize = 128;
 
@@ -138,19 +134,9 @@ impl Connection {
             drive_reader(reader, reader_state, reader_cancellation).await;
         });
 
-        if let Some(stderr) = stderr {
+        if let Some(stderr_pipe) = stderr {
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
-                loop {
-                    match lines.next_line().await {
-                        Ok(Some(line)) => debug!("code-mode host stderr: {line}"),
-                        Ok(None) => break,
-                        Err(err) => {
-                            warn!("failed to read code-mode host stderr: {err}");
-                            break;
-                        }
-                    }
-                }
+                stderr::drain(stderr_pipe).await;
             });
         }
 
