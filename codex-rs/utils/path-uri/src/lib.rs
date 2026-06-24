@@ -647,13 +647,13 @@ fn path_uri_from_segments<'a>(
     let anchor_depth = usize::from(convention == PathConvention::Windows);
     let mut depth = 0;
     let mut normalized_segments = Vec::new();
+    let mut has_trailing_separator = false;
     for segment in segments {
         match segment {
-            "." => {}
+            "" => has_trailing_separator = true,
+            "." => has_trailing_separator = false,
             ".." => {
-                while normalized_segments.last() == Some(&"") {
-                    normalized_segments.pop();
-                }
+                has_trailing_separator = false;
                 if depth > anchor_depth {
                     normalized_segments.pop();
                     depth -= 1;
@@ -661,9 +661,13 @@ fn path_uri_from_segments<'a>(
             }
             segment => {
                 normalized_segments.push(segment);
-                depth += usize::from(!segment.is_empty());
+                depth += 1;
+                has_trailing_separator = false;
             }
         }
+    }
+    if has_trailing_separator {
+        normalized_segments.push("");
     }
     {
         let mut url_segments = url.path_segments_mut().ok()?;

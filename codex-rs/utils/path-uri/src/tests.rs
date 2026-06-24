@@ -627,6 +627,8 @@ fn join_normalizes_absolute_parent_segments() {
             r"\\server\share\a\..\b",
             "file://server/share/b",
         ),
+        ("file:///workspace", "/tmp//a/../b", "file:///tmp/b"),
+        ("file:///workspace", "/tmp/a/..//b", "file:///tmp/b"),
         ("file:///workspace", "/tmp/a///../b", "file:///tmp/b"),
         (
             "file:///C:/workspace",
@@ -670,6 +672,30 @@ fn join_absolute_parent_segments_stop_at_native_path_roots() {
             "file:///C:/workspace",
             r"\\server\share\\\..\b",
             "file://server/share/b",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn join_collapses_redundant_absolute_separators() {
+    for (base, path, expected) in [
+        ("file:///workspace", "/tmp///", "file:///tmp/"),
+        ("file:///workspace", "///", "file:///"),
+        ("file:///C:/workspace", r"D:\tmp\\\", "file:///D:/tmp/"),
+        ("file:///C:/workspace", r"D:\\\", "file:///D:/"),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\tmp\\\",
+            "file://server/share/tmp/",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\\\",
+            "file://server/share/",
         ),
     ] {
         let base = PathUri::parse(base).expect("valid base URI");
