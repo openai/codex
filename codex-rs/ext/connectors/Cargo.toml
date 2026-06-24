@@ -8,6 +8,7 @@ version.workspace = true
 name = "codex_connectors_extension"
 path = "src/lib.rs"
 doctest = false
+test = false
 
 [lints]
 workspace = true
