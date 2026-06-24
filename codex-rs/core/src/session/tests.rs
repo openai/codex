@@ -2686,6 +2686,56 @@ async fn record_initial_history_reconstructs_forked_transcript() {
     assert_eq!(expected, history.raw_items());
 }
 
+#[tokio::test]
+async fn start_new_context_window_assigns_and_persists_item_ids() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            let _ = config.features.enable(Feature::ItemIds);
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("unique session")).await;
+    let world_state = Arc::new(
+        build_world_state_from_turn_context(session.as_ref(), turn_context.as_ref()).await,
+    );
+
+    session
+        .start_new_context_window(turn_context.as_ref(), world_state)
+        .await;
+
+    let live_history = session.clone_history().await;
+    assert!(!live_history.raw_items().is_empty());
+    assert!(
+        live_history
+            .raw_items()
+            .iter()
+            .all(|item| item.id().is_some())
+    );
+
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let persisted_replacement_history = resumed.history.iter().rev().find_map(|item| match item {
+        RolloutItem::Compacted(compacted) => compacted.replacement_history.as_ref(),
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_) => None,
+    });
+    assert_eq!(
+        persisted_replacement_history.map(Vec::as_slice),
+        Some(live_history.raw_items())
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_configured_reports_permission_profile_for_external_sandbox() -> anyhow::Result<()>
 {
