@@ -1,5 +1,6 @@
 use super::RunnerTransportRequest;
 use super::spawn_runner_transport_with_retry;
+use crate::WindowsSandboxProxySettingsMode;
 use crate::identity::SandboxCreds;
 use crate::ipc_framed::ErrorPayload;
 use crate::ipc_framed::ErrorStage;
@@ -39,6 +40,7 @@ struct RefreshObservation {
     deny_read_paths_override: Vec<PathBuf>,
     deny_write_paths_override: Vec<PathBuf>,
     proxy_enforced: bool,
+    proxy_settings_mode: WindowsSandboxProxySettingsMode,
 }
 
 #[test]
@@ -85,6 +87,7 @@ fn retry_uses_original_unified_exec_request_and_stops_after_second_failure() {
         deny_read_paths_override: vec![PathBuf::from(r"C:\secrets")],
         deny_write_paths_override: vec![PathBuf::from(r"C:\workspace\.codex")],
         proxy_enforced: true,
+        proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
     };
     let expected_spawn_request =
         serde_json::to_value(&request.spawn_request).expect("serialize spawn request");
@@ -99,6 +102,7 @@ fn retry_uses_original_unified_exec_request_and_stops_after_second_failure() {
         deny_read_paths_override: request.deny_read_paths_override.clone(),
         deny_write_paths_override: request.deny_write_paths_override.clone(),
         proxy_enforced: true,
+        proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
     };
     let spawn_observations = RefCell::new(Vec::new());
     let refresh_observations = RefCell::new(Vec::new());
@@ -136,7 +140,8 @@ fn retry_uses_original_unified_exec_request_and_stops_after_second_failure() {
          write_roots_override,
          deny_read_paths_override,
          deny_write_paths_override,
-         proxy_enforced| {
+         proxy_enforced,
+         proxy_settings_mode| {
             refresh_observations.borrow_mut().push(RefreshObservation {
                 permissions: permissions.clone(),
                 cwd: cwd.to_path_buf(),
@@ -148,6 +153,7 @@ fn retry_uses_original_unified_exec_request_and_stops_after_second_failure() {
                 deny_read_paths_override: deny_read_paths_override.to_vec(),
                 deny_write_paths_override: deny_write_paths_override.to_vec(),
                 proxy_enforced,
+                proxy_settings_mode,
             });
             Ok(SandboxCreds {
                 username: "refreshed".to_string(),
