@@ -412,6 +412,7 @@ mod job {
                     Some(communication.to_model_input_item())
                 }
                 RolloutItem::SessionMeta(_)
+                | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::EventMsg(_) => None,
@@ -788,6 +789,27 @@ mod tests {
         let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("parse");
 
         assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn serializes_agent_message_response_items_for_memory() {
+        let communication = InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::root().join("worker").expect("agent path"),
+            Vec::new(),
+            "delegated task".to_string(),
+            /*trigger_turn*/ true,
+        );
+        let response_item = communication.to_model_input_item();
+
+        let serialized = job::serialize_filtered_rollout_response_items(&[
+            RolloutItem::InterAgentCommunicationMetadata { trigger_turn: true },
+            RolloutItem::ResponseItem(response_item.clone()),
+        ])
+        .expect("serialize");
+        let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("parse");
+
+        assert_eq!(parsed, vec![response_item]);
     }
 
     #[test]

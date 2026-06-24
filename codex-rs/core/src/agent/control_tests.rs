@@ -163,6 +163,7 @@ async fn persisted_originator(thread: &CodexThread) -> String {
             RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.originator.clone()),
             RolloutItem::ResponseItem(_)
             | RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::EventMsg(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::TurnContext(_) => None,

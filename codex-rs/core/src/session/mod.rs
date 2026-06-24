@@ -2841,7 +2841,7 @@ impl Session {
             std::slice::from_ref(&response_item),
         );
         let items = items.as_ref();
-        communication.id = items.first().and_then(ResponseItem::id).map(str::to_string);
+        let response_item = items[0].clone();
         {
             let mut state = self.state.lock().await;
             state.record_items(
@@ -2849,8 +2849,13 @@ impl Session {
                 turn_context.model_info.truncation_policy.into(),
             );
         }
-        self.persist_rollout_items(&[RolloutItem::InterAgentCommunication(communication)])
-            .await;
+        self.persist_rollout_items(&[
+            RolloutItem::InterAgentCommunicationMetadata {
+                trigger_turn: communication.trigger_turn,
+            },
+            RolloutItem::ResponseItem(response_item),
+        ])
+        .await;
         self.send_raw_response_items(turn_context, items).await;
     }
 

@@ -72,7 +72,14 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
     for (idx, item) in items.iter().enumerate() {
         match item {
             RolloutItem::ResponseItem(item) => {
-                if is_user_turn_boundary(item) {
+                let has_delivery_metadata = matches!(item, ResponseItem::AgentMessage { .. })
+                    && idx.checked_sub(1).is_some_and(|previous_idx| {
+                        matches!(
+                            items.get(previous_idx),
+                            Some(RolloutItem::InterAgentCommunicationMetadata { .. })
+                        )
+                    });
+                if is_user_turn_boundary(item) && !has_delivery_metadata {
                     rollback_turn_positions.push(idx);
                 }
                 if is_real_user_message_boundary(item) || is_trigger_turn_boundary(item) {
@@ -82,6 +89,12 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
             RolloutItem::InterAgentCommunication(communication) => {
                 rollback_turn_positions.push(idx);
                 if communication.trigger_turn {
+                    fork_turn_positions.push(idx);
+                }
+            }
+            RolloutItem::InterAgentCommunicationMetadata { trigger_turn } => {
+                rollback_turn_positions.push(idx);
+                if *trigger_turn {
                     fork_turn_positions.push(idx);
                 }
             }
