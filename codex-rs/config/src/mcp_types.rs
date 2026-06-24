@@ -131,8 +131,9 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
-    /// When `true`, authenticate HTTP requests with the current ChatGPT session unless the
-    /// server's configured bearer token or authorization header resolves.
+    /// When `true`, request authentication with the current ChatGPT session. Codex honors this
+    /// only when the server URL has the same origin as the configured ChatGPT base URL and no
+    /// configured bearer token or authorization header resolves.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub use_chatgpt_auth: bool,
 

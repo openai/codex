@@ -255,9 +255,26 @@ pub fn effective_mcp_servers_from_configured(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, EffectiveMcpServer> {
+    let chatgpt_origin = url::Url::parse(&config.chatgpt_base_url)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https"))
+        .map(|url| url.origin());
     let mut servers = configured_servers
         .into_iter()
-        .map(|(name, server)| (name, EffectiveMcpServer::configured(server)))
+        .map(|(name, mut server)| {
+            if server.use_chatgpt_auth {
+                let server_origin = match &server.transport {
+                    McpServerTransportConfig::StreamableHttp { url, .. } => url::Url::parse(url)
+                        .ok()
+                        .filter(|url| matches!(url.scheme(), "http" | "https"))
+                        .map(|url| url.origin()),
+                    McpServerTransportConfig::Stdio { .. } => None,
+                };
+                server.use_chatgpt_auth =
+                    server_origin.is_some() && server_origin.as_ref() == chatgpt_origin.as_ref();
+            }
+            (name, EffectiveMcpServer::configured(server))
+        })
         .collect::<HashMap<_, _>>();
     if !host_owned_codex_apps_enabled(config, auth) {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);

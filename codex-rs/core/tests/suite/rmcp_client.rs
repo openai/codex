@@ -2313,17 +2313,16 @@ async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> any
     else {
         return Ok(());
     };
-    let Some(configured_auth_server) =
-        start_streamable_http_test_server("configured-auth", Some("configured-token")).await?
-    else {
-        return Ok(());
-    };
     let chatgpt_auth_url = chatgpt_auth_server.url().to_string();
-    let configured_auth_url = configured_auth_server.url().to_string();
+    let chatgpt_base_url = chatgpt_auth_url
+        .strip_suffix("/mcp")
+        .expect("test MCP URL should end in /mcp")
+        .to_string();
 
-    let fixture = test_codex()
+    let chatgpt_auth_fixture = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
             insert_mcp_server(
                 config,
                 "chatgpt_auth",
@@ -2339,6 +2338,28 @@ async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> any
                     ..Default::default()
                 },
             );
+        })
+        .build_with_remote_env(&server)
+        .await?;
+    wait_for_mcp_server(&chatgpt_auth_fixture.codex, "chatgpt_auth").await?;
+    drop(chatgpt_auth_fixture);
+    chatgpt_auth_server.shutdown().await;
+
+    let Some(configured_auth_server) =
+        start_streamable_http_test_server("configured-auth", Some("configured-token")).await?
+    else {
+        return Ok(());
+    };
+    let configured_auth_url = configured_auth_server.url().to_string();
+    let configured_auth_base_url = configured_auth_url
+        .strip_suffix("/mcp")
+        .expect("test MCP URL should end in /mcp")
+        .to_string();
+
+    let configured_auth_fixture = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = configured_auth_base_url;
             insert_mcp_server(
                 config,
                 "configured_auth",
@@ -2361,10 +2382,8 @@ async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> any
         .build_with_remote_env(&server)
         .await?;
 
-    wait_for_mcp_server(&fixture.codex, "chatgpt_auth").await?;
-    wait_for_mcp_server(&fixture.codex, "configured_auth").await?;
-
-    chatgpt_auth_server.shutdown().await;
+    wait_for_mcp_server(&configured_auth_fixture.codex, "configured_auth").await?;
+    drop(configured_auth_fixture);
     configured_auth_server.shutdown().await;
 
     Ok(())
