@@ -1715,6 +1715,7 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
         description: None,
         keywords: Vec::new(),
         paths: crate::manifest::PluginManifestPaths {
+            agents: Vec::new(),
             skills: vec![
                 plugin_root.join("skills"),
                 plugin_root.join("skills/abc"),

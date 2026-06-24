@@ -96,6 +96,7 @@ impl MarketplacePluginManifestFallback {
         )
         .ok()?;
         manifest.paths = crate::manifest::PluginManifestPaths {
+            agents: Vec::new(),
             skills: Vec::new(),
             mcp_servers: None,
             apps: None,

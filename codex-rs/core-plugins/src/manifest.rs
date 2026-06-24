@@ -858,6 +858,7 @@ mod tests {
                 description: None,
                 keywords: Vec::new(),
                 paths: PluginManifestPaths {
+                    agents: Vec::new(),
                     skills: vec![plugin_root.join("skills").expect("skills URI")],
                     mcp_servers: Some(PluginManifestMcpServers::Path(
                         plugin_root.join(".mcp.json").expect("MCP URI"),

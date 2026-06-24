@@ -114,8 +114,9 @@ enabled = true
             &stack,
             HashMap::new(),
             &store,
+            /*plugin_skill_snapshots*/ None,
             Some(Product::Codex),
-            /*prefer_remote_curated_conflicts*/ false,
+            /*remote_global_catalog_active*/ false,
         )
         .await;
 
