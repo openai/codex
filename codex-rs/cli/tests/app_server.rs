@@ -97,7 +97,6 @@ fn proxy_ensure_listener_rejects_a_non_default_socket() -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(unix)]
 #[test]
 fn proxy_ensure_listener_accepts_default_socket_through_symlinked_codex_home() -> Result<()> {
