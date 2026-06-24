@@ -194,6 +194,9 @@ pub struct McpServerRefreshConfig {
 pub struct ConversationStartParams {
     /// Whether Codex response handoffs are managed through explicit client append calls.
     pub client_managed_handoffs: bool,
+    /// Whether to route any remaining transcript tail through Codex when the session ends.
+    /// TODO: Remove this rollout knob once transcript-tail flushing is always enabled.
+    pub flush_transcript_tail_on_session_end: bool,
     /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
     pub codex_responses_as_items: bool,
     /// Optional prefix added to automatic Codex response items when `codex_responses_as_items` is set.
