@@ -21,6 +21,7 @@ use tokio::sync::TryLockError;
 use tracing::Instrument as _;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -458,6 +459,11 @@ impl ModelsManager for StaticModelsManager {
                             .iter()
                             .any(|candidate| candidate.slug == *model)
                     {
+                        warn!(
+                            requested_model = %model,
+                            fallback_model = %fallback_model,
+                            "requested model is not present in static catalog; using fallback"
+                        );
                         return fallback_model.clone();
                     }
                     return model.to_string();
