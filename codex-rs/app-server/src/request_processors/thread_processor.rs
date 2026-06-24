@@ -4432,7 +4432,15 @@ fn build_thread_from_snapshot(
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     Thread {
         id: thread_id.to_string(),
-        extra: None,
+        // copybara:replace-for-public begin
+        extra: config_snapshot.extra_config.as_ref().map(|extra_config| {
+            codex_app_server_protocol::ThreadExtra {
+                persistent_mode: extra_config.persistent_mode_message.is_some(),
+            }
+        }),
+        // copybara:replace-for-public with
+        // copybara:public extra: None,
+        // copybara:replace-for-public end
         session_id,
         forked_from_id: None,
         parent_thread_id: config_snapshot.parent_thread_id.map(|id| id.to_string()),
