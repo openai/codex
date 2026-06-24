@@ -11,7 +11,7 @@ use codex_core::ThreadConfigSnapshot;
 use codex_file_watcher::WatchRegistration;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_rollout::state_db::StateDbHandle;
 use codex_utils_path_uri::LegacyAppPathString;
 use std::collections::HashMap;
@@ -29,7 +29,6 @@ type PendingInterruptQueue = Vec<ConnectionRequestId>;
 
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
-    pub(crate) history_items: Vec<RolloutItem>,
     pub(crate) config_snapshot: ThreadConfigSnapshot,
     pub(crate) instruction_sources: Vec<LegacyAppPathString>,
     pub(crate) thread_summary: codex_app_server_protocol::Thread,
@@ -50,6 +49,9 @@ pub(crate) enum ThreadListenerCommand {
         turn_id: Option<String>,
         goal: ThreadGoal,
     },
+    // PersistAndEmitThreadGoalUpdated is used for extension-originated updates that have not yet
+    // passed through the live thread's ordered rollout writer.
+    PersistAndEmitThreadGoalUpdated(ThreadGoalUpdatedEvent),
     // EmitThreadGoalCleared is used to order app-server goal clears with running-thread resume responses.
     EmitThreadGoalCleared,
     // EmitThreadGoalSnapshot is used to read and emit the latest goal state in the listener order.

@@ -56,6 +56,7 @@ use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -232,6 +233,8 @@ pub struct ThreadHistoryBuilder {
     current_rollout_index: usize,
     next_rollout_index: usize,
     active_change_set: Option<ThreadHistoryChangeSet>,
+    /// Legacy events generated after typed item completion, retained across unrelated live events.
+    pending_completed_item_legacy_events: VecDeque<EventMsg>,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -249,6 +252,7 @@ impl ThreadHistoryBuilder {
             current_rollout_index: 0,
             next_rollout_index: 0,
             active_change_set: None,
+            pending_completed_item_legacy_events: VecDeque::new(),
         }
     }
 
@@ -307,12 +311,15 @@ impl ThreadHistoryBuilder {
             .map(|turn| turn.rollout_start_index)
     }
 
-    /// Shared reducer for persisted rollout replay and in-memory current-turn
-    /// tracking used by running thread resume/rejoin.
+    /// Shared reducer for persisted rollout replay and live current-turn tracking used by running
+    /// thread resume/rejoin.
     ///
-    /// This function should handle all EventMsg variants that can be persisted in a rollout file.
-    /// See `should_persist_event_msg` in `codex-rs/core/rollout/policy.rs`.
+    /// In addition to persisted events, this must reduce typed item lifecycle and delta events that
+    /// reconstruct the latest in-progress turn while app-server remains connected to core.
     pub fn handle_event(&mut self, event: &EventMsg) {
+        if self.consume_completed_item_legacy_event(event) {
+            return;
+        }
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
             EventMsg::AgentMessage(payload) => self.handle_agent_message(
@@ -367,6 +374,19 @@ impl ThreadHistoryBuilder {
             EventMsg::ExitedReviewMode(payload) => self.handle_exited_review_mode(payload),
             EventMsg::ItemStarted(payload) => self.handle_item_started(payload),
             EventMsg::ItemCompleted(payload) => self.handle_item_completed(payload),
+            EventMsg::AgentMessageContentDelta(payload) => {
+                self.handle_agent_message_content_delta(payload)
+            }
+            EventMsg::PlanDelta(payload) => self.handle_plan_delta(payload),
+            EventMsg::ReasoningContentDelta(payload) => {
+                self.handle_reasoning_content_delta(payload)
+            }
+            EventMsg::ReasoningRawContentDelta(payload) => {
+                self.handle_reasoning_raw_content_delta(payload)
+            }
+            EventMsg::ExecCommandOutputDelta(payload) => {
+                self.handle_exec_command_output_delta(payload)
+            }
             EventMsg::HookStarted(_) | EventMsg::HookCompleted(_) => {}
             EventMsg::Error(payload) => self.handle_error(payload),
             EventMsg::TokenCount(_) => {}
@@ -574,16 +594,10 @@ impl ThreadHistoryBuilder {
 
     fn handle_item_started(&mut self, payload: &ItemStartedEvent) {
         match &payload.item {
-            codex_protocol::items::TurnItem::Plan(plan) => {
-                if plan.text.is_empty() {
-                    return;
-                }
-                self.upsert_item_in_turn_id(
-                    &payload.turn_id,
-                    ThreadItem::from(payload.item.clone()),
-                );
-            }
-            codex_protocol::items::TurnItem::Sleep(_) => {
+            codex_protocol::items::TurnItem::AgentMessage(_)
+            | codex_protocol::items::TurnItem::Plan(_)
+            | codex_protocol::items::TurnItem::Reasoning(_)
+            | codex_protocol::items::TurnItem::Sleep(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),
@@ -591,8 +605,6 @@ impl ThreadHistoryBuilder {
             }
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::HookPrompt(_)
-            | codex_protocol::items::TurnItem::AgentMessage(_)
-            | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
             | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
@@ -602,8 +614,88 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    fn handle_agent_message_content_delta(
+        &mut self,
+        payload: &codex_protocol::protocol::AgentMessageContentDeltaEvent,
+    ) {
+        self.update_item_in_active_turn(&payload.turn_id, &payload.item_id, |item| {
+            let ThreadItem::AgentMessage { text, .. } = item else {
+                return false;
+            };
+            text.push_str(&payload.delta);
+            true
+        });
+    }
+
+    fn handle_plan_delta(&mut self, payload: &codex_protocol::protocol::PlanDeltaEvent) {
+        self.update_item_in_active_turn(&payload.turn_id, &payload.item_id, |item| {
+            let ThreadItem::Plan { text, .. } = item else {
+                return false;
+            };
+            text.push_str(&payload.delta);
+            true
+        });
+    }
+
+    fn handle_reasoning_content_delta(
+        &mut self,
+        payload: &codex_protocol::protocol::ReasoningContentDeltaEvent,
+    ) {
+        self.update_item_in_active_turn(&payload.turn_id, &payload.item_id, |item| {
+            let ThreadItem::Reasoning { summary, .. } = item else {
+                return false;
+            };
+            append_indexed_delta(summary, payload.summary_index, &payload.delta)
+        });
+    }
+
+    fn handle_reasoning_raw_content_delta(
+        &mut self,
+        payload: &codex_protocol::protocol::ReasoningRawContentDeltaEvent,
+    ) {
+        self.update_item_in_active_turn(&payload.turn_id, &payload.item_id, |item| {
+            let ThreadItem::Reasoning { content, .. } = item else {
+                return false;
+            };
+            append_indexed_delta(content, payload.content_index, &payload.delta)
+        });
+    }
+
+    fn handle_exec_command_output_delta(
+        &mut self,
+        payload: &codex_protocol::protocol::ExecCommandOutputDeltaEvent,
+    ) {
+        let Some(turn_id) = self.current_turn.as_ref().map(|turn| turn.id.clone()) else {
+            return;
+        };
+        self.update_item_in_active_turn(&turn_id, &payload.call_id, |item| {
+            let ThreadItem::CommandExecution {
+                aggregated_output, ..
+            } = item
+            else {
+                return false;
+            };
+            aggregated_output
+                .get_or_insert_default()
+                .push_str(&String::from_utf8_lossy(&payload.chunk));
+            true
+        });
+    }
+
     fn handle_item_completed(&mut self, payload: &ItemCompletedEvent) {
         match &payload.item {
+            codex_protocol::items::TurnItem::AgentMessage(_)
+            | codex_protocol::items::TurnItem::Reasoning(_) => {
+                self.upsert_item_in_turn_id(
+                    &payload.turn_id,
+                    ThreadItem::from(payload.item.clone()),
+                );
+                self.pending_completed_item_legacy_events.extend(
+                    payload
+                        .item
+                        .as_legacy_events(/*show_raw_agent_reasoning*/ true),
+                );
+            }
             codex_protocol::items::TurnItem::Plan(plan) => {
                 if plan.text.is_empty() {
                     return;
@@ -621,8 +713,6 @@ impl ThreadHistoryBuilder {
             }
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::HookPrompt(_)
-            | codex_protocol::items::TurnItem::AgentMessage(_)
-            | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
             | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
@@ -630,6 +720,18 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::McpToolCall(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
+    }
+
+    fn consume_completed_item_legacy_event(&mut self, event: &EventMsg) -> bool {
+        let Some(index) = self
+            .pending_completed_item_legacy_events
+            .iter()
+            .position(|expected| completed_item_legacy_events_match(expected, event))
+        else {
+            return false;
+        };
+        self.pending_completed_item_legacy_events.remove(index);
+        true
     }
 
     fn handle_web_search_begin(&mut self, payload: &WebSearchBeginEvent) {
@@ -1387,6 +1489,30 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    fn update_item_in_active_turn(
+        &mut self,
+        turn_id: &str,
+        item_id: &str,
+        update: impl FnOnce(&mut ThreadItem) -> bool,
+    ) {
+        let tracking_changes = self.is_tracking_changes();
+        let changed_item = {
+            let Some(turn) = self.current_turn.as_mut().filter(|turn| turn.id == turn_id) else {
+                return;
+            };
+            let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id) else {
+                return;
+            };
+            if !update(item) {
+                return;
+            }
+            tracking_changes.then(|| (turn.id.clone(), item.clone()))
+        };
+        if let Some((turn_id, item)) = changed_item {
+            self.record_changed_item(turn_id, item);
+        }
+    }
+
     fn is_tracking_changes(&self) -> bool {
         self.active_change_set.is_some()
     }
@@ -1451,6 +1577,35 @@ impl ThreadHistoryBuilder {
             });
         }
         content
+    }
+}
+
+fn append_indexed_delta(parts: &mut Vec<String>, index: i64, delta: &str) -> bool {
+    let Ok(index) = usize::try_from(index) else {
+        return false;
+    };
+    if parts.len() <= index {
+        parts.resize(index + 1, String::new());
+    }
+    parts[index].push_str(delta);
+    true
+}
+
+fn completed_item_legacy_events_match(expected: &EventMsg, actual: &EventMsg) -> bool {
+    match (expected, actual) {
+        (EventMsg::AgentMessage(expected), EventMsg::AgentMessage(actual)) => {
+            expected.message == actual.message
+                && expected.phase == actual.phase
+                && expected.memory_citation == actual.memory_citation
+        }
+        (EventMsg::AgentReasoning(expected), EventMsg::AgentReasoning(actual)) => {
+            expected.text == actual.text
+        }
+        (
+            EventMsg::AgentReasoningRawContent(expected),
+            EventMsg::AgentReasoningRawContent(actual),
+        ) => expected.text == actual.text,
+        _ => false,
     }
 }
 
@@ -1566,7 +1721,11 @@ mod tests {
     use crate::protocol::v2::CommandExecutionSource;
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
+    use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+    use codex_protocol::items::AgentMessageItem as CoreAgentMessageItem;
     use codex_protocol::items::HookPromptFragment as CoreHookPromptFragment;
+    use codex_protocol::items::PlanItem as CorePlanItem;
+    use codex_protocol::items::ReasoningItem as CoreReasoningItem;
     use codex_protocol::items::SleepItem as CoreSleepItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
@@ -1576,6 +1735,7 @@ mod tests {
     use codex_protocol::models::MessagePhase as CoreMessagePhase;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::AgentMessageContentDeltaEvent;
     use codex_protocol::protocol::AgentMessageEvent;
     use codex_protocol::protocol::AgentReasoningEvent;
     use codex_protocol::protocol::AgentReasoningRawContentEvent;
@@ -1583,13 +1743,20 @@ mod tests {
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::CompactedItem;
     use codex_protocol::protocol::DynamicToolCallResponseEvent;
+    use codex_protocol::protocol::ExecCommandBeginEvent;
     use codex_protocol::protocol::ExecCommandEndEvent;
+    use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
     use codex_protocol::protocol::ExecCommandSource;
+    use codex_protocol::protocol::ExecOutputStream;
     use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::McpToolCallEndEvent;
     use codex_protocol::protocol::PatchApplyBeginEvent;
+    use codex_protocol::protocol::PlanDeltaEvent;
+    use codex_protocol::protocol::ReasoningContentDeltaEvent;
+    use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
+    use codex_protocol::protocol::TokenCountEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::TurnCompleteEvent;
@@ -3189,6 +3356,352 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn active_turn_snapshot_accumulates_agent_message_deltas() {
+        let thread_id = ThreadId::new();
+        let turn_id = "turn-1";
+        let mut builder = ThreadHistoryBuilder::new();
+        for event in [
+            turn_started(turn_id),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                    id: "msg-1".to_string(),
+                    content: Vec::new(),
+                    phase: None,
+                    memory_citation: None,
+                }),
+                started_at_ms: 0,
+            }),
+            EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "msg-1".to_string(),
+                delta: "hel".to_string(),
+            }),
+            EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "msg-1".to_string(),
+                delta: "lo".to_string(),
+            }),
+        ] {
+            builder.handle_event(&event);
+        }
+
+        assert_eq!(
+            builder.active_turn_snapshot().expect("active turn").items,
+            vec![ThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "hello".to_string(),
+                phase: None,
+                memory_citation: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn active_turn_snapshot_accumulates_reasoning_deltas_by_index() {
+        let thread_id = ThreadId::new();
+        let turn_id = "turn-1";
+        let mut builder = ThreadHistoryBuilder::new();
+        let events = [
+            turn_started(turn_id),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: CoreTurnItem::Reasoning(CoreReasoningItem {
+                    id: "reason-1".to_string(),
+                    summary_text: Vec::new(),
+                    raw_content: Vec::new(),
+                }),
+                started_at_ms: 0,
+            }),
+            EventMsg::ReasoningContentDelta(ReasoningContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "reason-1".to_string(),
+                delta: "think".to_string(),
+                summary_index: 0,
+            }),
+            EventMsg::ReasoningContentDelta(ReasoningContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "reason-1".to_string(),
+                delta: " more".to_string(),
+                summary_index: 0,
+            }),
+            EventMsg::ReasoningContentDelta(ReasoningContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "reason-1".to_string(),
+                delta: "next".to_string(),
+                summary_index: 1,
+            }),
+            EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "reason-1".to_string(),
+                delta: "raw".to_string(),
+                content_index: 0,
+            }),
+            EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "reason-1".to_string(),
+                delta: " detail".to_string(),
+                content_index: 0,
+            }),
+            EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "reason-1".to_string(),
+                delta: "other".to_string(),
+                content_index: 1,
+            }),
+        ];
+        for event in events {
+            builder.handle_event(&event);
+        }
+
+        assert_eq!(
+            builder.active_turn_snapshot().expect("active turn").items,
+            vec![ThreadItem::Reasoning {
+                id: "reason-1".to_string(),
+                summary: vec!["think more".to_string(), "next".to_string()],
+                content: vec!["raw detail".to_string(), "other".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn active_turn_snapshot_accumulates_plan_deltas() {
+        let thread_id = ThreadId::new();
+        let turn_id = "turn-1";
+        let mut builder = ThreadHistoryBuilder::new();
+        for event in [
+            turn_started(turn_id),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: CoreTurnItem::Plan(CorePlanItem {
+                    id: "plan-1".to_string(),
+                    text: String::new(),
+                }),
+                started_at_ms: 0,
+            }),
+            EventMsg::PlanDelta(PlanDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "plan-1".to_string(),
+                delta: "first".to_string(),
+            }),
+            EventMsg::PlanDelta(PlanDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "plan-1".to_string(),
+                delta: " step".to_string(),
+            }),
+        ] {
+            builder.handle_event(&event);
+        }
+
+        assert_eq!(
+            builder.active_turn_snapshot().expect("active turn").items,
+            vec![ThreadItem::Plan {
+                id: "plan-1".to_string(),
+                text: "first step".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn active_turn_snapshot_accumulates_command_output_deltas() {
+        let turn_id = "turn-1";
+        let mut builder = ThreadHistoryBuilder::new();
+        for event in [
+            turn_started(turn_id),
+            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                call_id: "command-1".to_string(),
+                process_id: Some("process-1".to_string()),
+                turn_id: turn_id.to_string(),
+                started_at_ms: 0,
+                command: vec!["echo".to_string(), "hello".to_string()],
+                cwd: test_path_buf("/tmp").abs().into(),
+                parsed_cmd: vec![ParsedCommand::Unknown {
+                    cmd: "echo hello".to_string(),
+                }],
+                source: ExecCommandSource::Agent,
+                interaction_input: None,
+            }),
+            EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                call_id: "command-1".to_string(),
+                stream: ExecOutputStream::Stdout,
+                chunk: b"hel".to_vec(),
+            }),
+            EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                call_id: "command-1".to_string(),
+                stream: ExecOutputStream::Stdout,
+                chunk: b"lo".to_vec(),
+            }),
+        ] {
+            builder.handle_event(&event);
+        }
+
+        assert_eq!(
+            builder.active_turn_snapshot().expect("active turn").items,
+            vec![ThreadItem::CommandExecution {
+                id: "command-1".to_string(),
+                command: "echo hello".to_string(),
+                cwd: test_path_buf("/tmp").abs().into(),
+                process_id: Some("process-1".to_string()),
+                source: CommandExecutionSource::Agent,
+                status: CommandExecutionStatus::InProgress,
+                command_actions: vec![CommandAction::Unknown {
+                    command: "echo hello".to_string(),
+                }],
+                aggregated_output: Some("hello".to_string()),
+                exit_code: None,
+                duration_ms: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn completed_agent_message_replaces_streamed_item_without_legacy_duplicate() {
+        let thread_id = ThreadId::new();
+        let turn_id = "turn-1";
+        let completed_item = CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+            id: "msg-1".to_string(),
+            content: vec![CoreAgentMessageContent::Text {
+                text: "hello".to_string(),
+            }],
+            phase: None,
+            memory_citation: None,
+        });
+        let mut builder = ThreadHistoryBuilder::new();
+        for event in [
+            turn_started(turn_id),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                    id: "msg-1".to_string(),
+                    content: Vec::new(),
+                    phase: None,
+                    memory_citation: None,
+                }),
+                started_at_ms: 0,
+            }),
+            EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "msg-1".to_string(),
+                delta: "hello".to_string(),
+            }),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: completed_item.clone(),
+                completed_at_ms: 0,
+            }),
+            EventMsg::TokenCount(TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            }),
+            completed_item
+                .as_legacy_events(/*show_raw_agent_reasoning*/ true)
+                .into_iter()
+                .next()
+                .expect("agent message should produce one legacy event"),
+        ] {
+            builder.handle_event(&event);
+        }
+
+        assert_eq!(
+            builder.active_turn_snapshot().expect("active turn").items,
+            vec![ThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "hello".to_string(),
+                phase: None,
+                memory_citation: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn completed_reasoning_replaces_streamed_item_without_legacy_duplicate() {
+        let thread_id = ThreadId::new();
+        let turn_id = "turn-1";
+        let completed_item = CoreTurnItem::Reasoning(CoreReasoningItem {
+            id: "reason-1".to_string(),
+            summary_text: vec!["thinking".to_string()],
+            raw_content: vec!["details".to_string()],
+        });
+        let mut builder = ThreadHistoryBuilder::new();
+        let mut events = vec![
+            turn_started(turn_id),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: CoreTurnItem::Reasoning(CoreReasoningItem {
+                    id: "reason-1".to_string(),
+                    summary_text: Vec::new(),
+                    raw_content: Vec::new(),
+                }),
+                started_at_ms: 0,
+            }),
+            EventMsg::ReasoningContentDelta(ReasoningContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "reason-1".to_string(),
+                delta: "thinking".to_string(),
+                summary_index: 0,
+            }),
+            EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "reason-1".to_string(),
+                delta: "details".to_string(),
+                content_index: 0,
+            }),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: completed_item.clone(),
+                completed_at_ms: 0,
+            }),
+            EventMsg::TokenCount(TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            }),
+        ];
+        events.extend(completed_item.as_legacy_events(/*show_raw_agent_reasoning*/ true));
+        for event in events {
+            builder.handle_event(&event);
+        }
+
+        assert_eq!(
+            builder.active_turn_snapshot().expect("active turn").items,
+            vec![ThreadItem::Reasoning {
+                id: "reason-1".to_string(),
+                summary: vec!["thinking".to_string()],
+                content: vec!["details".to_string()],
+            }]
+        );
+    }
+
+    fn turn_started(turn_id: &str) -> EventMsg {
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_id.to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })
     }
 
     #[test]

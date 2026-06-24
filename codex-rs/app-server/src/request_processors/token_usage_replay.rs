@@ -61,9 +61,29 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
 ///
 /// The id is preferred when it still appears in the rebuilt thread. The position is a
 /// fallback for histories whose implicit turn ids are regenerated during reconstruction.
-struct TokenUsageTurnOwner {
+pub(super) struct TokenUsageTurnOwner {
     id: String,
     position: Option<usize>,
+}
+
+impl TokenUsageTurnOwner {
+    pub(super) fn from_history_builder(builder: &ThreadHistoryBuilder) -> Option<Self> {
+        let position = builder.active_turn_position();
+        builder.active_turn_snapshot().map(|turn| Self {
+            id: turn.id,
+            position,
+        })
+    }
+
+    pub(super) fn resolve(self, turns: &[Turn]) -> Option<String> {
+        if turns.iter().any(|turn| turn.id == self.id) {
+            Some(self.id)
+        } else {
+            self.position
+                .and_then(|position| turns.get(position))
+                .map(|turn| turn.id.clone())
+        }
+    }
 }
 
 pub(super) fn latest_token_usage_turn_id_from_rollout_items(
@@ -75,26 +95,12 @@ pub(super) fn latest_token_usage_turn_id_from_rollout_items(
 
     for item in rollout_items {
         if matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))) {
-            token_usage_turn_owner =
-                builder
-                    .active_turn_snapshot()
-                    .map(|turn| TokenUsageTurnOwner {
-                        id: turn.id,
-                        position: builder.active_turn_position(),
-                    });
+            token_usage_turn_owner = TokenUsageTurnOwner::from_history_builder(&builder);
         }
         builder.handle_rollout_item(item);
     }
 
-    let owner = token_usage_turn_owner?;
-    if turns.iter().any(|turn| turn.id == owner.id) {
-        Some(owner.id)
-    } else {
-        owner
-            .position
-            .and_then(|position| turns.get(position))
-            .map(|turn| turn.id.clone())
-    }
+    token_usage_turn_owner.and_then(|owner| owner.resolve(turns))
 }
 
 /// Chooses a fallback turn id that should own a replayed token usage update.

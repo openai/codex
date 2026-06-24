@@ -2387,6 +2387,7 @@ impl ThreadRequestProcessor {
                 items_view: items_view.unwrap_or(TurnItemsView::Summary),
             },
         )
+        .map(|(response, _)| response)
     }
 
     async fn thread_items_list_response_inner(
@@ -2818,7 +2819,11 @@ impl ThreadRequestProcessor {
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
                 );
-                let token_usage_thread = include_turns.then(|| thread.clone());
+                let initial_turns_sort_direction = initial_turns_page
+                    .as_ref()
+                    .and_then(|params| params.sort_direction)
+                    .unwrap_or(SortDirection::Desc);
+                let mut initial_turns_page_token_usage_turn_id = None;
                 let mut initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
                     match build_thread_resume_initial_turns_page(
                         response_history.get_rollout_items(),
@@ -2827,7 +2832,10 @@ impl ThreadRequestProcessor {
                         /*active_turn*/ None,
                         params,
                     ) {
-                        Ok(page) => Some(page),
+                        Ok((page, token_usage_turn_id)) => {
+                            initial_turns_page_token_usage_turn_id = token_usage_turn_id;
+                            Some(page)
+                        }
                         Err(error) => {
                             self.outgoing.send_error(request_id, error).await;
                             return Ok(());
@@ -2835,6 +2843,26 @@ impl ThreadRequestProcessor {
                     }
                 } else {
                     None
+                };
+                let token_usage_thread = include_turns.then(|| thread.clone()).or_else(|| {
+                    initial_turns_page.as_ref().map(|page| {
+                        let mut token_usage_thread = thread.clone();
+                        token_usage_thread.turns = page.data.clone();
+                        if initial_turns_sort_direction == SortDirection::Desc {
+                            token_usage_thread.turns.reverse();
+                        }
+                        token_usage_thread
+                    })
+                });
+                let token_usage_turn_id = if initial_turns_page.is_some() {
+                    initial_turns_page_token_usage_turn_id
+                } else {
+                    token_usage_thread.as_ref().and_then(|token_usage_thread| {
+                        latest_token_usage_turn_id_from_rollout_items(
+                            response_history.get_rollout_items(),
+                            token_usage_thread.turns.as_slice(),
+                        )
+                    })
                 };
                 if redact_resume_payloads {
                     redact_thread_resume_payloads(&mut thread.turns);
@@ -2862,13 +2890,10 @@ impl ThreadRequestProcessor {
 
                 let connection_id = request_id.connection_id;
                 self.outgoing.send_response(request_id, response).await;
-                // `excludeTurns` is explicitly the cheap resume path, so avoid
-                // rebuilding history only to attribute a replayed usage update.
+                // An initial turns page already paid the reconstruction cost and provides the
+                // bounded turn identities needed for usage attribution. Metadata-only resume
+                // remains cheap.
                 if let Some(token_usage_thread) = token_usage_thread {
-                    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                        response_history.get_rollout_items(),
-                        token_usage_thread.turns.as_slice(),
-                    );
                     // The client needs restored usage before it starts another turn.
                     // Sending after the response preserves JSON-RPC request ordering while
                     // still filling the status line before the next turn lifecycle begins.
@@ -2882,6 +2907,14 @@ impl ThreadRequestProcessor {
                     )
                     .await;
                 }
+                send_persisted_side_state_to_connection(
+                    &self.outgoing,
+                    connection_id,
+                    thread_id,
+                    response_history.get_rollout_items(),
+                    self.config.features.enabled(Feature::Goals),
+                )
+                .await;
                 self.thread_goal_processor
                     .emit_resume_goal_snapshot_and_continue(thread_id, codex_thread.as_ref())
                     .await;
@@ -2941,7 +2974,7 @@ impl ThreadRequestProcessor {
                 .read_stored_thread_for_resume(
                     &params.thread_id,
                     /*path*/ None,
-                    /*include_history*/ true,
+                    /*include_history*/ false,
                 )
                 .await?;
             Some((existing_thread_id, existing_thread, source_thread))
@@ -2964,7 +2997,7 @@ impl ThreadRequestProcessor {
             }
         };
 
-        if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
+        if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
             let existing_thread_rollout_path = existing_thread.rollout_path();
             let active_path = existing_thread_rollout_path
                 .as_ref()
@@ -3024,16 +3057,6 @@ impl ThreadRequestProcessor {
             }
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
-            let history_items = source_thread
-                .history
-                .take()
-                .map(|history| history.items)
-                .ok_or_else(|| {
-                    internal_error(format!(
-                        "thread {existing_thread_id} did not include persisted history"
-                    ))
-                })?;
-
             let thread_state = self
                 .thread_state_manager
                 .thread_state(existing_thread_id)
@@ -3077,7 +3100,6 @@ impl ThreadRequestProcessor {
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
-                    history_items,
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
@@ -3919,8 +3941,8 @@ fn build_thread_turns_page_response(
     has_live_running_thread: bool,
     active_turn: Option<Turn>,
     options: ThreadTurnsPageOptions<'_>,
-) -> Result<ThreadTurnsListResponse, JSONRPCErrorError> {
-    let mut turns = reconstruct_thread_turns_for_turns_list(
+) -> Result<(ThreadTurnsListResponse, Option<String>), JSONRPCErrorError> {
+    let (mut turns, token_usage_turn_id) = reconstruct_thread_turns_for_turns_list(
         items,
         loaded_status,
         has_live_running_thread,
@@ -3928,11 +3950,14 @@ fn build_thread_turns_page_response(
     );
     apply_thread_turns_items_view(&mut turns, options.items_view);
     let page = paginate_thread_turns(turns, options.cursor, options.limit, options.sort_direction)?;
-    Ok(ThreadTurnsListResponse {
-        data: page.turns,
-        next_cursor: page.next_cursor,
-        backwards_cursor: page.backwards_cursor,
-    })
+    Ok((
+        ThreadTurnsListResponse {
+            data: page.turns,
+            next_cursor: page.next_cursor,
+            backwards_cursor: page.backwards_cursor,
+        },
+        token_usage_turn_id,
+    ))
 }
 
 pub(super) fn build_thread_resume_initial_turns_page(
@@ -3941,7 +3966,7 @@ pub(super) fn build_thread_resume_initial_turns_page(
     has_live_running_thread: bool,
     active_turn: Option<Turn>,
     params: &ThreadResumeInitialTurnsPageParams,
-) -> Result<codex_app_server_protocol::TurnsPage, JSONRPCErrorError> {
+) -> Result<(codex_app_server_protocol::TurnsPage, Option<String>), JSONRPCErrorError> {
     build_thread_turns_page_response(
         items,
         loaded_status,
@@ -3954,7 +3979,7 @@ pub(super) fn build_thread_resume_initial_turns_page(
             items_view: params.items_view.unwrap_or(TurnItemsView::Summary),
         },
     )
-    .map(Into::into)
+    .map(|(response, token_usage_turn_id)| (response.into(), token_usage_turn_id))
 }
 
 fn apply_thread_turns_items_view(turns: &mut [Turn], items_view: TurnItemsView) {
@@ -4000,17 +4025,29 @@ fn reconstruct_thread_turns_for_turns_list(
     loaded_status: ThreadStatus,
     has_live_running_thread: bool,
     active_turn: Option<Turn>,
-) -> Vec<Turn> {
+) -> (Vec<Turn>, Option<String>) {
     let has_live_in_progress_turn = has_live_running_thread
         || active_turn
             .as_ref()
             .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
-    let mut turns = build_api_turns_from_rollout_items(items);
+    let mut builder = ThreadHistoryBuilder::new();
+    let mut token_usage_turn_owner = None;
+    for item in items {
+        if !is_persisted_rollout_item(item) {
+            continue;
+        }
+        if matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))) {
+            token_usage_turn_owner = TokenUsageTurnOwner::from_history_builder(&builder);
+        }
+        builder.handle_rollout_item(item);
+    }
+    let mut turns = builder.finish();
     normalize_thread_turns_status(&mut turns, loaded_status, has_live_in_progress_turn);
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn);
     }
-    turns
+    let token_usage_turn_id = token_usage_turn_owner.and_then(|owner| owner.resolve(&turns));
+    (turns, token_usage_turn_id)
 }
 
 fn normalize_thread_turns_status(
@@ -4059,7 +4096,7 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
     }
 }
 
-fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
+pub(super) fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
         ThreadStoreError::Unsupported { operation } => {

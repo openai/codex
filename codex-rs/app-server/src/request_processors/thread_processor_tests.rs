@@ -314,7 +314,7 @@ mod thread_processor_behavior_tests {
             duration_ms: None,
         };
 
-        let turns = reconstruct_thread_turns_for_turns_list(
+        let (turns, _) = reconstruct_thread_turns_for_turns_list(
             &persisted_items,
             ThreadStatus::Idle,
             /*has_live_running_thread*/ false,

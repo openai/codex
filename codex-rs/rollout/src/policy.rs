@@ -107,9 +107,16 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
                     | codex_protocol::items::TurnItem::Sleep(_)
             )
         }
-        EventMsg::Error(_)
-        | EventMsg::GuardianAssessment(_)
-        | EventMsg::ExecCommandEnd(_)
+        EventMsg::Error(error) => error.affects_turn_status(),
+        EventMsg::GuardianAssessment(event) => match event.status {
+            codex_protocol::protocol::GuardianAssessmentStatus::InProgress => false,
+            codex_protocol::protocol::GuardianAssessmentStatus::Approved
+            | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+            | codex_protocol::protocol::GuardianAssessmentStatus::TimedOut
+            | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => true,
+        },
+        EventMsg::HookCompleted(_) => true,
+        EventMsg::ExecCommandEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionEnd(_)
@@ -154,7 +161,6 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)
         | EventMsg::HookStarted(_)
-        | EventMsg::HookCompleted(_)
         | EventMsg::AgentMessageContentDelta(_)
         | EventMsg::PlanDelta(_)
         | EventMsg::ReasoningContentDelta(_)
@@ -165,5 +171,113 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::CodexErrorInfo;
+    use codex_protocol::protocol::ErrorEvent;
+    use codex_protocol::protocol::GuardianAssessmentAction;
+    use codex_protocol::protocol::GuardianAssessmentEvent;
+    use codex_protocol::protocol::GuardianAssessmentStatus;
+    use codex_protocol::protocol::HookCompletedEvent;
+    use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookExecutionMode;
+    use codex_protocol::protocol::HookHandlerType;
+    use codex_protocol::protocol::HookRunStatus;
+    use codex_protocol::protocol::HookRunSummary;
+    use codex_protocol::protocol::HookScope;
+    use codex_protocol::protocol::HookSource;
+    use codex_protocol::protocol::HookStartedEvent;
+    use codex_protocol::protocol::NetworkApprovalProtocol;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn persists_only_errors_that_define_terminal_turn_state() {
+        let terminal_error = EventMsg::Error(ErrorEvent {
+            message: "simulated failure".to_string(),
+            codex_error_info: Some(CodexErrorInfo::InternalServerError),
+        });
+        let request_error = EventMsg::Error(ErrorEvent {
+            message: "rollback failed".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+        });
+
+        assert!(should_persist_event_msg(&terminal_error));
+        assert!(!should_persist_event_msg(&request_error));
+    }
+
+    #[test]
+    fn persists_only_terminal_guardian_assessments() {
+        let mut assessment = GuardianAssessmentEvent {
+            id: "review-1".to_string(),
+            target_item_id: None,
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 1,
+            completed_at_ms: None,
+            status: GuardianAssessmentStatus::InProgress,
+            risk_level: None,
+            user_authorization: None,
+            rationale: None,
+            decision_source: None,
+            action: GuardianAssessmentAction::NetworkAccess {
+                target: "https://example.com".to_string(),
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+                port: 443,
+            },
+        };
+
+        for (status, expected) in [
+            (GuardianAssessmentStatus::InProgress, false),
+            (GuardianAssessmentStatus::Approved, true),
+            (GuardianAssessmentStatus::Denied, true),
+            (GuardianAssessmentStatus::TimedOut, true),
+            (GuardianAssessmentStatus::Aborted, true),
+        ] {
+            assessment.status = status;
+            assert_eq!(
+                should_persist_event_msg(&EventMsg::GuardianAssessment(assessment.clone())),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn persists_completed_hook_events_but_not_started_events() {
+        let run = HookRunSummary {
+            id: "hook-1".to_string(),
+            event_name: HookEventName::PostToolUse,
+            handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
+            scope: HookScope::Turn,
+            source_path: std::env::current_dir()
+                .expect("current directory should be available")
+                .try_into()
+                .expect("current directory should be absolute"),
+            source: HookSource::Project,
+            display_order: 0,
+            status: HookRunStatus::Completed,
+            status_message: None,
+            started_at: 1,
+            completed_at: Some(2),
+            duration_ms: Some(1_000),
+            entries: Vec::new(),
+        };
+
+        assert!(!should_persist_event_msg(&EventMsg::HookStarted(
+            HookStartedEvent {
+                turn_id: Some("turn-1".to_string()),
+                run: run.clone(),
+            },
+        )));
+        assert!(should_persist_event_msg(&EventMsg::HookCompleted(
+            HookCompletedEvent {
+                turn_id: Some("turn-1".to_string()),
+                run,
+            },
+        )));
     }
 }
