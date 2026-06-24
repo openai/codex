@@ -26,7 +26,7 @@
           "type": "string"
         },
         {
-          "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.\n\nCodex backend request headers supplied by the process embedding Codex.",
+          "description": "[UNSTABLE] Host-provided backend auth for embedded Codex runtimes.\n\nRequest headers are supplied by the process embedding Codex.",
           "enum": [
             "hostProvided"
           ],

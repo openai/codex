@@ -31,9 +31,9 @@ pub enum AuthMode {
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
-    /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
+    /// [UNSTABLE] Host-provided backend auth for embedded Codex runtimes.
     ///
-    /// Codex backend request headers supplied by the process embedding Codex.
+    /// Request headers are supplied by the process embedding Codex.
     #[serde(rename = "hostProvided")]
     #[ts(rename = "hostProvided")]
     #[strum(serialize = "hostProvided")]
