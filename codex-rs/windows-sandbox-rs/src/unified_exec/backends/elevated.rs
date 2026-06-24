@@ -63,6 +63,7 @@ fn spawn_runner_transport_with_retry<T>(
 ) -> Result<T> {
     retry_runner_spawn_once(
         sandbox_creds,
+        &request.spawn_request.command,
         |sandbox_creds| {
             spawn(
                 &request.codex_home,
