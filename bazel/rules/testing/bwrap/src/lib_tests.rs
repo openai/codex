@@ -2,6 +2,9 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fs;
 use std::future::Future;
+use std::os::fd::AsRawFd;
+use std::os::fd::FromRawFd;
+use std::os::fd::OwnedFd;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
@@ -139,6 +142,61 @@ async fn async_teardown_disarms_drop_bomb_and_cleans_up() -> Result<()> {
 }
 
 #[tokio::test]
+async fn async_teardown_kills_descendants_in_detached_sessions() -> Result<()> {
+    let mut process = BwrapTestCommand::new(smoke_fixture()?)
+        .arg("spawn-detached-descendant")
+        .spawn()?;
+    let mut lines = BufReader::new(process.take_stdout()).lines();
+    let ready_line = timeout(Duration::from_secs(10), lines.next_line())
+        .await
+        .context("detached descendant did not become ready")??
+        .context("detached descendant exited before becoming ready")?;
+    let descendant_pid: libc::pid_t = ready_line
+        .strip_prefix("BWRAP_TEST_DETACHED_DESCENDANT_READY=")
+        .context("invalid detached descendant ready line")?
+        .parse()
+        .context("parse detached descendant PID")?;
+    // SAFETY: pidfd_open does not dereference userspace pointers. The returned
+    // descriptor is uniquely owned when the syscall succeeds.
+    let raw_pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, descendant_pid, 0) };
+    if raw_pidfd == -1 {
+        return Err(std::io::Error::last_os_error()).context("open detached descendant pidfd");
+    }
+    // SAFETY: a successful pidfd_open returns a new owned descriptor.
+    let descendant_pidfd = unsafe { OwnedFd::from_raw_fd(raw_pidfd as i32) };
+
+    process.shutdown().await?;
+
+    let next_line = match timeout(Duration::from_secs(10), lines.next_line()).await {
+        Ok(result) => result?,
+        Err(timeout_error) => {
+            // SAFETY: pidfd_send_signal only reads the supplied null siginfo
+            // pointer, and descendant_pidfd remains owned for the syscall.
+            let kill_result = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    descendant_pidfd.as_raw_fd(),
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            };
+            if kill_result == -1 {
+                let kill_error = std::io::Error::last_os_error();
+                return Err(anyhow::Error::new(timeout_error).context(format!(
+                    "detached descendant kept stdout open after teardown; \
+                     cleanup kill also failed: {kill_error}"
+                )));
+            }
+            return Err(anyhow::Error::new(timeout_error)
+                .context("detached descendant kept stdout open after teardown"));
+        }
+    };
+    assert_eq!(next_line, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn scope_returns_value_and_cleans_up() -> Result<()> {
     let process = waiting_smoke_process().await?;
     let environment = environment_path(&process);
@@ -179,13 +237,16 @@ async fn outer_namespace_topology_matches_the_exec_server_contract() -> Result<(
         Some(&namespace_identity("user")?),
         "outer user namespace should differ from its parent"
     );
-    for namespace in ["pid", "net"] {
-        assert_eq!(
-            values.get(&format!("ns.{namespace}")),
-            Some(&namespace_identity(namespace)?),
-            "outer {namespace} namespace should deliberately match its parent"
-        );
-    }
+    assert_eq!(
+        values.get("ns.net"),
+        Some(&namespace_identity("net")?),
+        "outer network namespace should deliberately match its parent"
+    );
+    assert_ne!(
+        values.get("ns.pid"),
+        Some(&namespace_identity("pid")?),
+        "outer pid namespace should differ from its parent"
+    );
     for namespace in ["mnt", "ipc", "uts"] {
         assert_ne!(
             values.get(&format!("ns.{namespace}")),
@@ -194,18 +255,19 @@ async fn outer_namespace_topology_matches_the_exec_server_contract() -> Result<(
         );
     }
     if let Some(pid_one_namespace) = values.get("proc.1.pid_ns") {
-        assert_eq!(Some(pid_one_namespace), values.get("proc.self.pid_ns"));
+        assert_eq!(pid_one_namespace, &namespace_identity("pid")?);
     } else {
         assert!(
             values.contains_key("proc.1.pid_ns.error"),
             "outer procfs should either expose PID 1 or report why it is unreadable"
         );
     }
-    assert_eq!(
+    assert_ne!(
         values.get("proc.self.pid_ns"),
         Some(&namespace_identity("pid")?),
-        "outer /proc should deliberately expose the parent PID namespace"
+        "outer process should run in a private PID namespace"
     );
+    assert_eq!(values.get("proc.self.pid_ns"), values.get("ns.pid"));
     for name in ["overflowuid", "overflowgid"] {
         let value = values
             .get(&format!("proc.{name}"))

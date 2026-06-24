@@ -14,10 +14,11 @@ use anyhow::Result;
 
 /// Namespace classes whose topology is part of this harness's contract.
 ///
-/// The outer bwrap isolates user, mount, IPC, and UTS, but deliberately inherits
-/// PID plus writable procfs for nested bwrap setup and network for loopback.
-/// Cgroup and time namespaces stay executor-owned; `*_for_children` entries are
-/// alternate PID/time handles rather than separate namespace classes.
+/// The outer bwrap isolates user, mount, PID, IPC, and UTS, but deliberately
+/// inherits the VM's writable procfs for nested bwrap setup and its network for
+/// loopback. Cgroup and time namespaces stay executor-owned; `*_for_children`
+/// entries are alternate PID/time handles rather than separate namespace
+/// classes.
 const NAMESPACES: &[&str] = &["user", "mnt", "pid", "ipc", "uts", "net"];
 
 fn main() -> Result<()> {
@@ -26,6 +27,8 @@ fn main() -> Result<()> {
     let mode = args.next().context("missing bwrap smoke fixture mode")?;
     match mode.to_str() {
         Some("wait") => wait(),
+        Some("spawn-detached-descendant") => spawn_detached_descendant(),
+        Some("detached-wait") => detached_wait(),
         Some("inspect") => inspect(),
         Some("filesystem") => {
             let tmp_dir = args.next().context("missing tmp directory")?;
@@ -52,6 +55,34 @@ fn main() -> Result<()> {
 
 fn wait() -> Result<()> {
     println!("BWRAP_TEST_READY");
+    std::io::stdout().flush()?;
+    loop {
+        std::thread::park();
+    }
+}
+
+fn spawn_detached_descendant() -> Result<()> {
+    let _descendant = Command::new(env::current_exe()?)
+        .arg("detached-wait")
+        .spawn()
+        .context("spawn detached descendant")?;
+    loop {
+        std::thread::park();
+    }
+}
+
+fn detached_wait() -> Result<()> {
+    // SAFETY: setsid has no memory-safety preconditions. This fixture is a
+    // forked child and therefore is not already a process-group leader.
+    if unsafe { libc::setsid() } == -1 {
+        return Err(std::io::Error::last_os_error()).context("detach descendant session");
+    }
+    let status = fs::read_to_string("/proc/self/status").context("read detached child status")?;
+    let vm_pid = status_field(&status, "NSpid")?
+        .split_whitespace()
+        .next()
+        .context("detached child status has no VM-visible PID")?;
+    println!("BWRAP_TEST_DETACHED_DESCENDANT_READY={vm_pid}");
     std::io::stdout().flush()?;
     loop {
         std::thread::park();
@@ -156,8 +187,10 @@ fn filesystem(tmp_dir: &Path, workspace_dir: &Path, root_target: &Path) -> Resul
         println!("{name}.value={}", fs::read_to_string(&writable_file)?);
     }
 
-    let error = fs::write(root_target, "must not be written")
-        .expect_err("writing through the read-only root unexpectedly succeeded");
+    let error = match fs::write(root_target, "must not be written") {
+        Ok(()) => anyhow::bail!("writing through the read-only root unexpectedly succeeded"),
+        Err(error) => error,
+    };
     println!(
         "root.write_errno={}",
         error

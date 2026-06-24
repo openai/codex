@@ -4,13 +4,19 @@ compile_error!("bwrap_test_support can only run on Linux");
 use std::ffi::OsString;
 use std::fs;
 use std::future::Future;
+use std::io;
+use std::io::Read;
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::process::Stdio;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -20,6 +26,13 @@ use tokio::process::Child;
 use tokio::process::ChildStdout;
 use tokio::process::Command as TokioCommand;
 
+use self::sandbox_init::BWRAP_CLEANUP_TIMEOUT;
+use self::sandbox_init::SandboxInit;
+
+const BWRAP_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+mod sandbox_init;
+
 /// Builds a command that runs inside the Linux integration-test namespace.
 pub struct BwrapTestCommand {
     executable: PathBuf,
@@ -27,17 +40,19 @@ pub struct BwrapTestCommand {
     env: Vec<(OsString, OsString)>,
 }
 
-/// Owns a process running inside the Linux integration-test namespace.
+/// Owns a process tree running inside a dedicated PID namespace.
 ///
 /// Call [`Self::scope`] or [`Self::shutdown`] on every successful path. A
 /// normal unguarded drop panics, while a drop during unwinding performs
-/// blocking cleanup without introducing a second panic.
+/// blocking cleanup without introducing a second panic. Teardown signals the
+/// namespace init and waits for it, so detached descendants cannot escape.
 pub struct BwrapTestProcess {
     processes: Option<BwrapProcesses>,
 }
 
 struct BwrapProcesses {
     child: Child,
+    sandbox_init: SandboxInit,
     cleanup_complete: bool,
     environment: TempDir,
 }
@@ -109,14 +124,15 @@ impl BwrapTestCommand {
             },
         )?;
 
-        // Firecracker supplies the host PID boundary, so the outer wrapper
-        // deliberately shares the disposable VM's PID namespace and rebinds
-        // its procfs read-write. Nested unprivileged bwrap writes UID/GID maps
-        // through the caller's /proc before mounting a fresh procfs for its
-        // own PID namespace. Giving the outer wrapper a fresh procfs on this
-        // executor leaves locked child mounts that make the nested proc mount
-        // fail Linux's mount_too_revealing check; making the inherited procfs
-        // read-only instead makes UID/GID map setup fail.
+        // Firecracker supplies the host PID boundary. The outer wrapper adds a
+        // child PID namespace so terminating its init kills every descendant,
+        // but deliberately rebinds the VM's existing procfs read-write. Nested
+        // unprivileged bwrap writes UID/GID maps through the caller's /proc
+        // before mounting a fresh procfs for its own PID namespace. Giving the
+        // outer wrapper a fresh procfs on this executor leaves locked child
+        // mounts that make the nested proc mount fail Linux's
+        // mount_too_revealing check; making the inherited procfs read-only
+        // instead makes UID/GID map setup fail.
         //
         // A private directory backs /tmp so remote fixtures cannot alias files
         // owned by the test runner. The Bazel workspace is the other deliberate
@@ -127,8 +143,25 @@ impl BwrapTestCommand {
         // capabilities. Bubblewrap rejects a non-root caller that already has
         // capabilities, while an unprivileged nested bwrap acquires the setup
         // capabilities it needs inside the user namespace it creates.
+        let (mut info_reader, info_writer) =
+            UnixStream::pair().context("create bwrap info pipe")?;
+        let (block_reader, block_writer) =
+            UnixStream::pair().context("create bwrap startup gate")?;
+        info_reader
+            .set_read_timeout(Some(BWRAP_SETUP_TIMEOUT))
+            .context("set bwrap info timeout")?;
+        let info_writer_fd = info_writer.as_raw_fd();
+        let block_reader_fd = block_reader.as_raw_fd();
+
+        // Hold the sandbox at --block-fd before it forks the payload. This
+        // keeps the reported PID-namespace init alive until its pidfd is open;
+        // dropping block_writer below releases the sandbox with EOF.
         let mut command = StdCommand::new(&runtime.bwrap);
         command
+            .arg("--info-fd")
+            .arg(info_writer_fd.to_string())
+            .arg("--block-fd")
+            .arg(block_reader_fd.to_string())
             .args([
                 "--new-session",
                 "--die-with-parent",
@@ -147,6 +180,7 @@ impl BwrapTestCommand {
             .arg(&workspace)
             .args([
                 "--unshare-user",
+                "--unshare-pid",
                 "--unshare-ipc",
                 "--unshare-uts",
                 "--uid",
@@ -168,15 +202,57 @@ impl BwrapTestCommand {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
+        // SAFETY: only async-signal-safe fcntl calls run between fork and exec.
+        // The parent retains both descriptors until spawn completes.
+        unsafe {
+            command.pre_exec(move || {
+                for fd in [info_writer_fd, block_reader_fd] {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags == -1
+                        || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+
         let mut command = TokioCommand::from(command);
         command.kill_on_drop(true);
-        let child = command
+        let mut child = command
             .spawn()
             .context("start process inside bwrap test environment")?;
+        // This binding is intentionally declared after child. On an early
+        // return it drops first, releasing the startup gate before
+        // kill_on_drop terminates the launcher. Failures before a pidfd is
+        // acquired ultimately remain contained by the disposable action VM.
+        let startup_gate = block_writer;
+        let launcher_pid = child.id().context("bwrap launcher omitted its PID")?;
+        drop(info_writer);
+        drop(block_reader);
+        let mut bwrap_info = String::new();
+        let startup_result = info_reader
+            .read_to_string(&mut bwrap_info)
+            .context("read bwrap child information")
+            .and_then(|_| SandboxInit::from_bwrap_info(&bwrap_info, launcher_pid));
+        drop(startup_gate);
+        let sandbox_init = match startup_result {
+            Ok(sandbox_init) => sandbox_init,
+            Err(error) => {
+                if let Err(kill_error) = child.start_kill() {
+                    return Err(error.context(format!(
+                        "bwrap startup cleanup could not kill its launcher: {kill_error}"
+                    )));
+                }
+                return Err(error);
+            }
+        };
 
         Ok(BwrapTestProcess {
             processes: Some(BwrapProcesses {
                 child,
+                sandbox_init,
                 cleanup_complete: false,
                 environment,
             }),
@@ -225,7 +301,7 @@ impl BwrapTestProcess {
         }
     }
 
-    /// Kills the isolated process and waits for bwrap to exit.
+    /// Kills the isolated PID namespace and waits for bwrap to exit.
     pub async fn shutdown(mut self) -> Result<()> {
         let Some(processes) = self.processes.as_mut() else {
             anyhow::bail!("bwrap process guard is missing");
@@ -256,21 +332,57 @@ impl BwrapRuntimePaths {
 
 impl BwrapProcesses {
     async fn shutdown(&mut self) -> Result<()> {
-        let (kill_result, check_exit_status) = match self.child.try_wait() {
-            Ok(Some(_)) => (Ok(()), true),
-            Ok(None) => (
-                self.child
-                    .start_kill()
-                    .context("kill process running inside bwrap"),
-                false,
-            ),
-            Err(error) => (Err(error).context("check bwrap process status"), false),
+        let child_status = self.child.try_wait();
+        let sandbox_kill_result = self
+            .sandbox_init
+            .start_kill()
+            .context("kill bwrap PID namespace init");
+        let (mut check_exit_status, status_check_result) = match child_status {
+            Ok(Some(_)) => (true, Ok(())),
+            Ok(None) => (false, Ok(())),
+            Err(error) => (false, Err(error).context("check bwrap process status")),
         };
-        let wait_result = self
-            .child
+        let mut fallback_started = false;
+        let early_fallback_result = if sandbox_kill_result.is_err() {
+            check_exit_status = false;
+            fallback_started = true;
+            self.start_kill_launcher()
+        } else {
+            Ok(())
+        };
+        let sandbox_wait_result = self
+            .sandbox_init
             .wait()
             .await
-            .context("wait for process running inside bwrap")
+            .context("wait for bwrap PID namespace init");
+        let late_fallback_result = if sandbox_wait_result.is_err() && !fallback_started {
+            check_exit_status = false;
+            self.start_kill_launcher()
+        } else {
+            Ok(())
+        };
+        let mut timeout_kill_result = Ok(());
+        let launcher_timeout_result;
+        let launcher_wait_result =
+            match tokio::time::timeout(BWRAP_CLEANUP_TIMEOUT, self.child.wait()).await {
+                Ok(result) => {
+                    launcher_timeout_result = Ok(());
+                    result.context("wait for bwrap launcher")
+                }
+                Err(_) => {
+                    launcher_timeout_result = Err(anyhow::anyhow!(
+                        "timed out waiting for bwrap launcher after {BWRAP_CLEANUP_TIMEOUT:?}"
+                    ));
+                    check_exit_status = false;
+                    timeout_kill_result = self.start_kill_launcher();
+                    match tokio::time::timeout(BWRAP_CLEANUP_TIMEOUT, self.child.wait()).await {
+                        Ok(result) => result.context("wait for killed bwrap launcher"),
+                        Err(_) => Err(anyhow::anyhow!(
+                            "timed out waiting for killed bwrap launcher after {BWRAP_CLEANUP_TIMEOUT:?}"
+                        )),
+                    }
+                }
+            }
             .and_then(|status| {
                 anyhow::ensure!(
                     !check_exit_status || status.success(),
@@ -282,8 +394,24 @@ impl BwrapProcesses {
         // Every cleanup action has been attempted, so an individual error
         // should not cause the blocking fallback to repeat them.
         self.cleanup_complete = true;
-        kill_result?;
-        wait_result
+        status_check_result?;
+        sandbox_kill_result?;
+        early_fallback_result?;
+        sandbox_wait_result?;
+        late_fallback_result?;
+        launcher_timeout_result?;
+        timeout_kill_result?;
+        launcher_wait_result
+    }
+
+    fn start_kill_launcher(&mut self) -> Result<()> {
+        if let Err(kill_error) = self.child.start_kill() {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) | Err(_) => return Err(kill_error).context("kill bwrap launcher"),
+            }
+        }
+        Ok(())
     }
 
     fn shutdown_blocking(&mut self) {
@@ -291,25 +419,48 @@ impl BwrapProcesses {
             "bwrap panic cleanup starting for environment {}",
             self.environment.path().display()
         ));
-        if let Err(error) = self.child.start_kill() {
+        if let Err(error) = self.sandbox_init.start_kill() {
             log_panic_cleanup(format_args!(
-                "bwrap panic cleanup could not kill its child: {error}"
+                "bwrap panic cleanup could not kill its PID namespace init: {error}"
+            ));
+        }
+        if let Err(error) = self.start_kill_launcher() {
+            log_panic_cleanup(format_args!(
+                "bwrap panic cleanup could not kill its launcher: {error}"
             ));
         }
 
-        log_panic_cleanup(format_args!("bwrap panic cleanup waiting for its child"));
+        log_panic_cleanup(format_args!(
+            "bwrap panic cleanup waiting for its PID namespace init"
+        ));
+        if let Err(error) = self.sandbox_init.wait_blocking() {
+            log_panic_cleanup(format_args!(
+                "bwrap panic cleanup could not wait for its PID namespace init: {error}"
+            ));
+        }
+
+        log_panic_cleanup(format_args!("bwrap panic cleanup waiting for its launcher"));
+        let deadline = Instant::now() + BWRAP_CLEANUP_TIMEOUT;
         loop {
             match self.child.try_wait() {
                 Ok(Some(status)) => {
                     log_panic_cleanup(format_args!(
-                        "bwrap panic cleanup child exited with {status}"
+                        "bwrap panic cleanup launcher exited with {status}"
                     ));
                     break;
                 }
-                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        log_panic_cleanup(format_args!(
+                            "bwrap panic cleanup timed out waiting for its launcher"
+                        ));
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
                 Err(error) => {
                     log_panic_cleanup(format_args!(
-                        "bwrap panic cleanup could not wait for its child: {error}"
+                        "bwrap panic cleanup could not wait for its launcher: {error}"
                     ));
                     break;
                 }
