@@ -135,6 +135,9 @@ pub struct PluginListParams {
     /// the default remote catalog when enabled by feature flag.
     #[ts(optional = nullable)]
     pub marketplace_kinds: Option<Vec<PluginListMarketplaceKind>>,
+    /// When true, bypass app/tool caches that can stay stale after external app re-auth.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_refetch: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
