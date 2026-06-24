@@ -26,16 +26,19 @@ Start the server with `TestAppServer::new_with_auto_env()` unless the test defin
 `$CODEX_HOME/environments.toml` or will define custom environments at runtime.
 
 Start threads with `TestAppServer::send_thread_start_request_with_auto_env()` if you've created the
-server with the `auto_env` approach. Leave `ThreadStartParams.environments` empty when doing so.
+server with the `auto_env` approach. Omit `ThreadStartParams.environments` (leave it as `None`) when
+doing so.
 
 ## Test Skips
 
 If a test doesn't pass in a particular remote executor configuration you can skip it in just that
-configuration. Each skip macro accepts a string reason for future readers' understanding.
+configuration. Include a string reason for future readers when the selected skip macro supports
+one.
 
 Choose the skip macro by what causes the test to fail:
 
 - `skip_if_target_windows!`: Windows target behavior.
+- `skip_if_wine_exec!`: Wine-exec runner constraints.
 - `skip_if_host_windows!`: Windows host constraints.
 - `skip_if_remote!`: Local-only test behavior.
 - `skip_if_no_remote_env!`: Remote-only test behavior.
