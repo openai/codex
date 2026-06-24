@@ -192,6 +192,15 @@ pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
     Daemon::from_environment()?.run(command).await
 }
 
+/// Ensures the CODEX_HOME app-server listener is healthy, starting it with the
+/// currently running Codex executable when needed.
+pub async fn ensure_listener_started_with_current_exe() -> Result<()> {
+    ensure_supported_platform()?;
+    Daemon::from_environment()?
+        .ensure_listener_started_with_current_exe()
+        .await
+}
+
 pub async fn bootstrap(options: BootstrapOptions) -> Result<BootstrapOutput> {
     ensure_supported_platform()?;
     Daemon::from_environment()?.bootstrap(options).await
@@ -291,6 +300,25 @@ impl Daemon {
         }
     }
 
+    async fn ensure_listener_started_with_current_exe(&self) -> Result<()> {
+        let _operation_lock = self.acquire_operation_lock().await?;
+        let settings = self.load_settings().await?;
+        if client::probe(&self.socket_path).await.is_ok() {
+            return Ok(());
+        }
+
+        if self.running_backend_instance(&settings).await?.is_some() {
+            self.wait_until_ready().await?;
+            return Ok(());
+        }
+
+        let current_exe =
+            std::env::current_exe().context("failed to resolve the current Codex executable")?;
+        self.start_backend_with_bin(&settings, &current_exe).await?;
+        self.wait_until_ready().await?;
+        Ok(())
+    }
+
     async fn start(&self) -> Result<LifecycleOutput> {
         let settings = self.load_settings().await?;
         if let Ok(info) = client::probe(&self.socket_path).await {
@@ -381,7 +409,7 @@ impl Daemon {
                 RestartDecision::Restart => {
                     backend.stop().await?;
                     let _ = self
-                        .start_managed_backend_with_bin(&settings, managed_codex_bin)
+                        .start_backend_with_bin(&settings, managed_codex_bin)
                         .await?;
                     self.wait_until_ready().await?;
                     RestartIfRunningOutcome::Restarted
@@ -642,11 +670,11 @@ impl Daemon {
     }
 
     async fn start_managed_backend(&self, settings: &DaemonSettings) -> Result<Option<u32>> {
-        self.start_managed_backend_with_bin(settings, &self.managed_codex_bin)
+        self.start_backend_with_bin(settings, &self.managed_codex_bin)
             .await
     }
 
-    async fn start_managed_backend_with_bin(
+    async fn start_backend_with_bin(
         &self,
         settings: &DaemonSettings,
         managed_codex_bin: &Path,
