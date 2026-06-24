@@ -5,6 +5,7 @@ use crate::config::Config;
 use codex_config::McpServerConfig;
 use codex_connectors::ConnectorSnapshot;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::apps_route_available;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
@@ -96,6 +97,8 @@ impl McpManager {
             Some(thread_init) => McpServerContributionContext::for_thread(config, thread_init),
             None => McpServerContributionContext::global(config),
         };
+        let selected_connector_snapshot =
+            thread_init.and_then(ExtensionDataInit::get::<ConnectorSnapshot>);
         let mut selected_plugin_registrations = Vec::new();
         let mut overlays = Vec::new();
         // A contributor can emit multiple ordered actions, so order each action globally rather
@@ -118,14 +121,25 @@ impl McpManager {
                         plugin_display_name,
                         selection_order,
                         config,
-                    } => selected_plugin_registrations.push(
-                        McpServerRegistration::from_selected_plugin(
-                            name,
-                            McpPluginAttribution::new(plugin_id, plugin_display_name),
-                            selection_order,
-                            *config,
-                        ),
-                    ),
+                    } => {
+                        let routed_through_app =
+                            apps_route_available(self.plugins_manager.auth_mode())
+                                && selected_connector_snapshot
+                                    .as_ref()
+                                    .is_some_and(|snapshot| {
+                                        snapshot.plugin_declares_app(&plugin_id, &name)
+                                    });
+                        if !routed_through_app {
+                            selected_plugin_registrations.push(
+                                McpServerRegistration::from_selected_plugin(
+                                    name,
+                                    McpPluginAttribution::new(plugin_id, plugin_display_name),
+                                    selection_order,
+                                    *config,
+                                ),
+                            );
+                        }
+                    }
                     McpServerContribution::Remove { name } => {
                         overlays.push(OrderedMcpOverlay::Remove {
                             contributor_id: contributor.id(),

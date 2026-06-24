@@ -10,6 +10,7 @@ use codex_plugin::PluginCapabilitySummary;
 pub struct PluginConnectorSource {
     plugin_id: String,
     plugin_display_name: String,
+    app_names: HashSet<String>,
     connector_ids: Vec<AppConnectorId>,
 }
 
@@ -20,13 +21,21 @@ impl PluginConnectorSource {
         plugin_display_name: impl Into<String>,
         declarations: impl IntoIterator<Item = AppDeclaration>,
     ) -> Self {
-        Self::from_connector_ids(
+        let declarations = declarations.into_iter().collect::<Vec<_>>();
+        let app_names = declarations
+            .iter()
+            .filter(|declaration| !declaration.connector_id.0.trim().is_empty())
+            .map(|declaration| declaration.name.clone())
+            .collect();
+        let mut source = Self::from_connector_ids(
             plugin_id,
             plugin_display_name,
             declarations
                 .into_iter()
                 .map(|declaration| declaration.connector_id),
-        )
+        );
+        source.app_names = app_names;
+        source
     }
 
     /// Creates one plugin source from connector IDs that were already parsed.
@@ -44,6 +53,7 @@ impl PluginConnectorSource {
         Self {
             plugin_id: plugin_id.into(),
             plugin_display_name: plugin_display_name.into(),
+            app_names: HashSet::new(),
             connector_ids,
         }
     }
@@ -123,6 +133,13 @@ impl ConnectorSnapshot {
             .get(connector_id)
             .map(Vec::as_slice)
             .unwrap_or_default()
+    }
+
+    /// Returns whether one package declares an app with the given logical name.
+    pub fn plugin_declares_app(&self, plugin_id: &str, app_name: &str) -> bool {
+        self.sources
+            .iter()
+            .any(|source| source.plugin_id == plugin_id && source.app_names.contains(app_name))
     }
 
     /// Combines two snapshots while preserving source order and provenance.

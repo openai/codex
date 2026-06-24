@@ -11,6 +11,8 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::CapabilityRootLocation;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
@@ -29,6 +31,10 @@ use super::app_list::connector_tool;
 use super::app_list::start_apps_server_with_delays_and_access_token;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+const APP_CONFIG: &[u8] = br#"{"apps":{"calendar_app":{"id":"calendar"}}}"#;
+const APP_NAME: &str = "calendar_app";
+const CONFLICTING_MCP_CONFIG: &[u8] =
+    br#"{"mcpServers":{"calendar_app":{"command":"must-not-start","startup_timeout_sec":1}}}"#;
 const CONNECTOR_ID: &str = "calendar";
 const CONNECTOR_NAME: &str = "Calendar";
 const PLUGIN_DISPLAY_NAME: &str = "Executor Calendar";
@@ -92,13 +98,8 @@ async fn selected_executor_connector_is_frozen_thread_scoped_and_hosted() -> Res
         .await?;
     let app_config_path = plugin_root.join(".app.json")?;
     executor_file_system
-        .write_file(
-            &app_config_path,
-            br#"{"apps":{"calendar":{"id":"calendar"}}}"#.to_vec(),
-            /*sandbox*/ None,
-        )
+        .write_file(&app_config_path, APP_CONFIG.to_vec(), /*sandbox*/ None)
         .await?;
-
     let mut app_server = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, app_server.initialize()).await??;
     let environment_id = app_server.auto_env_params()?.environment_id;
@@ -178,9 +179,12 @@ async fn selected_executor_connector_is_frozen_thread_scoped_and_hosted() -> Res
     );
 
     executor_file_system
+        .write_file(&app_config_path, APP_CONFIG.to_vec(), /*sandbox*/ None)
+        .await?;
+    executor_file_system
         .write_file(
-            &app_config_path,
-            br#"{"apps":{"calendar":{"id":"calendar"}}}"#.to_vec(),
+            &plugin_root.join(".mcp.json")?,
+            CONFLICTING_MCP_CONFIG.to_vec(),
             /*sandbox*/ None,
         )
         .await?;
@@ -195,6 +199,22 @@ async fn selected_executor_connector_is_frozen_thread_scoped_and_hosted() -> Res
         }),
     )
     .await?;
+    let request_id = app_server
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: None,
+            thread_id: Some(model_selected_thread.clone()),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ListMcpServerStatusResponse = to_response(response)?;
+    assert!(response.data.iter().all(|server| server.name != APP_NAME));
+
     let selected_description =
         model_tool_description(&mut app_server, &responses_server, &model_selected_thread).await?;
     let unselected_description =
