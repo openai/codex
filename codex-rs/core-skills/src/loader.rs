@@ -25,6 +25,7 @@ use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::plugin_namespace_for_skill_path;
 use dirs::home_dir;
@@ -145,6 +146,8 @@ enum SymlinkPolicy {
 
 struct SkillFileDiscovery {
     skill_files: Vec<PathUri>,
+    plugin_roots: HashSet<PathUri>,
+    namespace_roots: HashSet<PathUri>,
     warnings: Vec<String>,
 }
 
@@ -500,6 +503,8 @@ async fn discover_skills_under_root(
     let root = root.clone();
     let mut discovery = SkillFileDiscovery {
         skill_files: Vec::new(),
+        plugin_roots: HashSet::new(),
+        namespace_roots: HashSet::from([root.clone()]),
         warnings: Vec::new(),
     };
     match fs.get_metadata(&root, /*sandbox*/ None).await {
@@ -553,6 +558,12 @@ async fn discover_skills_under_root(
             .into_iter()
             .filter_map(|entry| {
                 let file_name = entry.file_name;
+                if DISCOVERABLE_PLUGIN_MANIFEST_PATHS
+                    .iter()
+                    .any(|path| path.split('/').next() == Some(file_name.as_str()))
+                {
+                    discovery.plugin_roots.insert(dir.clone());
+                }
                 if file_name.starts_with('.') {
                     return None;
                 }
@@ -592,6 +603,7 @@ async fn discover_skills_under_root(
                 match fs.read_directory(&path, /*sandbox*/ None).await {
                     Ok(_) => {
                         let resolved_dir = canonicalize_uri_for_skill_identity(fs, &path).await;
+                        discovery.namespace_roots.insert(resolved_dir.clone());
                         enqueue_dir(
                             &mut queue,
                             &mut visited_dirs,
@@ -669,6 +681,7 @@ async fn load_skills_under_root(
     let SkillFileDiscovery {
         skill_files,
         warnings,
+        ..
     } = discover_skills_under_root(fs, &PathUri::from_abs_path(root), symlink_policy).await;
     for warning in warnings {
         error!("{warning}");
