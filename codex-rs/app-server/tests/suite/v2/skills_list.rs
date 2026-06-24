@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -8,6 +9,8 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
@@ -154,6 +157,108 @@ fn write_cached_remote_plugin_with_skill(
     Ok(skill_path)
 }
 
+fn write_cached_local_curated_plugin_with_skill(codex_home: &std::path::Path) -> Result<()> {
+    let plugin_root = codex_home.join("plugins/cache/openai-curated/google-calendar/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"google-calendar"}"#,
+    )?;
+
+    let skill_dir = plugin_root.join("skills/meeting-prep");
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: meeting-prep\ndescription: Prepare for meetings\n---\n\n# Body\n",
+    )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_remote_plugin_enablement_excludes_local_curated_plugin_skills() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_cached_local_curated_plugin_with_skill(codex_home.path())?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+
+[plugins."google-calendar@openai-curated"]
+enabled = true
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let initial_skills_list_request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+    let initial_skills_list_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(initial_skills_list_request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(initial_skills_list_response)?;
+    assert!(data.iter().any(|entry| {
+        entry
+            .skills
+            .iter()
+            .any(|skill| skill.name == "google-calendar:meeting-prep")
+    }));
+
+    let enablement_request_id = mcp
+        .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {
+            enablement: BTreeMap::from([("remote_plugin".to_string(), true)]),
+        })
+        .await?;
+    let enablement_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(enablement_request_id)),
+    )
+    .await??;
+    let _: ExperimentalFeatureEnablementSetResponse = to_response(enablement_response)?;
+
+    let skills_list_request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+    let skills_list_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(skills_list_request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(skills_list_response)?;
+
+    assert!(data.iter().all(|entry| {
+        entry
+            .skills
+            .iter()
+            .all(|skill| skill.name != "google-calendar:meeting-prep")
+    }));
+    Ok(())
+}
+
 #[tokio::test]
 async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -268,6 +373,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
 
     for (scope, body) in [
         ("GLOBAL", global_installed_body),
+        ("USER", empty_page_body),
         ("WORKSPACE", empty_page_body),
     ] {
         Mock::given(method("GET"))
@@ -788,6 +894,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             base_instructions: None,
             developer_instructions: None,
             personality: None,
+            multi_agent_mode: None,
             ephemeral: None,
             session_start_source: None,
             thread_source: None,

@@ -76,10 +76,7 @@ pub(crate) fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
         "path must be absolute: {}",
         path.display()
     );
-    match AbsolutePathBuf::try_from(path) {
-        Ok(path) => path,
-        Err(err) => panic!("path should be absolute: {err}"),
-    }
+    AbsolutePathBuf::try_from(path).expect("path should be absolute")
 }
 
 pub(crate) fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystemSandboxContext {

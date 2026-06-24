@@ -31,6 +31,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -506,7 +507,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
-    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
         .to_string();
 
     test.codex
@@ -649,8 +650,8 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     );
     assert_eq!(
         image_generation_calls[0]["id"].as_str(),
-        Some("ig_123"),
-        "expected the original image generation call id to be preserved"
+        None,
+        "expected the image generation call id to be omitted"
     );
     assert_eq!(
         image_generation_calls[0]["result"].as_str(),
@@ -766,8 +767,8 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
     );
     assert_eq!(
         image_generation_calls[0]["id"].as_str(),
-        Some("ig_123"),
-        "second request should preserve the original generated image call id"
+        None,
+        "second request should omit the generated image call id"
     );
     assert_eq!(
         image_generation_calls[0]["result"].as_str(),
@@ -795,6 +796,8 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn thread_rollback_after_generated_image_drops_entire_image_turn_history() -> Result<()> {
+    // TODO(anp): Remove after generated-image artifacts use target-native paths.
+    skip_if_wine_exec!(Ok(()), "uses host-native generated-image artifact paths");
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;

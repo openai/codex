@@ -15,7 +15,9 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::CloudConfigBundleLoader;
 use codex_core::CodexThread;
+use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
+use codex_core::TimeProvider;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_core::shell::Shell;
@@ -28,6 +30,7 @@ use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::LoadUserInstructionsFuture;
 use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
+use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -38,6 +41,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
@@ -53,15 +57,15 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-use crate::PathBufExt;
 use crate::TempDirExt;
-use crate::get_remote_test_env;
+use crate::TestEnvironment;
 use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cloud_config_bundle;
 use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
+use crate::test_environment;
 use crate::wait_for_event_match;
 use crate::wait_for_event_with_timeout;
 use wiremock::Match;
@@ -117,6 +121,7 @@ pub struct TestEnv {
     environment: codex_exec_server::Environment,
     exec_server_url: Option<String>,
     cwd: AbsolutePathBuf,
+    selection: TurnEnvironmentSelection,
     local_cwd_temp_dir: Option<Arc<TempDir>>,
     remote_container_name: Option<String>,
 }
@@ -127,10 +132,12 @@ impl TestEnv {
         let cwd = local_cwd_temp_dir.abs();
         let environment =
             codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?;
+        let selection = local(cwd.clone());
         Ok(Self {
             environment,
             exec_server_url: None,
             cwd,
+            selection,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
             remote_container_name: None,
         })
@@ -142,6 +149,11 @@ impl TestEnv {
 
     pub fn environment(&self) -> &codex_exec_server::Environment {
         &self.environment
+    }
+
+    /// Returns the environment and target-native cwd selected by the test harness.
+    pub fn selection(&self) -> &TurnEnvironmentSelection {
+        &self.selection
     }
 
     fn local_cwd_temp_dir(&self) -> Option<Arc<TempDir>> {
@@ -159,13 +171,15 @@ impl Drop for TestEnv {
 }
 
 pub async fn test_env() -> Result<TestEnv> {
-    match get_remote_test_env() {
-        Some(remote_env) => {
+    match test_environment() {
+        remote_env @ (TestEnvironment::Docker { .. } | TestEnvironment::WineExec) => {
             let websocket_url = remote_exec_server_url()?;
             let environment =
                 codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
-            let cwd = remote_aware_cwd_path();
-            let cwd_uri = PathUri::from_path(&cwd)?;
+            let cwd = remote_env
+                .remote_cwd(&remote_test_instance_id())?
+                .context("remote test environment should define a cwd")?;
+            let cwd_uri = cwd.to_path_uri(remote_env.path_convention())?;
             environment
                 .get_filesystem()
                 .create_directory(
@@ -174,24 +188,35 @@ pub async fn test_env() -> Result<TestEnv> {
                     /*sandbox*/ None,
                 )
                 .await?;
+            let selection = TurnEnvironmentSelection {
+                environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: cwd_uri.clone(),
+            };
+            let cwd = if remote_env == TestEnvironment::WineExec {
+                // TODO(anp): Convert `Config::cwd` to `LegacyAppPathString` and remove this
+                // compatibility projection.
+                // `Config::cwd` still requires `AbsolutePathBuf`. Preserve the test harness's
+                // Linux-absolute `/C:/...` compatibility spelling so converting it back to a
+                // `PathUri` recovers the remote Windows convention. Production conversions stay
+                // strict: `PathUri::to_abs_path` intentionally rejects foreign paths.
+                let path = cwd_uri.to_url().to_file_path().map_err(|()| {
+                    anyhow!("remote test cwd URI cannot be projected onto the host: {cwd_uri}")
+                })?;
+                AbsolutePathBuf::try_from(path)?
+            } else {
+                cwd_uri.to_abs_path()?
+            };
             Ok(TestEnv {
                 environment,
                 exec_server_url: Some(websocket_url),
                 cwd,
+                selection,
                 local_cwd_temp_dir: None,
-                remote_container_name: Some(remote_env.container_name),
+                remote_container_name: remote_env.docker_container_name().map(str::to_owned),
             })
         }
-        None => TestEnv::local().await,
+        TestEnvironment::Local => TestEnv::local().await,
     }
-}
-
-fn remote_aware_cwd_path() -> AbsolutePathBuf {
-    PathBuf::from(format!(
-        "/tmp/codex-core-test-cwd-{}",
-        remote_test_instance_id()
-    ))
-    .abs()
 }
 
 fn remote_exec_server_url() -> Result<String> {
@@ -263,6 +288,8 @@ pub struct TestCodexBuilder {
     exec_server_url: Option<String>,
     extensions: Arc<ExtensionRegistry<Config>>,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
+    supports_openai_form_elicitation: bool,
+    external_time_provider: Option<Arc<dyn TimeProvider>>,
 }
 
 impl TestCodexBuilder {
@@ -293,14 +320,13 @@ impl TestCodexBuilder {
         let model = model.to_string();
         self.with_config(move |config| {
             let model_catalog = config.model_catalog.get_or_insert_with(|| {
-                bundled_models_response()
-                    .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"))
+                bundled_models_response().expect("bundled models.json should parse")
             });
             let model_info = model_catalog
                 .models
                 .iter_mut()
                 .find(|model_info| model_info.slug == model)
-                .unwrap_or_else(|| panic!("{model} should exist in the configured model catalog"));
+                .expect("model should exist in the configured model catalog");
             override_model_info(model_info);
             config.model = Some(model);
         })
@@ -360,6 +386,16 @@ impl TestCodexBuilder {
         self
     }
 
+    pub fn with_openai_form_elicitation(mut self) -> Self {
+        self.supports_openai_form_elicitation = true;
+        self
+    }
+
+    pub fn with_external_time_provider(mut self, provider: Arc<dyn TimeProvider>) -> Self {
+        self.external_time_provider = Some(provider);
+        self
+    }
+
     pub fn with_windows_cmd_shell(self) -> Self {
         if cfg!(windows) {
             self.with_user_shell(get_shell_by_model_provided_path(&PathBuf::from("cmd.exe")))
@@ -382,7 +418,16 @@ impl TestCodexBuilder {
         .await
     }
 
-    pub async fn build_with_remote_env(
+    /// Builds a test runtime using the execution environment selected by the test process.
+    ///
+    /// With no remote test configuration, or with `CODEX_TEST_ENVIRONMENT=local`, this uses a
+    /// temporary local environment just like [`Self::build`]. `CODEX_TEST_ENVIRONMENT=docker` or
+    /// `CODEX_TEST_ENVIRONMENT=wine-exec` selects the remote exec server configured by
+    /// `CODEX_TEST_REMOTE_EXEC_SERVER_URL`; the legacy `CODEX_TEST_REMOTE_ENV` Docker-container
+    /// configuration does the same. Only the automatically selected environment is registered.
+    /// Use [`Self::build_with_remote_and_local_env`] when a remote test also needs the local
+    /// environment to be selectable explicitly.
+    pub async fn build_with_auto_env(
         &mut self,
         server: &wiremock::MockServer,
     ) -> anyhow::Result<TestCodex> {
@@ -566,6 +611,7 @@ impl TestCodexBuilder {
             state_db.clone(),
             installation_id,
             /*attestation_provider*/ None,
+            /*external_time_provider*/ self.external_time_provider.clone(),
         );
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
@@ -580,6 +626,7 @@ impl TestCodexBuilder {
                         path,
                         auth_manager,
                         user_shell_override,
+                        self.supports_openai_form_elicitation,
                     ),
                 )
                 .await?
@@ -591,6 +638,7 @@ impl TestCodexBuilder {
                     path,
                     auth_manager,
                     /*parent_trace*/ None,
+                    self.supports_openai_form_elicitation,
                 ))
                 .await?
             }
@@ -600,11 +648,30 @@ impl TestCodexBuilder {
                         thread_manager.as_ref(),
                         config.clone(),
                         user_shell_override,
+                        self.supports_openai_form_elicitation,
                     ),
                 )
                 .await?
             }
-            (None, None) => Box::pin(thread_manager.start_thread(config.clone())).await?,
+            (None, None) => {
+                let environments = thread_manager.default_environment_selections(&config.cwd);
+                Box::pin(
+                    thread_manager.start_thread_with_options(StartThreadOptions {
+                        config: config.clone(),
+                        initial_history: InitialHistory::New,
+                        session_source: None,
+                        thread_source: None,
+                        dynamic_tools: Vec::new(),
+                        metrics_service_name: None,
+                        multi_agent_mode: None,
+                        parent_trace: None,
+                        environments,
+                        thread_extension_init: Default::default(),
+                        supports_openai_form_elicitation: self.supports_openai_form_elicitation,
+                    }),
+                )
+                .await?
+            }
         };
 
         Ok(TestCodex {
@@ -678,14 +745,13 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         return Ok(());
     }
 
-    let bundled_models = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let bundled_models = bundled_models_response().expect("bundled models.json should parse");
     let mut model = bundled_models
         .models
         .iter()
         .find(|candidate| candidate.slug == "gpt-5.2")
         .cloned()
-        .unwrap_or_else(|| panic!("missing bundled model gpt-5.2"));
+        .expect("missing bundled model gpt-5.2");
     model.slug = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.display_name = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
@@ -917,9 +983,9 @@ impl TestCodexHarness {
         Ok(Self { server, test })
     }
 
-    pub async fn with_remote_env_builder(mut builder: TestCodexBuilder) -> Result<Self> {
+    pub async fn with_auto_env_builder(mut builder: TestCodexBuilder) -> Result<Self> {
         let server = start_mock_server().await;
-        let test = builder.build_with_remote_env(&server).await?;
+        let test = builder.build_with_auto_env(&server).await?;
         Ok(Self { server, test })
     }
 
@@ -954,7 +1020,7 @@ impl TestCodexHarness {
     ) -> Result<()> {
         let abs_path = self.path_abs(rel);
         if let Some(parent) = abs_path.parent() {
-            let parent_uri = PathUri::from_path(&parent)?;
+            let parent_uri = PathUri::from_host_native_path(&parent)?;
             self.test
                 .fs()
                 .create_directory(
@@ -964,7 +1030,7 @@ impl TestCodexHarness {
                 )
                 .await?;
         }
-        let abs_path_uri = PathUri::from_path(&abs_path)?;
+        let abs_path_uri = PathUri::from_host_native_path(&abs_path)?;
         self.test
             .fs()
             .write_file(
@@ -978,7 +1044,7 @@ impl TestCodexHarness {
 
     pub async fn read_file_text(&self, rel: impl AsRef<Path>) -> Result<String> {
         let path = self.path_abs(rel);
-        let path_uri = PathUri::from_path(&path)?;
+        let path_uri = PathUri::from_host_native_path(&path)?;
         Ok(self
             .test
             .fs()
@@ -988,7 +1054,7 @@ impl TestCodexHarness {
 
     pub async fn create_dir_all(&self, rel: impl AsRef<Path>) -> Result<()> {
         let path = self.path_abs(rel);
-        let path_uri = PathUri::from_path(&path)?;
+        let path_uri = PathUri::from_host_native_path(&path)?;
         self.test
             .fs()
             .create_directory(
@@ -1100,46 +1166,47 @@ impl TestCodexHarness {
 }
 
 fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                {
-                    return item;
-                }
-            }
-        }
-    }
-    panic!("custom_tool_call_output {call_id} not found");
+    let missing_output = format!("custom_tool_call_output {call_id} not found");
+    bodies
+        .iter()
+        .filter_map(|body| body.get("input").and_then(Value::as_array))
+        .flatten()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })
+        .expect(&missing_output)
 }
 
 fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
+    let missing_output = format!("custom_tool_call_output {call_id} missing output");
     let output = custom_tool_call_output(bodies, call_id)
         .get("output")
-        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing output"));
-    output_value_to_text(output)
-        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing text output"))
+        .expect(&missing_output);
+    output_value_to_text(output).expect("custom tool call output missing text output")
 }
 
 fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) == Some("function_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                {
-                    return item;
-                }
-            }
-        }
-    }
-    panic!("function_call_output {call_id} not found");
+    let missing_output = format!("function_call_output {call_id} not found");
+    bodies
+        .iter()
+        .filter_map(|body| body.get("input").and_then(Value::as_array))
+        .flatten()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })
+        .expect(&missing_output)
 }
 
 pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
-        config_mutators: vec![],
+        config_mutators: vec![Box::new(|config| {
+            config
+                .features
+                .disable(Feature::Apps)
+                .expect("test config should allow Apps override");
+        })],
         auth: CodexAuth::from_api_key("dummy"),
         pre_build_hooks: vec![],
         workspace_setups: vec![],
@@ -1149,6 +1216,8 @@ pub fn test_codex() -> TestCodexBuilder {
         exec_server_url: None,
         extensions: empty_extension_registry(),
         user_instructions_provider: None,
+        supports_openai_form_elicitation: false,
+        external_time_provider: None,
     }
 }
 

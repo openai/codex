@@ -89,7 +89,7 @@ async fn run_connection(
                 warn!("ignoring malformed exec-server message: {reason}");
                 if outgoing_tx
                     .send(RpcServerOutboundMessage::Error {
-                        request_id: codex_app_server_protocol::RequestId::Integer(-1),
+                        request_id: codex_exec_server_protocol::RequestId::Integer(-1),
                         error: invalid_request(reason),
                     })
                     .await
@@ -99,7 +99,7 @@ async fn run_connection(
                 }
             }
             JsonRpcConnectionEvent::Message(message) => match message {
-                codex_app_server_protocol::JSONRPCMessage::Request(request) => {
+                codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
                     if let Some(route) = router.request_route(request.method.as_str()) {
                         let message = tokio::select! {
                             message = route(Arc::clone(&handler), request) => message,
@@ -127,7 +127,7 @@ async fn run_connection(
                         break;
                     }
                 }
-                codex_app_server_protocol::JSONRPCMessage::Notification(notification) => {
+                codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
                     let Some(route) = router.notification_route(notification.method.as_str())
                     else {
                         warn!(
@@ -150,14 +150,14 @@ async fn run_connection(
                         break;
                     }
                 }
-                codex_app_server_protocol::JSONRPCMessage::Response(response) => {
+                codex_exec_server_protocol::JSONRPCMessage::Response(response) => {
                     warn!(
                         "closing exec-server connection after unexpected client response: {:?}",
                         response.id
                     );
                     break;
                 }
-                codex_app_server_protocol::JSONRPCMessage::Error(error) => {
+                codex_exec_server_protocol::JSONRPCMessage::Error(error) => {
                     warn!(
                         "closing exec-server connection after unexpected client error: {:?}",
                         error.id
@@ -190,12 +190,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCNotification;
-    use codex_app_server_protocol::JSONRPCRequest;
-    use codex_app_server_protocol::JSONRPCResponse;
-    use codex_app_server_protocol::RequestId;
+    use codex_exec_server_protocol::JSONRPCMessage;
+    use codex_exec_server_protocol::JSONRPCNotification;
+    use codex_exec_server_protocol::JSONRPCRequest;
+    use codex_exec_server_protocol::JSONRPCResponse;
+    use codex_exec_server_protocol::RequestId;
     use codex_utils_path_uri::PathUri;
+    use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde::de::DeserializeOwned;
     use tokio::io::AsyncBufReadExt;
@@ -211,9 +212,11 @@ mod tests {
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
+    use crate::protocol::ENVIRONMENT_INFO_METHOD;
     use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
     use crate::protocol::EXEC_TERMINATE_METHOD;
+    use crate::protocol::EnvironmentInfo;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
     use crate::protocol::INITIALIZE_METHOD;
@@ -224,6 +227,38 @@ mod tests {
     use crate::protocol::TerminateParams;
     use crate::protocol::TerminateResponse;
     use crate::server::session_registry::SessionRegistry;
+
+    #[tokio::test]
+    async fn connection_accepts_pipelined_scalar_requests() {
+        let registry = SessionRegistry::new();
+        let (mut writer, mut lines, task) = spawn_test_connection(registry, "pipelined-scalar");
+
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        send_request(&mut writer, /*id*/ 2, ENVIRONMENT_INFO_METHOD, &()).await;
+        send_request(&mut writer, /*id*/ 3, ENVIRONMENT_INFO_METHOD, &()).await;
+
+        let _: EnvironmentInfo = read_response(&mut lines, /*expected_id*/ 2).await;
+        let _: EnvironmentInfo = read_response(&mut lines, /*expected_id*/ 3).await;
+
+        drop(writer);
+        drop(lines);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+    }
 
     #[tokio::test]
     async fn transport_disconnect_detaches_session_during_in_flight_read() {
@@ -347,7 +382,6 @@ mod tests {
                 id: RequestId::Integer(id),
                 method: method.to_string(),
                 params: Some(serde_json::to_value(params).expect("serialize params")),
-                trace: None,
             }),
         )
         .await;
@@ -397,12 +431,16 @@ mod tests {
         ExecParams {
             process_id,
             argv: sleep_then_print_argv(),
-            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
+            cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
+                .expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            sandbox: None,
+            enforce_managed_network: false,
+            managed_network: None,
         }
     }
 

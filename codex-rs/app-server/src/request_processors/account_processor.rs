@@ -1,8 +1,14 @@
 use super::*;
+use crate::auth_mode::auth_mode_to_api;
+use chrono::DateTime;
+
+mod rate_limit_resets;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
+const ACCOUNT_WORKSPACE_MESSAGES_FETCH_TIMEOUT: Duration =
+    Duration::from_millis(/*millis*/ 1000);
 // The override is intentionally available only in debug builds, matching the login path below.
 #[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
@@ -140,6 +146,14 @@ impl AccountRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn get_workspace_messages(
+        &self,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.get_workspace_messages_response()
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn send_add_credits_nudge_email(
         &self,
         params: SendAddCreditsNudgeEmailParams,
@@ -166,12 +180,15 @@ impl AccountRequestProcessor {
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
-            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+            auth_mode: auth
+                .as_ref()
+                .map(CodexAuth::api_auth_mode)
+                .map(auth_mode_to_api),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
         }
     }
 
-    async fn maybe_refresh_remote_installed_plugins_cache_for_current_config(
+    async fn maybe_refresh_plugin_caches_for_current_config(
         config_manager: &ConfigManager,
         thread_manager: &Arc<ThreadManager>,
         auth: Option<CodexAuth>,
@@ -179,6 +196,9 @@ impl AccountRequestProcessor {
         thread_manager
             .plugins_manager()
             .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
+        thread_manager
+            .plugins_manager()
+            .clear_recommended_plugins_cache();
 
         match config_manager
             .load_latest_config(/*fallback_cwd*/ None)
@@ -189,7 +209,7 @@ impl AccountRequestProcessor {
                 let refresh_config_manager = config_manager.clone();
                 thread_manager
                     .plugins_manager()
-                    .maybe_start_remote_installed_plugins_cache_refresh(
+                    .maybe_start_remote_plugin_caches_refresh(
                         &config.plugins_config_input(),
                         auth,
                         Some(Arc::new(move || {
@@ -214,7 +234,7 @@ impl AccountRequestProcessor {
     ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
-            thread_manager.skills_manager().clear_cache();
+            thread_manager.skills_service().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
@@ -339,10 +359,11 @@ impl AccountRequestProcessor {
             codex_streamlined_login,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
-                CLIENT_ID.to_string(),
+                oauth_client_id(),
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
                 config.auth_keyring_backend_kind(),
+                config.auth_route_config(),
             )
         };
         #[cfg(debug_assertions)]
@@ -616,7 +637,7 @@ impl AccountRequestProcessor {
     }
 
     async fn send_login_success_notifications(&self, login_id: Option<Uuid>) {
-        Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
+        Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
             &self.thread_manager,
             self.auth_manager.auth_cached(),
@@ -669,14 +690,17 @@ impl AccountRequestProcessor {
                 .await;
 
             let auth = auth_manager.auth_cached();
-            Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
+            Self::maybe_refresh_plugin_caches_for_current_config(
                 &config_manager,
                 &thread_manager,
                 auth.clone(),
             )
             .await;
             let payload_v2 = AccountUpdatedNotification {
-                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+                auth_mode: auth
+                    .as_ref()
+                    .map(CodexAuth::api_auth_mode)
+                    .map(auth_mode_to_api),
                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
             };
             outgoing
@@ -701,7 +725,7 @@ impl AccountRequestProcessor {
             }
         }
 
-        Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
+        Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
             &self.thread_manager,
             self.auth_manager.auth_cached(),
@@ -713,7 +737,8 @@ impl AccountRequestProcessor {
             .auth_manager
             .auth_cached()
             .as_ref()
-            .map(CodexAuth::api_auth_mode))
+            .map(CodexAuth::api_auth_mode)
+            .map(auth_mode_to_api))
     }
 
     async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), JSONRPCErrorError> {
@@ -784,7 +809,7 @@ impl AccountRequestProcessor {
                 Some(auth) => {
                     let permanent_refresh_failure =
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
-                    let auth_mode = auth.api_auth_mode();
+                    let auth_mode = auth_mode_to_api(auth.api_auth_mode());
                     let (reported_auth_method, token_opt) = if matches!(
                         auth,
                         CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_)
@@ -851,19 +876,64 @@ impl AccountRequestProcessor {
     async fn get_account_rate_limits_response(
         &self,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
-        self.fetch_account_rate_limits()
+        let Some(auth) = self.auth_manager.auth().await else {
+            return Err(invalid_request(
+                "codex account authentication required to read rate limits",
+            ));
+        };
+
+        if !auth.uses_codex_backend() {
+            return Err(invalid_request(
+                "chatgpt authentication required to read rate limits",
+            ));
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+
+        let response = client
+            .get_rate_limits_with_reset_credits()
             .await
-            .map(
-                |(rate_limits, rate_limits_by_limit_id)| GetAccountRateLimitsResponse {
-                    rate_limits: rate_limits.into(),
-                    rate_limits_by_limit_id: Some(
-                        rate_limits_by_limit_id
-                            .into_iter()
-                            .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
-                            .collect(),
-                    ),
-                },
-            )
+            .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
+        if response.rate_limits.is_empty() {
+            return Err(internal_error(
+                "failed to fetch codex rate limits: no snapshots returned",
+            ));
+        }
+
+        let rate_limits_by_limit_id: HashMap<_, _> = response
+            .rate_limits
+            .iter()
+            .cloned()
+            .map(|snapshot| {
+                let limit_id = snapshot
+                    .limit_id
+                    .clone()
+                    .unwrap_or_else(|| "codex".to_string());
+                (limit_id, snapshot)
+            })
+            .collect();
+        let rate_limits = response
+            .rate_limits
+            .iter()
+            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
+            .cloned()
+            .unwrap_or_else(|| response.rate_limits[0].clone());
+
+        Ok(GetAccountRateLimitsResponse {
+            rate_limits: rate_limits.into(),
+            rate_limits_by_limit_id: Some(
+                rate_limits_by_limit_id
+                    .into_iter()
+                    .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
+                    .collect(),
+            ),
+            rate_limit_reset_credits: response.rate_limit_reset_credits.map(|summary| {
+                RateLimitResetCreditsSummary {
+                    available_count: summary.available_count,
+                }
+            }),
+        })
     }
 
     async fn get_account_token_usage_response(
@@ -893,6 +963,48 @@ impl AccountRequestProcessor {
         Ok(Self::account_token_usage_response(profile))
     }
 
+    async fn get_workspace_messages_response(
+        &self,
+    ) -> Result<GetWorkspaceMessagesResponse, JSONRPCErrorError> {
+        let Some(auth) = self.auth_manager.auth().await else {
+            return Err(invalid_request(
+                "codex account authentication required to read workspace messages",
+            ));
+        };
+
+        if !auth.uses_codex_backend() {
+            return Err(invalid_request(
+                "chatgpt authentication required to read workspace messages",
+            ));
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let messages = tokio::time::timeout(
+            ACCOUNT_WORKSPACE_MESSAGES_FETCH_TIMEOUT,
+            client.list_workspace_messages(),
+        )
+        .await
+        .map_err(|_| internal_error("workspace messages fetch timed out"))?;
+
+        match messages {
+            Ok(messages) => {
+                Self::workspace_messages_response(messages, /*feature_enabled*/ true)
+            }
+            Err(err) if workspace_messages_feature_disabled(&err) => {
+                Self::workspace_messages_response(
+                    BackendWorkspaceMessagesResponse {
+                        messages: Vec::new(),
+                    },
+                    /*feature_enabled*/ false,
+                )
+            }
+            Err(err) => Err(internal_error(format!(
+                "failed to fetch workspace messages: {err}"
+            ))),
+        }
+    }
+
     fn account_token_usage_response(profile: TokenUsageProfile) -> GetAccountTokenUsageResponse {
         let stats = profile.stats;
         GetAccountTokenUsageResponse {
@@ -913,6 +1025,20 @@ impl AccountRequestProcessor {
                     .collect()
             }),
         }
+    }
+
+    fn workspace_messages_response(
+        messages: BackendWorkspaceMessagesResponse,
+        feature_enabled: bool,
+    ) -> Result<GetWorkspaceMessagesResponse, JSONRPCErrorError> {
+        Ok(GetWorkspaceMessagesResponse {
+            feature_enabled,
+            messages: messages
+                .messages
+                .into_iter()
+                .map(workspace_message_from_backend)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 
     async fn send_add_credits_nudge_email_response(
@@ -963,61 +1089,48 @@ impl AccountRequestProcessor {
             AddCreditsNudgeCreditType::UsageLimit => BackendAddCreditsNudgeCreditType::UsageLimit,
         }
     }
+}
 
-    async fn fetch_account_rate_limits(
-        &self,
-    ) -> Result<
-        (
-            CoreRateLimitSnapshot,
-            HashMap<String, CoreRateLimitSnapshot>,
-        ),
-        JSONRPCErrorError,
-    > {
-        let Some(auth) = self.auth_manager.auth().await else {
-            return Err(invalid_request(
-                "codex account authentication required to read rate limits",
-            ));
-        };
+fn workspace_message_from_backend(
+    message: BackendWorkspaceMessage,
+) -> Result<WorkspaceMessage, JSONRPCErrorError> {
+    Ok(WorkspaceMessage {
+        message_id: message.message_id,
+        message_type: workspace_message_type_from_backend(message.message_type),
+        message_body: message.message_body,
+        created_at: workspace_message_timestamp_from_backend(message.created_at)?,
+        archived_at: workspace_message_timestamp_from_backend(message.archived_at)?,
+    })
+}
 
-        if !auth.uses_codex_backend() {
-            return Err(invalid_request(
-                "chatgpt authentication required to read rate limits",
-            ));
-        }
+fn workspace_message_timestamp_from_backend(
+    timestamp: Option<String>,
+) -> Result<Option<i64>, JSONRPCErrorError> {
+    timestamp
+        .map(|timestamp| {
+            DateTime::parse_from_rfc3339(&timestamp)
+                .map(|timestamp| timestamp.timestamp())
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to parse workspace message timestamp `{timestamp}`: {err}"
+                    ))
+                })
+        })
+        .transpose()
+}
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
-
-        let snapshots = client
-            .get_rate_limits_many()
-            .await
-            .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
-        if snapshots.is_empty() {
-            return Err(internal_error(
-                "failed to fetch codex rate limits: no snapshots returned",
-            ));
-        }
-
-        let rate_limits_by_limit_id: HashMap<String, CoreRateLimitSnapshot> = snapshots
-            .iter()
-            .cloned()
-            .map(|snapshot| {
-                let limit_id = snapshot
-                    .limit_id
-                    .clone()
-                    .unwrap_or_else(|| "codex".to_string());
-                (limit_id, snapshot)
-            })
-            .collect();
-
-        let primary = snapshots
-            .iter()
-            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
-            .cloned()
-            .unwrap_or_else(|| snapshots[0].clone());
-
-        Ok((primary, rate_limits_by_limit_id))
+fn workspace_message_type_from_backend(
+    message_type: BackendWorkspaceMessageType,
+) -> WorkspaceMessageType {
+    match message_type {
+        BackendWorkspaceMessageType::Headline => WorkspaceMessageType::Headline,
+        BackendWorkspaceMessageType::Announcement => WorkspaceMessageType::Announcement,
+        BackendWorkspaceMessageType::Unknown => WorkspaceMessageType::Unknown,
     }
+}
+
+fn workspace_messages_feature_disabled(err: &BackendRequestError) -> bool {
+    err.status().is_some_and(|status| status.as_u16() == 404)
 }
 
 #[cfg(test)]
@@ -1059,5 +1172,56 @@ mod tests {
                 }]),
             }
         );
+    }
+
+    #[test]
+    fn workspace_messages_response_maps_backend_messages() {
+        let response = AccountRequestProcessor::workspace_messages_response(
+            BackendWorkspaceMessagesResponse {
+                messages: vec![BackendWorkspaceMessage {
+                    message_id: "headline-id".to_string(),
+                    message_type: BackendWorkspaceMessageType::Headline,
+                    message_body: "Headline body".to_string(),
+                    created_at: Some("2026-06-14T00:00:00Z".to_string()),
+                    archived_at: Some("2026-06-15T00:00:00Z".to_string()),
+                }],
+            },
+            /*feature_enabled*/ true,
+        )
+        .expect("workspace message timestamps should parse");
+
+        assert_eq!(
+            response,
+            GetWorkspaceMessagesResponse {
+                feature_enabled: true,
+                messages: vec![WorkspaceMessage {
+                    message_id: "headline-id".to_string(),
+                    message_type: WorkspaceMessageType::Headline,
+                    message_body: "Headline body".to_string(),
+                    created_at: Some(1_781_395_200),
+                    archived_at: Some(1_781_481_600),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn workspace_messages_feature_disabled_only_for_not_found() {
+        let cases = [
+            (reqwest::StatusCode::NOT_FOUND, true),
+            (reqwest::StatusCode::UNAUTHORIZED, false),
+            (reqwest::StatusCode::FORBIDDEN, false),
+        ];
+
+        for (status, expected) in cases {
+            let err = BackendRequestError::UnexpectedStatus {
+                method: "GET".to_string(),
+                url: "https://example.test/api/codex/workspace-messages".to_string(),
+                status,
+                content_type: "application/json".to_string(),
+                body: "{}".to_string(),
+            };
+            assert_eq!(workspace_messages_feature_disabled(&err), expected);
+        }
     }
 }

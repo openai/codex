@@ -4,6 +4,7 @@ pub use elicitation::ElicitationReviewRequest;
 pub use elicitation::ElicitationReviewer;
 pub use elicitation::ElicitationReviewerHandle;
 pub use resource_client::McpResourceClient;
+pub use resource_client::McpResourceClientCacheKey;
 pub use resource_client::McpResourcePage;
 pub use resource_client::McpResourceReadResult;
 pub use rmcp_client::MCP_SANDBOX_STATE_META_CAPABILITY;
@@ -45,7 +46,7 @@ pub use mcp::hosted_plugin_runtime_mcp_server_config;
 pub use mcp::tool_plugin_provenance;
 pub use plugin_config::PluginMcpConfigParseOutcome;
 pub use plugin_config::PluginMcpServerParseError;
-pub use plugin_config::PluginMcpServerPlacement;
+pub use plugin_config::parse_executor_plugin_mcp_config;
 pub use plugin_config::parse_plugin_mcp_config;
 
 pub use mcp::McpServerStatusSnapshot;

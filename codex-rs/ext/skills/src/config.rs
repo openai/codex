@@ -5,4 +5,6 @@ pub struct SkillsExtensionConfig {
     pub include_instructions: bool,
     /// Whether bundled skills are eligible for discovery.
     pub bundled_skills_enabled: bool,
+    /// Whether orchestrator-owned skills are eligible for discovery.
+    pub orchestrator_skills_enabled: bool,
 }

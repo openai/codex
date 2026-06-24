@@ -33,10 +33,13 @@ pub(super) async fn create_thread(
             params.parent_thread_id,
             params.source,
             params.thread_source,
+            params.originator,
             params.base_instructions,
             params.dynamic_tools,
         )
-        .with_multi_agent_version(params.multi_agent_version),
+        .with_session_id(params.session_id)
+        .with_multi_agent_version(params.multi_agent_version)
+        .with_initial_window_id(params.initial_window_id),
     )
     .await
     .map_err(|err| ThreadStoreError::Internal {

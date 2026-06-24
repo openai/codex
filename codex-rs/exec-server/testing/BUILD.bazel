@@ -17,6 +17,21 @@ rust_library(
 )
 
 rust_binary(
+    name = "wine-exec-test-runner",
+    testonly = True,
+    srcs = ["wine_remote_test_runner.rs"],
+    crate_name = "wine_exec_test_runner",
+    crate_root = "wine_remote_test_runner.rs",
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":wine-exec-server-test-support",
+        "@crates//:anyhow",
+        "@crates//:tokio",
+    ],
+)
+
+rust_binary(
     name = "windows-exec-server",
     testonly = True,
     srcs = ["windows_exec_server.rs"],
@@ -24,7 +39,7 @@ rust_binary(
     crate_root = "windows_exec_server.rs",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:windows"],
-    visibility = ["//codex-rs/core/tests/remote_env_windows:__pkg__"],
+    visibility = ["//visibility:public"],
     deps = [
         "//codex-rs/exec-server",
         "@crates//:tokio",

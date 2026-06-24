@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolInvocation;
 use crate::tools::hook_names::HookToolName;
@@ -29,9 +30,11 @@ fn sample_patch() -> &'static str {
 
 async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
     let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
     ToolInvocation {
         session: session.into(),
-        turn: turn.into(),
+        step_context: StepContext::for_test(Arc::clone(&turn)),
+        turn,
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-apply-patch".to_string(),
@@ -225,6 +228,8 @@ async fn approval_keys_include_move_destination() {
 +new content
 *** End Patch"#;
     let argv = vec!["apply_patch".to_string(), patch.to_string()];
+    // TODO(anp): Keep apply_patch handler test cwd values as PathUri.
+    let cwd = PathUri::from_abs_path(&cwd);
     let action = match codex_apply_patch::maybe_parse_apply_patch_verified(
         &argv,
         &cwd,

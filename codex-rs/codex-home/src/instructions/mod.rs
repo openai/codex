@@ -48,12 +48,6 @@ impl CodexHomeUserInstructionsProvider {
                     continue;
                 }
             };
-            if let Err(err) = std::str::from_utf8(&data) {
-                warnings.push(format!(
-                    "Global AGENTS.md instructions from `{}` contain invalid UTF-8: {err}. Invalid byte sequences were replaced.",
-                    path.display()
-                ));
-            }
             let contents = String::from_utf8_lossy(&data);
             let trimmed = contents.trim();
             if !trimmed.is_empty() {

@@ -5,7 +5,6 @@ Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
-use crate::path_utils;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -51,6 +50,7 @@ pub(crate) fn build_sandbox_command(
         args: args.to_vec(),
         cwd,
         env: env.clone(),
+        managed_network: None,
         additional_permissions,
     })
 }
@@ -68,26 +68,26 @@ pub(crate) fn exec_env_for_sandbox_permissions(
     env
 }
 
-pub(crate) fn strip_managed_proxy_env(env: &mut HashMap<String, String>) {
-    for key in PROXY_ENV_KEYS {
-        env.remove(*key);
+pub(crate) fn is_managed_proxy_env_var(key: &str, value: &str) -> bool {
+    if PROXY_ENV_KEYS.contains(&key) {
+        return true;
     }
-    for key in CUSTOM_CA_ENV_KEYS {
-        if env
-            .get(key)
-            .is_some_and(|value| is_managed_mitm_ca_trust_bundle_path(value))
-        {
-            env.remove(key);
-        }
+    if CUSTOM_CA_ENV_KEYS.contains(&key) {
+        return is_managed_mitm_ca_trust_bundle_path(value);
     }
-    // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
     #[cfg(target_os = "macos")]
-    if env
-        .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
-        .is_some_and(|command| command.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER))
     {
-        env.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
+        key == PROXY_GIT_SSH_COMMAND_ENV_KEY
+            && value.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER)
     }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+pub(crate) fn strip_managed_proxy_env(env: &mut HashMap<String, String>) {
+    env.retain(|key, value| !is_managed_proxy_env_var(key, value));
 }
 
 /// Prepends `path_entry` to `PATH`, removing duplicate and empty existing
@@ -251,7 +251,7 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
-    cwd: &AbsolutePathBuf,
+    shell_snapshot: Option<&AbsolutePathBuf>,
     explicit_env_overrides: &HashMap<String, String>,
     env: &HashMap<String, String>,
     runtime_path_prepends: &RuntimePathPrepends,
@@ -260,15 +260,11 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    let Some(snapshot) = session_shell.shell_snapshot() else {
+    let Some(snapshot) = shell_snapshot else {
         return command.to_vec();
     };
 
-    if !snapshot.path.exists() {
-        return command.to_vec();
-    }
-
-    if !path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd) {
+    if !snapshot.exists() {
         return command.to_vec();
     }
 
@@ -281,7 +277,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    let snapshot_path = snapshot.path.to_string_lossy();
+    let snapshot_path = snapshot.to_string_lossy();
     let shell_path = session_shell.shell_path.to_string_lossy();
     let original_shell = shell_single_quote(&command[0]);
     let original_script = shell_single_quote(&command[2]);

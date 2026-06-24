@@ -12,7 +12,8 @@ use std::path::PathBuf;
 
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
-use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
+use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
@@ -21,12 +22,13 @@ use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -102,21 +104,34 @@ impl PluginLocation {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginRemoteSectionError {
+    pub(crate) section_id: String,
+    pub(crate) label: String,
+    pub(crate) message: String,
+}
+
 /// Distinguishes why a rate-limit refresh was requested so the completion
 /// handler can route the result correctly.
 ///
 /// A `StartupPrefetch` fires once, concurrently with the rest of TUI init, and
-/// only updates the cached snapshots (no status card to finalize). A
-/// `StatusCommand` is tied to a specific `/status` invocation and must call
-/// `finish_status_rate_limit_refresh` when done so the card stops showing a
-/// "refreshing" state.
+/// updates the cached snapshots and any available reset-credit notice (no
+/// status card to finalize). A `StatusCommand` is tied to a specific `/status`
+/// invocation and must call `finish_status_rate_limit_refresh` when done so the
+/// card stops showing a "refreshing" state. A `UsageMenu` refreshes a cached
+/// zero reset count so the disabled menu entry can become available without a
+/// restart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RateLimitRefreshOrigin {
-    /// Eagerly fetched after bootstrap so the first `/status` already has data.
-    StartupPrefetch,
+    /// Eagerly fetched after bootstrap for `/status` data and reset availability.
+    StartupPrefetch { reset_hint_request_id: u64 },
     /// User-initiated via `/status`; the `request_id` correlates with the
     /// status card that should be updated when the fetch completes.
     StatusCommand { request_id: u64 },
+    /// User reopened `/usage` while the cached reset-credit count was zero.
+    UsageMenu { request_id: u64 },
+    /// Refresh requested after a reset credit was successfully consumed.
+    ResetConsume { request_id: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,7 +306,31 @@ pub(crate) enum AppEvent {
     /// Result of refreshing rate limits.
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,
-        result: Result<Vec<RateLimitSnapshot>, String>,
+        result: Result<GetAccountRateLimitsResponse, String>,
+    },
+
+    /// Open the default token-activity view selected from the `/usage` menu.
+    OpenTokenActivity,
+
+    /// Open the reset-credit flow selected from the `/usage` menu.
+    OpenRateLimitResetCredits,
+
+    /// Result of reading the current reset-credit balance.
+    RateLimitResetCreditsLoaded {
+        request_id: u64,
+        result: Result<GetAccountRateLimitsResponse, String>,
+    },
+
+    /// Consume one reset credit using a stable idempotency key.
+    ConsumeRateLimitResetCredit {
+        idempotency_key: String,
+    },
+
+    /// Result of consuming one reset credit.
+    RateLimitResetCreditConsumed {
+        request_id: u64,
+        idempotency_key: String,
+        result: Result<ConsumeAccountRateLimitResetCreditResponse, String>,
     },
 
     /// Fetch account-wide token activity for a `/usage` history card.
@@ -305,8 +344,16 @@ pub(crate) enum AppEvent {
         result: Result<GetAccountTokenUsageResponse, String>,
     },
 
-    /// Commit a settled token activity card after a stream shutdown barrier.
-    CommitCompletedTokenActivityOutput,
+    /// Fetch workspace messages for the status-line headline item.
+    RefreshStatusLineWorkspaceHeadline {
+        request_id: u64,
+    },
+
+    /// Commit settled asynchronous usage output after active-output barriers clear.
+    CommitPendingUsageOutput,
+
+    /// Commit settled asynchronous usage output after stream shutdown.
+    CommitPendingUsageOutputAfterStreamShutdown,
 
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {
@@ -404,6 +451,19 @@ pub(crate) enum AppEvent {
     PluginsLoaded {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
+    },
+
+    /// Open the plugin list from an already cached response.
+    OpenPluginsList {
+        cwd: PathBuf,
+        response: PluginListResponse,
+    },
+
+    /// Result of explicitly fetching remote-backed plugin sections.
+    PluginRemoteSectionsLoaded {
+        cwd: PathBuf,
+        marketplaces: Vec<PluginMarketplaceEntry>,
+        section_errors: Vec<PluginRemoteSectionError>,
     },
 
     /// Result of fetching lifecycle hook inventory.
@@ -647,6 +707,11 @@ pub(crate) enum AppEvent {
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
+
+    /// Finish a settings selection after its preceding update events have been applied.
+    SettingsSelectionClosed,
+    /// Run after any nested settings events emitted while handling the close event.
+    SettingsSelectionSettled,
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
@@ -930,6 +995,11 @@ pub(crate) enum AppEvent {
     StatusLineGitSummaryUpdated {
         cwd: PathBuf,
         summary: crate::chatwidget::StatusLineGitSummary,
+    },
+    /// Async update of the workspace notification headline for status line rendering.
+    StatusLineWorkspaceHeadlineUpdated {
+        request_id: u64,
+        result: Result<crate::workspace_messages::WorkspaceHeadlineFetchResult, String>,
     },
     /// Apply a user-confirmed status-line item ordering/selection.
     StatusLineSetup {

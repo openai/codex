@@ -113,9 +113,9 @@ impl ToolFilter {
     }
 }
 
-/// Returns the model-visible view of a tool while preserving the raw metadata
-/// used by execution. Keep cache entries raw and call this at manager return
-/// boundaries.
+/// Returns the model-visible view of a tool while preserving the raw metadata used by execution.
+/// Declared file parameters are presented as local file paths; execution later uploads those files
+/// and replaces the paths with the uploaded-file objects expected by the app.
 pub(crate) fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
     let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
     if file_params.is_empty() {
@@ -124,7 +124,7 @@ pub(crate) fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
 
     let mut tool = tool.clone();
     let mut input_schema = JsonValue::Object(tool.input_schema.as_ref().clone());
-    mask_input_schema_for_file_path_params(&mut input_schema, &file_params);
+    rewrite_input_schema_for_local_file_paths(&mut input_schema, &file_params);
     if let JsonValue::Object(input_schema) = input_schema {
         tool.input_schema = Arc::new(input_schema);
     }
@@ -262,15 +262,7 @@ const MAX_TOOL_NAME_LENGTH: usize = 64;
 const CALLABLE_NAME_HASH_LEN: usize = 12;
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
 
-fn callable_namespace_with_prefix(namespace: &str, prefix_mcp_tool_names: bool) -> String {
-    if !prefix_mcp_tool_names || namespace.starts_with(LEGACY_MCP_TOOL_NAME_PREFIX) {
-        namespace.to_string()
-    } else {
-        format!("{LEGACY_MCP_TOOL_NAME_PREFIX}{namespace}")
-    }
-}
-
-fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
+fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {
     let Some(properties) = input_schema
         .as_object_mut()
         .and_then(|schema| schema.get_mut("properties"))
@@ -283,11 +275,11 @@ fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_par
         let Some(property_schema) = properties.get_mut(field_name) else {
             continue;
         };
-        mask_input_property_schema(property_schema);
+        rewrite_input_property_schema_as_local_file_path(property_schema);
     }
 }
 
-fn mask_input_property_schema(schema: &mut JsonValue) {
+fn rewrite_input_property_schema_as_local_file_path(schema: &mut JsonValue) {
     let Some(object) = schema.as_object_mut() else {
         return;
     };
@@ -313,6 +305,14 @@ fn mask_input_property_schema(schema: &mut JsonValue) {
         object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
     } else {
         object.insert("type".to_string(), JsonValue::String("string".to_string()));
+    }
+}
+
+fn callable_namespace_with_prefix(namespace: &str, prefix_mcp_tool_names: bool) -> String {
+    if !prefix_mcp_tool_names || namespace.starts_with(LEGACY_MCP_TOOL_NAME_PREFIX) {
+        namespace.to_string()
+    } else {
+        format!("{LEGACY_MCP_TOOL_NAME_PREFIX}{namespace}")
     }
 }
 

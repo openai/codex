@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 
 use anyhow::Context;
 use anyhow::Result;
@@ -1086,40 +1086,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "danger_full_access_on_failure_allows_outside_write",
-            approval_policy: OnFailure,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::WriteFile {
-                target: TargetPath::OutsideWorkspace("dfa_on_failure.txt"),
-                content: "danger-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.2"),
-            outcome: Outcome::Auto,
-            expectation: Expectation::FileCreated {
-                target: TargetPath::OutsideWorkspace("dfa_on_failure.txt"),
-                content: "danger-on-failure",
-            },
-        },
-        ScenarioSpec {
-            name: "danger_full_access_on_failure_allows_outside_write_gpt_5_1_no_exit",
-            approval_policy: OnFailure,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::WriteFile {
-                target: TargetPath::OutsideWorkspace("dfa_on_failure_5_1.txt"),
-                content: "danger-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.4"),
-            outcome: Outcome::Auto,
-            expectation: Expectation::FileCreatedNoExitCode {
-                target: TargetPath::OutsideWorkspace("dfa_on_failure_5_1.txt"),
-                content: "danger-on-failure",
-            },
-        },
-        ScenarioSpec {
             name: "danger_full_access_unless_trusted_requests_approval",
             approval_policy: UnlessTrusted,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -1297,48 +1263,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 message_contains: &["exec command rejected by user"],
             },
         },
-        #[cfg(not(target_os = "linux"))] // TODO (pakrym): figure out why linux behaves differently
-        ScenarioSpec {
-            name: "read_only_on_failure_escalates_after_sandbox_error",
-            approval_policy: OnFailure,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            action: ActionKind::WriteFile {
-                target: TargetPath::Workspace("ro_on_failure.txt"),
-                content: "read-only-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.2"),
-            outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Approved,
-                expected_reason: Some("command failed; retry without sandbox?"),
-            },
-            expectation: Expectation::FileCreated {
-                target: TargetPath::Workspace("ro_on_failure.txt"),
-                content: "read-only-on-failure",
-            },
-        },
-        #[cfg(not(target_os = "linux"))]
-        ScenarioSpec {
-            name: "read_only_on_failure_escalates_after_sandbox_error_gpt_5_1_no_exit",
-            approval_policy: OnFailure,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            action: ActionKind::WriteFile {
-                target: TargetPath::Workspace("ro_on_failure_5_1.txt"),
-                content: "read-only-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.4"),
-            outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Approved,
-                expected_reason: Some("command failed; retry without sandbox?"),
-            },
-            expectation: Expectation::FileCreatedNoExitCode {
-                target: TargetPath::Workspace("ro_on_failure_5_1.txt"),
-                content: "read-only-on-failure",
-            },
-        },
         ScenarioSpec {
             name: "read_only_on_request_network_escalates_when_approved",
             approval_policy: OnRequest,
@@ -1380,7 +1304,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
         ScenarioSpec {
             name: "apply_patch_shell_command_requires_patch_approval",
             approval_policy: UnlessTrusted,
-            sandbox_policy: workspace_write(false),
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::ApplyPatchShell {
                 target: TargetPath::Workspace("apply_patch_shell.txt"),
                 content: "shell-apply-patch",
@@ -1494,7 +1418,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
         ScenarioSpec {
             name: "apply_patch_freeform_unless_trusted_requires_patch_approval",
             approval_policy: UnlessTrusted,
-            sandbox_policy: workspace_write(false),
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::ApplyPatchFreeform {
                 target: TargetPath::Workspace("apply_patch_freeform_unless_trusted.txt"),
                 content: "freeform-patch-unless-trusted",
@@ -1674,27 +1598,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::Auto,
             expectation: Expectation::NetworkSuccess {
                 body_contains: "workspace-network-ok",
-            },
-        },
-        #[cfg(not(target_os = "linux"))] // TODO (pakrym): figure out why linux behaves differently
-        ScenarioSpec {
-            name: "workspace_write_on_failure_escalates_outside_workspace",
-            approval_policy: OnFailure,
-            sandbox_policy: workspace_write(false),
-            action: ActionKind::WriteFile {
-                target: TargetPath::OutsideWorkspace("ww_on_failure.txt"),
-                content: "workspace-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.2"),
-            outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Approved,
-                expected_reason: Some("command failed; retry without sandbox?"),
-            },
-            expectation: Expectation::FileCreated {
-                target: TargetPath::OutsideWorkspace("ww_on_failure.txt"),
-                content: "workspace-on-failure",
             },
         },
         ScenarioSpec {
@@ -2060,13 +1963,8 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let approval_policy = AskForApproval::OnRequest;
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let sandbox_policy_for_config = sandbox_policy.clone();
 
     let mut builder = test_codex()
@@ -2987,7 +2885,7 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let approval_policy = AskForApproval::OnFailure;
+    let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,
@@ -3472,7 +3370,7 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let approval_policy = AskForApproval::OnFailure;
+    let approval_policy = AskForApproval::OnRequest;
     let turn_sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,

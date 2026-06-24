@@ -1,3 +1,4 @@
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_network_proxy::has_proxy_url_env_vars;
@@ -103,52 +104,68 @@ struct UnixSocketPathParam {
 }
 
 fn proxy_policy_inputs(
+    managed_network: Option<&ManagedNetworkSandboxContext>,
     network: Option<&NetworkProxy>,
+    environment_id: Option<&str>,
     extra_allow_unix_sockets: &[AbsolutePathBuf],
-) -> ProxyPolicyInputs {
+) -> Result<ProxyPolicyInputs, String> {
     let extra_allowed = extra_allow_unix_sockets
         .iter()
         .filter_map(|socket_path| normalize_path_for_sandbox(socket_path.as_path()))
         .collect::<Vec<_>>();
 
+    let unix_domain_socket_policy = match network {
+        Some(network) if network.dangerously_allow_all_unix_sockets() => {
+            UnixDomainSocketPolicy::AllowAll
+        }
+        Some(network) => {
+            let mut allowed = network
+                .allow_unix_sockets()
+                .iter()
+                .filter_map(|socket_path| {
+                    match normalize_path_for_sandbox(Path::new(socket_path)) {
+                        Some(path) => Some(path),
+                        None => {
+                            warn!(
+                                "ignoring network.allow_unix_sockets entry because it could not be normalized: {socket_path}"
+                            );
+                            None
+                        }
+                    }
+                })
+                .collect::<Vec<_>>();
+            allowed.extend(extra_allowed);
+            UnixDomainSocketPolicy::Restricted { allowed }
+        }
+        None => UnixDomainSocketPolicy::Restricted {
+            allowed: extra_allowed,
+        },
+    };
+    if let Some(managed_network) = managed_network {
+        return Ok(ProxyPolicyInputs {
+            ports: managed_network.loopback_ports.clone(),
+            has_proxy_config: true,
+            allow_local_binding: managed_network.allow_local_binding,
+            unix_domain_socket_policy,
+        });
+    }
     match network {
         Some(network) => {
             let mut env = HashMap::new();
-            network.apply_to_env(&mut env);
-            let unix_domain_socket_policy = if network.dangerously_allow_all_unix_sockets() {
-                UnixDomainSocketPolicy::AllowAll
-            } else {
-                let mut allowed = network
-                    .allow_unix_sockets()
-                    .iter()
-                    .filter_map(|socket_path| {
-                        match normalize_path_for_sandbox(Path::new(socket_path)) {
-                            Some(path) => Some(path),
-                            None => {
-                                warn!(
-                                    "ignoring network.allow_unix_sockets entry because it could not be normalized: {socket_path}"
-                                );
-                                None
-                            }
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                allowed.extend(extra_allowed);
-                UnixDomainSocketPolicy::Restricted { allowed }
-            };
-            ProxyPolicyInputs {
+            network
+                .apply_to_env_for_optional_environment(&mut env, environment_id)
+                .map_err(|err| err.to_string())?;
+            Ok(ProxyPolicyInputs {
                 ports: proxy_loopback_ports_from_env(&env),
                 has_proxy_config: has_proxy_url_env_vars(&env),
                 allow_local_binding: network.allow_local_binding(),
                 unix_domain_socket_policy,
-            }
+            })
         }
-        None => ProxyPolicyInputs {
-            unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
-                allowed: extra_allowed,
-            },
+        None => Ok(ProxyPolicyInputs {
+            unix_domain_socket_policy,
             ..Default::default()
-        },
+        }),
     }
 }
 
@@ -572,7 +589,7 @@ fn create_seatbelt_command_args_for_legacy_policy(
     sandbox_policy_cwd: &Path,
     enforce_managed_network: bool,
     network: Option<&NetworkProxy>,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         sandbox_policy,
         sandbox_policy_cwd,
@@ -583,6 +600,8 @@ fn create_seatbelt_command_args_for_legacy_policy(
         network_sandbox_policy: NetworkSandboxPolicy::from(sandbox_policy),
         sandbox_policy_cwd,
         enforce_managed_network,
+        managed_network: None,
+        environment_id: None,
         network,
         extra_allow_unix_sockets: &[],
     })
@@ -595,17 +614,23 @@ pub struct CreateSeatbeltCommandArgsParams<'a> {
     pub network_sandbox_policy: NetworkSandboxPolicy,
     pub sandbox_policy_cwd: &'a Path,
     pub enforce_managed_network: bool,
+    pub managed_network: Option<&'a ManagedNetworkSandboxContext>,
+    pub environment_id: Option<&'a str>,
     pub network: Option<&'a NetworkProxy>,
     pub extra_allow_unix_sockets: &'a [AbsolutePathBuf],
 }
 
-pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -> Vec<String> {
+pub fn create_seatbelt_command_args(
+    args: CreateSeatbeltCommandArgsParams<'_>,
+) -> Result<Vec<String>, String> {
     let CreateSeatbeltCommandArgsParams {
         command,
         file_system_sandbox_policy,
         network_sandbox_policy,
         sandbox_policy_cwd,
         enforce_managed_network,
+        managed_network,
+        environment_id,
         network,
         extra_allow_unix_sockets,
     } = args;
@@ -701,7 +726,12 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
             }
         };
 
-    let proxy = proxy_policy_inputs(network, extra_allow_unix_sockets);
+    let proxy = proxy_policy_inputs(
+        managed_network,
+        network,
+        environment_id,
+        extra_allow_unix_sockets,
+    )?;
     let network_policy =
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
 
@@ -737,7 +767,7 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
     seatbelt_args.extend(definition_args);
     seatbelt_args.push("--".to_string());
     seatbelt_args.extend(command);
-    seatbelt_args
+    Ok(seatbelt_args)
 }
 
 #[cfg(test)]

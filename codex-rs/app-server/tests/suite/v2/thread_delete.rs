@@ -122,11 +122,11 @@ fn create_delete_test_rollout(codex_home: &Path, minute: u8, preview: &str) -> R
 async fn thread_delete_handles_live_threads_before_rollout_exists() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -155,7 +155,7 @@ async fn thread_delete_handles_live_threads_before_rollout_exists() -> Result<()
     let _: ThreadDeleteResponse = to_response::<ThreadDeleteResponse>(delete_resp)?;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             ephemeral: Some(true),
             ..Default::default()
         })

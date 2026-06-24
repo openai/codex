@@ -1,11 +1,14 @@
 use anyhow::Context;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_login::CodexAuth;
-use codex_plugin::PluginCapabilitySummary;
+use codex_plugin::PluginId;
 use std::collections::HashSet;
 use tracing::warn;
 
+use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
+use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginsConfigInput;
 use crate::PluginsManager;
 use crate::marketplace::MarketplacePluginInstallPolicy;
@@ -73,21 +76,24 @@ impl PluginsManager {
             return Ok(Vec::new());
         }
 
+        let use_remote_global_catalog =
+            input.plugins.remote_plugin_enabled && auth.is_some_and(CodexAuth::uses_codex_backend);
         let marketplaces = self
             .list_marketplaces_for_config(
                 &input.plugins,
                 &[],
-                /*include_openai_curated*/ !input.plugins.remote_plugin_enabled,
+                /*include_openai_curated*/ !use_remote_global_catalog,
             )
             .context("failed to list plugin marketplaces for tool suggestions")?
             .marketplaces;
-        let remote_installed_marketplaces = if input.plugins.remote_plugin_enabled {
+        let remote_installed_marketplaces = if use_remote_global_catalog {
             self.build_remote_installed_plugin_marketplaces_from_cache(&[
                 REMOTE_GLOBAL_MARKETPLACE_NAME,
             ])
         } else {
             None
         };
+        let skill_config_rules = skill_config_rules_from_stack(&input.plugins.config_layer_stack);
 
         let mut discoverable_plugins = Vec::<ToolSuggestDiscoverablePlugin>::new();
         for marketplace in marketplaces {
@@ -95,8 +101,7 @@ impl PluginsManager {
 
             for plugin in marketplace.plugins {
                 let is_configured_plugin = input.configured_plugin_ids.contains(plugin.id.as_str());
-                let is_fallback_plugin =
-                    TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.id.as_str());
+                let is_fallback_plugin = is_tool_suggest_fallback_plugin(&plugin.id);
                 if plugin.installed
                     || plugin.policy.installation == MarketplacePluginInstallPolicy::NotAvailable
                     || input.disabled_plugin_ids.contains(plugin.id.as_str())
@@ -106,17 +111,15 @@ impl PluginsManager {
                 }
 
                 let plugin_id = plugin.id.clone();
-
                 match self
-                    .read_plugin_detail_for_marketplace_plugin(
-                        &input.plugins,
+                    .tool_suggest_metadata_for_marketplace_plugin(
                         &marketplace_name,
-                        plugin,
+                        &plugin,
+                        &skill_config_rules,
                     )
                     .await
                 {
                     Ok(plugin) => {
-                        let plugin: PluginCapabilitySummary = plugin.into();
                         discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
                             id: plugin.config_name,
                             remote_plugin_id: None,
@@ -162,8 +165,7 @@ impl PluginsManager {
                     || input
                         .configured_plugin_ids
                         .contains(plugin.remote_plugin_id.as_str());
-                let is_fallback_plugin =
-                    TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.config_id.as_str());
+                let is_fallback_plugin = is_tool_suggest_fallback_plugin(&plugin.config_id);
                 let matches_installed_app = plugin
                     .app_ids
                     .iter()
@@ -201,6 +203,25 @@ impl PluginsManager {
         });
         Ok(discoverable_plugins)
     }
+}
+
+fn is_tool_suggest_fallback_plugin(plugin_id: &str) -> bool {
+    if TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin_id) {
+        return true;
+    }
+
+    let Ok(plugin_id) = PluginId::parse(plugin_id) else {
+        return false;
+    };
+    if plugin_id.marketplace_name != OPENAI_API_CURATED_MARKETPLACE_NAME {
+        return false;
+    }
+
+    let default_curated_plugin_id = format!(
+        "{}@{}",
+        plugin_id.plugin_name, OPENAI_CURATED_MARKETPLACE_NAME
+    );
+    TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&default_curated_plugin_id.as_str())
 }
 
 #[cfg(test)]

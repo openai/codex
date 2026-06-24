@@ -3,6 +3,7 @@
 use super::*;
 use crate::config::RolloutConfig;
 use chrono::TimeZone;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -45,6 +46,7 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
         "timestamp": ts,
         "type": "session_meta",
         "payload": {
+            "session_id": uuid,
             "id": uuid,
             "timestamp": ts,
             "cwd": ".",
@@ -83,6 +85,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
 
     let session_meta_line = SessionMetaLine {
         meta: SessionMeta {
+            session_id: thread_id.into(),
             id: thread_id,
             forked_from_id: None,
             parent_thread_id: None,
@@ -100,6 +103,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
             dynamic_tools: None,
             memory_mode: None,
             multi_agent_version: None,
+            context_window: None,
         },
         git: None,
     };
@@ -145,7 +149,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Result<()> {
+async fn load_rollout_items_defaults_legacy_session_id() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let rollout_path = home.path().join("rollout.jsonl");
     let mut file = File::create(&rollout_path)?;
@@ -210,7 +214,10 @@ async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Resu
     assert_eq!(loaded_thread_id, Some(thread_id));
     assert_eq!(parse_errors, 0);
     assert_eq!(items.len(), 2);
-    assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
+    let RolloutItem::SessionMeta(session_meta) = &items[0] else {
+        panic!("expected session metadata");
+    };
+    assert_eq!(session_meta.meta.session_id, SessionId::from(thread_id));
     assert!(matches!(
         items[1],
         RolloutItem::ResponseItem(ResponseItem::Message { .. })
@@ -234,6 +241,7 @@ async fn load_rollout_items_preserves_legacy_guardian_assessment_lines() -> std:
             "timestamp": ts,
             "type": "session_meta",
             "payload": {
+                "session_id": thread_id,
                 "id": thread_id,
                 "timestamp": ts,
                 "cwd": ".",
@@ -297,6 +305,7 @@ async fn load_rollout_items_filters_legacy_ghost_snapshots_from_compaction_histo
             "timestamp": ts,
             "type": "session_meta",
             "payload": {
+                "session_id": thread_id,
                 "id": thread_id,
                 "timestamp": ts,
                 "cwd": ".",
@@ -365,7 +374,9 @@ async fn load_rollout_items_filters_legacy_ghost_snapshots_from_compaction_histo
 async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
+    let session_id = SessionId::default();
     let thread_id = ThreadId::new();
+    let initial_window_id = Uuid::now_v7().to_string();
     let recorder = RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(
@@ -374,9 +385,12 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
             /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
+            "test_originator".to_string(),
             BaseInstructions::default(),
             Vec::new(),
-        ),
+        )
+        .with_session_id(session_id)
+        .with_initial_window_id(initial_window_id.clone()),
     )
     .await?;
 
@@ -421,9 +435,18 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
     assert!(rollout_path.exists(), "rollout file should be materialized");
 
     let text = std::fs::read_to_string(&rollout_path)?;
-    assert!(
-        text.contains("\"type\":\"session_meta\""),
-        "expected session metadata in rollout"
+    let first_line = text.lines().next().expect("session metadata line");
+    let session_meta: RolloutLine = serde_json::from_str(first_line)?;
+    let RolloutItem::SessionMeta(session_meta) = session_meta.item else {
+        panic!("expected session metadata in rollout");
+    };
+    assert_eq!(session_meta.meta.session_id, session_id);
+    assert_eq!(
+        session_meta
+            .meta
+            .context_window
+            .map(|window| window.window_id),
+        Some(initial_window_id)
     );
     let buffered_idx = text
         .find("buffered-event")
@@ -455,6 +478,7 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
             /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
+            "test_originator".to_string(),
             BaseInstructions::default(),
             Vec::new(),
         ),
@@ -732,6 +756,7 @@ async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result
         "timestamp": ts,
         "type": "session_meta",
         "payload": {
+            "session_id": uuid,
             "id": uuid,
             "timestamp": ts,
             "cwd": home.path().display().to_string(),
@@ -984,6 +1009,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         model_provider: None,
         cli_version: None,
         created_at: None,
+        recency_at: Some("2025-01-03T15:59:00.000Z".to_string()),
         updated_at: None,
     };
     let state_item = ThreadItem {
@@ -1002,6 +1028,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         model_provider: Some("state-provider".to_string()),
         cli_version: Some("state-version".to_string()),
         created_at: Some("2025-01-03T16:00:00Z".to_string()),
+        recency_at: Some("2025-01-03T16:00:30.001Z".to_string()),
         updated_at: Some("2025-01-03T16:01:02.003Z".to_string()),
     };
 
@@ -1027,6 +1054,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
     assert_eq!(item.model_provider.as_deref(), Some("state-provider"));
     assert_eq!(item.cli_version.as_deref(), Some("state-version"));
     assert_eq!(item.created_at.as_deref(), Some("2025-01-03T16:00:00Z"));
+    assert_eq!(item.recency_at.as_deref(), Some("2025-01-03T16:00:30.001Z"));
     assert_eq!(item.updated_at.as_deref(), Some("2025-01-03T16:01:02.003Z"));
 }
 
@@ -1134,7 +1162,8 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
         timestamp: "2025-01-03T13:00:01Z".to_string(),
         item: RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some("turn-1".to_string()),
-            cwd: latest_cwd.clone(),
+            cwd: serde_json::from_value(serde_json::json!(&latest_cwd))
+                .expect("absolute latest cwd"),
             workspace_roots: None,
             current_date: None,
             timezone: None,
@@ -1148,6 +1177,7 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             personality: None,
             collaboration_mode: None,
             multi_agent_version: None,
+            multi_agent_mode: None,
             realtime_active: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,

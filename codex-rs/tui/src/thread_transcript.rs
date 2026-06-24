@@ -203,7 +203,8 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
             vec![vec!["web search: ".dim(), query.clone().into()].into()]
         }
         ThreadItem::ImageView { path, .. } => {
-            vec![format!("image: {}", path.as_path().display()).dim().into()]
+            let path = path.render_for_ui();
+            vec![format!("image: {path}").dim().into()]
         }
         ThreadItem::ImageGeneration {
             status, saved_path, ..
@@ -226,7 +227,8 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
         ThreadItem::UserMessage { .. }
         | ThreadItem::AgentMessage { .. }
         | ThreadItem::Plan { .. }
-        | ThreadItem::Reasoning { .. } => return None,
+        | ThreadItem::Reasoning { .. }
+        | ThreadItem::Sleep { .. } => return None,
     };
     (!lines.is_empty()).then(|| PlainHistoryCell::new(lines))
 }

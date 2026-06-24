@@ -210,9 +210,9 @@ impl App {
         &self,
         thread_id: ThreadId,
         request: &ServerRequest,
-    ) -> Option<ThreadInteractiveRequest> {
+    ) -> std::io::Result<Option<ThreadInteractiveRequest>> {
         let thread_label = Some(self.thread_label(thread_id));
-        match request {
+        Ok(match request {
             ServerRequest::CommandExecutionRequestApproval { params, .. } => {
                 let network_approval_context = params.network_approval_context.clone();
                 let additional_permissions = params.additional_permissions.clone();
@@ -226,6 +226,7 @@ impl App {
                         .approval_id
                         .clone()
                         .unwrap_or_else(|| params.item_id.clone()),
+                    environment_id: params.environment_id.clone(),
                     command: params
                         .command
                         .as_deref()
@@ -291,7 +292,10 @@ impl App {
                                 message: message.clone(),
                             },
                         )),
-                        codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
+                        codex_app_server_protocol::McpServerElicitationRequest::OpenAiForm {
+                            ..
+                        }
+                        | codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
                             self.app_event_tx.resolve_elicitation(
                                 thread_id,
                                 params.server_name.clone(),
@@ -305,18 +309,28 @@ impl App {
                     }
                 }
             }
-            ServerRequest::PermissionsRequestApproval { params, .. } => Some(
-                ThreadInteractiveRequest::Approval(ApprovalRequest::Permissions {
-                    thread_id,
-                    thread_label,
-                    call_id: params.item_id.clone(),
-                    environment_id: params.environment_id.clone(),
-                    reason: params.reason.clone(),
-                    permissions: params.permissions.clone().into(),
-                }),
-            ),
+            ServerRequest::PermissionsRequestApproval { params, .. } => {
+                // TODO(anp): Remove this native-path localization error path once core permission
+                // paths remain PathUri after crossing the app-server boundary.
+                let permissions = params.permissions.clone().try_into().map_err(|err| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("failed to localize requested filesystem paths: {err}"),
+                    )
+                })?;
+                Some(ThreadInteractiveRequest::Approval(
+                    ApprovalRequest::Permissions {
+                        thread_id,
+                        thread_label,
+                        call_id: params.item_id.clone(),
+                        environment_id: params.environment_id.clone(),
+                        reason: params.reason.clone(),
+                        permissions,
+                    },
+                ))
+            }
             _ => None,
-        }
+        })
     }
 
     pub(super) fn push_thread_interactive_request(&mut self, request: ThreadInteractiveRequest) {
@@ -376,20 +390,23 @@ impl App {
         requests
     }
 
-    pub(super) async fn surface_pending_inactive_thread_interactive_requests(&mut self) {
+    pub(super) async fn surface_pending_inactive_thread_interactive_requests(
+        &mut self,
+    ) -> Result<()> {
         if self.active_side_parent_thread_id().is_some() {
-            return;
+            return Ok(());
         }
 
         let requests = self.pending_inactive_thread_requests().await;
         for (thread_id, request) in requests {
             if let Some(request) = self
                 .interactive_request_for_thread_request(thread_id, &request)
-                .await
+                .await?
             {
                 self.push_thread_interactive_request(request);
             }
         }
+        Ok(())
     }
 
     pub(super) async fn submit_active_thread_op(
@@ -991,7 +1008,7 @@ impl App {
     ) -> Result<()> {
         let inactive_interactive_request = if self.active_thread_id != Some(thread_id) {
             self.interactive_request_for_thread_request(thread_id, &request)
-                .await
+                .await?
         } else {
             None
         };
@@ -1098,8 +1115,7 @@ impl App {
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ true);
         self.chat_widget.handle_thread_session(session);
-        let should_buffer_initial_replay =
-            self.terminal_resize_reflow_enabled() && !turns.is_empty();
+        let should_buffer_initial_replay = !turns.is_empty();
         if should_buffer_initial_replay {
             self.app_event_tx
                 .send(AppEvent::BeginInitialHistoryReplayBuffer);
@@ -1289,8 +1305,7 @@ impl App {
         resume_restored_queue: bool,
     ) {
         self.refresh_mcp_startup_expected_servers_from_config();
-        let should_buffer_replay = self.terminal_resize_reflow_enabled()
-            && (!snapshot.turns.is_empty() || !snapshot.events.is_empty());
+        let should_buffer_replay = !snapshot.turns.is_empty() || !snapshot.events.is_empty();
         if should_buffer_replay {
             self.app_event_tx
                 .send(AppEvent::BeginThreadSwitchHistoryReplayBuffer);

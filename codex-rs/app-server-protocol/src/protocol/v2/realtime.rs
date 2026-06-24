@@ -1,6 +1,5 @@
 use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
-use codex_protocol::protocol::RealtimeConversationArchitecture;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
@@ -67,15 +66,30 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
-    /// Overrides the configured realtime architecture for this session only.
+    /// Leaves Codex response handoffs to the client's explicit append calls instead of forwarding
+    /// them automatically. Defaults to false.
     #[ts(optional = nullable)]
-    pub architecture: Option<RealtimeConversationArchitecture>,
+    pub client_managed_handoffs: Option<bool>,
+    /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
+    #[ts(optional = nullable)]
+    pub codex_responses_as_items: Option<bool>,
+    /// Optional prefix added to automatic Codex response items when `codexResponsesAsItems` is true.
+    #[ts(optional = nullable)]
+    pub codex_response_item_prefix: Option<String>,
+    /// Optional prefix added to automatic V1 Codex commentary sent with
+    /// `conversation.handoff.append` when `codexResponsesAsItems` is not true. Final answers are
+    /// sent without the prefix.
+    #[ts(optional = nullable)]
+    pub codex_response_handoff_prefix: Option<String>,
     /// Overrides the configured realtime model for this session only.
     #[ts(optional = nullable)]
     pub model: Option<String>,
     /// Selects text or audio output for the realtime session. Transport and voice stay
     /// independent so clients can choose how they connect separately from what the model emits.
     pub output_modality: RealtimeOutputModality,
+    /// Set to false to start without Codex's startup context. Omitted or null includes it.
+    #[ts(optional = nullable)]
+    pub include_startup_context: Option<bool>,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
@@ -145,6 +159,21 @@ pub struct ThreadRealtimeAppendTextParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeAppendTextResponse {}
+
+/// EXPERIMENTAL - append speakable text to thread realtime.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeAppendSpeechParams {
+    pub thread_id: String,
+    pub text: String,
+}
+
+/// EXPERIMENTAL - response for appending realtime speech.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeAppendSpeechResponse {}
 
 /// EXPERIMENTAL - stop thread realtime.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]

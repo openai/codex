@@ -8,19 +8,18 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::runtime::emit_duration;
 use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
 use crate::tools::ToolInfo;
 use anyhow::Context;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::McpServerInfo;
-use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
 use codex_utils_plugins::mcp_connector::sanitize_name;
 use serde::Deserialize;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
+use tracing::instrument;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexAppsToolsCacheKey {
@@ -67,15 +66,7 @@ pub(crate) enum CachedCodexAppsToolsLoad {
     Invalid,
 }
 
-pub(crate) fn normalize_codex_apps_tool_title(
-    server_name: &str,
-    connector_name: Option<&str>,
-    value: &str,
-) -> String {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return value.to_string();
-    }
-
+pub(crate) fn normalize_codex_apps_tool_title(connector_name: Option<&str>, value: &str) -> String {
     let Some(connector_name) = connector_name
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -94,15 +85,10 @@ pub(crate) fn normalize_codex_apps_tool_title(
 }
 
 pub(crate) fn normalize_codex_apps_callable_name(
-    server_name: &str,
     tool_name: &str,
     connector_id: Option<&str>,
     connector_name: Option<&str>,
 ) -> String {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return tool_name.to_string();
-    }
-
     let tool_name = sanitize_name(tool_name);
 
     if let Some(connector_name) = connector_name
@@ -132,25 +118,18 @@ pub(crate) fn normalize_codex_apps_callable_namespace(
     server_name: &str,
     connector_name: Option<&str>,
 ) -> String {
-    if server_name == CODEX_APPS_MCP_SERVER_NAME
-        && let Some(connector_name) = connector_name
-    {
+    if let Some(connector_name) = connector_name {
         format!("{}__{}", server_name, sanitize_name(connector_name))
     } else {
         server_name.to_string()
     }
 }
 
-pub(crate) fn write_cached_codex_apps_tools_if_needed(
-    server_name: &str,
+pub(crate) fn write_codex_apps_tools_cache(
     cache_context: Option<&CodexAppsToolsCacheContext>,
     server_info: &McpServerInfo,
     tools: &[ToolInfo],
 ) {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return;
-    }
-
     if let Some(cache_context) = cache_context {
         let cache_write_start = Instant::now();
         write_cached_codex_apps_tools(cache_context, tools);
@@ -166,13 +145,8 @@ pub(crate) fn write_cached_codex_apps_tools_if_needed(
 }
 
 pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
-    server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
 ) -> Option<Vec<ToolInfo>> {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
-    }
-
     let cache_context = cache_context?;
 
     match load_cached_codex_apps_tools(cache_context) {
@@ -182,13 +156,8 @@ pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
 }
 
 pub(crate) fn load_startup_cached_codex_apps_server_info(
-    server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
 ) -> Option<McpServerInfo> {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
-    }
-
     load_cached_codex_apps_server_info(cache_context?)
 }
 
@@ -202,6 +171,7 @@ pub(crate) fn read_cached_codex_apps_tools(
     }
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn load_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
 ) -> CachedCodexAppsToolsLoad {
@@ -220,7 +190,7 @@ pub(crate) fn load_cached_codex_apps_tools(
     if cache.schema_version != CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION {
         return CachedCodexAppsToolsLoad::Invalid;
     }
-    CachedCodexAppsToolsLoad::Hit(filter_disallowed_codex_apps_tools(cache.tools))
+    CachedCodexAppsToolsLoad::Hit(cache.tools)
 }
 
 pub(crate) fn write_cached_codex_apps_tools(
@@ -233,16 +203,16 @@ pub(crate) fn write_cached_codex_apps_tools(
     {
         return;
     }
-    let tools = filter_disallowed_codex_apps_tools(tools.to_vec());
     let Ok(bytes) = serde_json::to_vec_pretty(&CodexAppsToolsDiskCache {
         schema_version: CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION,
-        tools,
+        tools: tools.to_vec(),
     }) else {
         return;
     };
     let _ = std::fs::write(cache_path, bytes);
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn load_cached_codex_apps_server_info(
     cache_context: &CodexAppsToolsCacheContext,
 ) -> Option<McpServerInfo> {
@@ -279,17 +249,6 @@ fn write_cached_codex_apps_server_info(
     Ok(())
 }
 
-pub(crate) fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
-    tools
-        .into_iter()
-        .filter(|tool| {
-            tool.connector_id
-                .as_deref()
-                .is_none_or(is_connector_id_allowed)
-        })
-        .collect()
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CodexAppsToolsDiskCache {
     schema_version: u8,
@@ -303,7 +262,7 @@ struct CodexAppsServerInfoDiskCache {
 }
 
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
-pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 3;
+pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 4;
 
 const CODEX_APPS_SERVER_INFO_CACHE_DIR: &str = "cache/codex_apps_server_info";
 const CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION: u8 = 1;

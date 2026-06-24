@@ -1,6 +1,7 @@
 use super::*;
 use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::tempdir;
 
 fn write_plugin_with_version(
@@ -69,6 +70,46 @@ fn install_copies_plugin_into_default_marketplace() {
     );
     assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
     assert!(installed_path.join("skills/SKILL.md").is_file());
+}
+
+#[test]
+fn install_accepts_manifest_mcp_server_objects() {
+    let tmp = tempdir().unwrap();
+    let plugin_root = tmp.path().join("counter-sample");
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "counter-sample",
+  "version": "1.1.1",
+  "mcpServers": {
+    "counter": {
+      "type": "http",
+      "url": "https://sample.example/counter/mcp"
+    }
+  }
+}"#,
+    )
+    .unwrap();
+    let plugin_id = PluginId::new("counter-sample".to_string(), "debug".to_string()).unwrap();
+
+    let result = PluginStore::new(tmp.path().to_path_buf())
+        .install(
+            AbsolutePathBuf::try_from(plugin_root).unwrap(),
+            plugin_id.clone(),
+        )
+        .unwrap();
+
+    let installed_path = tmp.path().join("plugins/cache/debug/counter-sample/1.1.1");
+    assert_eq!(
+        result,
+        PluginInstallResult {
+            plugin_id,
+            plugin_version: "1.1.1".to_string(),
+            installed_path: AbsolutePathBuf::try_from(installed_path.clone()).unwrap(),
+        }
+    );
+    assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
 }
 
 #[test]
@@ -152,7 +193,112 @@ fn install_with_version_uses_requested_cache_version() {
 }
 
 #[test]
-fn install_uses_manifest_version_when_present() {
+fn remote_plugin_install_metadata_follows_installed_cache_lifecycle() {
+    let tmp = tempdir().unwrap();
+    write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+    let plugin_id = PluginId::new(
+        "sample-plugin".to_string(),
+        "openai-curated-remote".to_string(),
+    )
+    .unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let source = AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap();
+
+    store
+        .install(source.clone(), plugin_id.clone())
+        .expect("install plugin");
+    assert_eq!(store.remote_plugin_id(&plugin_id).unwrap(), None);
+
+    store
+        .write_remote_plugin_id(&plugin_id, "plugins~Plugin_sample")
+        .expect("write remote identity");
+    let metadata_path = store.remote_plugin_install_metadata_path(&plugin_id);
+    assert_eq!(
+        metadata_path.as_path().file_name(),
+        Some(std::ffi::OsStr::new(".codex-remote-plugin-install.json"))
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(metadata_path.as_path()).expect("read install metadata")
+        )
+        .expect("parse install metadata"),
+        json!({
+            "schema_version": 1,
+            "remote_plugin_id": "plugins~Plugin_sample",
+        })
+    );
+    assert_eq!(
+        store.remote_plugin_id(&plugin_id).unwrap(),
+        Some("plugins~Plugin_sample".to_string())
+    );
+    store
+        .write_remote_plugin_id(&plugin_id, "plugins~Plugin_updated")
+        .expect("replace remote identity");
+    assert_eq!(
+        store.remote_plugin_id(&plugin_id).unwrap(),
+        Some("plugins~Plugin_updated".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(metadata_path.as_path()).expect("read updated install metadata")
+        )
+        .expect("parse updated install metadata"),
+        json!({
+            "schema_version": 1,
+            "remote_plugin_id": "plugins~Plugin_updated",
+        })
+    );
+
+    store
+        .install(source, plugin_id.clone())
+        .expect("replace with local install");
+    assert_eq!(store.remote_plugin_id(&plugin_id).unwrap(), None);
+    assert!(!metadata_path.as_path().exists());
+
+    store
+        .write_remote_plugin_id(&plugin_id, "plugins~Plugin_sample")
+        .expect("restore remote identity");
+    store.uninstall(&plugin_id).expect("uninstall plugin");
+    assert_eq!(store.remote_plugin_id(&plugin_id).unwrap(), None);
+    assert!(!metadata_path.as_path().exists());
+}
+
+#[test]
+fn remote_plugin_install_metadata_rejects_unsupported_schema_version() {
+    let tmp = tempdir().unwrap();
+    write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+    let plugin_id = PluginId::new(
+        "sample-plugin".to_string(),
+        "openai-curated-remote".to_string(),
+    )
+    .unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    store
+        .install(
+            AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
+            plugin_id.clone(),
+        )
+        .expect("install plugin");
+    fs::write(
+        store
+            .remote_plugin_install_metadata_path(&plugin_id)
+            .as_path(),
+        r#"{"schema_version":2,"remote_plugin_id":"plugins~Plugin_sample"}"#,
+    )
+    .expect("write unsupported install metadata");
+
+    let err = store
+        .remote_plugin_id(&plugin_id)
+        .expect_err("unsupported schema version should fail");
+
+    assert_eq!(
+        err.to_string(),
+        "unsupported remote plugin install metadata schema version: 2"
+    );
+}
+
+#[test]
+fn install_prefers_on_disk_manifest_version_over_fallback() {
     let tmp = tempdir().unwrap();
     write_plugin_with_version(
         tmp.path(),
@@ -163,9 +309,10 @@ fn install_uses_manifest_version_when_present() {
     let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
 
     let result = PluginStore::new(tmp.path().to_path_buf())
-        .install(
+        .install_with_fallback_manifest(
             AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
             plugin_id.clone(),
+            r#"{"name":"sample-plugin","version":"9.9.9"}"#,
         )
         .unwrap();
 

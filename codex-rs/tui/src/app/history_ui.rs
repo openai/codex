@@ -32,36 +32,38 @@ impl App {
         }
         // A committed cell can unblock a settled /usage card that was waiting
         // behind a transient active cell or a provisional stream tail.
-        self.chat_widget
-            .request_completed_token_activity_output_insertion();
+        self.chat_widget.request_pending_usage_output_insertion();
     }
 
-    pub(super) fn insert_completed_token_activity_output_if_ready(&mut self, tui: &mut tui::Tui) {
-        if self.chat_widget.token_activity_history_insertion_blocked()
-            || self.transcript_cells.last().is_some_and(|cell| {
-                cell.as_any().is::<history_cell::AgentMessageCell>()
-                    || cell.as_any().is::<history_cell::ProposedPlanStreamCell>()
-            })
-        {
-            return;
-        }
-        self.insert_completed_token_activity_output(tui);
+    pub(super) fn pending_usage_output_insertion_blocked(&self) -> bool {
+        self.chat_widget.usage_history_insertion_blocked()
+            || self
+                .transcript_cells
+                .last()
+                .is_some_and(|cell| cell.as_any().is::<history_cell::AgentMessageCell>())
     }
 
-    pub(super) fn insert_completed_token_activity_output(&mut self, tui: &mut tui::Tui) {
+    fn insert_pending_usage_output(&mut self, tui: &mut tui::Tui) {
         if let Some(cell) = self.chat_widget.take_completed_token_activity_output() {
+            self.insert_history_cell(tui, Box::new(cell));
+        }
+        if let Some(cell) = self.chat_widget.take_pending_rate_limit_reset_hint() {
             self.insert_history_cell(tui, Box::new(cell));
         }
     }
 
-    pub(super) fn insert_completed_token_activity_output_after_stream_shutdown(
-        &mut self,
-        tui: &mut tui::Tui,
-    ) {
-        if self.chat_widget.token_activity_history_insertion_blocked() {
+    pub(super) fn insert_pending_usage_output_if_ready(&mut self, tui: &mut tui::Tui) {
+        if self.pending_usage_output_insertion_blocked() {
             return;
         }
-        self.insert_completed_token_activity_output(tui);
+        self.insert_pending_usage_output(tui);
+    }
+
+    pub(super) fn insert_pending_usage_output_after_stream_shutdown(&mut self, tui: &mut tui::Tui) {
+        if self.chat_widget.usage_history_insertion_blocked() {
+            return;
+        }
+        self.insert_pending_usage_output(tui);
     }
 
     pub(super) fn open_url_in_browser(&mut self, url: String) {
@@ -167,6 +169,7 @@ impl App {
         self.has_emitted_history_lines = false;
         self.transcript_reflow.clear();
         self.chat_widget.clear_pending_token_activity_refreshes();
+        self.chat_widget.clear_pending_rate_limit_reset_hint();
         self.initial_history_replay_buffer = None;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;

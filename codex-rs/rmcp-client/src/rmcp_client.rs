@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -40,6 +39,7 @@ use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
+use rmcp::model::RequestParamsMeta;
 use rmcp::model::ServerResult;
 use rmcp::model::Tool;
 use rmcp::service::RoleClient;
@@ -58,6 +58,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio::time;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::elicitation_client_service::ElicitationClientService;
@@ -251,7 +252,24 @@ fn remaining_operation_timeout(
     }
 }
 
-pub type Elicitation = CreateElicitationRequestParams;
+#[derive(Debug, Clone, PartialEq)]
+pub enum Elicitation {
+    Mcp(CreateElicitationRequestParams),
+    OpenAiForm {
+        meta: Option<serde_json::Value>,
+        message: String,
+        requested_schema: serde_json::Value,
+    },
+}
+
+impl Elicitation {
+    pub fn meta(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        match self {
+            Self::Mcp(request) => request.meta().map(|meta| &meta.0),
+            Self::OpenAiForm { meta, .. } => meta.as_ref().and_then(serde_json::Value::as_object),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -336,7 +354,7 @@ impl RmcpClient {
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
         env_vars: &[McpServerEnvVar],
-        cwd: Option<PathBuf>,
+        cwd: Option<String>,
         launcher: Arc<dyn StdioServerLauncher>,
     ) -> io::Result<Self> {
         let transport_recipe = TransportRecipe::Stdio {
@@ -403,6 +421,7 @@ impl RmcpClient {
 
     /// Perform the initialization handshake with the MCP server.
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization
+    #[instrument(level = "trace", skip_all)]
     pub async fn initialize(
         &self,
         params: InitializeRequestParams,
@@ -438,7 +457,7 @@ impl RmcpClient {
             .peer()
             .peer_info()
             .ok_or_else(|| anyhow!("handshake succeeded but server info was missing"))?;
-        let initialize_result = initialize_result_rmcp.clone();
+        let initialize_result = initialize_result_rmcp.as_ref().clone();
 
         {
             let mut initialize_context = self.initialize_context.lock().await;
@@ -484,6 +503,7 @@ impl RmcpClient {
         Ok(result)
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn list_tools_with_connector_ids(
         &self,
         params: Option<PaginatedRequestParams>,

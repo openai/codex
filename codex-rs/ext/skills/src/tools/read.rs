@@ -75,14 +75,17 @@ impl ToolExecutor<ToolCall> for ReadTool {
             let requested_resource = SkillResourceId::new(args.resource);
             let result = self
                 .context
-                .providers
-                .read(SkillReadRequest {
-                    authority,
-                    package: SkillPackageId(args.package),
-                    resource: requested_resource.clone(),
-                    host: None,
-                    mcp_resources: self.context.mcp_resources.clone(),
-                })
+                .thread_state
+                .read_skill(
+                    &self.context.providers,
+                    SkillReadRequest {
+                        authority,
+                        package: SkillPackageId(args.package),
+                        resource: requested_resource.clone(),
+                        host_snapshot: None,
+                        mcp_resources: self.context.mcp_resources.clone(),
+                    },
+                )
                 .await
                 .map_err(|err| {
                     tracing::warn!(

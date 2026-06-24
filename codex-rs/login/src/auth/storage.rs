@@ -22,12 +22,12 @@ use super::BedrockApiKeyAuth;
 use crate::token_data::TokenData;
 use codex_agent_identity::AgentIdentityJwtClaims;
 use codex_agent_identity::decode_agent_identity_jwt;
-use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 pub use codex_config::types::AuthKeyringBackendKind;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::auth::AuthMode;
 use codex_secrets::LocalSecretsNamespace;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
@@ -51,7 +51,7 @@ pub struct AuthDotJson {
     pub last_refresh: Option<DateTime<Utc>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_identity: Option<String>,
+    pub agent_identity: Option<AgentIdentityStorage>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_access_token: Option<String>,
@@ -61,14 +61,66 @@ pub struct AuthDotJson {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AgentIdentityStorage {
+    Jwt(String),
+    Record(AgentIdentityAuthRecord),
+}
+
+impl AgentIdentityStorage {
+    pub fn has_auth_material(&self) -> bool {
+        match self {
+            Self::Jwt(jwt) => !jwt.trim().is_empty(),
+            Self::Record(record) => {
+                !record.agent_runtime_id.trim().is_empty()
+                    && !record.agent_private_key.trim().is_empty()
+            }
+        }
+    }
+
+    pub(crate) fn as_record(&self) -> Option<&AgentIdentityAuthRecord> {
+        match self {
+            Self::Jwt(_) => None,
+            Self::Record(record) => Some(record),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct AgentIdentityAuthRecord {
     pub agent_runtime_id: String,
     pub agent_private_key: String,
     pub account_id: String,
     pub chatgpt_user_id: String,
-    pub email: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_empty_string",
+        serialize_with = "serialize_optional_string_as_empty"
+    )]
+    pub email: Option<String>,
     pub plan_type: AccountPlanType,
     pub chatgpt_account_is_fedramp: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
+
+fn deserialize_optional_non_empty_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(|value| value.filter(|value| !value.is_empty()))
+}
+
+fn serialize_optional_string_as_empty<S>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    value.as_deref().unwrap_or_default().serialize(serializer)
 }
 
 impl AgentIdentityAuthRecord {
@@ -90,6 +142,7 @@ impl From<AgentIdentityJwtClaims> for AgentIdentityAuthRecord {
             email: claims.email,
             plan_type: claims.plan_type.into(),
             chatgpt_account_is_fedramp: claims.chatgpt_account_is_fedramp,
+            task_id: None,
         }
     }
 }

@@ -12,6 +12,7 @@ use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 
 impl App {
     pub(super) async fn reject_app_server_request(
@@ -103,6 +104,18 @@ impl PendingAppServerRequests {
                 None
             }
             ServerRequest::PermissionsRequestApproval { request_id, params } => {
+                // TODO(anp): Remove this duplicate validation once core permission paths remain
+                // PathUri after crossing the app-server boundary. Native permission paths do not
+                // yet have an ingress validation step, so validate them here before recording the
+                // request as pending. Discovering an invalid path later in a UI delivery path
+                // would leave the app-server RPC waiting without a clean rejection path.
+                if let Err(err) = CoreRequestPermissionProfile::try_from(params.permissions.clone())
+                {
+                    return Some(UnsupportedAppServerRequest {
+                        request_id: request_id.clone(),
+                        message: format!("failed to localize requested filesystem paths: {err}"),
+                    });
+                }
                 self.permissions_approvals
                     .insert(params.item_id.clone(), request_id.clone());
                 None
@@ -138,6 +151,12 @@ impl PendingAppServerRequests {
                 Some(UnsupportedAppServerRequest {
                     request_id: request_id.clone(),
                     message: "Attestation generation is not available in TUI.".to_string(),
+                })
+            }
+            ServerRequest::CurrentTimeRead { request_id, .. } => {
+                Some(UnsupportedAppServerRequest {
+                    request_id: request_id.clone(),
+                    message: "External current time is not available in TUI.".to_string(),
                 })
             }
             ServerRequest::ApplyPatchApproval { request_id, .. } => {
@@ -339,6 +358,7 @@ impl PendingAppServerRequests {
             ServerRequest::DynamicToolCall { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }
             | ServerRequest::AttestationGenerate { .. }
+            | ServerRequest::CurrentTimeRead { .. }
             | ServerRequest::ApplyPatchApproval { .. }
             | ServerRequest::ExecCommandApproval { .. } => true,
         }
@@ -397,6 +417,7 @@ struct McpRequestKey {
 mod tests {
     use super::PendingAppServerRequests;
     use super::ResolvedAppServerRequest;
+    use super::UnsupportedAppServerRequest;
     use crate::app_command::AppCommand as Op;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
@@ -438,6 +459,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 started_at_ms: 0,
                 approval_id: Some("approval-1".to_string()),
+                environment_id: None,
                 reason: None,
                 network_approval_context: None,
                 command: Some("ls".to_string()),
@@ -463,6 +485,54 @@ mod tests {
 
         assert_eq!(resolution.request_id, AppServerRequestId::Integer(41));
         assert_eq!(resolution.result, json!({ "decision": "accept" }));
+    }
+
+    #[test]
+    fn rejects_permissions_with_paths_that_cannot_be_localized() {
+        let mut pending = PendingAppServerRequests::default();
+        let request_id = AppServerRequestId::Integer(7);
+        let permissions = codex_app_server_protocol::RequestPermissionProfile {
+            network: None,
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![
+                    serde_json::from_value(json!("relative/path"))
+                        .expect("relative API path should deserialize"),
+                ]),
+                write: None,
+                glob_scan_max_depth: None,
+                entries: None,
+            }),
+        };
+        let localization_error =
+            RequestPermissionProfile::try_from(permissions.clone()).expect_err("relative path");
+        let cwd = AbsolutePathBuf::try_from(PathBuf::from(if cfg!(windows) {
+            r"C:\tmp"
+        } else {
+            "/tmp"
+        }))
+        .expect("path must be absolute");
+
+        assert_eq!(
+            pending.note_server_request(&ServerRequest::PermissionsRequestApproval {
+                request_id: request_id.clone(),
+                params: PermissionsRequestApprovalParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "perm-1".to_string(),
+                    environment_id: None,
+                    started_at_ms: 0,
+                    cwd,
+                    reason: None,
+                    permissions,
+                },
+            }),
+            Some(UnsupportedAppServerRequest {
+                request_id,
+                message: format!(
+                    "failed to localize requested filesystem paths: {localization_error}"
+                ),
+            })
+        );
     }
 
     #[test]
@@ -544,19 +614,19 @@ mod tests {
                         enabled: Some(true),
                     }),
                     file_system: Some(AdditionalFileSystemPermissions {
-                        read: Some(vec![absolute_path(read_path)]),
-                        write: Some(vec![absolute_path(write_path)]),
+                        read: Some(vec![absolute_path(read_path).into()]),
+                        write: Some(vec![absolute_path(write_path).into()]),
                         glob_scan_max_depth: None,
                         entries: Some(vec![
                             codex_app_server_protocol::FileSystemSandboxEntry {
                                 path: codex_app_server_protocol::FileSystemPath::Path {
-                                    path: absolute_path(read_path),
+                                    path: absolute_path(read_path).into(),
                                 },
                                 access: codex_app_server_protocol::FileSystemAccessMode::Read,
                             },
                             codex_app_server_protocol::FileSystemSandboxEntry {
                                 path: codex_app_server_protocol::FileSystemPath::Path {
-                                    path: absolute_path(write_path),
+                                    path: absolute_path(write_path).into(),
                                 },
                                 access: codex_app_server_protocol::FileSystemAccessMode::Write,
                             },
@@ -729,6 +799,7 @@ mod tests {
                     item_id: "call-1".to_string(),
                     started_at_ms: 0,
                     approval_id: Some("approval-1".to_string()),
+                    environment_id: None,
                     reason: None,
                     network_approval_context: None,
                     command: Some("ls".to_string()),

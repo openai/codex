@@ -63,7 +63,7 @@ fn find_log_by_event_name<'a>(
                 .get("event.name")
                 .is_some_and(|value| value == event_name)
         })
-        .unwrap_or_else(|| panic!("missing log event: {event_name}"))
+        .expect("log event should exist")
 }
 
 fn find_span_event_by_name_attr<'a>(
@@ -77,7 +77,7 @@ fn find_span_event_by_name_attr<'a>(
                 .get("event.name")
                 .is_some_and(|value| value == event_name)
         })
-        .unwrap_or_else(|| panic!("missing span event: {event_name}"))
+        .expect("span event should exist")
 }
 
 fn auth_env_metadata() -> AuthEnvTelemetryMetadata {

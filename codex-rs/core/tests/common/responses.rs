@@ -91,11 +91,39 @@ fn is_zstd_encoding(value: &str) -> bool {
 
 fn decode_body_bytes(body: &[u8], content_encoding: Option<&str>) -> Vec<u8> {
     if content_encoding.is_some_and(is_zstd_encoding) {
-        zstd::stream::decode_all(std::io::Cursor::new(body)).unwrap_or_else(|err| {
-            panic!("failed to decode zstd request body: {err}");
-        })
+        zstd::stream::decode_all(std::io::Cursor::new(body))
+            .expect("failed to decode zstd request body")
     } else {
         body.to_vec()
+    }
+}
+
+/// Returns a response item without internal transport metadata for semantic assertions.
+pub fn strip_metadata(mut item: ResponseItem) -> ResponseItem {
+    item.clear_internal_chat_message_metadata_passthrough();
+    item
+}
+
+/// Returns response items without internal transport metadata for semantic assertions.
+pub fn strip_metadata_from_items(items: &[ResponseItem]) -> Vec<ResponseItem> {
+    items.iter().cloned().map(strip_metadata).collect()
+}
+
+/// Returns JSON without internal transport metadata for semantic assertions.
+pub fn strip_metadata_from_json(value: Value) -> Value {
+    match value {
+        Value::Array(values) => {
+            Value::Array(values.into_iter().map(strip_metadata_from_json).collect())
+        }
+        Value::Object(mut map) => {
+            map.remove("internal_chat_message_metadata_passthrough");
+            Value::Object(
+                map.into_iter()
+                    .map(|(key, value)| (key, strip_metadata_from_json(value)))
+                    .collect(),
+            )
+        }
+        value => value,
     }
 }
 
@@ -222,7 +250,7 @@ impl ResponsesRequest {
                 item.get("type").unwrap() == call_type && item.get("call_id").unwrap() == call_id
             })
             .cloned()
-            .unwrap_or_else(|| panic!("function call output {call_id} item not found in request"))
+            .expect("function call output item not found in request")
     }
 
     /// Returns true if this request's `input` contains a `function_call` with
@@ -685,6 +713,7 @@ pub fn user_message_item(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -1060,9 +1089,10 @@ pub async fn mount_compact_user_history_with_summary_sequence(
     impl Respond for UserHistorySummaryResponder {
         fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
             let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
-            let Some(summary_text) = self.summary_texts.get(call_num) else {
-                panic!("no summary text for compact request {call_num}");
-            };
+            let summary_text = self
+                .summary_texts
+                .get(call_num)
+                .expect("missing summary text for compact request");
             let body_bytes = decode_body_bytes(
                 &request.body,
                 request
@@ -1070,8 +1100,8 @@ pub async fn mount_compact_user_history_with_summary_sequence(
                     .get("content-encoding")
                     .and_then(|value| value.to_str().ok()),
             );
-            let body_json: Value = serde_json::from_slice(&body_bytes)
-                .unwrap_or_else(|err| panic!("failed to parse compact request body: {err}"));
+            let body_json: Value =
+                serde_json::from_slice(&body_bytes).expect("failed to parse compact request body");
             let mut output = body_json
                 .get("input")
                 .and_then(Value::as_array)
@@ -1091,11 +1121,17 @@ pub async fn mount_compact_user_history_with_summary_sequence(
                         )
                 })
                 .collect::<Vec<Value>>();
-            // Append a synthetic compaction item as the newest item.
-            output.push(serde_json::json!({
+            let compaction_turn_id = body_json["client_metadata"]["turn_id"].as_str();
+            // Match Responses API: generated compaction items inherit the compact request turn.
+            let mut compaction_item = serde_json::json!({
                 "type": "compaction",
                 "encrypted_content": summary_text,
-            }));
+            });
+            if let Some(turn_id) = compaction_turn_id {
+                compaction_item["internal_chat_message_metadata_passthrough"] =
+                    serde_json::json!({ "turn_id": turn_id });
+            }
+            output.push(compaction_item);
             ResponseTemplate::new(200)
                 .insert_header("content-type", "application/json")
                 .set_body_json(serde_json::json!({ "output": output }))
@@ -1236,9 +1272,11 @@ pub async fn start_websocket_server_with_headers(
                 Ok(value) => value,
                 Err(_) => return,
             };
+            // Ordinary HTTP probes can share this listener with websocket tests. Only a
+            // successful websocket handshake should consume a scripted connection.
             let connection = {
-                let mut pending = connections.lock().unwrap();
-                pending.pop_front()
+                let pending = connections.lock().unwrap();
+                pending.front().cloned()
             };
 
             let Some(connection) = connection else {
@@ -1290,6 +1328,7 @@ pub async fn start_websocket_server_with_headers(
                 Ok(ws) => ws,
                 Err(_) => continue,
             };
+            connections.lock().unwrap().pop_front();
 
             let connection_index = {
                 let mut log = requests.lock().unwrap();
@@ -1446,12 +1485,14 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
     impl Respond for SeqResponder {
         fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
             let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
-            match self.responses.get(call_num) {
-                Some(body) => ResponseTemplate::new(200)
-                    .insert_header("content-type", "text/event-stream")
-                    .set_body_string(body.clone()),
-                None => panic!("no response for {call_num}"),
-            }
+            let missing_response_message = format!("no response for {call_num}");
+            let body = self
+                .responses
+                .get(call_num)
+                .expect(&missing_response_message);
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body.clone())
         }
     }
 
@@ -1490,7 +1531,7 @@ pub async fn mount_response_sequence(
             let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
             self.responses
                 .get(call_num)
-                .unwrap_or_else(|| panic!("no response for {call_num}"))
+                .expect("missing response for call")
                 .clone()
         }
     }
@@ -1535,9 +1576,10 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
     let Ok(body): Result<Value, _> = serde_json::from_slice(&body_bytes) else {
         return;
     };
-    let Some(items) = body.get("input").and_then(Value::as_array) else {
-        panic!("input array not found in request");
-    };
+    let items = body
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array not found in request");
 
     use std::collections::HashSet;
 
@@ -1561,9 +1603,7 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
             .iter()
             .filter(|item| item.get("type").and_then(Value::as_str) == Some(kind))
             .map(|item| {
-                let Some(id) = get_call_id(item) else {
-                    panic!("{missing_msg}");
-                };
+                let id = get_call_id(item).expect(missing_msg);
                 id.to_string()
             })
             .collect()

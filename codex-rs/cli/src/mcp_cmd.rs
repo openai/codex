@@ -640,7 +640,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 let env_display = format_env_display(env.as_ref(), env_vars);
                 let cwd_display = cwd
                     .as_ref()
-                    .map(|path| path.display().to_string())
+                    .map(ToString::to_string)
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| "-".to_string());
                 let status = format_mcp_status(cfg);
@@ -897,7 +897,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             println!("  args: {args_display}");
             let cwd_display = cwd
                 .as_ref()
-                .map(|path| path.display().to_string())
+                .map(ToString::to_string)
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "-".to_string());
             println!("  cwd: {cwd_display}");

@@ -6,7 +6,8 @@ use codex_protocol::models::ResponseItem;
 pub fn is_persisted_rollout_item(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
-        RolloutItem::InterAgentCommunication(_) => true,
+        RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
@@ -44,8 +45,9 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. } => true,
-        ResponseItem::CompactionTrigger => false,
-        ResponseItem::Other => false,
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::CompactionTrigger { .. }
+        | ResponseItem::Other => false,
     }
 }
 
@@ -54,7 +56,8 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
 pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } => role != "developer",
-        ResponseItem::LocalShellCall { .. }
+        ResponseItem::AgentMessage { .. }
+        | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
@@ -62,11 +65,11 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. } => true,
-        ResponseItem::AgentMessage { .. }
+        ResponseItem::AdditionalTools { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
-        | ResponseItem::CompactionTrigger
+        | ResponseItem::CompactionTrigger { .. }
         | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Other => false,
     }
@@ -95,10 +98,14 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ImageGenerationEnd(_)
         | EventMsg::SubAgentActivity(_) => true,
         EventMsg::ItemCompleted(event) => {
-            // Plan items are derived from streaming tags and are not part of the
-            // raw ResponseItem history, so we persist their completion to replay
-            // them on resume without bloating rollouts with every item lifecycle.
-            matches!(event.item, codex_protocol::items::TurnItem::Plan(_))
+            // These items have no equivalent raw ResponseItem or legacy event,
+            // so persist their completion for replay without retaining every
+            // item lifecycle event.
+            matches!(
+                event.item,
+                codex_protocol::items::TurnItem::Plan(_)
+                    | codex_protocol::items::TurnItem::Sleep(_)
+            )
         }
         EventMsg::Error(_)
         | EventMsg::GuardianAssessment(_)
@@ -117,6 +124,7 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::RealtimeConversationSdp(_)
         | EventMsg::RealtimeConversationRealtime(_)
         | EventMsg::RealtimeConversationClosed(_)
+        | EventMsg::SafetyBuffering(_)
         | EventMsg::ModelReroute(_)
         | EventMsg::ModelVerification(_)
         | EventMsg::TurnModerationMetadata(_)

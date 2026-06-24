@@ -2,23 +2,30 @@ use std::io;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::JSONRPCErrorError;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
+use crate::file_read::FileReadHandleManager;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
+use crate::protocol::FsCloseParams;
+use crate::protocol::FsCloseResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsOpenParams;
+use crate::protocol::FsOpenResponse;
+use crate::protocol::FsReadBlockParams;
+use crate::protocol::FsReadBlockResponse;
 use crate::protocol::FsReadDirectoryEntry;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
@@ -26,22 +33,75 @@ use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsWalkParams;
+use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
 
+const MAX_FILE_READ_HANDLE_ID_BYTES: usize = 32;
+
 #[derive(Clone)]
 pub(crate) struct FileSystemHandler {
     file_system: LocalFileSystem,
+    file_reads: FileReadHandleManager,
 }
 
 impl FileSystemHandler {
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             file_system: LocalFileSystem::with_runtime_paths(runtime_paths),
+            file_reads: FileReadHandleManager::default(),
         }
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        self.file_reads.close_all().await;
+    }
+
+    pub(crate) async fn open(
+        &self,
+        params: FsOpenParams,
+    ) -> Result<FsOpenResponse, JSONRPCErrorError> {
+        validate_file_read_handle_id(&params.handle_id)?;
+        let file = self
+            .file_system
+            .open_file_for_read(&params.path, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?;
+        let handle_id = self
+            .file_reads
+            .open(params.handle_id, file)
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsOpenResponse { handle_id })
+    }
+
+    pub(crate) async fn read_block(
+        &self,
+        params: FsReadBlockParams,
+    ) -> Result<FsReadBlockResponse, JSONRPCErrorError> {
+        validate_file_read_handle_id(&params.handle_id)?;
+        let block = self
+            .file_reads
+            .read_block(&params.handle_id, params.offset, params.len)
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsReadBlockResponse {
+            chunk: block.bytes.into(),
+            eof: block.eof,
+        })
+    }
+
+    pub(crate) async fn close(
+        &self,
+        params: FsCloseParams,
+    ) -> Result<FsCloseResponse, JSONRPCErrorError> {
+        validate_file_read_handle_id(&params.handle_id)?;
+        self.file_reads.close(&params.handle_id).await;
+        Ok(FsCloseResponse {})
     }
 
     pub(crate) async fn read_file(
@@ -140,6 +200,16 @@ impl FileSystemHandler {
         Ok(FsReadDirectoryResponse { entries })
     }
 
+    pub(crate) async fn walk(
+        &self,
+        params: FsWalkParams,
+    ) -> Result<FsWalkResponse, JSONRPCErrorError> {
+        self.file_system
+            .walk(&params.path, params.options, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)
+    }
+
     pub(crate) async fn remove(
         &self,
         params: FsRemoveParams,
@@ -176,6 +246,15 @@ impl FileSystemHandler {
     }
 }
 
+fn validate_file_read_handle_id(handle_id: &str) -> Result<(), JSONRPCErrorError> {
+    if handle_id.len() > MAX_FILE_READ_HANDLE_ID_BYTES {
+        return Err(invalid_request(format!(
+            "file read handle ID must not exceed {MAX_FILE_READ_HANDLE_ID_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
     match err.kind() {
         io::ErrorKind::NotFound => not_found(err.to_string()),
@@ -207,7 +286,7 @@ mod tests {
         )
         .expect("runtime paths");
         let handler = FileSystemHandler::new(runtime_paths);
-        let sandbox_cwd = PathUri::from_path(temp_dir.path()).expect("tempdir URI");
+        let sandbox_cwd = PathUri::from_host_native_path(temp_dir.path()).expect("tempdir URI");
         let sandbox_context = |sandbox_policy| {
             FileSystemSandboxContext::from_legacy_sandbox_policy(
                 sandbox_policy,
@@ -225,7 +304,8 @@ mod tests {
                 },
             ),
         ] {
-            let path = PathUri::from_path(temp_dir.path().join(file_name)).expect("path URI");
+            let path =
+                PathUri::from_host_native_path(temp_dir.path().join(file_name)).expect("path URI");
 
             handler
                 .write_file(FsWriteFileParams {
@@ -245,7 +325,7 @@ mod tests {
                 .expect("canonicalize file");
             assert_eq!(
                 canonicalized.path,
-                PathUri::from_path(
+                PathUri::from_host_native_path(
                     std::fs::canonicalize(temp_dir.path().join(file_name)).expect("canonical path"),
                 )
                 .expect("canonical path URI"),

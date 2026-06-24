@@ -39,13 +39,16 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
     ));
 
     plugins_manager
-        .install_plugin(PluginInstallRequest {
-            plugin_name: "sample".to_string(),
-            marketplace_path: AbsolutePathBuf::try_from(
-                curated_root.join(".agents/plugins/marketplace.json"),
-            )
-            .expect("marketplace path"),
-        })
+        .install_plugin(
+            &config.config_layer_stack,
+            PluginInstallRequest {
+                plugin_name: "sample".to_string(),
+                marketplace_path: AbsolutePathBuf::try_from(
+                    curated_root.join(".agents/plugins/marketplace.json"),
+                )
+                .expect("marketplace path"),
+            },
+        )
         .await
         .expect("plugin should install");
 
@@ -66,6 +69,24 @@ fn remote_plugin_install_suggestions_skip_core_installed_verification() {
         "snowflake@openai-curated"
     ));
     assert!(!is_remote_plugin_install_suggestion("Plugin_123"));
+}
+
+#[test]
+fn recommended_plugin_install_args_accept_legacy_tool_id() {
+    let current: RecommendedPluginInstallArgs = serde_json::from_value(json!({
+        "plugin_id": "google-drive@openai-curated-remote",
+        "suggest_reason": "Use Google Drive for this request"
+    }))
+    .expect("current arguments should deserialize");
+    let legacy: RecommendedPluginInstallArgs = serde_json::from_value(json!({
+        "tool_type": "plugin",
+        "action_type": "install",
+        "tool_id": "google-drive@openai-curated-remote",
+        "suggest_reason": "Use Google Drive for this request"
+    }))
+    .expect("legacy arguments should deserialize");
+
+    assert_eq!(current, legacy);
 }
 
 #[test]

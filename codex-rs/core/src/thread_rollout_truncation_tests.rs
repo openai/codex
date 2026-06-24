@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::tests::build_world_state_from_turn_context;
 use crate::session::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItem;
@@ -15,6 +16,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -26,6 +28,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -37,6 +40,7 @@ fn developer_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -70,12 +74,13 @@ fn truncates_rollout_from_start_before_nth_user_only() {
         user_msg("u2"),
         assistant_msg("a3"),
         ResponseItem::Reasoning {
-            id: "r1".to_string(),
+            id: Some("r1".to_string()),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "s".to_string(),
             }],
             content: None,
             encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -83,6 +88,7 @@ fn truncates_rollout_from_start_before_nth_user_only() {
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
+            internal_chat_message_metadata_passthrough: None,
         },
         assistant_msg("a4"),
     ];
@@ -161,7 +167,10 @@ fn truncates_rollout_from_start_applies_thread_rollback_markers() {
 #[tokio::test]
 async fn ignores_session_prefix_messages_when_truncating_rollout_from_start() {
     let (session, turn_context) = make_session_and_context().await;
-    let mut items = session.build_initial_context(&turn_context).await;
+    let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
+    let mut items = session
+        .build_initial_context_with_world_state(&turn_context, &world_state)
+        .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
     items.push(user_msg("second question"));
@@ -230,6 +239,46 @@ fn fork_turn_positions_use_inter_agent_delivery_metadata() {
     ];
 
     assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 3, 5]);
+}
+
+#[test]
+fn fork_turn_positions_use_canonical_agent_messages_and_delivery_metadata() {
+    let queued = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "queued during user turn".to_string(),
+        /*trigger_turn*/ false,
+    );
+    let triggered = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "follow-up task".to_string(),
+        /*trigger_turn*/ true,
+    );
+    let mut rollout = vec![
+        RolloutItem::ResponseItem(user_msg("user task")),
+        RolloutItem::InterAgentCommunicationMetadata {
+            trigger_turn: false,
+        },
+        RolloutItem::ResponseItem(queued.to_model_input_item()),
+        RolloutItem::ResponseItem(assistant_msg("first answer")),
+        RolloutItem::InterAgentCommunicationMetadata { trigger_turn: true },
+        RolloutItem::ResponseItem(triggered.to_model_input_item()),
+        RolloutItem::ResponseItem(assistant_msg("second answer")),
+        RolloutItem::ResponseItem(user_msg("next user task")),
+    ];
+
+    assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 4, 7]);
+
+    rollout.insert(
+        7,
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    );
+    assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 8]);
 }
 
 #[test]

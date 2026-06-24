@@ -18,7 +18,6 @@ use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionOrigin;
 use crate::transport::TransportEvent;
 use base64::Engine;
-use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
@@ -36,6 +35,7 @@ use codex_login::CodexAuth;
 use codex_login::save_auth;
 use codex_login::token_data::TokenData;
 use codex_login::token_data::parse_chatgpt_jwt_claims;
+use codex_protocol::auth::AuthMode;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use futures::SinkExt;
@@ -1038,8 +1038,10 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
     let (transport_event_tx, _transport_event_rx) =
@@ -1866,8 +1868,10 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
@@ -1961,8 +1965,10 @@ async fn persisted_enable_does_not_follow_auth_to_an_account_without_a_preferenc
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
     let remote_control_target =

@@ -889,6 +889,7 @@ mod tests {
     fn test_thread(thread_id: &str, source: codex_app_server_protocol::SessionSource) -> Thread {
         Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
@@ -897,6 +898,7 @@ mod tests {
             model_provider: "mock-provider".to_string(),
             created_at: 0,
             updated_at: 0,
+            recency_at: Some(0),
             status: ThreadStatus::NotLoaded,
             path: None,
             cwd: test_path_buf("/tmp").abs(),

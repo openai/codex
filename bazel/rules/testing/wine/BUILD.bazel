@@ -1,7 +1,12 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
-load("//bazel/rules/testing:wine.bzl", "wine_rust_test")
+load(":wine.bzl", "wine_rust_test")
 
 package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "wine.bzl",
+    "wine_runtime.bzl",
+])
 
 rust_library(
     name = "wine_test_support",

@@ -178,9 +178,10 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             },
         ],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
-    assert_eq!(actual, expected);
+    assert_eq!(responses::strip_metadata(actual), expected);
 
     Ok(())
 }
@@ -199,7 +200,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         ..
     } = test_codex().build(&server).await?;
 
-    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=".to_string();
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string();
 
     let response = sse(vec![
         ev_response_created("resp-1"),
@@ -268,9 +269,10 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             },
         ],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
-    assert_eq!(actual, expected);
+    assert_eq!(responses::strip_metadata(actual), expected);
 
     Ok(())
 }

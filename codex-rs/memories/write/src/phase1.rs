@@ -303,6 +303,7 @@ mod job {
                 )?,
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         }];
         prompt.base_instructions = BaseInstructions {
             text: crate::stage_one::PROMPT.to_string(),
@@ -411,6 +412,7 @@ mod job {
                     Some(communication.to_model_input_item())
                 }
                 RolloutItem::SessionMeta(_)
+                | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::EventMsg(_) => None,
@@ -428,6 +430,7 @@ mod job {
             role,
             content,
             phase,
+            internal_chat_message_metadata_passthrough: metadata,
         } = item
         else {
             return should_persist_response_item_for_memories(item).then(|| item.clone());
@@ -455,6 +458,7 @@ mod job {
             role: role.clone(),
             content,
             phase: phase.clone(),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
         })
     }
 
@@ -684,6 +688,7 @@ mod tests {
                 },
             ],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let skill_message = ResponseItem::Message {
             id: None,
@@ -694,6 +699,7 @@ mod tests {
                         .to_string(),
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let subagent_message = ResponseItem::Message {
             id: None,
@@ -703,6 +709,7 @@ mod tests {
                     .to_string(),
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         };
 
         let serialized = job::serialize_filtered_rollout_response_items(&[
@@ -724,6 +731,7 @@ mod tests {
                             .to_string(),
                     }],
                     phase: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 subagent_message,
             ]
@@ -735,6 +743,7 @@ mod tests {
         let serialized =
             job::serialize_filtered_rollout_response_items(&[RolloutItem::ResponseItem(
                 ResponseItem::FunctionCallOutput {
+                    id: None,
                     call_id: "call_123".to_string(),
                     output: codex_protocol::models::FunctionCallOutputPayload {
                         body: codex_protocol::models::FunctionCallOutputBody::Text(
@@ -742,6 +751,7 @@ mod tests {
                         ),
                         success: Some(true),
                     },
+                    internal_chat_message_metadata_passthrough: None,
                 },
             )])
             .expect("serialize");
@@ -779,6 +789,27 @@ mod tests {
         let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("parse");
 
         assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn serializes_agent_message_response_items_for_memory() {
+        let communication = InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::root().join("worker").expect("agent path"),
+            Vec::new(),
+            "delegated task".to_string(),
+            /*trigger_turn*/ true,
+        );
+        let response_item = communication.to_model_input_item();
+
+        let serialized = job::serialize_filtered_rollout_response_items(&[
+            RolloutItem::InterAgentCommunicationMetadata { trigger_turn: true },
+            RolloutItem::ResponseItem(response_item.clone()),
+        ])
+        .expect("serialize");
+        let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("parse");
+
+        assert_eq!(parsed, vec![response_item]);
     }
 
     #[test]

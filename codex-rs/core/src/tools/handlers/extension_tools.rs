@@ -16,6 +16,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::TurnItemContributorPolicy;
+use crate::stream_events_utils::apply_turn_item_contributors;
 use crate::stream_events_utils::finalize_turn_item;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -71,10 +72,7 @@ struct CoreTurnItemEmitter {
 fn extension_turn_item(item: ExtensionTurnItem) -> TurnItem {
     match item {
         ExtensionTurnItem::WebSearch(item) => TurnItem::WebSearch(item),
-        ExtensionTurnItem::ImageGeneration(mut item) => {
-            item.saved_path = None;
-            TurnItem::ImageGeneration(item)
-        }
+        ExtensionTurnItem::ImageGeneration(item) => TurnItem::ImageGeneration(item),
     }
 }
 
@@ -95,15 +93,31 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
             let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
                 return;
             };
-            let mut item = extension_turn_item(item);
-            finalize_turn_item(
-                session.as_ref(),
-                turn.as_ref(),
-                TurnItemContributorPolicy::Run(turn.extension_data.as_ref()),
-                &mut item,
-                turn.collaboration_mode.mode == codex_protocol::config_types::ModeKind::Plan,
-            )
-            .await;
+            let item = match item {
+                ExtensionTurnItem::ImageGeneration(item) => {
+                    let mut item = TurnItem::ImageGeneration(item);
+                    apply_turn_item_contributors(
+                        session.as_ref(),
+                        turn.extension_data.as_ref(),
+                        &mut item,
+                    )
+                    .await;
+                    item
+                }
+                ExtensionTurnItem::WebSearch(item) => {
+                    let mut item = TurnItem::WebSearch(item);
+                    finalize_turn_item(
+                        session.as_ref(),
+                        turn.as_ref(),
+                        TurnItemContributorPolicy::Run(turn.extension_data.as_ref()),
+                        &mut item,
+                        turn.collaboration_mode.mode
+                            == codex_protocol::config_types::ModeKind::Plan,
+                    )
+                    .await;
+                    item
+                }
+            };
             session.emit_turn_item_completed(turn.as_ref(), item).await;
         })
     }
@@ -112,12 +126,18 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
-    let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
-    for environment in &invocation.turn.environments.turn_environments {
+    let mut environments =
+        Vec::with_capacity(invocation.step_context.environments.turn_environments.len());
+    for environment in &invocation.step_context.environments.turn_environments {
+        // TODO(anp): Migrate extension ToolEnvironment and granted-permission lookup to PathUri
+        // so extensions can receive foreign environment cwd values.
+        let Ok(native_cwd) = environment.cwd().to_abs_path() else {
+            continue;
+        };
         let additional_permissions = apply_granted_turn_permissions(
             invocation.session.as_ref(),
             &environment.environment_id,
-            environment.cwd().as_path(),
+            native_cwd.as_path(),
             SandboxPermissions::UseDefault,
             /*additional_permissions*/ None,
         )
@@ -125,10 +145,10 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         .additional_permissions;
         let file_system_sandbox_context = invocation
             .turn
-            .file_system_sandbox_context(additional_permissions, environment.cwd_uri());
+            .file_system_sandbox_context(additional_permissions, environment.cwd());
         environments.push(ToolEnvironment {
             environment_id: environment.environment_id.clone(),
-            cwd: environment.cwd().clone(),
+            cwd: native_cwd,
             file_system: environment.environment.get_filesystem(),
             file_system_sandbox_context,
         });
@@ -138,7 +158,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
         model: invocation.turn.model_info.slug.clone(),
-        truncation_policy: invocation.turn.truncation_policy,
+        truncation_policy: invocation.turn.model_info.truncation_policy.into(),
         conversation_history,
         turn_item_emitter: Arc::new(CoreTurnItemEmitter {
             session: Arc::downgrade(&invocation.session),
@@ -170,6 +190,7 @@ mod tests {
 
     use super::CoreTurnItemEmitter;
     use super::ExtensionToolAdapter;
+    use crate::session::step_context::StepContext;
     use crate::tools::context::ToolCallSource;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolPayload;
@@ -267,9 +288,11 @@ mod tests {
     async fn exposes_generic_hook_payloads() {
         let handler = ExtensionToolAdapter::new(Arc::new(StubExtensionExecutor));
         let (session, turn) = crate::session::tests::make_session_and_context().await;
+        let turn = Arc::new(turn);
         let invocation = ToolInvocation {
             session: session.into(),
-            turn: turn.into(),
+            step_context: StepContext::for_test(Arc::clone(&turn)),
+            turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "call-extension".to_string(),
@@ -310,12 +333,12 @@ mod tests {
         let weak_turn = Arc::downgrade(&turn);
         let turn_id = turn.sub_id.clone();
         let model = turn.model_info.slug.clone();
-        let truncation_policy = turn.truncation_policy;
+        let truncation_policy = turn.model_info.truncation_policy.into();
         let expected_sandbox_cwds = turn
             .environments
             .turn_environments
             .iter()
-            .map(|environment| Some(environment.cwd_uri().clone()))
+            .map(|environment| Some(environment.cwd().clone()))
             .collect::<Vec<_>>();
         let history_item = ResponseItem::Message {
             id: None,
@@ -324,17 +347,22 @@ mod tests {
                 text: "extension history".to_string(),
             }],
             phase: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         session
             .record_conversation_items(&turn, std::slice::from_ref(&history_item))
             .await;
+        let mut expected_history_item = history_item.clone();
+        expected_history_item.set_turn_id_if_missing(&turn_id);
         let raw_history_event = rx.recv().await.expect("history raw response item event");
         let EventMsg::RawResponseItem(raw_history_item) = raw_history_event.msg else {
             panic!("expected raw response item event");
         };
-        assert_eq!(raw_history_item.item, history_item);
+        assert_eq!(raw_history_item.item, expected_history_item);
+        let step_context = StepContext::for_test(Arc::clone(&turn));
         let invocation = ToolInvocation {
             session,
+            step_context,
             turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
@@ -371,7 +399,7 @@ mod tests {
         );
         assert_eq!(
             captured_call.conversation_history.items(),
-            std::slice::from_ref(&history_item)
+            std::slice::from_ref(&expected_history_item)
         );
         match captured_call.payload {
             ToolPayload::Function { arguments } => {
@@ -526,16 +554,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn image_generation_publication_is_finalized_by_core() {
-        let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor));
+    async fn image_generation_publication_preserves_extension_saved_path() {
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
-        let expected_path = crate::stream_events_utils::image_generation_artifact_path(
+        let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor));
+        let expected_path = test_path_buf("/tmp/extension-claimed.png").abs();
+        let default_path = crate::stream_events_utils::image_generation_artifact_path(
             &turn.config.codex_home,
             &session.thread_id.to_string(),
             "call-image",
         );
+        let step_context = StepContext::for_test(Arc::clone(&turn));
         let invocation = ToolInvocation {
             session,
+            step_context,
             turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
@@ -590,9 +621,6 @@ mod tests {
                 saved_path: Some(expected_path.clone()),
             }
         );
-        assert_eq!(
-            std::fs::read(&expected_path).expect("generated artifact should be saved"),
-            b"png"
-        );
+        assert!(!default_path.exists());
     }
 }

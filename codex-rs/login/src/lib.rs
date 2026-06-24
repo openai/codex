@@ -3,6 +3,7 @@ pub mod auth_env_telemetry;
 pub mod token_data;
 
 mod device_code_auth;
+mod outbound_proxy;
 mod pkce;
 mod server;
 
@@ -17,12 +18,14 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
+pub use auth::AgentIdentityAuthPolicy;
 pub use auth::AuthConfig;
 pub use auth::AuthDotJson;
 pub use auth::AuthKeyringBackendKind;
 pub use auth::AuthManager;
 pub use auth::AuthManagerConfig;
 pub use auth::CLIENT_ID;
+pub use auth::CLIENT_ID_OVERRIDE_ENV_VAR;
 pub use auth::CODEX_ACCESS_TOKEN_ENV_VAR;
 pub use auth::CODEX_API_KEY_ENV_VAR;
 pub use auth::CodexAuth;
@@ -45,9 +48,11 @@ pub use auth::login_with_api_key;
 pub use auth::login_with_bedrock_api_key;
 pub use auth::logout;
 pub use auth::logout_with_revoke;
+pub use auth::oauth_client_id;
 pub use auth::read_codex_access_token_from_env;
 pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;
 pub use auth_env_telemetry::AuthEnvTelemetry;
 pub use auth_env_telemetry::collect_auth_env_telemetry;
+pub use outbound_proxy::AuthRouteConfig;
 pub use token_data::TokenData;

@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -926,6 +924,7 @@ fn normalize_value(value: Value) -> Value {
         Value::Array(values) => Value::Array(values.into_iter().map(normalize_value).collect()),
         Value::Object(map) => Value::Object(
             map.into_iter()
+                .filter(|(key, _value)| key != "internal_chat_message_metadata_passthrough")
                 .map(|(key, value)| (key, normalize_value(value)))
                 .collect(),
         ),

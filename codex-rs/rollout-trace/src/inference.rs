@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn traced_response_item_preserves_reasoning_content_omitted_by_normal_serializer() {
         let item = ResponseItem::Reasoning {
-            id: "rs-1".to_string(),
+            id: Some("rs-1".to_string()),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "summary".to_string(),
             }],
@@ -504,6 +504,7 @@ mod tests {
                 text: "raw reasoning".to_string(),
             }]),
             encrypted_content: Some("encoded".to_string()),
+            internal_chat_message_metadata_passthrough: None,
         };
 
         let normal = serde_json::to_value(&item).expect("response item serializes");
@@ -514,6 +515,7 @@ mod tests {
             traced,
             json!({
                 "type": "reasoning",
+                "id": "rs-1",
                 "summary": [{"type": "summary_text", "text": "summary"}],
                 "content": [{"type": "text", "text": "raw reasoning"}],
                 "encrypted_content": "encoded",
