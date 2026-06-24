@@ -117,6 +117,9 @@ fn probe_system_bwrap(
     timeout: Duration,
     unshare_network: bool,
 ) -> SystemBwrapProbeResult {
+    let Some(true_command) = resolve_true_command() else {
+        return SystemBwrapProbeResult::Failed;
+    };
     let mut command = Command::new(system_bwrap_path);
     command.arg("--unshare-user");
     if unshare_network {
@@ -124,7 +127,7 @@ fn probe_system_bwrap(
     }
     command
         .args(["--ro-bind", "/", "/"])
-        .arg(resolve_true_command())
+        .arg(true_command)
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     let deadline = Instant::now() + timeout;
@@ -207,11 +210,10 @@ fn read_available_probe_stderr(stderr: &mut ChildStderr, bytes: &mut Vec<u8>) {
     }
 }
 
-fn resolve_true_command() -> &'static str {
+fn resolve_true_command() -> Option<&'static str> {
     ["/usr/bin/true", "/bin/true"]
         .into_iter()
         .find(|candidate| Path::new(candidate).exists())
-        .unwrap_or("true")
 }
 
 pub(crate) fn is_wsl1() -> bool {
