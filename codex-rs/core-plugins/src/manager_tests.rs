@@ -1061,7 +1061,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn remote_installed_cache_prefers_remote_curated_conflicts_when_remote_plugin_enabled() {
+async fn remote_global_catalog_ignores_local_curated_plugins() {
     let codex_home = TempDir::new().unwrap();
     write_file(
         &codex_home.path().join(CONFIG_TOML_FILE),
@@ -1086,7 +1086,11 @@ enabled = true
     write_cached_plugin(codex_home.path(), "openai-curated-remote", "remote-only");
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
-    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let manager = PluginsManager::new_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
     manager.write_remote_installed_plugins_cache(vec![
         remote_installed_plugin("linear"),
         remote_installed_plugin("remote-only"),
@@ -1100,9 +1104,50 @@ enabled = true
             .map(|plugin| plugin.config_name.clone())
             .collect::<Vec<_>>(),
         vec![
-            "calendar@openai-curated".to_string(),
+            "linear@openai-api-curated".to_string(),
             "linear@openai-curated-remote".to_string(),
             "remote-only@openai-curated-remote".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn remote_plugin_feature_keeps_local_curated_without_codex_backend() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+
+[plugins."linear@openai-curated"]
+enabled = true
+
+[plugins."linear@openai-api-curated"]
+enabled = true
+"#,
+    );
+    write_cached_plugin(codex_home.path(), "openai-curated", "linear");
+    write_cached_plugin(codex_home.path(), "openai-api-curated", "linear");
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::ApiKey),
+    );
+
+    let outcome = manager.plugins_for_config(&config).await;
+
+    assert_eq!(
+        outcome
+            .plugins()
+            .iter()
+            .map(|plugin| plugin.config_name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "linear@openai-api-curated".to_string(),
+            "linear@openai-curated".to_string(),
         ]
     );
 }
@@ -2273,7 +2318,7 @@ fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
     let cache_key = PluginLoadCacheKey {
         configured_plugins: HashMap::new(),
         skill_config_rules: SkillConfigRules::default(),
-        remote_plugin_enabled: false,
+        remote_global_catalog_active: false,
     };
     let stale_generation = manager.loaded_plugins_cache_generation();
 
@@ -5398,7 +5443,7 @@ async fn load_plugins_ignores_project_config_files() {
         &PluginStore::new(codex_home.path().to_path_buf()),
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
-        /*prefer_remote_curated_conflicts*/ false,
+        /*remote_global_catalog_active*/ false,
     )
     .await;
 
