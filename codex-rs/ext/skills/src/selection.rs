@@ -72,20 +72,6 @@ pub(crate) fn collect_explicit_skill_mentions(
         }
     }
 
-    tracing::info!(
-        input_count = inputs.len(),
-        catalog_entry_count = catalog.entries.len(),
-        selected_entry_count = selected.len(),
-        selected_entry_names = ?selected
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect::<Vec<_>>(),
-        selected_entry_resources = ?selected
-            .iter()
-            .map(|entry| entry.main_prompt.as_str())
-            .collect::<Vec<_>>(),
-        "collected extension explicit skill mentions"
-    );
     selected
 }
 

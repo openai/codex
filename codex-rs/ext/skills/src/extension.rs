@@ -320,15 +320,7 @@ impl<C> SkillsExtension<C> {
         session_store: &ExtensionData,
         thread_state: &SkillsThreadState,
     ) -> Result<SkillReadResult, String> {
-        tracing::info!(
-            skill = %entry.name,
-            authority_kind = %entry.authority.kind,
-            authority_id = %entry.authority.id,
-            package = %entry.id.0,
-            resource = %entry.main_prompt.as_str(),
-            "reading skill main prompt"
-        );
-        let result = thread_state
+        thread_state
             .read_skill(
                 &self.providers,
                 SkillReadRequest {
@@ -339,32 +331,8 @@ impl<C> SkillsExtension<C> {
                     mcp_resources: session_store.get::<McpResourceClient>(),
                 },
             )
-            .await;
-        match &result {
-            Ok(read_result) => {
-                tracing::info!(
-                    skill = %entry.name,
-                    authority_kind = %entry.authority.kind,
-                    authority_id = %entry.authority.id,
-                    package = %entry.id.0,
-                    resource = %read_result.resource.as_str(),
-                    contents_bytes = read_result.contents.len(),
-                    "read skill main prompt"
-                );
-            }
-            Err(err) => {
-                tracing::info!(
-                    skill = %entry.name,
-                    authority_kind = %entry.authority.kind,
-                    authority_id = %entry.authority.id,
-                    package = %entry.id.0,
-                    resource = %entry.main_prompt.as_str(),
-                    error = %err.message,
-                    "failed to read skill main prompt"
-                );
-            }
-        }
-        result.map_err(|err| err.message)
+            .await
+            .map_err(|err| err.message)
     }
 
     fn emit_warning(&self, turn_id: &str, message: String) {

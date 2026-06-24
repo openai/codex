@@ -89,42 +89,8 @@ impl SkillsThreadState {
         providers: &SkillProviders,
         request: SkillReadRequest,
     ) -> SkillProviderResult<SkillReadResult> {
-        let authority_kind = request.authority.kind.to_string();
-        let authority_id = request.authority.id.clone();
-        let package = request.package.0.clone();
-        let resource = request.resource.as_str().to_string();
-        tracing::info!(
-            authority_kind = %authority_kind,
-            authority_id = %authority_id,
-            package = %package,
-            resource = %resource,
-            "dispatching skill read"
-        );
         if request.authority.kind != SkillSourceKind::Orchestrator {
-            let result = providers.read(request).await;
-            match &result {
-                Ok(read_result) => {
-                    tracing::info!(
-                        authority_kind = %authority_kind,
-                        authority_id = %authority_id,
-                        package = %package,
-                        resource = %read_result.resource.as_str(),
-                        contents_bytes = read_result.contents.len(),
-                        "completed skill read"
-                    );
-                }
-                Err(err) => {
-                    tracing::info!(
-                        authority_kind = %authority_kind,
-                        authority_id = %authority_id,
-                        package = %package,
-                        resource = %resource,
-                        error = %err.message,
-                        "failed skill read"
-                    );
-                }
-            }
-            return result;
+            return providers.read(request).await;
         }
 
         let cache = self.orchestrator_cache(request.mcp_resources.as_deref());
@@ -135,44 +101,19 @@ impl SkillsThreadState {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&cache_key)
         {
-            tracing::info!(
-                authority_kind = %authority_kind,
-                authority_id = %authority_id,
-                package = %package,
-                resource = %result.resource.as_str(),
-                contents_bytes = result.contents.len(),
-                "served skill read from orchestrator cache"
-            );
             return Ok(result);
         }
 
         let result = providers.read(request).await?;
         if result.resource != cache_key.resource {
-            tracing::info!(
-                authority_kind = %authority_kind,
-                authority_id = %authority_id,
-                package = %package,
-                resource = %result.resource.as_str(),
-                contents_bytes = result.contents.len(),
-                "completed uncached skill read"
-            );
             return Ok(result);
         }
 
-        let result = cache
+        Ok(cache
             .resources
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(cache_key, result);
-        tracing::info!(
-            authority_kind = %authority_kind,
-            authority_id = %authority_id,
-            package = %package,
-            resource = %result.resource.as_str(),
-            contents_bytes = result.contents.len(),
-            "completed cached skill read"
-        );
-        Ok(result)
+            .insert(cache_key, result))
     }
 
     fn orchestrator_cache(

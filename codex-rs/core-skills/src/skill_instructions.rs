@@ -33,12 +33,6 @@ impl ContextualUserFragment for SkillInstructions {
     }
 
     fn body(&self) -> String {
-        tracing::info!(
-            skill = %self.name,
-            path = %self.path,
-            contents_bytes = self.contents.len(),
-            "rendering core skill instructions fragment"
-        );
         format!(
             "\n<name>{}</name>\n<path>{}</path>\n{}\n",
             self.name, self.path, self.contents
