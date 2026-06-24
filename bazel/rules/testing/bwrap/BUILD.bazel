@@ -11,6 +11,7 @@ rust_library(
     srcs = [
         "src/lib.rs",
         "src/lib_tests.rs",
+        "src/sandbox_init.rs",
     ],
     crate_name = "bwrap_test_support",
     crate_root = "src/lib.rs",
@@ -19,6 +20,7 @@ rust_library(
     deps = [
         "//codex-rs/utils/cargo-bin",
         "@crates//:anyhow",
+        "@crates//:libc",
         "@crates//:tempfile",
         "@crates//:tokio",
     ],
@@ -33,7 +35,10 @@ rust_binary(
     edition = "2024",
     target_compatible_with = ["@platforms//os:linux"],
     visibility = ["//visibility:private"],
-    deps = ["@crates//:anyhow"],
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:libc",
+    ],
 )
 
 rust_test(
