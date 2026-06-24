@@ -812,7 +812,7 @@ impl AccountRequestProcessor {
                     let auth_mode = auth_mode_to_api(auth.api_auth_mode());
                     let (reported_auth_method, token_opt) = if matches!(
                         auth,
-                        CodexAuth::HostProvided(_)
+                        CodexAuth::CallerProvided(_)
                             | CodexAuth::AgentIdentity(_)
                             | CodexAuth::PersonalAccessToken(_)
                     ) || include_token

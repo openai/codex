@@ -69,7 +69,7 @@ impl AmazonBedrockModelProvider {
                 CodexAuth::ApiKey(_)
                 | CodexAuth::Chatgpt(_)
                 | CodexAuth::ChatgptAuthTokens(_)
-                | CodexAuth::HostProvided(_)
+                | CodexAuth::CallerProvided(_)
                 | CodexAuth::AgentIdentity(_)
                 | CodexAuth::PersonalAccessToken(_) => None,
             })

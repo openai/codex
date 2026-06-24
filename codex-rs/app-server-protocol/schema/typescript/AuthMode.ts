@@ -5,4 +5,4 @@
 /**
  * Authentication mode for OpenAI-backed providers.
  */
-export type AuthMode = "apikey" | "chatgpt" | "chatgptAuthTokens" | "hostProvided" | "agentIdentity" | "personalAccessToken" | "bedrockApiKey";
+export type AuthMode = "apikey" | "chatgpt" | "chatgptAuthTokens" | "callerProvided" | "agentIdentity" | "personalAccessToken" | "bedrockApiKey";

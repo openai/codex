@@ -31,13 +31,13 @@ pub enum AuthMode {
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
-    /// [UNSTABLE] Host-provided backend auth for embedded Codex runtimes.
+    /// [UNSTABLE] Backend auth supplied programmatically by the caller.
     ///
-    /// Request headers are supplied by the process embedding Codex.
-    #[serde(rename = "hostProvided")]
-    #[ts(rename = "hostProvided")]
-    #[strum(serialize = "hostProvided")]
-    HostProvided,
+    /// Request headers are kept in memory and are not persisted or refreshed by Codex.
+    #[serde(rename = "callerProvided")]
+    #[ts(rename = "callerProvided")]
+    #[strum(serialize = "callerProvided")]
+    CallerProvided,
     /// Programmatic Codex auth backed by a registered Agent Identity.
     #[serde(rename = "agentIdentity")]
     #[ts(rename = "agentIdentity")]
@@ -60,7 +60,9 @@ impl AuthMode {
     pub fn has_chatgpt_account(self) -> bool {
         match self {
             Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::HostProvided | Self::AgentIdentity | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::CallerProvided | Self::AgentIdentity | Self::BedrockApiKey => {
+                false
+            }
         }
     }
 
@@ -69,7 +71,7 @@ impl AuthMode {
         match self {
             Self::Chatgpt
             | Self::ChatgptAuthTokens
-            | Self::HostProvided
+            | Self::CallerProvided
             | Self::AgentIdentity
             | Self::PersonalAccessToken => true,
             Self::ApiKey | Self::BedrockApiKey => false,

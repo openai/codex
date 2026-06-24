@@ -9,8 +9,8 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
+use codex_login::CallerProvidedAuth;
 use codex_login::CodexAuth;
-use codex_login::HostProvidedAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use pretty_assertions::assert_eq;
 
@@ -148,7 +148,7 @@ async fn hosted_apps_mcp_requires_chatgpt_auth() -> TestResult {
 }
 
 #[tokio::test]
-async fn hosted_apps_mcp_accepts_host_provided_codex_auth() -> TestResult {
+async fn hosted_apps_mcp_accepts_caller_provided_codex_auth() -> TestResult {
     let codex_home = tempfile::tempdir()?;
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -156,7 +156,7 @@ async fn hosted_apps_mcp_accepts_host_provided_codex_auth() -> TestResult {
         .cli_overrides(vec![("features.apps".to_string(), true.into())])
         .build()
         .await?;
-    let auth = CodexAuth::HostProvided(HostProvidedAuth::new([], "user-123"));
+    let auth = CodexAuth::CallerProvided(CallerProvidedAuth::new([], "user-123"));
     let manager = installed_manager(&config);
 
     let servers = manager.effective_servers(&config, Some(&auth)).await;

@@ -449,8 +449,8 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 eprintln!("Logged in using ChatGPT");
                 std::process::exit(0);
             }
-            AuthMode::HostProvided => {
-                eprintln!("Logged in using host-provided auth");
+            AuthMode::CallerProvided => {
+                eprintln!("Logged in using caller-provided auth");
                 std::process::exit(0);
             }
             AuthMode::AgentIdentity => {

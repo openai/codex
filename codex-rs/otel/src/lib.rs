@@ -59,7 +59,7 @@ impl From<AuthMode> for TelemetryAuthMode {
             AuthMode::ApiKey | AuthMode::BedrockApiKey => Self::ApiKey,
             AuthMode::Chatgpt
             | AuthMode::ChatgptAuthTokens
-            | AuthMode::HostProvided
+            | AuthMode::CallerProvided
             | AuthMode::AgentIdentity
             | AuthMode::PersonalAccessToken => Self::Chatgpt,
         }

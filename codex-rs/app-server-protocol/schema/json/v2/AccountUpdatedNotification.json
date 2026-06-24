@@ -26,9 +26,9 @@
           "type": "string"
         },
         {
-          "description": "[UNSTABLE] Host-provided backend auth for embedded Codex runtimes.\n\nRequest headers are supplied by the process embedding Codex.",
+          "description": "[UNSTABLE] Backend auth supplied programmatically by the caller.\n\nRequest headers are kept in memory and are not persisted or refreshed by Codex.",
           "enum": [
-            "hostProvided"
+            "callerProvided"
           ],
           "type": "string"
         },

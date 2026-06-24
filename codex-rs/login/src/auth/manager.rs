@@ -41,7 +41,7 @@ use super::revoke::revoke_auth_tokens;
 pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::agent_identity::AgentIdentityAuthError;
 pub use crate::auth::bedrock_api_key::BedrockApiKeyAuth;
-use crate::auth::host_provided::HostProvidedAuth;
+use crate::auth::caller_provided::CallerProvidedAuth;
 pub use crate::auth::personal_access_token::PersonalAccessTokenAuth;
 pub use crate::auth::storage::AgentIdentityAuthRecord;
 pub use crate::auth::storage::AgentIdentityStorage;
@@ -72,7 +72,7 @@ pub enum CodexAuth {
     ApiKey(ApiKeyAuth),
     Chatgpt(ChatgptAuth),
     ChatgptAuthTokens(ChatgptAuthTokens),
-    HostProvided(HostProvidedAuth),
+    CallerProvided(CallerProvidedAuth),
     AgentIdentity(AgentIdentityAuth),
     PersonalAccessToken(PersonalAccessTokenAuth),
     BedrockApiKey(BedrockApiKeyAuth),
@@ -147,7 +147,7 @@ impl AgentIdentityBootstrapCooldown {
 impl PartialEq for CodexAuth {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::HostProvided(a), Self::HostProvided(b)) => a == b,
+            (Self::CallerProvided(a), Self::CallerProvided(b)) => a == b,
             (Self::PersonalAccessToken(a), Self::PersonalAccessToken(b)) => a == b,
             (Self::BedrockApiKey(a), Self::BedrockApiKey(b)) => a == b,
             _ => self.api_auth_mode() == other.api_auth_mode(),
@@ -360,9 +360,9 @@ impl CodexAuth {
             };
             return Ok(Self::BedrockApiKey(auth));
         }
-        if auth_mode == AuthMode::HostProvided {
+        if auth_mode == AuthMode::CallerProvided {
             return Err(std::io::Error::other(
-                "host-provided auth cannot be loaded from auth storage.",
+                "caller-provided auth cannot be loaded from auth storage.",
             ));
         }
 
@@ -384,8 +384,8 @@ impl CodexAuth {
             }
             AuthMode::ChatgptAuthTokens => Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state })),
             AuthMode::ApiKey => unreachable!("api key mode is handled above"),
-            AuthMode::HostProvided => {
-                unreachable!("host-provided auth is never loaded from auth storage")
+            AuthMode::CallerProvided => {
+                unreachable!("caller-provided auth is never loaded from auth storage")
             }
             AuthMode::AgentIdentity => unreachable!("agent identity mode is handled above"),
             AuthMode::PersonalAccessToken => {
@@ -469,7 +469,7 @@ impl CodexAuth {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
             Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => AuthMode::Chatgpt,
-            Self::HostProvided(_) => AuthMode::HostProvided,
+            Self::CallerProvided(_) => AuthMode::CallerProvided,
             Self::AgentIdentity(_) => AuthMode::AgentIdentity,
             Self::PersonalAccessToken(_) => AuthMode::PersonalAccessToken,
             Self::BedrockApiKey(_) => AuthMode::BedrockApiKey,
@@ -482,7 +482,7 @@ impl CodexAuth {
             Self::ApiKey(_) => AuthMode::ApiKey,
             Self::Chatgpt(_) => AuthMode::Chatgpt,
             Self::ChatgptAuthTokens(_) => AuthMode::ChatgptAuthTokens,
-            Self::HostProvided(_) => AuthMode::HostProvided,
+            Self::CallerProvided(_) => AuthMode::CallerProvided,
             Self::AgentIdentity(_) => AuthMode::AgentIdentity,
             Self::PersonalAccessToken(_) => AuthMode::PersonalAccessToken,
             Self::BedrockApiKey(_) => AuthMode::BedrockApiKey,
@@ -519,7 +519,7 @@ impl CodexAuth {
             Self::ApiKey(auth) => Some(auth.api_key.as_str()),
             Self::Chatgpt(_)
             | Self::ChatgptAuthTokens(_)
-            | Self::HostProvided(_)
+            | Self::CallerProvided(_)
             | Self::AgentIdentity(_)
             | Self::PersonalAccessToken(_)
             | Self::BedrockApiKey(_) => None,
@@ -550,8 +550,8 @@ impl CodexAuth {
             Self::AgentIdentity(_) => Err(std::io::Error::other(
                 "agent identity auth does not expose a bearer token",
             )),
-            Self::HostProvided(_) => Err(std::io::Error::other(
-                "host-provided auth does not expose a bearer token",
+            Self::CallerProvided(_) => Err(std::io::Error::other(
+                "caller-provided auth does not expose a bearer token",
             )),
             Self::PersonalAccessToken(auth) => Ok(auth.access_token().to_string()),
             Self::BedrockApiKey(_) => Err(std::io::Error::other(
@@ -563,7 +563,7 @@ impl CodexAuth {
     /// Returns `None` if Codex backend auth does not expose an account id.
     pub fn get_account_id(&self) -> Option<String> {
         match self {
-            Self::HostProvided(auth) => auth.account_id().map(str::to_string),
+            Self::CallerProvided(auth) => auth.account_id().map(str::to_string),
             Self::AgentIdentity(auth) => Some(auth.account_id().to_string()),
             Self::PersonalAccessToken(auth) => Some(auth.account_id().to_string()),
             _ => self.get_current_token_data().and_then(|t| t.account_id),
@@ -573,7 +573,7 @@ impl CodexAuth {
     /// Returns false if Codex backend auth omits the FedRAMP claim.
     pub fn is_fedramp_account(&self) -> bool {
         match self {
-            Self::HostProvided(_) => false,
+            Self::CallerProvided(_) => false,
             Self::AgentIdentity(auth) => auth.is_fedramp_account(),
             Self::PersonalAccessToken(auth) => auth.is_fedramp_account(),
             _ => self
@@ -585,7 +585,7 @@ impl CodexAuth {
     /// Returns `None` if Codex backend auth does not expose an account email.
     pub fn get_account_email(&self) -> Option<String> {
         match self {
-            Self::HostProvided(_) => None,
+            Self::CallerProvided(_) => None,
             Self::AgentIdentity(auth) => auth.email().map(str::to_string),
             Self::PersonalAccessToken(auth) => auth.email().map(str::to_string),
             _ => self.get_current_token_data().and_then(|t| t.id_token.email),
@@ -595,7 +595,7 @@ impl CodexAuth {
     /// Returns `None` if Codex backend auth does not expose a ChatGPT user id.
     pub fn get_chatgpt_user_id(&self) -> Option<String> {
         match self {
-            Self::HostProvided(auth) => Some(auth.user_id().to_string()),
+            Self::CallerProvided(auth) => Some(auth.user_id().to_string()),
             Self::AgentIdentity(auth) => Some(auth.chatgpt_user_id().to_string()),
             Self::PersonalAccessToken(auth) => Some(auth.chatgpt_user_id().to_string()),
             _ => self
@@ -608,7 +608,7 @@ impl CodexAuth {
     /// Returns a high-level `AccountPlanType` (e.g., Free/Plus/Pro/Team/…)
     /// for UI or product decisions based on the user's subscription.
     pub fn account_plan_type(&self) -> Option<AccountPlanType> {
-        if matches!(self, Self::HostProvided(_)) {
+        if matches!(self, Self::CallerProvided(_)) {
             return Some(AccountPlanType::Unknown);
         }
         if let Self::AgentIdentity(auth) = self {
@@ -637,7 +637,7 @@ impl CodexAuth {
             Self::Chatgpt(auth) => &auth.state,
             Self::ChatgptAuthTokens(auth) => &auth.state,
             Self::ApiKey(_)
-            | Self::HostProvided(_)
+            | Self::CallerProvided(_)
             | Self::AgentIdentity(_)
             | Self::PersonalAccessToken(_)
             | Self::BedrockApiKey(_) => return None,
@@ -683,7 +683,7 @@ impl CodexAuth {
             Self::AgentIdentity(auth) => Ok(Some(auth.clone())),
             Self::ApiKey(_)
             | Self::ChatgptAuthTokens(_)
-            | Self::HostProvided(_)
+            | Self::CallerProvided(_)
             | Self::PersonalAccessToken(_)
             | Self::BedrockApiKey(_) => Ok(None),
             Self::Chatgpt(_) => {
@@ -1112,12 +1112,12 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
             | (ForcedLoginMethod::Api, AuthMode::BedrockApiKey) => None,
             (ForcedLoginMethod::Chatgpt, AuthMode::Chatgpt)
             | (ForcedLoginMethod::Chatgpt, AuthMode::ChatgptAuthTokens)
-            | (ForcedLoginMethod::Chatgpt, AuthMode::HostProvided)
+            | (ForcedLoginMethod::Chatgpt, AuthMode::CallerProvided)
             | (ForcedLoginMethod::Chatgpt, AuthMode::AgentIdentity)
             | (ForcedLoginMethod::Chatgpt, AuthMode::PersonalAccessToken) => None,
             (ForcedLoginMethod::Api, AuthMode::Chatgpt)
             | (ForcedLoginMethod::Api, AuthMode::ChatgptAuthTokens)
-            | (ForcedLoginMethod::Api, AuthMode::HostProvided)
+            | (ForcedLoginMethod::Api, AuthMode::CallerProvided)
             | (ForcedLoginMethod::Api, AuthMode::AgentIdentity)
             | (ForcedLoginMethod::Api, AuthMode::PersonalAccessToken) => Some(
                 "API key login is required, but ChatGPT is currently being used. Logging out."
@@ -1143,7 +1143,7 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
     if let Some(expected_account_ids) = config.forced_chatgpt_workspace_id.as_deref() {
         let chatgpt_account_id = match &auth {
             CodexAuth::ApiKey(_) | CodexAuth::BedrockApiKey(_) => return Ok(()),
-            CodexAuth::HostProvided(_)
+            CodexAuth::CallerProvided(_)
             | CodexAuth::AgentIdentity(_)
             | CodexAuth::PersonalAccessToken(_) => auth.get_account_id(),
             CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
@@ -2200,7 +2200,7 @@ impl AuthManager {
                 | (AuthMode::ChatgptAuthTokens, AuthMode::ChatgptAuthTokens) => {
                     a.get_current_auth_json() == b.get_current_auth_json()
                 }
-                (AuthMode::HostProvided, AuthMode::HostProvided) => a == b,
+                (AuthMode::CallerProvided, AuthMode::CallerProvided) => a == b,
                 (AuthMode::AgentIdentity, AuthMode::AgentIdentity) => match (a, b) {
                     (CodexAuth::AgentIdentity(a), CodexAuth::AgentIdentity(b)) => {
                         a.record() == b.record()
@@ -2285,9 +2285,9 @@ impl AuthManager {
         }
     }
 
-    /// Replaces the current auth snapshot with Codex backend auth supplied by the host.
-    pub fn set_host_provided_auth(&self, auth: HostProvidedAuth) {
-        let _ = self.set_cached_auth(Some(CodexAuth::HostProvided(auth)));
+    /// Replaces the current auth snapshot with Codex backend auth supplied by the caller.
+    pub fn set_caller_provided_auth(&self, auth: CallerProvidedAuth) {
+        let _ = self.set_cached_auth(Some(CodexAuth::CallerProvided(auth)));
     }
 
     pub fn clear_external_auth(&self) {
@@ -2486,7 +2486,7 @@ impl AuthManager {
                     .await
             }
             CodexAuth::ApiKey(_)
-            | CodexAuth::HostProvided(_)
+            | CodexAuth::CallerProvided(_)
             | CodexAuth::AgentIdentity(_)
             | CodexAuth::PersonalAccessToken(_)
             | CodexAuth::BedrockApiKey(_) => Ok(()),

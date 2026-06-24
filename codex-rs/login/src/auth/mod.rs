@@ -7,14 +7,14 @@ mod personal_access_token;
 mod storage;
 mod util;
 
+mod caller_provided;
 mod external_bearer;
-mod host_provided;
 mod manager;
 mod revoke;
 
 pub use bedrock_api_key::BedrockApiKeyAuth;
 pub use bedrock_api_key::login_with_bedrock_api_key;
+pub use caller_provided::CallerProvidedAuth;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
-pub use host_provided::HostProvidedAuth;
 pub use manager::*;
