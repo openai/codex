@@ -384,15 +384,16 @@ impl App {
                         .add_error_message(format!("Failed to retry with a faster model: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
-                let rollback_response = match app_server.thread_rollback(thread_id, 1).await {
-                    Ok(response) => response,
-                    Err(err) => {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to retry with a faster model: {err}"
-                        ));
-                        return Ok(AppRunControl::Continue);
-                    }
-                };
+                let rollback_response =
+                    match app_server.thread_rollback(thread_id, /*num_turns*/ 1).await {
+                        Ok(response) => response,
+                        Err(err) => {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to retry with a faster model: {err}"
+                            ));
+                            return Ok(AppRunControl::Continue);
+                        }
+                    };
 
                 self.chat_widget.prepare_safety_buffering_retry();
                 self.handle_thread_rollback_response_with_origin(

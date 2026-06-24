@@ -169,7 +169,7 @@ async fn safety_buffering_without_retry_shows_short_app_message() {
 
     chat.handle_server_notification(
         ServerNotification::ModelSafetyBufferingUpdated(safety_buffering_notification(
-            thread_id, turn_id, None,
+            thread_id, turn_id, /*faster_model*/ None,
         )),
         /*replay_kind*/ None,
     );
