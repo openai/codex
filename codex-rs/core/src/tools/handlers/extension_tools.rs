@@ -16,6 +16,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::TurnItemContributorPolicy;
+use crate::stream_events_utils::apply_turn_item_contributors;
 use crate::stream_events_utils::finalize_turn_item;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -71,10 +72,7 @@ struct CoreTurnItemEmitter {
 fn extension_turn_item(item: ExtensionTurnItem) -> TurnItem {
     match item {
         ExtensionTurnItem::WebSearch(item) => TurnItem::WebSearch(item),
-        ExtensionTurnItem::ImageGeneration(mut item) => {
-            item.saved_path = None;
-            TurnItem::ImageGeneration(item)
-        }
+        ExtensionTurnItem::ImageGeneration(item) => TurnItem::ImageGeneration(item),
     }
 }
 
@@ -95,15 +93,31 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
             let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
                 return;
             };
-            let mut item = extension_turn_item(item);
-            finalize_turn_item(
-                session.as_ref(),
-                turn.as_ref(),
-                TurnItemContributorPolicy::Run(turn.extension_data.as_ref()),
-                &mut item,
-                turn.collaboration_mode.mode == codex_protocol::config_types::ModeKind::Plan,
-            )
-            .await;
+            let item = match item {
+                ExtensionTurnItem::ImageGeneration(item) => {
+                    let mut item = TurnItem::ImageGeneration(item);
+                    apply_turn_item_contributors(
+                        session.as_ref(),
+                        turn.extension_data.as_ref(),
+                        &mut item,
+                    )
+                    .await;
+                    item
+                }
+                ExtensionTurnItem::WebSearch(item) => {
+                    let mut item = TurnItem::WebSearch(item);
+                    finalize_turn_item(
+                        session.as_ref(),
+                        turn.as_ref(),
+                        TurnItemContributorPolicy::Run(turn.extension_data.as_ref()),
+                        &mut item,
+                        turn.collaboration_mode.mode
+                            == codex_protocol::config_types::ModeKind::Plan,
+                    )
+                    .await;
+                    item
+                }
+            };
             session.emit_turn_item_completed(turn.as_ref(), item).await;
         })
     }
@@ -540,10 +554,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn image_generation_publication_is_finalized_by_core() {
-        let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor));
+    async fn image_generation_publication_preserves_extension_saved_path() {
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
-        let expected_path = crate::stream_events_utils::image_generation_artifact_path(
+        let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor));
+        let expected_path = test_path_buf("/tmp/extension-claimed.png").abs();
+        let default_path = crate::stream_events_utils::image_generation_artifact_path(
             &turn.config.codex_home,
             &session.thread_id.to_string(),
             "call-image",
@@ -606,9 +621,6 @@ mod tests {
                 saved_path: Some(expected_path.clone()),
             }
         );
-        assert_eq!(
-            std::fs::read(&expected_path).expect("generated artifact should be saved"),
-            b"png"
-        );
+        assert!(!default_path.exists());
     }
 }
