@@ -1,4 +1,4 @@
-use super::enroll::REMOTE_CONTROL_ACCOUNT_ID_HEADER;
+use super::auth::REMOTE_CONTROL_ACCOUNT_ID_HEADER;
 use super::enroll::REMOTE_CONTROL_INSTALLATION_ID_HEADER;
 use super::enroll::RemoteControlEnrollment;
 use super::enroll::load_persisted_remote_control_enrollment;
@@ -1473,14 +1473,16 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         Some(&"Bearer Access Token".to_string())
     );
     assert_eq!(
-        enroll_request.headers.get(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
-        Some(&"account_id".to_string())
+        enroll_request
+            .headers
+            .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+        vec!["account_id"]
     );
     assert_eq!(
         enroll_request
             .headers
-            .get(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
-        Some(&TEST_INSTALLATION_ID.to_string())
+            .get_all(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+        vec![TEST_INSTALLATION_ID]
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&enroll_request.body)
@@ -1719,6 +1721,18 @@ async fn remote_control_http_mode_refreshes_persisted_enrollment_before_connecti
     assert_eq!(
         refresh_request.headers.get("authorization"),
         Some(&"Bearer Access Token".to_string())
+    );
+    assert_eq!(
+        refresh_request
+            .headers
+            .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+        vec!["account_id"]
+    );
+    assert_eq!(
+        refresh_request
+            .headers
+            .get_all(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+        vec![TEST_INSTALLATION_ID]
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&refresh_request.body)
@@ -2578,8 +2592,33 @@ async fn remote_control_http_mode_preserves_enrollment_after_generic_websocket_4
 struct CapturedHttpRequest {
     stream: TcpStream,
     request_line: String,
-    headers: BTreeMap<String, String>,
+    headers: CapturedHttpHeaders,
     body: String,
+}
+
+#[derive(Debug, Default)]
+struct CapturedHttpHeaders(Vec<(String, String)>);
+
+impl CapturedHttpHeaders {
+    fn append(&mut self, name: String, value: String) {
+        self.0.push((name, value));
+    }
+
+    fn get(&self, name: &str) -> Option<&String> {
+        self.0
+            .iter()
+            .rev()
+            .find(|(candidate, _value)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_name, value)| value)
+    }
+
+    fn get_all(&self, name: &str) -> Vec<&str> {
+        self.0
+            .iter()
+            .filter(|(candidate, _value)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_name, value)| value.as_str())
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2612,7 +2651,7 @@ async fn accept_http_request(listener: &TcpListener) -> CapturedHttpRequest {
         .expect("request line should read");
     let request_line = request_line.trim_end_matches("\r\n").to_string();
 
-    let mut headers = BTreeMap::new();
+    let mut headers = CapturedHttpHeaders::default();
     loop {
         let mut line = String::new();
         reader
@@ -2624,7 +2663,7 @@ async fn accept_http_request(listener: &TcpListener) -> CapturedHttpRequest {
         }
         let line = line.trim_end_matches("\r\n");
         let (name, value) = line.split_once(':').expect("header should contain colon");
-        headers.insert(name.to_ascii_lowercase(), value.trim().to_string());
+        headers.append(name.to_ascii_lowercase(), value.trim().to_string());
     }
 
     let content_length = headers

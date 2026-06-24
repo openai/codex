@@ -31,7 +31,6 @@ const REMOTE_CONTROL_SERVER_TOKEN_REFRESH_SKEW_SECS: i64 = 30;
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
-pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 pub(super) const REMOTE_CONTROL_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -492,13 +491,11 @@ where
     Response: DeserializeOwned,
 {
     let client = build_reqwest_client();
-    let mut auth_headers = HeaderMap::new();
-    auth.auth_provider.add_auth_headers(&mut auth_headers);
+    let auth_headers = auth.request_headers()?;
     let response = client
         .post(url)
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
         .headers(auth_headers)
-        .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
         .header(REMOTE_CONTROL_INSTALLATION_ID_HEADER, installation_id)
         .json(request)
         .send()

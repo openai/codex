@@ -1,7 +1,6 @@
 use super::auth::RemoteControlConnectionAuth;
 use super::auth::load_remote_control_auth;
 use super::auth::recover_remote_control_auth;
-use super::enroll::REMOTE_CONTROL_ACCOUNT_ID_HEADER;
 use super::enroll::format_headers;
 use super::enroll::preview_remote_control_response_body;
 use super::protocol::normalize_remote_control_base_url;
@@ -188,8 +187,7 @@ async fn send_client_management_request_once(
     action: &str,
 ) -> io::Result<ClientManagementResponse> {
     let client = build_reqwest_client();
-    let mut auth_headers = HeaderMap::new();
-    auth.auth_provider.add_auth_headers(&mut auth_headers);
+    let auth_headers = auth.request_headers()?;
     let request = match request {
         ClientManagementRequest::List { url, params } => {
             let mut query = Vec::new();
@@ -216,7 +214,6 @@ async fn send_client_management_request_once(
     let response = request
         .timeout(REMOTE_CONTROL_CLIENT_MANAGEMENT_TIMEOUT)
         .headers(auth_headers)
-        .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
         .send()
         .await
         .map_err(|err| io::Error::other(format!("failed to {action}: {err}")))?;
