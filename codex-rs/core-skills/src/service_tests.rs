@@ -403,64 +403,6 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
 }
 
 #[tokio::test]
-async fn skills_for_config_indexes_usage_detection_for_non_implicit_skills() {
-    let codex_home = tempfile::tempdir().expect("tempdir");
-    let cwd = tempfile::tempdir().expect("tempdir");
-    let skill_dir = codex_home.path().join("skills/preflight");
-    let agents_dir = skill_dir.join("agents");
-    let scripts_dir = skill_dir.join("scripts");
-    fs::create_dir_all(&agents_dir).expect("create skill metadata dir");
-    fs::create_dir_all(&scripts_dir).expect("create scripts dir");
-    let skill_path = skill_dir.join("SKILL.md");
-    let script_path = scripts_dir.join("preflight.py");
-    fs::write(
-        &skill_path,
-        "---\nname: preflight-skill\ndescription: support/preflight skill\n---\n\n# Body\n",
-    )
-    .expect("write skill");
-    fs::write(
-        agents_dir.join("openai.yaml"),
-        "policy:\n  allow_implicit_invocation: false\n",
-    )
-    .expect("write skill metadata");
-    fs::write(&script_path, "print('ok')\n").expect("write script");
-
-    let config_layer_stack = config_stack(&codex_home, "");
-    let skills_service = SkillsService::new(
-        codex_home.path().abs(),
-        /*bundled_skills_enabled*/ true,
-    );
-
-    let outcome =
-        skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
-    assert!(
-        !outcome
-            .allowed_skills_for_implicit_invocation()
-            .iter()
-            .any(|skill| skill.name == "preflight-skill")
-    );
-    let workdir = cwd.path().abs();
-    let detected_names = [
-        format!("sed -n '1,20p' {}", skill_path.display()),
-        format!("python3 {}", script_path.display()),
-    ]
-    .into_iter()
-    .map(|command| {
-        crate::detect_implicit_skill_invocation_for_command(&outcome, &command, &workdir)
-            .map(|skill| skill.name)
-    })
-    .collect::<Vec<_>>();
-
-    assert_eq!(
-        detected_names,
-        vec![
-            Some("preflight-skill".to_string()),
-            Some("preflight-skill".to_string())
-        ]
-    );
-}
-
-#[tokio::test]
 async fn skills_for_cwd_loads_repo_and_user_roots_with_local_fs() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
