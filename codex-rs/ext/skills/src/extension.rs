@@ -293,12 +293,16 @@ impl<C> SkillsExtension<C> {
         mut query: SkillListQuery,
         thread_state: &SkillsThreadState,
     ) -> SkillCatalog {
+        let executor_query = query.clone();
         let include_orchestrator_skills = query.include_orchestrator_skills;
         let orchestrator_query = query.clone();
         let mcp_resources = orchestrator_query.mcp_resources.clone();
         query.include_orchestrator_skills = false;
 
-        let mut catalog = self.providers.list_for_turn(query).await;
+        let executor_catalog = thread_state
+            .executor_catalog_snapshot(self.providers.list_executor_for_turn(executor_query))
+            .await;
+        let mut catalog = self.providers.list_for_turn(query, executor_catalog).await;
         if include_orchestrator_skills {
             let orchestrator_catalog = thread_state
                 .orchestrator_catalog_snapshot(

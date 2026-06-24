@@ -147,6 +147,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
 async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_input() -> TestResult
 {
     let read_requests = Arc::new(Mutex::new(Vec::new()));
+    let list_calls = Arc::new(AtomicUsize::new(0));
     let executor_provider = Arc::new(StaticSkillProvider {
         catalog: SkillCatalog {
             entries: vec![test_entry(
@@ -158,7 +159,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
             warnings: Vec::new(),
         },
         read_requests: Arc::clone(&read_requests),
-        list_calls: None,
+        list_calls: Some(Arc::clone(&list_calls)),
         fail_first_list: false,
     });
     let providers = SkillProviders::new().with_executor_provider(executor_provider);
@@ -257,6 +258,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         .await;
 
     assert!(next_fragments.is_empty());
+    assert_eq!(1, list_calls.load(Ordering::Relaxed));
 
     Ok(())
 }

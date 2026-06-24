@@ -107,9 +107,40 @@ impl SkillProviders {
             .any(|source| source.kind == SkillSourceKind::Orchestrator)
     }
 
-    pub(crate) async fn list_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
-        self.list_matching(&query, |source| source.should_list(&query))
-            .await
+    pub(crate) async fn list_for_turn(
+        &self,
+        query: SkillListQuery,
+        executor_catalog: SkillCatalog,
+    ) -> SkillCatalog {
+        let mut catalog = SkillCatalog::default();
+        let mut executor_catalog = Some(executor_catalog);
+
+        for source in self
+            .sources
+            .iter()
+            .filter(|source| source.should_list(&query))
+        {
+            if source.kind == SkillSourceKind::Executor {
+                if let Some(executor_catalog) = executor_catalog.take() {
+                    catalog.extend(executor_catalog);
+                }
+                continue;
+            }
+            extend_catalog(
+                &mut catalog,
+                source.provider.list(query.clone()).await,
+                source.label.as_str(),
+            );
+        }
+
+        catalog
+    }
+
+    pub(crate) async fn list_executor_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
+        self.list_matching(&query, |source| {
+            source.kind == SkillSourceKind::Executor && source.should_list(&query)
+        })
+        .await
     }
 
     pub(crate) async fn list_orchestrator_for_turn(

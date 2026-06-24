@@ -27,6 +27,7 @@ const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     selected_roots: Vec<SelectedCapabilityRoot>,
+    executor_catalog: OnceCell<SkillCatalog>,
     orchestrator_skills_available: bool,
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
 }
@@ -40,6 +41,7 @@ impl SkillsThreadState {
         Self {
             config: Mutex::new(config),
             selected_roots,
+            executor_catalog: OnceCell::new(),
             orchestrator_skills_available,
             orchestrator_cache: Mutex::new(None),
         }
@@ -65,6 +67,16 @@ impl SkillsThreadState {
 
     pub(crate) fn orchestrator_skills_enabled(&self) -> bool {
         self.orchestrator_skills_available && self.config().orchestrator_skills_enabled
+    }
+
+    pub(crate) async fn executor_catalog_snapshot(
+        &self,
+        initialize: impl Future<Output = SkillCatalog> + Send,
+    ) -> SkillCatalog {
+        self.executor_catalog
+            .get_or_init(|| initialize)
+            .await
+            .clone()
     }
 
     pub(crate) async fn orchestrator_catalog_snapshot(
