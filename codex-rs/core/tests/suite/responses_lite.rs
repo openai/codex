@@ -57,6 +57,18 @@ fn has_hosted_tool(tools: &[Value], tool_type: &str) -> bool {
         .any(|tool| tool.get("type").and_then(Value::as_str) == Some(tool_type))
 }
 
+fn has_namespaced_tool(tools: &[Value], namespace: &str, tool_name: &str) -> bool {
+    tools.iter().any(|tool| {
+        tool.get("type").and_then(Value::as_str) == Some("namespace")
+            && tool.get("name").and_then(Value::as_str) == Some(namespace)
+            && tool["tools"].as_array().is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool.get("name").and_then(Value::as_str) == Some(tool_name))
+            })
+    })
+}
+
 fn additional_tools(body: &Value) -> Result<&[Value]> {
     body["input"]
         .as_array()
@@ -228,7 +240,8 @@ async fn responses_lite_uses_standalone_web_search_and_image_generation() -> Res
     let body = request.body_json();
     assert!(body.get("tools").is_none());
     let tools = additional_tools(&body)?;
-    assert!(!tools.is_empty());
+    assert!(has_namespaced_tool(tools, "web", "run"));
+    assert!(has_namespaced_tool(tools, "image_gen", "imagegen"));
     assert!(!has_hosted_tool(tools, "web_search"));
     assert!(!has_hosted_tool(tools, "image_generation"));
 
@@ -236,7 +249,7 @@ async fn responses_lite_uses_standalone_web_search_and_image_generation() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_lite_exposes_image_generation_for_actor_authenticated_provider() -> Result<()> {
+async fn responses_lite_exposes_standalone_tools_for_actor_authorized_provider() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -269,21 +282,12 @@ async fn responses_lite_exposes_image_generation_for_actor_authenticated_provide
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn("Use standalone image generation").await?;
+    test.submit_turn("Use standalone tools").await?;
 
     let body = response_mock.single_request().body_json();
-    let image_namespace = additional_tools(&body)?
-        .iter()
-        .find(|tool| {
-            tool.get("type").and_then(Value::as_str) == Some("namespace")
-                && tool.get("name").and_then(Value::as_str) == Some("image_gen")
-        })
-        .context("image_gen namespace should be advertised")?;
-    assert!(image_namespace["tools"].as_array().is_some_and(|tools| {
-        tools
-            .iter()
-            .any(|tool| tool.get("name").and_then(Value::as_str) == Some("imagegen"))
-    }));
+    let tools = additional_tools(&body)?;
+    assert!(has_namespaced_tool(tools, "web", "run"));
+    assert!(has_namespaced_tool(tools, "image_gen", "imagegen"));
 
     Ok(())
 }
