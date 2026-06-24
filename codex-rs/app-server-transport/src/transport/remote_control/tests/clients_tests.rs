@@ -60,8 +60,8 @@ async fn remote_control_handle_lists_clients_while_disabled() {
             Some(&"Bearer Access Token".to_string())
         );
         assert_eq!(
-            request.headers.get(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
-            Some(&"account_id".to_string())
+            request.headers.get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+            vec!["account_id"]
         );
         respond_with_json(
             request.stream,
@@ -126,6 +126,10 @@ async fn remote_control_handle_revokes_client_while_disabled() {
         assert_eq!(
             request.request_line,
             "DELETE /backend-api/wham/remote/control/environments/env%20%2F%3F/clients/client%20%2F%3F HTTP/1.1"
+        );
+        assert_eq!(
+            request.headers.get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+            vec!["account_id"]
         );
         respond_with_status(request.stream, "204 No Content", "").await;
     });

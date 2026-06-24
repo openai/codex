@@ -1,3 +1,5 @@
+use axum::http::HeaderMap;
+use axum::http::HeaderValue;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::UnauthorizedRecovery;
@@ -8,9 +10,28 @@ use tokio::sync::watch;
 use tracing::info;
 use tracing::warn;
 
+pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
+
 pub(super) struct RemoteControlConnectionAuth {
     pub(super) auth_provider: SharedAuthProvider,
     pub(super) account_id: String,
+}
+
+impl RemoteControlConnectionAuth {
+    pub(super) fn request_headers(&self) -> io::Result<HeaderMap> {
+        let mut headers = HeaderMap::new();
+        self.auth_provider.add_auth_headers(&mut headers);
+        headers.insert(
+            REMOTE_CONTROL_ACCOUNT_ID_HEADER,
+            HeaderValue::from_str(&self.account_id).map_err(|err| {
+                io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("invalid remote control account id header: {err}"),
+                )
+            })?,
+        );
+        Ok(headers)
+    }
 }
 
 pub(super) async fn load_remote_control_auth(
