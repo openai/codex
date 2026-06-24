@@ -403,7 +403,7 @@ impl RolloutRecorder {
                 allowed_sources,
                 model_providers,
                 cwd_filters,
-                /*parent_thread_id*/ None,
+                /*relation_filter*/ None,
                 archived,
                 search_term,
             )
@@ -512,7 +512,7 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             cwd_filters,
-            /*parent_thread_id*/ None,
+            /*relation_filter*/ None,
             archived,
             search_term,
         )
@@ -541,7 +541,7 @@ impl RolloutRecorder {
                     allowed_sources,
                     model_providers,
                     cwd_filters,
-                    /*parent_thread_id*/ None,
+                    /*relation_filter*/ None,
                     archived,
                     search_term,
                 )
@@ -581,7 +581,7 @@ impl RolloutRecorder {
                         allowed_sources,
                         model_providers,
                         cwd_filters,
-                        /*parent_thread_id*/ None,
+                        /*relation_filter*/ None,
                         archived,
                         search_term,
                     )
@@ -659,7 +659,7 @@ impl RolloutRecorder {
                     allowed_sources,
                     model_providers,
                     cwd_filter.as_ref().map(std::slice::from_ref),
-                    /*parent_thread_id*/ None,
+                    /*relation_filter*/ None,
                     /*archived*/ false,
                     /*search_term*/ None,
                 )
@@ -1083,7 +1083,10 @@ async fn fill_missing_thread_item_metadata_from_state_db(
                 continue;
             }
         };
-        fill_missing_thread_item_metadata(item, thread_item_from_state_metadata(metadata));
+        fill_missing_thread_item_metadata(
+            item,
+            thread_item_from_state_metadata(metadata, /*parent_thread_id*/ None),
+        );
     }
 
     page
@@ -1775,21 +1778,32 @@ impl JsonlWriter {
 
 impl From<codex_state::ThreadsPage> for ThreadsPage {
     fn from(db_page: codex_state::ThreadsPage) -> Self {
-        let items = db_page
-            .items
+        let codex_state::ThreadsPage {
+            items,
+            parent_thread_ids,
+            next_anchor,
+            num_scanned_rows,
+        } = db_page;
+        let items = items
             .into_iter()
-            .map(thread_item_from_state_metadata)
+            .map(|item| {
+                let parent_thread_id = parent_thread_ids.get(&item.id).copied();
+                thread_item_from_state_metadata(item, parent_thread_id)
+            })
             .collect();
         Self {
             items,
-            next_cursor: db_page.next_anchor.map(Into::into),
-            num_scanned_files: db_page.num_scanned_rows,
+            next_cursor: next_anchor.map(Into::into),
+            num_scanned_files: num_scanned_rows,
             reached_scan_cap: false,
         }
     }
 }
 
-fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadItem {
+fn thread_item_from_state_metadata(
+    item: codex_state::ThreadMetadata,
+    parent_thread_id: Option<ThreadId>,
+) -> ThreadItem {
     ThreadItem {
         path: item.rollout_path,
         thread_id: Some(item.id),
@@ -1804,7 +1818,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
                 .or_else(|_| serde_json::from_value(Value::String(item.source)))
                 .unwrap_or(SessionSource::Unknown),
         ),
-        parent_thread_id: None,
+        parent_thread_id,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         model_provider: Some(item.model_provider),

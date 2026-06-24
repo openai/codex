@@ -545,19 +545,16 @@ impl AgentControl {
         {
             return Ok(resumed_thread_id);
         }
-        let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
-            return Ok(resumed_thread_id);
-        };
-        let Some(state_db_ctx) = resumed_thread.state_db() else {
+        let Some(agent_graph_store) = state.agent_graph_store() else {
             return Ok(resumed_thread_id);
         };
 
         let mut resume_queue = VecDeque::from([(thread_id, root_depth)]);
         while let Some((parent_thread_id, parent_depth)) = resume_queue.pop_front() {
-            let child_ids = match state_db_ctx
-                .list_thread_spawn_children_with_status(
+            let child_ids = match agent_graph_store
+                .list_thread_spawn_children(
                     parent_thread_id,
-                    DirectionalThreadSpawnEdgeStatus::Open,
+                    Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
                 )
                 .await
             {
@@ -613,7 +610,6 @@ impl AgentControl {
         session_source: SessionSource,
     ) -> CodexResult<(ThreadId, MultiAgentVersion)> {
         let state = self.upgrade()?;
-        let state_db_ctx = state.state_db();
         let stored_thread = state
             .read_stored_thread(ReadThreadParams {
                 thread_id,
@@ -621,6 +617,14 @@ impl AgentControl {
                 include_history: true,
             })
             .await?;
+        let resumed_agent_path = stored_thread
+            .agent_path
+            .as_deref()
+            .map(AgentPath::try_from)
+            .transpose()
+            .map_err(|err| CodexErr::InvalidRequest(format!("invalid stored agent path: {err}")))?;
+        let resumed_agent_nickname = stored_thread.agent_nickname.clone();
+        let resumed_agent_role = stored_thread.agent_role.clone();
         let history = stored_thread
             .history
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?
@@ -649,26 +653,15 @@ impl AgentControl {
                 agent_path,
                 agent_role: _,
                 agent_nickname: _,
-            }) => {
-                let (resumed_agent_nickname, resumed_agent_role) =
-                    if let Some(state_db_ctx) = state_db_ctx.as_ref() {
-                        match state_db_ctx.get_thread(thread_id).await {
-                            Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
-                            Ok(None) | Err(_) => (None, None),
-                        }
-                    } else {
-                        (None, None)
-                    };
-                self.prepare_thread_spawn(
-                    &mut reservation,
-                    &config,
-                    parent_thread_id,
-                    depth,
-                    agent_path,
-                    resumed_agent_role,
-                    resumed_agent_nickname,
-                )?
-            }
+            }) => self.prepare_thread_spawn(
+                &mut reservation,
+                &config,
+                parent_thread_id,
+                depth,
+                agent_path.or(resumed_agent_path),
+                resumed_agent_role,
+                resumed_agent_nickname,
+            )?,
             other => (other, AgentMetadata::default()),
         };
         let notification_source = session_source.clone();

@@ -1,25 +1,36 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io;
 
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::WalkEntryKind;
+use codex_exec_server::WalkOptions;
 use codex_protocol::protocol::Product;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
+use codex_utils_plugins::plugin_namespace_for_root_uri;
 use codex_utils_plugins::plugin_namespace_for_skill_uri;
+use futures::future::join_all;
 
 use crate::model::SkillDependencies;
 use crate::model::SkillPolicy;
 
 use super::MAX_QUALIFIED_NAME_LEN;
+use super::MAX_SCAN_DEPTH;
+use super::MAX_SKILLS_DIRS_PER_ROOT;
 use super::ParsedSkillFrontmatter;
+use super::SKILLS_FILENAME;
 use super::SKILLS_METADATA_DIR;
 use super::SKILLS_METADATA_FILENAME;
+use super::SkillFileDiscovery;
 use super::SkillMetadataFile;
-use super::SymlinkPolicy;
-use super::discover_skills_under_root;
 use super::parse_skill_frontmatter_metadata_inner;
 use super::resolve_dependencies;
 use super::resolve_policy;
 use super::sanitize_single_line;
 use super::validate_len;
+
+const MAX_SKILLS_ENTRIES_PER_ROOT: usize = 20_000;
 
 /// URI-native metadata for one skill owned by an execution environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,7 +63,11 @@ impl EnvironmentSkillMetadata {
         }
     }
 
-    async fn parse(file_system: &dyn ExecutorFileSystem, path: &PathUri) -> Result<Self, String> {
+    async fn parse(
+        file_system: &dyn ExecutorFileSystem,
+        path: &PathUri,
+        plugin_namespace: Option<&str>,
+    ) -> Result<Self, String> {
         let contents = file_system
             .read_file_text(path, /*sandbox*/ None)
             .await
@@ -63,8 +78,7 @@ impl EnvironmentSkillMetadata {
             short_description,
         } = parse_skill_frontmatter_metadata_inner(&contents, || default_skill_name(path))
             .map_err(|err| err.to_string())?;
-        let name = plugin_namespace_for_skill_uri(file_system, path)
-            .await
+        let name = plugin_namespace
             .map(|namespace| format!("{namespace}:{base_name}"))
             .unwrap_or(base_name);
         validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")
@@ -95,11 +109,135 @@ pub async fn load_environment_skills_from_root(
     restriction_product: Option<Product>,
 ) -> EnvironmentSkillLoadOutcome {
     let mut outcome = EnvironmentSkillLoadOutcome::default();
-    let discovery =
-        discover_skills_under_root(file_system, root, SymlinkPolicy::FollowDirectories).await;
+    let discovery = match file_system
+        .walk(
+            root,
+            WalkOptions {
+                max_depth: MAX_SCAN_DEPTH,
+                max_directories: MAX_SKILLS_DIRS_PER_ROOT,
+                max_entries: MAX_SKILLS_ENTRIES_PER_ROOT,
+                follow_directory_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+    {
+        Ok(walk) => {
+            let mut warnings = walk
+                .errors
+                .into_iter()
+                .map(|error| {
+                    format!(
+                        "failed to scan skill path {}: {}",
+                        error.path, error.message
+                    )
+                })
+                .collect::<Vec<_>>();
+            if walk.truncated {
+                warnings.push(format!(
+                    "skills scan reached its traversal limit (root: {root})"
+                ));
+            }
+            let mut skill_files = Vec::new();
+            let mut plugin_roots = HashSet::new();
+            for entry in walk.entries {
+                match entry.kind {
+                    WalkEntryKind::Directory => {
+                        if DISCOVERABLE_PLUGIN_MANIFEST_PATHS
+                            .iter()
+                            .any(|path| path.split('/').next() == entry.path.basename().as_deref())
+                            && let Some(plugin_root) = entry.path.parent()
+                        {
+                            plugin_roots.insert(plugin_root);
+                        }
+                    }
+                    WalkEntryKind::File => {
+                        if entry.path.basename().as_deref() == Some(SKILLS_FILENAME) {
+                            skill_files.push(entry.path);
+                        }
+                    }
+                }
+            }
+            SkillFileDiscovery {
+                skill_files,
+                plugin_roots,
+                namespace_roots: HashSet::from([root.clone()]),
+                warnings,
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => SkillFileDiscovery {
+            skill_files: Vec::new(),
+            plugin_roots: HashSet::new(),
+            namespace_roots: HashSet::new(),
+            warnings: Vec::new(),
+        },
+        Err(error) => SkillFileDiscovery {
+            skill_files: Vec::new(),
+            plugin_roots: HashSet::new(),
+            namespace_roots: HashSet::new(),
+            warnings: vec![format!("failed to walk skills root {root}: {error:#}")],
+        },
+    };
     outcome.warnings.extend(discovery.warnings);
+    if discovery.skill_files.is_empty() {
+        return outcome;
+    }
+
+    let mut skill_ancestors = HashSet::new();
+    for skill_path in &discovery.skill_files {
+        let mut ancestor = skill_path.parent();
+        while let Some(path) = ancestor {
+            skill_ancestors.insert(path.clone());
+            ancestor = path.parent();
+        }
+    }
+
+    let namespace_roots = discovery.namespace_roots;
+    let namespace_lookups = join_all(namespace_roots.iter().map(|namespace_root| async {
+        (
+            namespace_root.clone(),
+            plugin_namespace_for_skill_uri(file_system, namespace_root).await,
+        )
+    }))
+    .await;
+    let plugin_lookups = join_all(
+        discovery
+            .plugin_roots
+            .iter()
+            .filter(|plugin_root| skill_ancestors.contains(*plugin_root))
+            .filter(|plugin_root| !namespace_roots.contains(*plugin_root))
+            .map(|plugin_root| async {
+                (
+                    plugin_root.clone(),
+                    plugin_namespace_for_root_uri(file_system, plugin_root).await,
+                )
+            }),
+    )
+    .await;
+    let plugin_namespaces = namespace_lookups
+        .into_iter()
+        .chain(plugin_lookups)
+        .filter_map(|(plugin_root, namespace)| namespace.map(|namespace| (plugin_root, namespace)))
+        .collect::<HashMap<_, _>>();
+
     for path in discovery.skill_files {
-        match EnvironmentSkillMetadata::parse(file_system, &path).await {
+        let mut ancestor = path.parent();
+        let plugin_namespace = loop {
+            let Some(current) = ancestor else {
+                break None;
+            };
+            if let Some(namespace) = plugin_namespaces.get(&current) {
+                break Some(namespace.as_str());
+            }
+            ancestor = current.parent();
+        };
+        match EnvironmentSkillMetadata::parse(
+            file_system,
+            &path,
+            /*plugin_namespace*/ plugin_namespace,
+        )
+        .await
+        {
             Ok(skill) if skill.matches_product_restriction(restriction_product) => {
                 outcome.skills.push(skill);
             }

@@ -74,6 +74,7 @@ async fn stdio_listen_transport_serves_initialize() {
             })
             .expect("initialize params should serialize"),
         ),
+        trace: None,
     });
     write_jsonrpc_line(&mut client_writer, &initialize).await;
 

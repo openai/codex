@@ -1,6 +1,5 @@
 //! `thread/delete` request handling.
 
-use super::thread_processor::core_thread_write_error;
 use super::thread_processor::unsupported_thread_store_operation;
 use super::*;
 
@@ -37,23 +36,7 @@ impl ThreadRequestProcessor {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        let mut thread_ids = self.state_db_spawn_subtree_thread_ids(thread_id).await?;
-        let mut seen = thread_ids.iter().copied().collect::<HashSet<_>>();
-
-        match self
-            .thread_manager
-            .list_agent_subtree_thread_ids(thread_id)
-            .await
-        {
-            Ok(live_thread_ids) => {
-                for live_thread_id in live_thread_ids {
-                    if seen.insert(live_thread_id) {
-                        thread_ids.push(live_thread_id);
-                    }
-                }
-            }
-            Err(err) => return Err(core_thread_write_error("delete thread", err)),
-        }
+        let thread_ids = self.state_db_spawn_subtree_thread_ids(thread_id).await?;
 
         self.validate_root_thread_delete(thread_id, thread_ids.len() > 1)
             .await?;

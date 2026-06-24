@@ -235,6 +235,8 @@ fn connector_tool(id: &str, name: &str) -> DiscoverableTool {
         description: None,
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
