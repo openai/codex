@@ -13,6 +13,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use tempfile::TempDir;
 
 fn layer(id: &str, name: &str, contents: &str) -> RequirementsLayerEntry {
     RequirementsLayerEntry::from_toml(
@@ -1025,4 +1026,155 @@ fn parse_error_names_layer() {
 
     assert!(err.to_string().contains("Bad layer (req_bad)"));
     assert!(err.to_string().contains("allowed_approval_policies"));
+}
+
+#[test]
+fn marketplace_allowed_sources_use_default_toml_merge() {
+    let composed = compose(vec![
+        layer(
+            "req_low",
+            "Low",
+            r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.shared]
+source = "git"
+url = "https://github.com/example/old.git"
+ref = "main"
+
+[marketplaces.allowed_sources.other]
+source = "git"
+url = "https://github.com/example/other.git"
+"#,
+        ),
+        layer(
+            "req_high",
+            "High",
+            r#"
+[marketplaces.allowed_sources.shared]
+ref = "release"
+"#,
+        ),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.shared]
+source = "git"
+url = "https://github.com/example/old.git"
+ref = "release"
+
+[marketplaces.allowed_sources.other]
+source = "git"
+url = "https://github.com/example/other.git"
+"#,
+        )
+    );
+}
+
+#[test]
+fn marketplace_source_switch_uses_default_toml_merge() {
+    let composed = compose(vec![
+        layer(
+            "req_low",
+            "Low",
+            r#"
+[marketplaces.allowed_sources.company]
+source = "git"
+url = "https://github.com/example/plugins.git"
+ref = "main"
+"#,
+        ),
+        layer(
+            "req_high",
+            "High",
+            r#"
+[marketplaces.allowed_sources.company]
+source = "host_pattern"
+host_pattern = '^github\.example\.com$'
+"#,
+        ),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+[marketplaces.allowed_sources.company]
+source = "host_pattern"
+url = "https://github.com/example/plugins.git"
+ref = "main"
+host_pattern = '^github\.example\.com$'
+"#,
+        )
+    );
+}
+
+#[test]
+fn marketplace_allowed_source_rejects_unknown_fields() {
+    let err = compose(vec![layer(
+        "req_bad",
+        "Bad marketplace layer",
+        r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.invalid]
+source = "git"
+url = "https://github.com/example/plugins.git"
+reff = "main"
+"#,
+    )])
+    .expect_err("invalid marketplace rule should fail");
+
+    assert!(err.to_string().contains("Bad marketplace layer (req_bad)"));
+    assert!(err.to_string().contains("unknown field `reff`"));
+}
+
+#[test]
+fn local_marketplace_path_is_not_resolved_during_requirements_merge() {
+    let base_dir = TempDir::new().expect("create requirements base directory");
+    let base_dir = AbsolutePathBuf::try_from(base_dir.path().to_path_buf())
+        .expect("absolute requirements base directory");
+    let composed = compose(vec![
+        layer(
+            "req_local",
+            "Local marketplace path",
+            r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.local]
+source = "local"
+path = "../plugins"
+"#,
+        )
+        .with_base_dir(base_dir),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.local]
+source = "local"
+path = "../plugins"
+"#,
+        )
+    );
 }

@@ -8679,6 +8679,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         hooks: None,
         mcp_servers: None,
         plugins: None,
+        marketplaces: None,
         apps: None,
         rules: None,
         enforce_residency: None,
