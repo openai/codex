@@ -12,6 +12,12 @@ use std::process::Command;
 use anyhow::Context;
 use anyhow::Result;
 
+/// Namespace classes whose topology is part of this harness's contract.
+///
+/// The outer bwrap isolates user, mount, IPC, and UTS, but deliberately inherits
+/// PID plus writable procfs for nested bwrap setup and network for loopback.
+/// Cgroup and time namespaces stay executor-owned; `*_for_children` entries are
+/// alternate PID/time handles rather than separate namespace classes.
 const NAMESPACES: &[&str] = &["user", "mnt", "pid", "ipc", "uts", "net"];
 
 fn main() -> Result<()> {

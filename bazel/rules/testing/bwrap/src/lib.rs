@@ -86,7 +86,12 @@ impl BwrapTestCommand {
         fs::create_dir(&private_tmp)
             .with_context(|| format!("create private tmp directory {}", private_tmp.display()))?;
         fs::set_permissions(&private_tmp, fs::Permissions::from_mode(0o1777)).with_context(
-            || format!("set permissions on private tmp directory {}", private_tmp.display()),
+            || {
+                format!(
+                    "set permissions on private tmp directory {}",
+                    private_tmp.display()
+                )
+            },
         )?;
         let home = private_tmp.join("home");
         let codex_home = private_tmp.join("codex-home");
@@ -104,15 +109,19 @@ impl BwrapTestCommand {
             },
         )?;
 
-        // Keep the VM's PID namespace and expose its existing procfs
-        // read-write: a nested bwrap must write UID/GID maps before mounting
-        // the fresh procfs for its own PID namespace. Mounting a fresh procfs
-        // here instead leaves locked child mounts that make the nested mount
-        // fail Linux's mount_too_revealing check. A private directory backs
-        // /tmp so remote fixtures cannot alias files owned by the test runner.
-        // The Bazel workspace is the other deliberate writable carveout:
-        // production bwrap setup needs to materialize missing mount targets
-        // below a writable command cwd.
+        // Firecracker supplies the host PID boundary, so the outer wrapper
+        // deliberately shares the disposable VM's PID namespace and rebinds
+        // its procfs read-write. Nested unprivileged bwrap writes UID/GID maps
+        // through the caller's /proc before mounting a fresh procfs for its
+        // own PID namespace. Giving the outer wrapper a fresh procfs on this
+        // executor leaves locked child mounts that make the nested proc mount
+        // fail Linux's mount_too_revealing check; making the inherited procfs
+        // read-only instead makes UID/GID map setup fail.
+        //
+        // A private directory backs /tmp so remote fixtures cannot alias files
+        // owned by the test runner. The Bazel workspace is the other deliberate
+        // writable carveout: production bwrap setup needs to materialize
+        // missing mount targets below a writable command cwd.
         //
         // Map the caller to a non-root ID and leave the final process with no
         // capabilities. Bubblewrap rejects a non-root caller that already has
@@ -133,11 +142,7 @@ impl BwrapTestCommand {
             ])
             .arg(&private_tmp)
             .arg("/tmp")
-            .args([
-                "--dev",
-                "/dev",
-                "--bind",
-            ])
+            .args(["--dev", "/dev", "--bind"])
             .arg(&workspace)
             .arg(&workspace)
             .args([
