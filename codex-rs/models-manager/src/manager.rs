@@ -233,24 +233,18 @@ impl OpenAiModelsManager {
 
 impl StaticModelsManager {
     /// Construct a static model manager from an authoritative catalog.
-    pub fn new(auth_manager: Option<Arc<AuthManager>>, model_catalog: ModelsResponse) -> Self {
-        Self {
-            remote_models: model_catalog.models,
-            auth_manager,
-            unsupported_model_fallback: None,
-        }
-    }
-
-    /// Construct a static model manager that replaces unsupported requested models.
-    pub fn new_with_unsupported_model_fallback(
+    ///
+    /// When configured, `unsupported_model_fallback` replaces explicit model names that are not
+    /// present in the catalog.
+    pub fn new(
         auth_manager: Option<Arc<AuthManager>>,
         model_catalog: ModelsResponse,
-        fallback_model: impl Into<String>,
+        unsupported_model_fallback: Option<String>,
     ) -> Self {
         Self {
             remote_models: model_catalog.models,
             auth_manager,
-            unsupported_model_fallback: Some(fallback_model.into()),
+            unsupported_model_fallback,
         }
     }
 }

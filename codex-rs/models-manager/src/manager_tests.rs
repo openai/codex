@@ -197,17 +197,21 @@ fn openai_manager_for_tests_with_auth(
 }
 
 fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManager {
-    StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
+    StaticModelsManager::new(
+        /*auth_manager*/ None,
+        model_catalog,
+        /*unsupported_model_fallback*/ None,
+    )
 }
 
 fn static_manager_with_fallback_for_tests(
     model_catalog: ModelsResponse,
     fallback_model: &str,
 ) -> StaticModelsManager {
-    StaticModelsManager::new_with_unsupported_model_fallback(
+    StaticModelsManager::new(
         /*auth_manager*/ None,
         model_catalog,
-        fallback_model,
+        /*unsupported_model_fallback*/ Some(fallback_model.to_string()),
     )
 }
 
@@ -991,6 +995,7 @@ async fn static_manager_reads_latest_auth_mode() {
         ModelsResponse {
             models: vec![chatgpt_only_model, api_model],
         },
+        /*unsupported_model_fallback*/ None,
     );
 
     let chatgpt_models = manager.list_models(RefreshStrategy::Online).await;

@@ -290,6 +290,7 @@ impl ModelProvider for ConfiguredModelProvider {
             Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
+                /*unsupported_model_fallback*/ None,
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(

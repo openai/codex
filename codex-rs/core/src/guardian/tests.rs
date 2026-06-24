@@ -1455,6 +1455,7 @@ async fn guardian_request_model_for_auto_review(
                 ModelsResponse {
                     models: vec![parent_model],
                 },
+                /*unsupported_model_fallback*/ None,
             );
             Arc::get_mut(&mut session)
                 .expect("session should be unique")

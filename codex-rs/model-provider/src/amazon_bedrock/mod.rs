@@ -166,10 +166,10 @@ impl ModelProvider for AmazonBedrockModelProvider {
         _codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        Arc::new(StaticModelsManager::new_with_unsupported_model_fallback(
+        Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             config_model_catalog.map_or_else(static_model_catalog, with_default_only_service_tier),
-            AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
+            /*unsupported_model_fallback*/ Some(AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string()),
         ))
     }
 }
