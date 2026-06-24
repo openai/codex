@@ -62,8 +62,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn prepare_safety_buffering_retry(&mut self) {
+        let cancel_edit = std::mem::take(&mut self.cancel_edit);
         self.last_rendered_user_message_display = None;
         self.finalize_turn();
+        self.cancel_edit = cancel_edit;
     }
 
     pub(super) fn on_model_safety_buffering_updated(
