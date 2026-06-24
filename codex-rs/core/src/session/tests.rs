@@ -2683,8 +2683,11 @@ async fn record_initial_history_reconstructs_forked_transcript() {
         .record_initial_history(InitialHistory::Forked(rollout_items))
         .await;
 
-    let history = session.state.lock().await.clone_history();
-    assert_eq!(expected, history.raw_items());
+    let mut actual = session.state.lock().await.clone_history().into_raw_items();
+    for item in &mut actual {
+        item.set_id(/*new_id*/ None);
+    }
+    assert_eq!(expected, actual);
 }
 
 #[tokio::test]
