@@ -305,10 +305,21 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
     if existing.logo_url_dark.is_none() && logo_url_dark.is_some() {
         existing.logo_url_dark = logo_url_dark;
     }
-    if existing.icon_assets.is_none() && icon_assets.is_some() {
+    if existing.icon_assets.as_ref().is_none_or(HashMap::is_empty)
+        && icon_assets
+            .as_ref()
+            .is_some_and(|assets| !assets.is_empty())
+    {
         existing.icon_assets = icon_assets;
     }
-    if existing.icon_dark_assets.is_none() && icon_dark_assets.is_some() {
+    if existing
+        .icon_dark_assets
+        .as_ref()
+        .is_none_or(HashMap::is_empty)
+        && icon_dark_assets
+            .as_ref()
+            .is_some_and(|assets| !assets.is_empty())
+    {
         existing.icon_dark_assets = icon_dark_assets;
     }
     if existing.distribution_channel.is_none() && distribution_channel.is_some() {
@@ -535,7 +546,9 @@ mod tests {
         let response: DirectoryListResponse = serde_json::from_value(serde_json::json!({
             "apps": [{
                 "id": "alpha",
-                "name": "Alpha"
+                "name": "Alpha",
+                "icon_assets": {},
+                "icon_dark_assets": {}
             }, {
                 "id": "alpha",
                 "name": "",
