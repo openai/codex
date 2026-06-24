@@ -589,7 +589,7 @@ fn parse_posix_path(path: &str) -> Option<PathUri> {
             format!("/{path}").as_bytes(),
         ));
     }
-    path_uri_from_segments(/*host*/ None, path.split('/'))
+    path_uri_from_segments(PathConvention::Posix, /*host*/ None, path.split('/'))
 }
 
 fn parse_windows_path(path: &str) -> Option<PathUri> {
@@ -612,6 +612,7 @@ fn parse_windows_path(path: &str) -> Option<PathUri> {
             if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
     ) {
         return path_uri_from_segments(
+            PathConvention::Windows,
             /*host*/ None,
             std::iter::once(&path[..2]).chain(path[3..].split(is_windows_separator_char)),
         );
@@ -623,14 +624,19 @@ fn parse_windows_path(path: &str) -> Option<PathUri> {
         let mut components = path[2..].split(is_windows_separator_char);
         let host = components.next().filter(|host| !host.is_empty())?;
         let share = components.next().filter(|share| !share.is_empty())?;
-        return path_uri_from_segments(Some(host), std::iter::once(share).chain(components))
-            .or_else(|| Some(windows_opaque_path_uri(path)));
+        return path_uri_from_segments(
+            PathConvention::Windows,
+            Some(host),
+            std::iter::once(share).chain(components),
+        )
+        .or_else(|| Some(windows_opaque_path_uri(path)));
     }
 
     None
 }
 
 fn path_uri_from_segments<'a>(
+    convention: PathConvention,
     host: Option<&str>,
     segments: impl Iterator<Item = &'a str>,
 ) -> Option<PathUri> {
@@ -638,12 +644,30 @@ fn path_uri_from_segments<'a>(
     if let Some(host) = host {
         url.set_host(Some(host)).ok()?;
     }
+    let anchor_depth = usize::from(convention == PathConvention::Windows);
+    let mut depth = 0;
+    let mut normalized_segments = Vec::new();
+    for segment in segments {
+        match segment {
+            "." => {}
+            ".." => {
+                while normalized_segments.last() == Some(&"") {
+                    normalized_segments.pop();
+                }
+                if depth > anchor_depth {
+                    normalized_segments.pop();
+                    depth -= 1;
+                }
+            }
+            segment => {
+                normalized_segments.push(segment);
+                depth += usize::from(!segment.is_empty());
+            }
+        }
+    }
     {
         let mut url_segments = url.path_segments_mut().ok()?;
-        url_segments.clear();
-        for segment in segments {
-            url_segments.push(segment);
-        }
+        url_segments.clear().extend(normalized_segments);
     }
     PathUri::try_from(url).ok()
 }

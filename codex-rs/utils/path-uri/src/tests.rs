@@ -618,6 +618,67 @@ fn join_replaces_posix_absolute_path() {
 }
 
 #[test]
+fn join_normalizes_absolute_parent_segments() {
+    for (base, path, expected) in [
+        ("file:///workspace", "/tmp/a/../b", "file:///tmp/b"),
+        ("file:///C:/workspace", r"D:\tmp\a\..\b", "file:///D:/tmp/b"),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\a\..\b",
+            "file://server/share/b",
+        ),
+        ("file:///workspace", "/tmp/a///../b", "file:///tmp/b"),
+        (
+            "file:///C:/workspace",
+            r"D:\tmp\a\\\..\b",
+            "file:///D:/tmp/b",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\a\\\..\b",
+            "file://server/share/b",
+        ),
+        ("file:///workspace", "/tmp/a///b/../..", "file:///tmp"),
+        (
+            "file:///C:/workspace",
+            r"D:\tmp\a\\\b\..\..",
+            "file:///D:/tmp",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\a\\\b\..\..",
+            "file://server/share",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn join_absolute_parent_segments_stop_at_native_path_roots() {
+    for (base, path, expected) in [
+        ("file:///workspace", "/../../b", "file:///b"),
+        ("file:///C:/workspace", r"D:\..\..\b", "file:///D:/b"),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\..\..\b",
+            "file://server/share/b",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\\\..\b",
+            "file://server/share/b",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
 fn join_replaces_windows_absolute_path() {
     let base = PathUri::parse("file:///C:/workspace/src").expect("valid base URI");
 
