@@ -10,10 +10,13 @@ expression: rendered
   Standard Claude Chat data cannot be imported.
     [x] Tools & setup
         Settings, instructions, integrations, agents, commands, and skills
+        Importing: Settings 1
     [x] Current project
         Add Codex files alongside your existing project files
+        Importing: Plugins 6, Instructions 1
     [x] Chat sessions (1)
         Last 30 days of chats
+        Importing: Chat sessions 1
 
   Selected 4 of 4 items.
   › 1. Import selected

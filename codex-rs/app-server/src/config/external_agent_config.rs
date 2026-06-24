@@ -72,6 +72,7 @@ pub(crate) struct NamedMigration {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct MigrationDetails {
     pub plugins: Vec<PluginsMigration>,
+    pub skills: Vec<NamedMigration>,
     pub sessions: Vec<ExternalAgentSessionMigration>,
     pub mcp_servers: Vec<NamedMigration>,
     pub hooks: Vec<NamedMigration>,
@@ -570,7 +571,8 @@ impl ExternalAgentConfigService {
             || self.home_target_skills_dir(),
             |repo_root| repo_root.join(".agents").join("skills"),
         );
-        let skills_count = count_missing_subdirectories(&source_skills, &target_skills)?;
+        let skill_names = missing_subdirectory_names(&source_skills, &target_skills)?;
+        let skills_count = skill_names.len();
         if skills_count > 0 {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
@@ -580,7 +582,10 @@ impl ExternalAgentConfigService {
                     target_skills.display()
                 ),
                 cwd: cwd.clone(),
-                details: None,
+                details: Some(MigrationDetails {
+                    skills: named_migrations(skill_names),
+                    ..Default::default()
+                }),
             });
             emit_migration_metric(
                 EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
@@ -1569,13 +1574,16 @@ fn collect_subdirectory_names(path: &Path) -> io::Result<HashSet<OsString>> {
     Ok(names)
 }
 
-fn count_missing_subdirectories(source: &Path, target: &Path) -> io::Result<usize> {
+fn missing_subdirectory_names(source: &Path, target: &Path) -> io::Result<Vec<String>> {
     let source_names = collect_subdirectory_names(source)?;
     let target_names = collect_subdirectory_names(target)?;
-    Ok(source_names
-        .iter()
-        .filter(|name| !target_names.contains(*name))
-        .count())
+    let mut missing_names = source_names
+        .into_iter()
+        .filter(|name| !target_names.contains(name))
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    missing_names.sort();
+    Ok(missing_names)
 }
 
 fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {

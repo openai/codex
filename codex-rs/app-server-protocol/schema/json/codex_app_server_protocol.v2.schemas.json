@@ -8796,6 +8796,13 @@
           },
           "type": "array"
         },
+        "skills": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SkillMigration"
+          },
+          "type": "array"
+        },
         "subagents": {
           "default": [],
           "items": {
@@ -14114,6 +14121,17 @@
         "name",
         "path",
         "scope"
+      ],
+      "type": "object"
+    },
+    "SkillMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
       ],
       "type": "object"
     },

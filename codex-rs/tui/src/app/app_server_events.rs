@@ -103,7 +103,7 @@ impl App {
                 );
                 return;
             }
-            ServerNotification::ExternalAgentConfigImportCompleted(_) => {
+            ServerNotification::ExternalAgentConfigImportCompleted(notification) => {
                 let should_report_completion =
                     app_server_client.consume_external_agent_config_import_completion();
                 if let Err(err) = self.refresh_in_memory_config_from_disk().await {
@@ -117,10 +117,8 @@ impl App {
                 self.chat_widget.submit_op(AppCommand::reload_user_config());
                 self.fetch_plugins_list(app_server_client, cwd);
                 if should_report_completion {
-                    self.chat_widget.add_info_message(
-                        crate::external_agent_config_migration_flow::EXTERNAL_AGENT_CONFIG_MIGRATION_FINISHED_MESSAGE
-                            .to_string(),
-                        /*hint*/ None,
+                    self.chat_widget.add_plain_history_lines(
+                        crate::external_agent_config_migration_flow::external_agent_config_migration_finished_lines(notification),
                     );
                 }
                 return;

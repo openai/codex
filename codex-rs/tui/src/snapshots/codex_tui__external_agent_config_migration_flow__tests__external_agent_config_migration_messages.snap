@@ -2,10 +2,37 @@
 source: tui/src/external_agent_config_migration_flow_tests.rs
 expression: messages
 ---
-Claude Code import started. You can keep working while it finishes. Imported setup will apply to new chats.
-Claude Code import started. You can keep working while it finishes. Imported setup will apply to new chats. 1 additional item remains. After it finishes, run /import again to review it.
-Claude Code import started. You can keep working while it finishes. Imported setup will apply to new chats. 2 additional items remain. After it finishes, run /import again to review them.
-Claude Code import finished. Run /import again to check for additional items.
+• Claude Code import started. You can keep working while it finishes.
+  Imported setup will apply to new chats.
+  Importing:
+    Settings: 1
+    Skills: 4 — triage, release-notes, risk-check, +1 more
+    MCP servers: 2 — docs, issues
+    Chat sessions: 3 — Alpha rollout, Beta review, Gamma notes
+    Plugins: 2 — formatter, reviewer
+• Claude Code import started. You can keep working while it finishes.
+  Imported setup will apply to new chats.
+  Importing:
+    Settings: 1
+    Skills: 4 — triage, release-notes, risk-check, +1 more
+    MCP servers: 2 — docs, issues
+    Chat sessions: 3 — Alpha rollout, Beta review, Gamma notes
+    Plugins: 2 — formatter, reviewer
+  1 additional item remains. After it finishes, run /import again to review it.
+• Claude Code import started. You can keep working while it finishes.
+  Imported setup will apply to new chats.
+  Importing:
+    Settings: 1
+    Skills: 4 — triage, release-notes, risk-check, +1 more
+    MCP servers: 2 — docs, issues
+    Chat sessions: 3 — Alpha rollout, Beta review, Gamma notes
+    Plugins: 2 — formatter, reviewer
+  2 additional items remain. After it finishes, run /import again to review them.
+• Claude Code import finished: 2 imported, 1 failed.
+  Results by type:
+    Settings: 1 imported, 0 failed
+    Plugins: 1 imported, 1 failed
+  Run /import again to check for additional items.
 No Claude Code setup was found to import.
 Import from Claude Code is unavailable in remote sessions. Start Codex locally and run /import.
 Import from Claude Code is unavailable while Codex is connected to the local app-server daemon. Stop the daemon, restart Codex, and run /import.
