@@ -1535,7 +1535,17 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     .await;
     unrelated_chatgpt_auth.assert_visible_lacks(&["image_generation"]);
 
-    let actor_authenticated_provider = probe(|turn| {
+    let provider_without_actor_auth = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn, /*requires_openai_auth*/ false, /*actor_header*/ None,
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    provider_without_actor_auth.assert_visible_lacks(&["image_generation"]);
+
+    let provider_authenticated = probe(|turn| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
         use_provider_auth(
             turn,
@@ -1545,23 +1555,62 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
-    actor_authenticated_provider.assert_visible_lacks(&["image_generation"]);
+    provider_authenticated.assert_visible_contains(&["image_generation"]);
+
+    let empty_actor_auth = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "  ")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    empty_actor_auth.assert_visible_lacks(&["image_generation"]);
 
     let feature_disabled = probe(|turn| {
-        use_chatgpt_auth(turn);
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     feature_disabled.assert_visible_lacks(&["image_generation"]);
 
     let text_only_model = probe(|turn| {
-        use_chatgpt_auth(turn);
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
         turn.model_info.input_modalities = vec![];
     })
     .await;
     text_only_model.assert_visible_lacks(&["image_generation"]);
+
+    let unsupported_image_generation_provider = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_bedrock_provider(turn);
+        let mut provider_info = turn.provider.info().clone();
+        provider_info.requires_openai_auth = false;
+        provider_info.http_headers = Some(HashMap::from([(
+            "x-openai-actor-authorization".to_string(),
+            "test-actor-authorization".to_string(),
+        )]));
+        turn.auth_manager = None;
+        update_config(turn, |config| {
+            config.model_provider = provider_info.clone();
+        });
+        turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    unsupported_image_generation_provider.assert_visible_lacks(&["image_generation"]);
 
     let codex_managed_auth_provider = probe(|turn| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
