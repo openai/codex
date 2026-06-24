@@ -29,6 +29,7 @@ codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
 chrono = { workspace = true }
@@ -36,6 +37,7 @@ dirs = { workspace = true }
 flate2 = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 reqwest = { workspace = true }
+regex = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

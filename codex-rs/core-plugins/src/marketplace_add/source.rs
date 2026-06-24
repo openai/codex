@@ -202,7 +202,7 @@ fn is_github_shorthand_segment(segment: &str) -> bool {
 }
 
 impl MarketplaceSource {
-    pub(super) fn display(&self) -> String {
+    pub(crate) fn display(&self) -> String {
         match self {
             Self::Git { url, ref_name } => match ref_name {
                 Some(ref_name) => format!("{url}#{ref_name}"),

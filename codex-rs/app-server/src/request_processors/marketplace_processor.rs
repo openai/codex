@@ -105,8 +105,10 @@ impl MarketplaceRequestProcessor {
         &self,
         params: MarketplaceAddParams,
     ) -> Result<MarketplaceAddResponse, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         add_marketplace_to_codex_home(
             self.config.codex_home.to_path_buf(),
+            config.config_layer_stack.requirements().clone(),
             MarketplaceAddRequest {
                 source: params.source,
                 ref_name: params.ref_name,

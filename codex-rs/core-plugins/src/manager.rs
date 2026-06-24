@@ -34,9 +34,9 @@ use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::plugin_interface_with_marketplace_category;
+use crate::marketplace_policy::MarketplacePolicy;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
-use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
@@ -1253,19 +1253,10 @@ impl PluginsManager {
 
     pub async fn install_plugin(
         &self,
+        config_layer_stack: &ConfigLayerStack,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
-        let resolved = match find_installable_marketplace_plugin(
-            &request.marketplace_path,
-            &request.plugin_name,
-            self.restriction_product,
-        ) {
-            Ok(resolved) => resolved,
-            Err(err) => {
-                self.track_plugin_install_resolution_failed(&err);
-                return Err(err.into());
-            }
-        };
+        let resolved = self.resolve_installable_plugin(config_layer_stack, &request)?;
         let plugin_id = resolved.plugin_id.clone();
         match self.install_resolved_plugin(resolved).await {
             Ok(outcome) => Ok(outcome),
@@ -1280,12 +1271,11 @@ impl PluginsManager {
         }
     }
 
-    pub async fn install_plugin_with_remote_sync(
+    fn resolve_installable_plugin(
         &self,
-        config: &PluginsConfigInput,
-        auth: Option<&CodexAuth>,
-        request: PluginInstallRequest,
-    ) -> Result<PluginInstallOutcome, PluginInstallError> {
+        config_layer_stack: &ConfigLayerStack,
+        request: &PluginInstallRequest,
+    ) -> Result<ResolvedMarketplacePlugin, PluginInstallError> {
         let resolved = match find_installable_marketplace_plugin(
             &request.marketplace_path,
             &request.plugin_name,
@@ -1297,6 +1287,32 @@ impl PluginsManager {
                 return Err(err.into());
             }
         };
+        if let Err(message) =
+            MarketplacePolicy::from_requirements(config_layer_stack.requirements())
+                .validate_install(
+                    config_layer_stack,
+                    self.codex_home.as_path(),
+                    &request.marketplace_path,
+                    &resolved.plugin_id.marketplace_name,
+                )
+        {
+            let err = MarketplaceError::InvalidMarketplaceFile {
+                path: request.marketplace_path.to_path_buf(),
+                message,
+            };
+            self.track_plugin_install_resolution_failed(&err);
+            return Err(err.into());
+        }
+        Ok(resolved)
+    }
+
+    pub async fn install_plugin_with_remote_sync(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        request: PluginInstallRequest,
+    ) -> Result<PluginInstallOutcome, PluginInstallError> {
+        let resolved = self.resolve_installable_plugin(&config.config_layer_stack, &request)?;
         let plugin_id = resolved.plugin_id.as_key();
         // This only forwards the backend mutation before the local install flow.
         if let Err(err) = crate::remote_legacy::enable_remote_plugin(
@@ -1995,21 +2011,18 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         marketplace_name: Option<&str>,
     ) -> Result<ConfiguredMarketplaceUpgradeOutcome, String> {
-        if let Some(marketplace_name) = marketplace_name
-            && !configured_git_marketplace_names(&config.config_layer_stack)
-                .iter()
-                .any(|name| name == marketplace_name)
-        {
-            return Err(format!(
-                "marketplace `{marketplace_name}` is not configured as a Git marketplace"
-            ));
-        }
-
         let mut outcome = upgrade_configured_git_marketplaces(
             self.codex_home.as_path(),
             &config.config_layer_stack,
             marketplace_name,
         );
+        if let Some(marketplace_name) = marketplace_name
+            && outcome.selected_marketplaces.is_empty()
+        {
+            return Err(format!(
+                "marketplace `{marketplace_name}` is not configured as a Git marketplace"
+            ));
+        }
         if !outcome.upgraded_roots.is_empty() {
             match refresh_non_curated_plugin_cache_force_reinstall(
                 self.codex_home.as_path(),
