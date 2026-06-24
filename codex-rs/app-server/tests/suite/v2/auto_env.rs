@@ -1,19 +1,15 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
-use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_responses_server_sequence;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
-use codex_app_server_protocol::CommandExecutionStatus;
-use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -23,17 +19,17 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_start_with_auto_env_uses_fixture_cwd() -> Result<()> {
-    let responses = vec![
-        create_shell_command_sse_response(
-            vec!["echo".to_string(), "auto-env-ok".to_string()],
-            /*workdir*/ None,
-            /*timeout_ms*/ None,
-            "cwd-call",
-        )?,
-        create_final_assistant_message_sse_response("done")?,
-    ];
-    let server = create_mock_responses_server_sequence(responses).await;
+async fn thread_start_with_auto_env_exposes_fixture_cwd_to_model() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
         codex_home.path(),
@@ -87,45 +83,24 @@ async fn thread_start_with_auto_env_uses_fixture_cwd() -> Result<()> {
     )
     .await??;
 
-    let command = timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let notification = mcp
-                .read_stream_until_notification_message("item/completed")
-                .await?;
-            let completed: ItemCompletedNotification = serde_json::from_value(
-                notification
-                    .params
-                    .expect("item/completed params must be present"),
-            )?;
-            if let ThreadItem::CommandExecution { .. } = completed.item {
-                return Ok::<ThreadItem, anyhow::Error>(completed.item);
-            }
-        }
-    })
-    .await??;
-    let ThreadItem::CommandExecution {
-        cwd,
-        status,
-        exit_code,
-        ..
-    } = command
-    else {
-        unreachable!("loop returns only command execution items");
-    };
-    assert_eq!(
-        (cwd, status, exit_code),
-        (
-            expected_environment.cwd,
-            CommandExecutionStatus::Completed,
-            Some(0)
-        )
-    );
-
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let environment_context = response_mock
+        .single_request()
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.starts_with("<environment_context>"))
+        .context("environment context should be model visible")?;
+    let model_cwd = environment_context
+        .lines()
+        .find(|line| line.trim_start().starts_with("<cwd>"))
+        .map(str::trim);
+    let expected_cwd = format!("<cwd>{}</cwd>", expected_environment.cwd);
+    assert_eq!(model_cwd, Some(expected_cwd.as_str()));
 
     Ok(())
 }
