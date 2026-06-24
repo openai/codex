@@ -32,10 +32,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tempfile::TempDir;
+use tokio::sync::Notify;
 
 #[derive(Clone, Copy)]
 enum InjectedFailure {
     Metadata(io::ErrorKind),
+    MetadataBlocked,
     MetadataPending,
     Read(io::ErrorKind),
 }
@@ -49,6 +51,8 @@ struct FailingFileSystem {
 #[derive(Default)]
 struct MetadataCallCounts {
     paths: Mutex<Vec<PathUri>>,
+    started: Notify,
+    release: Notify,
 }
 
 impl FailingFileSystem {
@@ -102,14 +106,20 @@ impl FailingFileSystem {
             .lock()
             .expect("metadata paths lock")
             .push(path.clone());
+        self.metadata_calls.started.notify_one();
         match self.failure {
             InjectedFailure::Metadata(kind) if path_abs == self.path => {
                 Err(io::Error::new(kind, "injected metadata failure"))
+            }
+            InjectedFailure::MetadataBlocked if path_abs == self.path => {
+                self.metadata_calls.release.notified().await;
+                LOCAL_FS.get_metadata(path, sandbox).await
             }
             InjectedFailure::MetadataPending if path_abs == self.path => {
                 std::future::pending().await
             }
             InjectedFailure::Metadata(_)
+            | InjectedFailure::MetadataBlocked
             | InjectedFailure::MetadataPending
             | InjectedFailure::Read(_) => LOCAL_FS.get_metadata(path, sandbox).await,
         }
@@ -708,8 +718,9 @@ async fn marker_search_does_not_wait_for_a_higher_ancestor() {
 }
 
 #[tokio::test]
-async fn project_root_marker_search_continues_beyond_concurrency_window() {
+async fn project_root_marker_search_pipelines_bounded_window_and_continues() {
     const NESTING_DEPTH: usize = 9;
+    const CONCURRENCY_LIMIT: usize = 8;
 
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join(".git"), "").unwrap();
@@ -723,9 +734,46 @@ async fn project_root_marker_search_continues_beyond_concurrency_window() {
     let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     config.cwd = nested.abs();
     let cwd = PathUri::from_abs_path(&config.cwd);
+    let metadata_calls = Arc::new(MetadataCallCounts::default());
+    let fs = FailingFileSystem {
+        path: config.cwd.join(".git"),
+        failure: InjectedFailure::MetadataBlocked,
+        metadata_calls: Arc::clone(&metadata_calls),
+    };
 
-    let paths = super::agents_md_paths(&config.config, &cwd, LOCAL_FS.as_ref())
+    let search =
+        tokio::spawn(async move { super::agents_md_paths(&config.config, &cwd, &fs).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let started = metadata_calls.started.notified();
+            if metadata_calls
+                .paths
+                .lock()
+                .expect("metadata paths lock")
+                .len()
+                >= CONCURRENCY_LIMIT
+            {
+                break;
+            }
+            started.await;
+        }
+    })
+    .await
+    .expect("initial marker window should start");
+    assert_eq!(
+        metadata_calls
+            .paths
+            .lock()
+            .expect("metadata paths lock")
+            .len(),
+        CONCURRENCY_LIMIT
+    );
+
+    metadata_calls.release.notify_one();
+    let paths = tokio::time::timeout(std::time::Duration::from_secs(5), search)
         .await
+        .expect("marker search should complete")
+        .expect("marker search task")
         .expect("AGENTS.md discovery");
 
     assert_eq!(
