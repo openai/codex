@@ -148,13 +148,9 @@ pub(crate) async fn resolve_provider_auth_for_scope(
         }));
     }
 
-    let managed_chatgpt_auth = agent_identity_policy == AgentIdentityAuthPolicy::ChatGptAuth
-        && matches!(auth, Some(CodexAuth::Chatgpt(_)));
-    if !managed_chatgpt_auth {
-        return resolve_provider_auth(auth, provider);
-    }
-
-    if agent_identity_session_fallback.is_engaged() {
+    if !should_bootstrap_chatgpt_agent_identity(agent_identity_policy, auth)
+        || agent_identity_session_fallback.is_engaged()
+    {
         return resolve_provider_auth(auth, provider);
     }
 
@@ -193,6 +189,14 @@ pub(crate) async fn resolve_provider_auth_for_scope(
             }
         }
     }
+}
+
+fn should_bootstrap_chatgpt_agent_identity(
+    agent_identity_policy: AgentIdentityAuthPolicy,
+    auth: Option<&CodexAuth>,
+) -> bool {
+    agent_identity_policy == AgentIdentityAuthPolicy::ChatGptAuth
+        && matches!(auth, Some(CodexAuth::Chatgpt(_)))
 }
 
 fn bearer_auth_for_provider(

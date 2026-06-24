@@ -28,7 +28,6 @@ use codex_login::CodexAuth;
 use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_otel::SessionTelemetry;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -255,7 +254,6 @@ struct RealtimeStart {
     realtime_call_api_provider: Option<ApiProvider>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
-    session_telemetry: SessionTelemetry,
     sdp: Option<String>,
 }
 
@@ -313,7 +311,6 @@ impl RealtimeConversationManager {
             realtime_call_api_provider,
             session_config,
             model_client,
-            session_telemetry,
             sdp,
         } = start;
         let event_parser = session_config.event_parser;
@@ -354,7 +351,6 @@ impl RealtimeConversationManager {
                     session_config.clone(),
                     extra_headers.unwrap_or_default(),
                     realtime_call_api_provider,
-                    &session_telemetry,
                 )
                 .await?;
             let task = spawn_webrtc_sideband_input_task(RealtimeWebrtcSidebandInputTask {
@@ -994,7 +990,6 @@ async fn handle_start_inner(
         realtime_call_api_provider,
         session_config,
         model_client: sess.services.model_client.clone(),
-        session_telemetry: sess.services.session_telemetry.clone(),
         sdp,
     };
     let start_output = sess.conversation.start(start).await?;

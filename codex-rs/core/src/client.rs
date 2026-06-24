@@ -157,7 +157,6 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 // period between stream events.
 const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
-const REALTIME_CALL_ENDPOINT: &str = "/realtime/calls";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -629,7 +628,6 @@ impl ModelClient {
         session_config: ApiRealtimeSessionConfig,
         mut extra_headers: ApiHeaderMap,
         api_provider_override: Option<ApiProvider>,
-        session_telemetry: &SessionTelemetry,
     ) -> Result<RealtimeWebrtcCallStart> {
         // Create the media call over HTTP first, then retain matching auth so realtime can attach
         // the server-side control WebSocket to the call id from that HTTP response.
@@ -643,18 +641,7 @@ impl ModelClient {
         ));
         let transport = ReqwestTransport::new(build_reqwest_client());
         let api_provider = api_provider_override.unwrap_or(client_setup.api_provider);
-        let request_telemetry = Self::build_request_telemetry(
-            session_telemetry,
-            AuthRequestTelemetryContext::new(
-                client_setup.auth.as_ref().map(CodexAuth::auth_mode),
-                client_setup.api_auth.as_ref(),
-                PendingUnauthorizedRetry::default(),
-            ),
-            RequestRouteTelemetry::for_endpoint(REALTIME_CALL_ENDPOINT),
-            self.state.auth_env_telemetry.clone(),
-        );
         let response = ApiRealtimeCallClient::new(transport, api_provider, client_setup.api_auth)
-            .with_telemetry(Some(request_telemetry))
             .create_with_session_and_headers(sdp, session_config, extra_headers)
             .await
             .map_err(|error| self.state.provider.map_api_error(error))?;
