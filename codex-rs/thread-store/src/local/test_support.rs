@@ -17,6 +17,23 @@ pub(super) fn test_config(codex_home: &Path) -> LocalThreadStoreConfig {
 }
 
 pub(super) fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<PathBuf> {
+    write_session_file_with_history_mode(root, ts, uuid, "legacy")
+}
+
+pub(super) fn write_paginated_session_file(
+    root: &Path,
+    ts: &str,
+    uuid: Uuid,
+) -> std::io::Result<PathBuf> {
+    write_session_file_with_history_mode(root, ts, uuid, "paginated")
+}
+
+fn write_session_file_with_history_mode(
+    root: &Path,
+    ts: &str,
+    uuid: Uuid,
+    history_mode: &str,
+) -> std::io::Result<PathBuf> {
     write_session_file_with(
         root,
         root.join("sessions/2025/01/03"),
@@ -24,6 +41,7 @@ pub(super) fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::
         uuid,
         "Hello from user",
         Some("test-provider"),
+        history_mode,
     )
 }
 
@@ -39,6 +57,7 @@ pub(super) fn write_archived_session_file(
         uuid,
         "Archived user message",
         Some("test-provider"),
+        "legacy",
     )
 }
 
@@ -49,6 +68,7 @@ pub(super) fn write_session_file_with(
     uuid: Uuid,
     first_user_message: &str,
     model_provider: Option<&str>,
+    history_mode: &str,
 ) -> std::io::Result<PathBuf> {
     write_session_file_with_fork(
         root,
@@ -58,9 +78,11 @@ pub(super) fn write_session_file_with(
         first_user_message,
         model_provider,
         /*forked_from_id*/ None,
+        history_mode,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn write_session_file_with_fork(
     root: &Path,
     day_dir: PathBuf,
@@ -69,6 +91,7 @@ pub(super) fn write_session_file_with_fork(
     first_user_message: &str,
     model_provider: Option<&str>,
     forked_from_id: Option<Uuid>,
+    history_mode: &str,
 ) -> std::io::Result<PathBuf> {
     fs::create_dir_all(&day_dir)?;
     let path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
@@ -86,6 +109,7 @@ pub(super) fn write_session_file_with_fork(
             "cli_version": "test_version",
             "source": "cli",
             "model_provider": model_provider,
+            "history_mode": history_mode,
             "git": {
                 "commit_hash": "abcdef",
                 "branch": "main",

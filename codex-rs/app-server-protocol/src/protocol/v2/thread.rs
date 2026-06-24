@@ -4,6 +4,7 @@ use super::AskForApproval;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
+use super::ThreadHistoryMode;
 use super::ThreadItem;
 use super::ThreadSource;
 use super::Turn;
@@ -105,6 +106,10 @@ pub struct ThreadStartParams {
     pub multi_agent_mode: Option<MultiAgentMode>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
+    /// Persisted thread history contract to use for this new thread.
+    #[experimental("thread/start.historyMode")]
+    #[ts(optional = nullable)]
+    pub history_mode: Option<ThreadHistoryMode>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
     /// Optional client-supplied analytics source classification for this thread.

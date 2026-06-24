@@ -174,6 +174,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,
+            history_mode: Default::default(),
             model_provider: "openai".to_string(),
             created_at: 1,
             updated_at: 1,
@@ -210,6 +211,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
     };
 
     let value = serde_json::to_value(&response).expect("serialize thread resume response");
+    assert_eq!(value["thread"]["historyMode"], json!("legacy"));
     assert_eq!(
         value.get("initialTurnsPage"),
         Some(&json!({
@@ -3875,6 +3877,24 @@ fn thread_start_params_round_trip_multi_agent_mode() {
     assert_eq!(
         serde_json::to_value(params).expect("params should serialize")["multiAgentMode"],
         "proactive"
+    );
+}
+
+#[test]
+fn thread_start_params_round_trip_history_mode() {
+    let params: ThreadStartParams = serde_json::from_value(json!({
+        "historyMode": "legacy"
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(params.history_mode, Some(ThreadHistoryMode::Legacy));
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+        Some("thread/start.historyMode")
+    );
+    assert_eq!(
+        serde_json::to_value(params).expect("params should serialize")["historyMode"],
+        "legacy"
     );
 }
 

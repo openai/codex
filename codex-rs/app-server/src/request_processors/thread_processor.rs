@@ -1,6 +1,7 @@
 use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -922,6 +923,7 @@ impl ThreadRequestProcessor {
             personality,
             multi_agent_mode: _multi_agent_mode,
             ephemeral,
+            history_mode,
             session_start_source,
             thread_source,
             environments,
@@ -930,6 +932,9 @@ impl ThreadRequestProcessor {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",
             ));
+        }
+        if matches!(history_mode, Some(ThreadHistoryMode::Paginated)) {
+            return Err(unsupported_thread_store_operation("paginated_threads"));
         }
         let environment_selections =
             resolve_turn_environment_selections(self.thread_manager.as_ref(), environments)?;
@@ -2295,6 +2300,9 @@ impl ThreadRequestProcessor {
             Err(ThreadStoreError::InvalidRequest { message }) => {
                 Err(ThreadReadViewError::InvalidRequest(message))
             }
+            Err(ThreadStoreError::Unsupported { operation }) => {
+                Err(ThreadReadViewError::Unsupported(operation))
+            }
             Err(err) => Err(ThreadReadViewError::Internal(format!(
                 "failed to read thread: {err}"
             ))),
@@ -2496,6 +2504,9 @@ impl ThreadRequestProcessor {
             }) if missing_thread_id == thread_id => {}
             Err(ThreadStoreError::InvalidRequest { message }) => {
                 return Err(ThreadReadViewError::InvalidRequest(message));
+            }
+            Err(ThreadStoreError::Unsupported { operation }) => {
+                return Err(ThreadReadViewError::Unsupported(operation));
             }
             Err(err) => {
                 return Err(ThreadReadViewError::Internal(format!(
@@ -4244,6 +4255,7 @@ pub(crate) fn thread_from_stored_thread(
         parent_thread_id: thread.parent_thread_id.map(|id| id.to_string()),
         preview: thread.preview,
         ephemeral: false,
+        history_mode: thread.history_mode.into(),
         model_provider: if thread.model_provider.is_empty() {
             fallback_provider.to_string()
         } else {
@@ -4455,6 +4467,7 @@ fn build_thread_from_snapshot(
         parent_thread_id: config_snapshot.parent_thread_id.map(|id| id.to_string()),
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,
+        history_mode: config_snapshot.history_mode.into(),
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,
         updated_at: now,

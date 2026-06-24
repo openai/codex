@@ -16,6 +16,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use std::sync::OnceLock;
@@ -96,6 +97,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
+    /// Persisted thread history contract selected when this thread was created.
+    pub(super) history_mode: ThreadHistoryMode,
     /// Immediate history source copied into this thread, when this thread was forked.
     pub(super) forked_from_thread_id: Option<ThreadId>,
     /// Immediate control/spawn parent for this thread, when it has one.
@@ -192,6 +195,7 @@ impl SessionConfiguration {
             personality: self.personality,
             collaboration_mode: self.collaboration_mode.clone(),
             session_source: self.session_source.clone(),
+            history_mode: self.history_mode,
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source.clone(),
@@ -591,6 +595,7 @@ impl Session {
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
                             selected_capability_roots: selected_capability_roots.clone(),
                             multi_agent_version: initial_multi_agent_version,
+                            history_mode: session_configuration.history_mode,
                             initial_window_id: initial_auto_compact_window_ids
                                 .window_id
                                 .to_string(),
@@ -611,6 +616,7 @@ impl Session {
                             thread_id: resumed_history.conversation_id,
                             rollout_path: resumed_history.rollout_path.clone(),
                             history: Some(resumed_history.history.clone()),
+                            history_mode: session_configuration.history_mode,
                             include_archived: true,
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),

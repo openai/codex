@@ -222,6 +222,7 @@ async fn apply_metadata_update(
                     patch.source.clone().unwrap_or(SessionSource::Unknown),
                 );
                 builder.model_provider = patch.model_provider.clone();
+                builder.history_mode = patch.history_mode.unwrap_or_default();
                 builder.thread_source = patch.thread_source.clone().flatten();
                 builder.agent_nickname = patch.agent_nickname.clone().flatten();
                 builder.agent_role = patch.agent_role.clone().flatten();
@@ -268,6 +269,9 @@ async fn apply_metadata_update(
             }
             if let Some(source) = patch.source {
                 metadata.source = enum_to_string(&source);
+            }
+            if let Some(history_mode) = patch.history_mode {
+                metadata.history_mode = history_mode;
             }
             if let Some(thread_source) = patch.thread_source {
                 metadata.thread_source = thread_source;
@@ -412,6 +416,7 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.permission_profile.is_some()
         || patch.token_usage.is_some()
         || patch.first_user_message.is_some()
+        || patch.history_mode.is_some()
 }
 
 fn enum_to_string<T: serde::Serialize>(value: &T) -> String {
@@ -803,6 +808,7 @@ mod tests {
                 thread_id,
                 rollout_path: Some(path.clone()),
                 history: None,
+                history_mode: Default::default(),
                 include_archived: true,
                 metadata: test_thread_metadata(),
             })
@@ -1606,6 +1612,7 @@ mod tests {
                 thread_id,
                 rollout_path: Some(archived_path.clone()),
                 history: None,
+                history_mode: Default::default(),
                 include_archived: true,
                 metadata: test_thread_metadata(),
             })

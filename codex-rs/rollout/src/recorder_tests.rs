@@ -103,6 +103,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
             dynamic_tools: None,
             selected_capability_roots: Vec::new(),
             memory_mode: None,
+            history_mode: Default::default(),
             multi_agent_version: None,
             context_window: None,
         },
@@ -442,6 +443,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
         panic!("expected session metadata in rollout");
     };
     assert_eq!(session_meta.meta.session_id, session_id);
+    assert_eq!(session_meta.meta.history_mode, Default::default());
     assert_eq!(
         session_meta
             .meta
@@ -1004,6 +1006,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("filesystem-sha".to_string()),
         git_origin_url: Some("https://example.com/filesystem.git".to_string()),
         source: None,
+        history_mode: Default::default(),
         parent_thread_id: None,
         agent_nickname: None,
         agent_role: None,
@@ -1023,6 +1026,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("state-sha".to_string()),
         git_origin_url: Some("https://example.com/state.git".to_string()),
         source: Some(SessionSource::Exec),
+        history_mode: Default::default(),
         parent_thread_id: None,
         agent_nickname: Some("state-agent".to_string()),
         agent_role: Some("state-role".to_string()),

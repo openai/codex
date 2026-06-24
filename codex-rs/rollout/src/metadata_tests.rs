@@ -13,6 +13,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_state::BackfillStatus;
 use codex_state::ThreadMetadataBuilder;
 use pretty_assertions::assert_eq;
@@ -51,6 +52,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         dynamic_tools: None,
         selected_capability_roots: Vec::new(),
         memory_mode: None,
+        history_mode: ThreadHistoryMode::Paginated,
         multi_agent_version: None,
         context_window: None,
     };
@@ -77,8 +79,44 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
     expected.recency_at = expected.updated_at;
 
     assert_eq!(outcome.metadata, expected);
+    assert_eq!(outcome.metadata.history_mode, ThreadHistoryMode::Paginated);
     assert_eq!(outcome.memory_mode, None);
     assert_eq!(outcome.parse_errors, 0);
+}
+
+#[tokio::test]
+async fn extract_metadata_from_rollout_rejects_unknown_history_mode() {
+    let dir = tempdir().expect("tempdir");
+    let uuid = Uuid::new_v4();
+    let id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let path = dir
+        .path()
+        .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
+    let mut rollout_line = serde_json::to_value(RolloutLine {
+        timestamp: "2026-01-27T12:34:56Z".to_string(),
+        item: RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: id.into(),
+                id,
+                timestamp: "2026-01-27T12:34:56Z".to_string(),
+                cwd: dir.path().to_path_buf(),
+                originator: "cli".to_string(),
+                cli_version: "0.0.0".to_string(),
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
+    })
+    .expect("serialize rollout line");
+    rollout_line["payload"]["history_mode"] = serde_json::json!("future");
+    let mut file = File::create(&path).expect("create rollout");
+    writeln!(file, "{rollout_line}").expect("write rollout");
+
+    assert!(
+        extract_metadata_from_rollout(&path, "openai")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -109,6 +147,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         dynamic_tools: None,
         selected_capability_roots: Vec::new(),
         memory_mode: None,
+        history_mode: Default::default(),
         multi_agent_version: None,
         context_window: None,
     };
@@ -379,6 +418,7 @@ fn write_rollout_in_sessions_with_cwd(
         dynamic_tools: None,
         selected_capability_roots: Vec::new(),
         memory_mode: None,
+        history_mode: Default::default(),
         multi_agent_version: None,
         context_window: None,
     };

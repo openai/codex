@@ -977,6 +977,13 @@
       "description": "Extra app-server data for a thread.",
       "type": "object"
     },
+    "ThreadHistoryMode": {
+      "enum": [
+        "legacy",
+        "paginated"
+      ],
+      "type": "string"
+    },
     "ThreadId": {
       "type": "string"
     },

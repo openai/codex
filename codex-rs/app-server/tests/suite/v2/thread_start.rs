@@ -15,6 +15,7 @@ use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -214,6 +215,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         !thread.ephemeral,
         "new persistent threads should not be ephemeral"
     );
+    assert_eq!(thread.history_mode, Default::default());
     assert_eq!(thread.status, ThreadStatus::Idle);
     assert_eq!(thread.thread_source, Some(ThreadSource::User));
     let thread_path = thread.path.clone().expect("thread path should be present");
@@ -247,6 +249,11 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         thread_json.get("ephemeral").and_then(Value::as_bool),
         Some(false),
         "new persistent threads should serialize `ephemeral: false`"
+    );
+    assert_eq!(
+        thread_json.get("historyMode").and_then(Value::as_str),
+        Some("legacy"),
+        "new threads should serialize `historyMode: legacy`"
     );
     assert_eq!(
         thread_json.get("threadSource").and_then(Value::as_str),
@@ -296,6 +303,13 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     );
     assert_eq!(
         started_thread_json
+            .get("historyMode")
+            .and_then(Value::as_str),
+        Some("legacy"),
+        "thread/started should serialize `historyMode: legacy`"
+    );
+    assert_eq!(
+        started_thread_json
             .get("threadSource")
             .and_then(Value::as_str),
         Some("user"),
@@ -305,6 +319,61 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_accepts_explicit_legacy_history_mode() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Legacy),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(response)?;
+
+    assert_eq!(thread.history_mode, ThreadHistoryMode::Legacy);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_rejects_paginated_history_mode_as_unsupported() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32601);
+    assert_eq!(
+        error.error.message,
+        "paginated_threads is not supported yet"
+    );
     Ok(())
 }
 
