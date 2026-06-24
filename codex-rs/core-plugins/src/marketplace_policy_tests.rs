@@ -1,7 +1,7 @@
 use super::*;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
 use codex_config::RequirementSource;
 use codex_config::RequirementsLayerEntry;
 use codex_config::compose_requirements;
