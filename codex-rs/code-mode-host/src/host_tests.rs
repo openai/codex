@@ -339,7 +339,7 @@ async fn writer_failure_terminates_the_connection() {
 
     writer
         .write(&ClientToHost::Request {
-            id: 1,
+            id: request_id(1),
             request: HostRequest::OpenSession {
                 session_id: session_id("session-1"),
             },

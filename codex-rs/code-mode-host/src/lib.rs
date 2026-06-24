@@ -255,6 +255,7 @@ impl HostState {
             }
             HostRequest::Execute {
                 session_id,
+                cell_id,
                 request,
             } => {
                 let request = match request.try_into() {
@@ -268,7 +269,7 @@ impl HostState {
                     }
                 };
                 let result = match self.session(&session_id) {
-                    Ok(session) => session.execute(request).await,
+                    Ok(session) => session.execute_with_cell_id(cell_id.into(), request).await,
                     Err(err) => {
                         self.respond(request_id, Err(err));
                         return;

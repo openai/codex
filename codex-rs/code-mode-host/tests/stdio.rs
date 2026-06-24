@@ -423,6 +423,7 @@ async fn explicit_yield_frame_precedes_notification_and_terminal_output_drops_ti
             id: request_id(/*value*/ 2),
             request: HostRequest::Execute {
                 session_id: session_id.clone(),
+                cell_id: cell_id("client-cell").into(),
                 request: execute_request(
                     r#"
 text("hello");
@@ -447,7 +448,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
             id: request_id(/*value*/ 2),
             result: WireResult::Ok {
                 value: HostResponse::ExecutionStarted {
-                    cell_id: cell_id("1").into(),
+                    cell_id: cell_id("client-cell").into(),
                 },
             },
         })
@@ -461,7 +462,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
             id: request_id(/*value*/ 2),
             result: WireResult::Ok {
                 value: RuntimeResponse::Yielded {
-                    cell_id: cell_id("1"),
+                    cell_id: cell_id("client-cell"),
                     content_items: vec![FunctionCallOutputContentItem::InputText {
                         text: "hello".to_string(),
                     }],
@@ -488,7 +489,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
         }) => {
             assert_eq!(callback_session_id, session_id);
             assert_eq!(call_id, "call-1");
-            assert_eq!(callback_cell_id, cell_id("1").into());
+            assert_eq!(callback_cell_id, cell_id("client-cell").into());
             assert_eq!(text, "this is important");
             id
         }
@@ -509,7 +510,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
             request: HostRequest::Wait {
                 session_id: session_id.clone(),
                 request: WaitRequest {
-                    cell_id: cell_id("1"),
+                    cell_id: cell_id("client-cell"),
                     yield_time_ms: 60_000,
                 }
                 .into(),
@@ -532,7 +533,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
                 cell_id: closed_cell_id,
             }) => {
                 assert_eq!(closed_session_id, session_id);
-                assert_eq!(closed_cell_id, cell_id("1").into());
+                assert_eq!(closed_cell_id, cell_id("client-cell").into());
             }
             message => panic!("unexpected terminal frame: {message:?}"),
         }
@@ -542,7 +543,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
         WireResult::Ok {
             value: HostResponse::WaitCompleted {
                 outcome: WaitOutcome::LiveCell(RuntimeResponse::Result {
-                    cell_id: cell_id("1"),
+                    cell_id: cell_id("client-cell"),
                     content_items: vec![FunctionCallOutputContentItem::InputText {
                         text: "world".to_string(),
                     }],
@@ -589,6 +590,79 @@ setTimeout(() => { text("should never emit"); }, 60000);
         .expect("host exit timeout")
         .expect("wait for host");
     assert!(status.success(), "host exited with {status}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn concurrent_sessions_from_one_provider_share_one_host_process() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let host_binary =
+        codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").expect("host binary");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let pid_log = temp_dir.path().join("host-pids");
+    let wrapper = temp_dir.path().join("code-mode-host-wrapper");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$$\" >> {}\nexec {}\n",
+        shell_quote(&pid_log),
+        shell_quote(&host_binary),
+    );
+    std::fs::write(&wrapper, script).expect("write host wrapper");
+    let mut permissions = std::fs::metadata(&wrapper)
+        .expect("host wrapper metadata")
+        .permissions();
+    permissions.set_mode(/*mode*/ 0o755);
+    std::fs::set_permissions(&wrapper, permissions).expect("make host wrapper executable");
+
+    let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(wrapper);
+    let (first, second, third) = tokio::join!(
+        provider.create_session(Arc::new(RecordingDelegate::default())),
+        provider.create_session(Arc::new(RecordingDelegate::default())),
+        provider.create_session(Arc::new(RecordingDelegate::default())),
+    );
+    let first = first.expect("create first session");
+    let second = second.expect("create second session");
+    let third = third.expect("create third session");
+
+    let (first_response, second_response, third_response) = tokio::join!(
+        execute(&first, execute_request(r#"text("first");"#)),
+        execute(&second, execute_request(r#"text("second");"#)),
+        execute(&third, execute_request(r#"text("third");"#)),
+    );
+    assert_eq!(
+        (first_response, second_response, third_response),
+        (
+            RuntimeResponse::Result {
+                cell_id: cell_id("1"),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "first".to_string(),
+                }],
+                error_text: None,
+            },
+            RuntimeResponse::Result {
+                cell_id: cell_id("1"),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "second".to_string(),
+                }],
+                error_text: None,
+            },
+            RuntimeResponse::Result {
+                cell_id: cell_id("1"),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "third".to_string(),
+                }],
+                error_text: None,
+            },
+        )
+    );
+    assert_eq!(recorded_pids(&pid_log).len(), 1);
+
+    let (first_shutdown, second_shutdown, third_shutdown) =
+        tokio::join!(first.shutdown(), second.shutdown(), third.shutdown(),);
+    assert_eq!(
+        (first_shutdown, second_shutdown, third_shutdown),
+        (Ok(()), Ok(()), Ok(()))
+    );
 }
 
 #[cfg(unix)]
@@ -667,7 +741,7 @@ async fn closed_host_stdout_terminates_the_spawned_process() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn crashed_host_fails_in_flight_exec_and_next_exec_respawns() {
+async fn crashed_host_recovery_does_not_reuse_cell_ids() {
     use std::os::unix::fs::PermissionsExt;
 
     let host_binary =
@@ -709,15 +783,40 @@ async fn crashed_host_fails_in_flight_exec_and_next_exec_respawns() {
         "unexpected error: {error}"
     );
 
+    let mut recovered_request = execute_request("await new Promise(() => {});");
+    recovered_request.yield_time_ms = Some(1);
+    let recovered = session
+        .execute(recovered_request)
+        .await
+        .expect("start recovered execution");
+    assert_eq!(recovered.cell_id, cell_id("2"));
     assert_eq!(
-        execute(&session, execute_request(r#"text("recovered");"#)).await,
-        RuntimeResponse::Result {
+        recovered.initial_response().await,
+        Ok(RuntimeResponse::Yielded {
+            cell_id: cell_id("2"),
+            content_items: Vec::new(),
+        })
+    );
+    assert_eq!(
+        session
+            .terminate(cell_id("1"))
+            .await
+            .expect("terminate stale cell"),
+        WaitOutcome::MissingCell(RuntimeResponse::Result {
             cell_id: cell_id("1"),
-            content_items: vec![FunctionCallOutputContentItem::InputText {
-                text: "recovered".to_string(),
-            }],
-            error_text: None,
-        }
+            content_items: Vec::new(),
+            error_text: Some("exec cell 1 not found".to_string()),
+        })
+    );
+    assert_eq!(
+        session
+            .terminate(cell_id("2"))
+            .await
+            .expect("terminate recovered cell"),
+        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+            cell_id: cell_id("2"),
+            content_items: Vec::new(),
+        })
     );
     let pids = recorded_pids(&pid_log);
     assert_eq!(pids.len(), 2);

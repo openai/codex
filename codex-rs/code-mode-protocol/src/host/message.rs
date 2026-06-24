@@ -180,6 +180,7 @@ pub enum HostRequest {
     #[serde(rename = "session/execute")]
     Execute {
         session_id: SessionId,
+        cell_id: WireCellId,
         request: WireExecuteRequest,
     },
     #[serde(rename = "session/wait")]

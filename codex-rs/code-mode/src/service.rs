@@ -97,18 +97,26 @@ impl InProcessCodeModeSession {
             )
             .await
             .map_err(|error| error.to_string())?;
-        let cell_id = protocol_cell_id(&started.cell_id);
-        let response_cell_id = cell_id.clone();
-        let (response_tx, response_rx) = oneshot::channel();
-        tokio::spawn(async move {
-            let response = started
-                .initial_event()
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|event| runtime_response(&response_cell_id, event));
-            let _ = response_tx.send(response);
-        });
-        Ok(StartedCell::from_result_receiver(cell_id, response_rx))
+        Ok(protocol_started_cell(started))
+    }
+
+    /// Executes a cell using an ID assigned by a remote-session client.
+    pub async fn execute_with_cell_id(
+        &self,
+        cell_id: CellId,
+        request: ExecuteRequest,
+    ) -> Result<StartedCell, String> {
+        let yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
+        let started = self
+            .runtime
+            .execute_with_cell_id(
+                runtime_cell_id(&cell_id),
+                runtime_request(request),
+                runtime::ObserveMode::YieldAfter(Duration::from_millis(yield_time_ms)),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(protocol_started_cell(started))
     }
 
     pub async fn execute_to_pending(
@@ -317,6 +325,21 @@ fn runtime_cell_id(cell_id: &CellId) -> runtime::CellId {
 
 fn protocol_cell_id(cell_id: &runtime::CellId) -> CellId {
     CellId::new(cell_id.as_str().to_string())
+}
+
+fn protocol_started_cell(started: runtime::StartedCell) -> StartedCell {
+    let cell_id = protocol_cell_id(&started.cell_id);
+    let response_cell_id = cell_id.clone();
+    let (response_tx, response_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let response = started
+            .initial_event()
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|event| runtime_response(&response_cell_id, event));
+        let _ = response_tx.send(response);
+    });
+    StartedCell::from_result_receiver(cell_id, response_rx)
 }
 
 fn pending_outcome(

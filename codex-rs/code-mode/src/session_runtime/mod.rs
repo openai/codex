@@ -68,10 +68,19 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         request: CreateCellRequest,
         initial_observe_mode: ObserveMode,
     ) -> Result<StartedCell, Error> {
+        self.execute_with_cell_id(self.allocate_cell_id(), request, initial_observe_mode)
+            .await
+    }
+
+    pub(crate) async fn execute_with_cell_id(
+        &self,
+        cell_id: CellId,
+        request: CreateCellRequest,
+        initial_observe_mode: ObserveMode,
+    ) -> Result<StartedCell, Error> {
         if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
-        let cell_id = self.allocate_cell_id();
         let initial_event = self
             .start_cell(cell_id.clone(), request, initial_observe_mode)
             .await?;

@@ -246,11 +246,13 @@ fn client_to_host_v1_variants_are_pinned() {
             request_id(/*value*/ 2),
             HostRequest::Execute {
                 session_id: session_id(),
+                cell_id: cell_id("cell-1"),
                 request: execute_request,
             },
             json!({
                 "method": "session/execute",
                 "sessionId": "session-1",
+                "cellId": "cell-1",
                 "request": {
                     "tool_call_id": "call-1",
                     "enabled_tools": [

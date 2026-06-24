@@ -203,6 +203,7 @@ impl Connection {
     pub(super) async fn execute(
         &self,
         session_id: SessionId,
+        cell_id: CellId,
         request: ExecuteRequest,
     ) -> Result<StartedCell, String> {
         let request = request
@@ -223,6 +224,7 @@ impl Connection {
                 id,
                 request: HostRequest::Execute {
                     session_id,
+                    cell_id: (&cell_id).into(),
                     request,
                 },
             })
@@ -244,10 +246,11 @@ impl Connection {
             }
         };
         match response {
-            HostResponse::ExecutionStarted { cell_id } => Ok(StartedCell::from_result_receiver(
-                cell_id.into(),
-                initial_rx,
-            )),
+            HostResponse::ExecutionStarted {
+                cell_id: started_cell_id,
+            } if started_cell_id.as_str() == cell_id.as_str() => {
+                Ok(StartedCell::from_result_receiver(cell_id, initial_rx))
+            }
             _ => {
                 self.state.initial_responses.lock().await.remove(&id);
                 Err("code-mode host returned an invalid execute response".to_string())
