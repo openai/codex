@@ -95,7 +95,7 @@ fn renders_only_changed_environments() -> Result<()> {
   </environments>
 </environment_context>"#,
         )],
-        render_fragments(current.render_diff(&previous)),
+        render_fragments(current.render_diff(&previous.snapshot())),
     );
     Ok(())
 }
@@ -151,7 +151,7 @@ fn persisted_turn_context_values_render_a_diff() -> Result<()> {
   <filesystem><permission_profile type="external"><file_system type="external" /></permission_profile></filesystem>
 </environment_context>"#,
         )],
-        render_fragments(current.render_diff(&previous)),
+        render_fragments(current.render_diff(&previous.snapshot())),
     );
     Ok(())
 }

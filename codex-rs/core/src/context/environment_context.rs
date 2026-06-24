@@ -5,23 +5,27 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
 pub(crate) struct FileSystemContext {
     workspace_roots: Vec<String>,
     permission_profile: FileSystemPermissionProfileContext,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum FileSystemPermissionProfileContext {
     Managed(ManagedFileSystemContext),
     Disabled,
     External,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum ManagedFileSystemContext {
     Restricted {
         entries: Vec<FileSystemSandboxEntry>,
@@ -210,7 +214,7 @@ pub(crate) fn push_xml_escaped_text(rendered: &mut String, value: &str) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub(crate) struct NetworkContext {
     allowed_domains: Vec<String>,
     denied_domains: Vec<String>,

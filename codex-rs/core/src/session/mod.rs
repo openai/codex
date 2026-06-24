@@ -1402,14 +1402,13 @@ impl Session {
         prepare_response_items(&mut history);
         let world_state_baseline = reference_context_item
             .as_ref()
-            .map(build_world_state_from_turn_context_item);
+            .map(build_world_state_from_turn_context_item)
+            .map(|world_state| world_state.snapshot());
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
             if let Some(world_state) = world_state_baseline {
-                state
-                    .history
-                    .set_world_state_baseline(Arc::new(world_state));
+                state.history.set_world_state_baseline(world_state);
             }
             let fallback_ids = state.auto_compact_window_ids();
             let window_id = window_id.unwrap_or(fallback_ids.window_id);
@@ -2796,7 +2795,7 @@ impl Session {
                 .await,
         );
         let items = crate::context_manager::updates::merge_contextual_fragments(
-            world_state.render_diff(previous_world_state.as_ref()),
+            world_state.render_diff(&previous_world_state.snapshot()),
         );
         if !items.is_empty() {
             self.record_conversation_items(turn_context, &items).await;
@@ -2807,7 +2806,7 @@ impl Session {
             .lock()
             .await
             .history
-            .set_world_state_baseline(Arc::clone(&world_state));
+            .set_world_state_baseline(world_state.snapshot());
         world_state
     }
 
@@ -2949,7 +2948,9 @@ impl Session {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
             if let Some(world_state) = world_state_baseline {
-                state.history.set_world_state_baseline(world_state);
+                state
+                    .history
+                    .set_world_state_baseline(world_state.snapshot());
             }
         }
 
@@ -3522,7 +3523,7 @@ impl Session {
                 .lock()
                 .await
                 .history
-                .set_world_state_baseline(Arc::clone(&world_state));
+                .set_world_state_baseline(world_state.snapshot());
             context_items
         } else {
             // Steady-state path: append only built-in context diffs here; turn-scoped extension
@@ -3533,7 +3534,7 @@ impl Session {
             let world_state_items = {
                 let mut state = self.state.lock().await;
                 crate::context_manager::updates::merge_contextual_fragments(
-                    state.history.update_world_state(Arc::clone(&world_state)),
+                    state.history.update_world_state(world_state.as_ref()),
                 )
             };
             context_items.extend(world_state_items);

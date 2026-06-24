@@ -10,10 +10,12 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 
 /// Environment values visible to the model.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct EnvironmentsState {
     environments: BTreeMap<String, EnvironmentState>,
     current_date: Option<String>,
@@ -91,7 +93,17 @@ impl EnvironmentsState {
 }
 
 impl WorldStateSection for EnvironmentsState {
-    fn render_diff(&self, previous: Option<&Self>) -> Option<Box<dyn ContextualUserFragment>> {
+    const ID: &'static str = "environments";
+    type Snapshot = Self;
+
+    fn snapshot(&self) -> Self::Snapshot {
+        self.clone()
+    }
+
+    fn render_diff(
+        &self,
+        previous: Option<&Self::Snapshot>,
+    ) -> Option<Box<dyn ContextualUserFragment>> {
         let empty = Self::default();
         let previous = previous.unwrap_or(&empty);
         let turn_context_values_changed = self.current_date != previous.current_date
@@ -262,7 +274,7 @@ fn push_optional_element(rendered: &mut String, name: &str, value: Option<&str>)
     rendered.push_str(">\n");
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 struct EnvironmentState {
     cwd: PathUri,
     status: EnvironmentStatus,
@@ -281,7 +293,8 @@ impl EnvironmentState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum EnvironmentStatus {
     Starting,
     Available,
