@@ -698,6 +698,15 @@ pub struct DeleteThreadParams {
     pub thread_id: ThreadId,
 }
 
+/// Store-owned invalidation for a thread catalog row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadCatalogChange {
+    /// The row was created or its metadata changed.
+    Upsert { thread_id: ThreadId },
+    /// The row was deleted.
+    Delete { thread_id: ThreadId },
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
