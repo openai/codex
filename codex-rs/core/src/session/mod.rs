@@ -2795,6 +2795,7 @@ impl Session {
             self.build_world_state_for_environments(turn_context, &step_context.environments)
                 .await,
         );
+        // Derive the model update and persisted patch from the same two snapshots.
         let previous_snapshot = previous_world_state.snapshot();
         let world_state_snapshot = world_state.snapshot();
         let world_state_item = world_state_snapshot
@@ -2813,6 +2814,7 @@ impl Session {
             .await
             .history
             .set_world_state_baseline(world_state_snapshot);
+        // Record the patch after the context it describes is present in model history.
         if let Some(world_state_item) = world_state_item {
             self.persist_rollout_items(&[RolloutItem::WorldState(world_state_item)])
                 .await;
@@ -2954,6 +2956,7 @@ impl Session {
             replacement_history: Some(items.clone()),
             ..compacted_item
         };
+        // Compaction starts a new history window, so its WorldState baseline must be full.
         let mut world_state_item = None;
         {
             let mut state = self.state.lock().await;
@@ -2967,6 +2970,7 @@ impl Session {
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
+        // Persist the baseline after the replacement history that established it.
         if let Some(world_state_item) = world_state_item {
             self.persist_rollout_items(&[RolloutItem::WorldState(world_state_item)])
                 .await;
@@ -3540,6 +3544,7 @@ impl Session {
             self.build_world_state_for_environments(turn_context, &turn_context.environments)
                 .await,
         );
+        // Full initial context resets the baseline; later turns persist only its changes.
         let (mut context_items, world_state_item) = if should_inject_full_context {
             let context_items = self
                 .build_initial_context_with_world_state(turn_context, world_state.as_ref())
@@ -3578,6 +3583,7 @@ impl Session {
                     .await,
             );
         }
+        // A snapshot can change without producing model-visible or TurnContext updates.
         let only_world_state_changed = !turn_context_changed && context_items.is_empty();
         if only_world_state_changed && world_state_item.is_none() {
             return world_state;
@@ -3586,10 +3592,12 @@ impl Session {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
         }
+        // Persist state only after any model-visible context generated from it.
         if let Some(world_state_item) = world_state_item {
             self.persist_rollout_items(&[RolloutItem::WorldState(world_state_item)])
                 .await;
         }
+        // A snapshot-only change does not require a duplicate TurnContext record.
         if only_world_state_changed {
             return world_state;
         }
