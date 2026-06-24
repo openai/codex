@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -230,6 +231,59 @@ async fn responses_lite_uses_standalone_web_search_and_image_generation() -> Res
     assert!(!tools.is_empty());
     assert!(!has_hosted_tool(tools, "web_search"));
     assert!(!has_hosted_tool(tools, "image_generation"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_exposes_image_generation_for_actor_authenticated_provider() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let auth = CodexAuth::from_api_key("dummy");
+    let extensions = responses_extensions(&auth);
+    let mut builder = test_codex()
+        .with_auth(auth)
+        .with_extensions(extensions)
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+            configure_image_capable_model(model_info);
+        })
+        .with_config(|config| {
+            configure_responses_tools(config);
+            config.model_provider.name = "local".to_string();
+            config.model_provider.requires_openai_auth = false;
+            config.model_provider.http_headers = Some(HashMap::from([(
+                "x-openai-actor-authorization".to_string(),
+                "test-actor-authorization".to_string(),
+            )]));
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("Use standalone image generation").await?;
+
+    let body = response_mock.single_request().body_json();
+    let image_namespace = additional_tools(&body)?
+        .iter()
+        .find(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("namespace")
+                && tool.get("name").and_then(Value::as_str) == Some("image_gen")
+        })
+        .context("image_gen namespace should be advertised")?;
+    assert!(image_namespace["tools"].as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool.get("name").and_then(Value::as_str) == Some("imagegen"))
+    }));
 
     Ok(())
 }
