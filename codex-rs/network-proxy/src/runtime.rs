@@ -1024,7 +1024,9 @@ mod tests {
         )
         .unwrap();
         let mut reloaded_state = initial_state.clone();
-        reloaded_state.config.set_credential_broker_enabled(true);
+        reloaded_state
+            .config
+            .set_credential_broker_enabled(/*enabled*/ true);
         let state = NetworkProxyState::with_reloader(
             initial_state,
             Arc::new(StaticReloader {
