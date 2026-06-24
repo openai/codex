@@ -7,7 +7,6 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
-use codex_network_proxy::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigReloaderFuture;
@@ -65,7 +64,7 @@ fn shell_with_snapshot(
 
 async fn test_network_proxy() -> anyhow::Result<NetworkProxy> {
     let mut config = NetworkProxyConfig::default();
-    config.set_credential_broker_enabled(true);
+    config.set_credential_broker_enabled(/*enabled*/ true);
     let state =
         codex_network_proxy::build_config_state(config, NetworkProxyConstraints::default())?;
     NetworkProxy::builder()
@@ -552,8 +551,9 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "nested-thread");
 }
 
-#[test]
-fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
+#[tokio::test]
+async fn snapshot_wrapper_restores_prepared_broker_credentials() -> anyhow::Result<()> {
+    let proxy = test_network_proxy().await?;
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
     std::fs::write(
@@ -574,35 +574,63 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
         "printf '%s\\n%s\\n%s\\n%s\\n%s' \"$PIP_PROXY\" \"$HTTP_PROXY\" \"$http_proxy\" \"$GIT_SSH_COMMAND\" \"$OPENAI_API_KEY\""
             .to_string(),
     ];
+    let real_openai_api_key =
+        "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+    let mut env = proxy
+        .prepare_for_optional_environment(
+            HashMap::from([(
+                "OPENAI_API_KEY".to_string(),
+                real_openai_api_key.to_string(),
+            )]),
+            /*environment_id*/ None,
+        )?
+        .env;
+    let brokered_openai_api_key = env
+        .get("OPENAI_API_KEY")
+        .expect("brokered OpenAI API key")
+        .clone();
+    assert_ne!(brokered_openai_api_key, real_openai_api_key);
+    env.extend([
+        ("PIP_PROXY".to_string(), "http://127.0.0.1:4321".to_string()),
+        (
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:4321".to_string(),
+        ),
+        (
+            "http_proxy".to_string(),
+            "http://127.0.0.1:4321".to_string(),
+        ),
+        (
+            "GIT_SSH_COMMAND".to_string(),
+            "ssh -o ProxyCommand=fresh".to_string(),
+        ),
+    ]);
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         Some(&shell_snapshot),
         &HashMap::new(),
-        &HashMap::from([(CREDENTIAL_BROKER_ACTIVE_ENV_KEY.into(), "1".into())]),
+        &env,
         &RuntimePathPrepends::default(),
     );
     let output = Command::new(&rewritten[0])
         .args(&rewritten[1..])
-        .env(PROXY_ACTIVE_ENV_KEY, "1")
-        .env(CREDENTIAL_BROKER_ACTIVE_ENV_KEY, "1")
-        .env("PIP_PROXY", "http://127.0.0.1:4321")
-        .env("HTTP_PROXY", "http://127.0.0.1:4321")
-        .env("http_proxy", "http://127.0.0.1:4321")
-        .env("GIT_SSH_COMMAND", "ssh -o ProxyCommand=fresh")
-        .env("OPENAI_API_KEY", "sk-brokered")
+        .envs(&env)
         .output()
         .expect("run rewritten command");
 
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "http://127.0.0.1:4321\n\
-         http://127.0.0.1:4321\n\
-         http://127.0.0.1:4321\n\
-         ssh -o ProxyCommand=stale\n\
-         sk-brokered"
+        format!(
+            "http://127.0.0.1:4321\n\
+             http://127.0.0.1:4321\n\
+             http://127.0.0.1:4321\n\
+             ssh -o ProxyCommand=stale\n\
+             {brokered_openai_api_key}"
+        )
     );
+    Ok(())
 }
 
 #[test]
