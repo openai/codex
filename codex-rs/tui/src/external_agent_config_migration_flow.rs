@@ -89,7 +89,7 @@ fn external_agent_config_migration_started_lines(
     let mut lines = vec![
         vec![
             "• ".dim(),
-            "Claude Code import started.".green(),
+            "Claude Code import started.".cyan(),
             " You can keep working while it finishes.".into(),
         ]
         .into(),
@@ -145,7 +145,7 @@ pub(crate) fn external_agent_config_migration_finished_lines(
     let mut lines = vec![
         vec![
             "• ".dim(),
-            "Claude Code import finished: ".green(),
+            "Claude Code import finished: ".into(),
             format!("{imported_count} imported").green(),
             ", ".into(),
             failed_count,

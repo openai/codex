@@ -173,7 +173,7 @@ fn external_agent_config_migration_status_lines_use_semantic_colors() {
         vec![
             Line::from(vec![
                 "• ".dim(),
-                "Claude Code import started.".green(),
+                "Claude Code import started.".cyan(),
                 " You can keep working while it finishes.".into(),
             ]),
             Line::from(vec![
@@ -227,7 +227,7 @@ fn external_agent_config_migration_status_lines_use_semantic_colors() {
         vec![
             Line::from(vec![
                 "• ".dim(),
-                "Claude Code import finished: ".green(),
+                "Claude Code import finished: ".into(),
                 "2 imported".green(),
                 ", ".into(),
                 "1 failed".red(),
