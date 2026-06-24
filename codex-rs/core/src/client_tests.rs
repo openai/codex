@@ -144,7 +144,7 @@ fn test_model_info() -> ModelInfo {
 
 #[test]
 fn parallel_summary_delivery_requires_summary_generation() {
-    let openai_provider = ModelProviderInfo::create_openai_provider(None);
+    let openai_provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     let other_provider =
         create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     let mut model_info = test_model_info();
