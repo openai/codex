@@ -58,6 +58,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio::time;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::elicitation_client_service::ElicitationClientService;
@@ -420,6 +421,7 @@ impl RmcpClient {
 
     /// Perform the initialization handshake with the MCP server.
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization
+    #[instrument(level = "trace", skip_all)]
     pub async fn initialize(
         &self,
         params: InitializeRequestParams,
@@ -501,6 +503,7 @@ impl RmcpClient {
         Ok(result)
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn list_tools_with_connector_ids(
         &self,
         params: Option<PaginatedRequestParams>,

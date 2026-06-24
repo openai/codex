@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
+use tracing::instrument;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexAppsToolsCacheKey {
@@ -170,6 +171,7 @@ pub(crate) fn read_cached_codex_apps_tools(
     }
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn load_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
 ) -> CachedCodexAppsToolsLoad {
@@ -210,6 +212,7 @@ pub(crate) fn write_cached_codex_apps_tools(
     let _ = std::fs::write(cache_path, bytes);
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn load_cached_codex_apps_server_info(
     cache_context: &CodexAppsToolsCacheContext,
 ) -> Option<McpServerInfo> {
