@@ -587,8 +587,9 @@ impl Session {
     pub(crate) async fn new_turn_with_sub_id(
         &self,
         sub_id: String,
-        updates: SessionSettingsUpdate,
+        mut updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
+        self.resolve_settings_update_model(&mut updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;

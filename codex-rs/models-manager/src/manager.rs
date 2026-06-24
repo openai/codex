@@ -1,4 +1,5 @@
 use super::cache::ModelsCacheManager;
+use crate::ModelResolution;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
 use crate::model_info;
@@ -166,6 +167,21 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         )
     }
 
+    /// Resolve a requested model, applying provider-specific fallback policy when configured.
+    ///
+    /// Implementations with an open-ended model namespace should preserve explicit model names.
+    /// Implementations backed by an authoritative catalog may replace unsupported names with a
+    /// provider-owned fallback.
+    fn resolve_model<'a>(
+        &'a self,
+        model: &'a Option<String>,
+        refresh_strategy: RefreshStrategy,
+    ) -> ModelsManagerFuture<'a, ModelResolution> {
+        Box::pin(async move {
+            ModelResolution::exact(self.get_default_model(model, refresh_strategy).await)
+        })
+    }
+
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     fn get_model_info<'a>(
@@ -208,6 +224,7 @@ pub struct OpenAiModelsManager {
 pub struct StaticModelsManager {
     remote_models: Vec<ModelInfo>,
     auth_manager: Option<Arc<AuthManager>>,
+    unsupported_model_fallback: Option<String>,
 }
 
 impl OpenAiModelsManager {
@@ -236,6 +253,20 @@ impl StaticModelsManager {
         Self {
             remote_models: model_catalog.models,
             auth_manager,
+            unsupported_model_fallback: None,
+        }
+    }
+
+    /// Construct a static model manager that replaces unsupported requested models.
+    pub fn new_with_unsupported_model_fallback(
+        auth_manager: Option<Arc<AuthManager>>,
+        model_catalog: ModelsResponse,
+        fallback_model: impl Into<String>,
+    ) -> Self {
+        Self {
+            remote_models: model_catalog.models,
+            auth_manager,
+            unsupported_model_fallback: Some(fallback_model.into()),
         }
     }
 }
@@ -433,6 +464,31 @@ impl ModelsManager for StaticModelsManager {
 
     fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
         builtin_collaboration_mode_presets()
+    }
+
+    fn resolve_model<'a>(
+        &'a self,
+        model: &'a Option<String>,
+        refresh_strategy: RefreshStrategy,
+    ) -> ModelsManagerFuture<'a, ModelResolution> {
+        Box::pin(async move {
+            let Some(requested_model) = model.as_ref() else {
+                return ModelResolution::exact(
+                    self.get_default_model(model, refresh_strategy).await,
+                );
+            };
+            let Some(fallback_model) = self.unsupported_model_fallback.as_ref() else {
+                return ModelResolution::exact(requested_model.clone());
+            };
+            if self
+                .remote_models
+                .iter()
+                .any(|candidate| candidate.slug == *requested_model)
+            {
+                return ModelResolution::exact(requested_model.clone());
+            }
+            ModelResolution::fallback(requested_model.clone(), fallback_model.clone())
+        })
     }
 
     fn refresh_if_new_etag(&self, _etag: String) -> ModelsManagerFuture<'_, ()> {

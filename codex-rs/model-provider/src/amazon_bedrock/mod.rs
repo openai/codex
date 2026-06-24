@@ -166,9 +166,10 @@ impl ModelProvider for AmazonBedrockModelProvider {
         _codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        Arc::new(StaticModelsManager::new(
+        Arc::new(StaticModelsManager::new_with_unsupported_model_fallback(
             /*auth_manager*/ None,
             config_model_catalog.map_or_else(static_model_catalog, with_default_only_service_tier),
+            AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
         ))
     }
 }
@@ -302,6 +303,32 @@ mod tests {
         assert_eq!(
             provider.approval_review_preferred_model(),
             AMAZON_BEDROCK_GPT_5_4_MODEL_ID
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_model_falls_back_to_bedrock_gpt_5_4() {
+        let provider = AmazonBedrockModelProvider::new(
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+            /*auth_manager*/ None,
+        );
+        let models_manager =
+            provider.models_manager(PathBuf::new(), /*config_model_catalog*/ None);
+
+        assert_eq!(
+            models_manager
+                .resolve_model(
+                    &Some("gpt-5.4-mini".to_string()),
+                    codex_models_manager::manager::RefreshStrategy::Offline,
+                )
+                .await,
+            codex_models_manager::ModelResolution {
+                model: AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string(),
+                fallback: Some(codex_models_manager::UnsupportedModelFallback {
+                    requested_model: "gpt-5.4-mini".to_string(),
+                    fallback_model: AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string(),
+                }),
+            }
         );
     }
 }

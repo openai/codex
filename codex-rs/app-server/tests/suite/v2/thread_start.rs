@@ -200,6 +200,49 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_start_falls_back_from_unsupported_bedrock_model() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+model = "openai.gpt-5.4"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock.aws]
+region = "us-east-2"
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("gpt-5.4-mini".to_string()),
+            ephemeral: Some(true),
+            thread_source: Some(ThreadSource::Feature("title_generation".to_string())),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        model,
+        model_provider,
+        ..
+    } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(model, "openai.gpt-5.4");
+    assert_eq!(model_provider, "amazon-bedrock");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

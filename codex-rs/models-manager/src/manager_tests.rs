@@ -200,6 +200,82 @@ fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManage
     StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
 }
 
+fn static_manager_with_fallback_for_tests(
+    model_catalog: ModelsResponse,
+    fallback_model: &str,
+) -> StaticModelsManager {
+    StaticModelsManager::new_with_unsupported_model_fallback(
+        /*auth_manager*/ None,
+        model_catalog,
+        fallback_model,
+    )
+}
+
+#[tokio::test]
+async fn static_manager_falls_back_from_unsupported_model_when_configured() {
+    let supported_model = remote_model("provider.gpt-5.4", "GPT-5.4", 0);
+    let manager = static_manager_with_fallback_for_tests(
+        ModelsResponse {
+            models: vec![supported_model],
+        },
+        "provider.gpt-5.4",
+    );
+
+    assert_eq!(
+        manager
+            .resolve_model(&Some("gpt-5.4-mini".to_string()), RefreshStrategy::Offline,)
+            .await,
+        crate::ModelResolution {
+            model: "provider.gpt-5.4".to_string(),
+            fallback: Some(crate::UnsupportedModelFallback {
+                requested_model: "gpt-5.4-mini".to_string(),
+                fallback_model: "provider.gpt-5.4".to_string(),
+            }),
+        }
+    );
+}
+
+#[tokio::test]
+async fn static_manager_preserves_supported_model_with_fallback_configured() {
+    let supported_model = remote_model("provider.gpt-5.4", "GPT-5.4", 0);
+    let manager = static_manager_with_fallback_for_tests(
+        ModelsResponse {
+            models: vec![supported_model],
+        },
+        "provider.gpt-5.4",
+    );
+
+    assert_eq!(
+        manager
+            .resolve_model(
+                &Some("provider.gpt-5.4".to_string()),
+                RefreshStrategy::Offline,
+            )
+            .await,
+        crate::ModelResolution {
+            model: "provider.gpt-5.4".to_string(),
+            fallback: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn static_manager_without_fallback_preserves_unknown_model() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![remote_model("known-model", "Known", 0)],
+    });
+
+    assert_eq!(
+        manager
+            .resolve_model(&Some("custom-model".to_string()), RefreshStrategy::Offline,)
+            .await,
+        crate::ModelResolution {
+            model: "custom-model".to_string(),
+            fallback: None,
+        }
+    );
+}
+
 async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
     let auth_dot_json = codex_login::AuthDotJson {
         auth_mode: Some(AuthMode::ChatgptAuthTokens),
